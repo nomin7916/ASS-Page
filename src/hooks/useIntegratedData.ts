@@ -333,9 +333,9 @@ export function useIntegratedData({
     const addOut = (d, v) => { if (d && v > 0) flowOutMap.set(d, (flowOutMap.get(d) || 0) + v); };
     const addLedger = (d, v) => { if (d && v) ledgerNetMap.set(d, (ledgerNetMap.get(d) || 0) + v); };
     // 계좌 내부 소득(noPrincipal 입금 = 배당·이자, 부호 보존) — 외부 흐름(IN)이 아니라 위 셋에는 안 들어가지만
-    // 예수금(장부)은 움직이므로 흡수 판정용 `incomeIn`으로 행에 실어 보낸다(utils.externalFlowInRange와 동일 규약).
-    const incomeMap = new Map();
-    const addIncome = (d, v) => { if (d && v) incomeMap.set(d, (incomeMap.get(d) || 0) + v); };
+    // 예수금(장부)은 움직이므로 흡수 판정용 `memoNet`으로 행에 실어 보낸다(utils.externalFlowInRange와 동일 규약).
+    const memoMap = new Map();
+    const addMemo = (d, v) => { if (d && v) memoMap.set(d, (memoMap.get(d) || 0) + v); };
 
     // ③ 계좌 편입/이탈 — 원장에 없는 흐름. '원금'이 아니라 평가액 전액이라야 ΔV와 정확히 상쇄된다.
     //    편입일(d0) 이하의 원장은 추적 시작 전 거래이므로 ①에서 제외한다(이중계상 방지).
@@ -413,20 +413,22 @@ export function useIntegratedData({
           if (since && d.date <= since) return;
           if (cutoff && d.date >= cutoff) return;
           const v = (cleanNum(d.amount) || 0) * rateOf(d);
-          // noPrincipal(배당·이자)은 계좌 안에서 발생한 수익 → 외부 유입이 아니다. 장부(예수금)만 움직이므로
-          // 흡수 판정용 소득으로만 기록한다(개별 계좌 externalFlowInRange.incomeIn과 동일 규약).
-          if (d.noPrincipal) { addIncome(d.date, v); return; }
+          // 미반영(noPrincipal) 행은 흐름이 아니라 **순수 메모**다 → 장부 관측 보정에만 기록한다
+          // (개별 계좌 externalFlowInRange.memoNet과 동일 규약).
+          if (d.noPrincipal) { addMemo(d.date, v); return; }
           // 계좌 간 이관 입금 — 짝(원계좌 출금)이 통합 집계에 함께 있으면 상쇄한다 → 보류
           if (holdTransfer(d, 'in', d.date, v)) return;
           if (v > 0) addIn(d.date, v); else if (v < 0) addOut(d.date, -v);
           addLedger(d.date, v);
         });
         wds.forEach(w => {
-          // 출금은 noPrincipal이어도 현금이 실제로 빠져나간다 → 전액 반영(입금과 비대칭이 정상)
           if (!w || !w.date) return;
           if (since && w.date <= since) return;
           if (cutoff && w.date >= cutoff) return;
           const v = (cleanNum(w.amount) || 0) * rateOf(w);
+          // ⚠️ 출금도 미반영이면 흐름에서 제외(2026-09 사용자 확정) — 입금과 **대칭**이다.
+          //    '원금 비영향'은 그 행을 어떤 집계에도 넣지 않는 순수 메모로 쓰겠다는 뜻이다.
+          if (w.noPrincipal) { addMemo(w.date, -v); return; }
           // 계좌 간 이관 출금 — 짝(대상계좌 입금)이 통합 집계에 함께 있으면 상쇄한다 → 보류
           if (holdTransfer(w, 'out', w.date, v)) return;
           if (v > 0) addOut(w.date, v); else if (v < 0) addIn(w.date, -v);
@@ -467,16 +469,16 @@ export function useIntegratedData({
     // 기록이 없는 날(주말 등)에 찍힌 원장 흐름은 다음 기록일 행으로 이월 — 흐름 유실 방지
     const flowAtRow = new Map();
     {
-      const allFlowDates = [...new Set([...flowInMap.keys(), ...flowOutMap.keys(), ...ledgerNetMap.keys(), ...incomeMap.keys(), ...sortedDates])].sort();
-      let carryIn = 0, carryOut = 0, carryLedger = 0, carryIncome = 0;
+      const allFlowDates = [...new Set([...flowInMap.keys(), ...flowOutMap.keys(), ...ledgerNetMap.keys(), ...memoMap.keys(), ...sortedDates])].sort();
+      let carryIn = 0, carryOut = 0, carryLedger = 0, carryMemo = 0;
       for (const d of allFlowDates) {
         carryIn += flowInMap.get(d) || 0;
         carryOut += flowOutMap.get(d) || 0;
         carryLedger += ledgerNetMap.get(d) || 0;
-        carryIncome += incomeMap.get(d) || 0;
+        carryMemo += memoMap.get(d) || 0;
         if (dateToTotal.has(d)) {
-          flowAtRow.set(d, { in: carryIn, out: carryOut, ledger: carryLedger, income: carryIncome });
-          carryIn = 0; carryOut = 0; carryLedger = 0; carryIncome = 0;
+          flowAtRow.set(d, { in: carryIn, out: carryOut, ledger: carryLedger, memo: carryMemo });
+          carryIn = 0; carryOut = 0; carryLedger = 0; carryMemo = 0;
         }
       }
     }
@@ -516,8 +518,8 @@ export function useIntegratedData({
           netFlowIn: f ? f.in : 0,
           netFlowOut: f ? f.out : 0,
           ledgerFlow: f ? f.ledger : 0,
-          // 계좌 내부 소득(noPrincipal 입금) — 흡수 판정 전용(외부 흐름 아님). 소비자: intTwrCumByDate·intMonthlyHistory.
-          netIncomeIn: f ? (f.income || 0) : 0,
+          // 미반영(noPrincipal) 원장 순액 — 흡수 판정 전용(외부 흐름 아님). 소비자: intTwrCumByDate·intMonthlyHistory.
+          netMemoNet: f ? (f.memo || 0) : 0,
           // 그날 총 장부액(Σ 예수금+매입원가). 한 계좌라도 미확보면 null → 소비자가 ΔV 폴백.
           // ⚠️ 오늘 행의 evalAmount는 라이브 합계로 덮어써지지만(:247) 장부액은 스냅샷 기준이다.
           //    예수금 편집은 그 날짜 스냅샷을 만들므로(snapshotCompositionKey에 depositAmount 포함)
@@ -572,7 +574,7 @@ export function useIntegratedData({
         : null;
       return {
         date: h.date, evalAmount: h.evalAmount,
-        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0, incomeIn: h.netIncomeIn || 0,
+        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0, memoNet: h.netMemoNet || 0,
         ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect, bookDelta,
       };
     });
@@ -658,7 +660,7 @@ export function useIntegratedData({
         : null;
       return {
         date: h.date, evalAmount: h.evalAmount,
-        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0, incomeIn: h.netIncomeIn || 0,
+        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0, memoNet: h.netMemoNet || 0,
         ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect, bookDelta,
       };
     }));

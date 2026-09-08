@@ -194,7 +194,7 @@ export const buildEvalCompareSheet = (input: EvalCompareExcelInput): XlsxSheet =
     //    raw `bookDelta`를 띄우면 배당이 있는 구간에서 그 값으로 판정을 검산할 수 없다.
     warns.push(`원장의 입출금(${amt(model.netFlow)})이 아직 평가액·예수금에 반영되지 않은 것으로 보입니다`
       + (model.bookFlowPart != null
-        ? ` (장부액 변화 ${amt(model.bookFlowPart)}${model.incomeIn ? `, 배당 등 계좌 내부 소득 ${amt(model.incomeIn)} 제외` : ''})`
+        ? ` (장부액 변화 ${amt(model.bookFlowPart)}${model.memoNet ? `, 미반영 기록 ${amt(model.memoNet)} 제외` : ''})`
         : ' (보유수량이 추정이라 확인 불가)')
       + ' — 거래 효과는 산출하지 않습니다');
   }

@@ -292,7 +292,7 @@ export interface EvalCompareResult {
   counterRate: number | null;
   /**
    * (비교일, 기준일] 순 외부 입출금(계좌 통화).
-   * ⚠️ `externalFlowInRange` 규약 — 입금은 `noPrincipal`(배당·이자) 제외, 출금은 전액.
+   * ⚠️ `externalFlowInRange` 규약 — 입금·출금 모두 `noPrincipal`(미반영) 행은 제외한다(순수 메모).
    */
   netFlow: number;
   /**
@@ -629,10 +629,10 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
     ? null
     : bookCostOf(itemsA0, bookOpts) - bookCostOf(itemsB0, bookOpts);
   const flowMaterial = Math.abs(netFlow) > Math.max(0, totals.compare.evalNative) * FLOW_MATERIAL_RATIO;
-  // 계좌 내부 소득(noPrincipal 입금 = 배당·이자)은 외부 흐름이 아니지만 장부(예수금)를 움직이므로 관측에서
-  // 걷어낸다 — 추이표(computeDailyMetricsSeries)와 같은 규약. 미기록(0)이면 종전과 동일.
-  const incomeIn = cleanNum(flow?.incomeIn);
-  const bookFlowPart = bookDelta != null ? bookDelta - incomeIn : null;
+  // 미반영(noPrincipal) 행은 외부 흐름이 아니지만 장부(예수금)를 움직일 수 있으므로 관측에서 걷어낸다 —
+  // 추이표(computeDailyMetricsSeries)와 같은 규약. 미기록(0)이면 종전과 동일.
+  const memoNet = cleanNum(flow?.memoNet);
+  const bookFlowPart = bookDelta != null ? bookDelta - memoNet : null;
   const flowReflected = netFlow === 0 || !flowMaterial || (bookFlowPart != null && (netFlow > 0
     ? bookFlowPart >= netFlow * FLOW_ABSORBED_RATIO
     : bookFlowPart <= netFlow * FLOW_ABSORBED_RATIO));
@@ -652,7 +652,7 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
     // ⚠️ 화면·엑셀 경고는 **판정에 실제로 쓰인 값**(`bookFlowPart`)을 인쇄해야 한다 — raw `bookDelta`를
     //    띄우면 배당(계좌 내부 소득)이 있는 구간에서 그 숫자로 판정을 검산할 수 없다.
     bookFlowPart,
-    incomeIn,
+    memoNet,
     tradeEffect: totals.basis.evalNative - totals.counter.evalNative - netFlow,
     // 기준일 종가를 못 구한 종목이 있으면 A·C 총액이 비대칭으로 과소해져 거래 효과가 부풀려지고,
     // 원장 흐름이 아직 평가액에 반영되지 않았으면 그 금액 전액이 가짜 손익이 된다.

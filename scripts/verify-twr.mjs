@@ -25,22 +25,23 @@ const cleanNum = (val) => {
 
 const externalFlowInRange = (depositHistory, depositHistory2, fromExclusive, toInclusive, rateOf) => {
   const rate = typeof rateOf === 'function' ? rateOf : () => 1;
-  let inFlow = 0, outFlow = 0, incomeIn = 0;
+  let inFlow = 0, outFlow = 0, memoNet = 0;
   const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
   // ⚠️ Math.abs 금지 — 음수 '정정 행'이 유입으로 뒤집힌다(테스트 #17)
   for (const d of depositHistory || []) {
     if (!d || !inRange(d.date || '')) continue;
     const v = cleanNum(d.amount) * rate(d);
-    // noPrincipal 입금(배당·이자) = 계좌 내부 소득 → 외부 유입 아님. 흡수 판정용 incomeIn에만 합산.
-    if (d.noPrincipal) { incomeIn += v; continue; }
+    // 미반영(noPrincipal) 행은 입금·출금 모두 흐름에서 제외(순수 메모). 장부 관측 보정용 memoNet에만 합산.
+    if (d.noPrincipal) { memoNet += v; continue; }
     if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
   }
   for (const w of depositHistory2 || []) {
     if (!w || !inRange(w.date || '')) continue;
     const v = cleanNum(w.amount) * rate(w);
+    if (w.noPrincipal) { memoNet -= v; continue; }
     if (v > 0) outFlow += v; else if (v < 0) inFlow += -v;
   }
-  return { in: inFlow, out: outFlow, net: inFlow - outFlow, incomeIn };
+  return { in: inFlow, out: outFlow, net: inFlow - outFlow, memoNet };
 };
 
 const dailyFlowAdjustedRate = (prevEval, curEval, flowIn, flowOut) => {
@@ -101,11 +102,11 @@ const computeDailyMetrics = (rows) => {
     const dV = h.evalAmount - prevV;
     const ownIn = h.flowIn || 0, ownOut = h.flowOut || 0;
     const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
-    // 계좌 내부 소득(noPrincipal 입금) — 장부 관측에서 걷어내 '외부 흐름이 반영됐는가'만 남긴다.
+    // 미반영(noPrincipal) 원장 순액 — 장부 관측에서 걷어내 '외부 흐름이 반영됐는가'만 남긴다.
     // ⚠️ 그 행의 것만 쓴다(이월 금지) — bookDelta는 하루치 델타라 이월하면 순수 이중 차감(src/utils.ts 주석).
-    const income = h.incomeIn || 0;
+    const memo = h.memoNet || 0;
     let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
-    const bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
+    const bookDelta = h.bookDelta != null ? h.bookDelta - memo : null;
     let reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
     // held = **이월 판정**(종전과 동일한 값). 화면 보류는 아래 emitHeld — 둘을 합치지 말 것.
     let held = reason != null;
@@ -279,12 +280,20 @@ check('#9 신규 계좌 편입 (major 4)', dailyFlowAdjustedRate(664_410_208, 71
   check('#10 배당 수익 인정 (0%면 실패)', dailyFlowAdjustedRate(664_410_208, 667_410_208, f.in, f.out), 0.451530);
 }
 
-// #10b 출금은 noPrincipal이어도 전액 반영 (비대칭 규칙)
+// #10b 출금도 noPrincipal이면 흐름에서 제외 — 입금과 **대칭**이다(2026-09 사용자 확정으로 규약 변경).
+//      옛 규약은 '출금은 noPrincipal이어도 전액 유출'(비대칭)이었다. '원금 비영향'은 그 행을 어떤
+//      집계에도 넣지 않는 **순수 메모**로 쓰겠다는 뜻이므로, 흐름만 예외로 두던 비대칭을 없앴다.
+//      ⚠️ 그 대가: 실제로 돈이 나가 평가액이 줄었다면 그 감소분이 시세 손실로 표시된다(사용자 수용).
 {
   const wds = [{ date: '2026-07-21', amount: 3_000_000, noPrincipal: true }];
   const f = externalFlowInRange([], wds, '2026-07-20', '2026-07-21');
-  check('#10b 배당금 인출은 전액 유출', f.out, 3_000_000);
-  check('#10b 배당금 인출일 가짜 손실 없음', dailyFlowAdjustedRate(664_410_208, 661_410_208, f.in, f.out), 0);
+  check('#10b 미반영 인출은 흐름에서 제외', f.out, 0);
+  check('#10b 순흐름 0', f.net, 0);
+  check('#10b memoNet에 부호대로 담긴다', f.memoNet, -3_000_000);
+  // 반영(일반) 출금은 종전 그대로 유출로 계상된다 — 이 대조군이 있어야 '전부 빼는' 회귀를 잡는다.
+  const g = externalFlowInRange([], [{ date: '2026-07-21', amount: 3_000_000 }], '2026-07-20', '2026-07-21');
+  check('#10b 반영 출금은 종전대로 전액 유출', g.out, 3_000_000);
+  check('#10b 반영 출금일 가짜 손실 없음', dailyFlowAdjustedRate(664_410_208, 661_410_208, g.in, g.out), 0);
 }
 
 // #11 해외계좌 입금 — fxRate 미적용 시 +2.0755% 유령 수익
@@ -818,50 +827,55 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
   checkEq('#31d 월요일 기준은 인접(일요일)이라 spanFrom null', m.get('2026-07-20').spanFrom, null);
 }
 
-// #33 계좌 내부 소득(noPrincipal 입금)과 흡수 판정 (2026-09 D3) — 분배금을 받아 같은 날 다른 계좌로 이체하면
-//     예수금 순변동이 0이라 장부만으로는 '흐름이 V 밖'으로 오판했다(unreflected-idle → 흐름 영영 이월·폐기 →
-//     분배 소득이 손익에서 사라짐). 원장에 분배금 입금(noPrincipal)을 기록하면 그 몫을 장부 관측에서 걷어내
-//     외부 흐름만 대조한다. 미기록이면 종전과 1바이트도 다르지 않다.
+// #33 미반영(noPrincipal) 원장 행 = 순수 메모 (2026-09 사용자 확정) — 입금·출금 **모두** 흐름에서 제외한다.
+//     분배금은 계좌가 낸 수익이지만 언제 어디에 쓸지는 사용자가 정하므로, 그 이동을 원장에 기록만 하고
+//     성과 계산에는 넣지 않겠다는 것. 다른 소비자(원금·누적 합계·차트 마커·자산검증)는 이미 전부 제외하고
+//     있었고 **흐름만 예외**였다. 장부(예수금) 관측 보정용 `memoNet`(부호 있는 순액)만 남긴다.
 {
   const deps = [{ date: '2026-09-02', amount: 4_550_000, noPrincipal: true }];
   const wds = [{ date: '2026-09-02', amount: 4_550_000, noPrincipal: true }];
   const f = externalFlowInRange(deps, wds, '2026-09-01', '2026-09-02');
-  check('#33 externalFlowInRange: 소득은 in에 안 들어간다(Dietz 규약 불변)', f.in, 0);
-  check('#33 externalFlowInRange: 출금은 noPrincipal이어도 전액 out', f.out, 4_550_000);
-  check('#33 externalFlowInRange: incomeIn 별도 합산', f.incomeIn, 4_550_000);
-  // (a) 소득 D + 이체 D, 예수금 순변동 0(장부 0) → 흐름 정산 → dV + D (분배 소득이 손익에 남는다)
-  const rowsA = [
+  check('#33 미반영 입금은 in에 안 들어간다', f.in, 0);
+  check('#33 미반영 출금도 out에 안 들어간다', f.out, 0);
+  check('#33 순흐름 0', f.net, 0);
+  check('#33 memoNet = 입금 − 출금(부호 보존)', f.memoNet, 0);
+  // 반영(일반) 행은 종전 그대로
+  const g = externalFlowInRange(
+    [{ date: '2026-09-02', amount: 1_000_000 }],
+    [{ date: '2026-09-02', amount: 3_000_000 }], '2026-09-01', '2026-09-02');
+  check('#33 반영 행은 종전대로 흐름에 든다(in)', g.in, 1_000_000);
+  check('#33 반영 행은 종전대로 흐름에 든다(out)', g.out, 3_000_000);
+  check('#33 반영 행은 memoNet에 안 든다', g.memoNet, 0);
+  // 미반영 출금만 있는 날 → 흐름 0이라 판정 자체를 하지 않는다 → ΔV 그대로(사용자 의도).
+  const mA = computeDailyMetrics([
     { date: '2026-09-01', evalAmount: 436_867_055, flowIn: 0, flowOut: 0, bookDelta: 0 },
-    { date: '2026-09-02', evalAmount: 424_658_290, flowIn: 0, flowOut: 4_550_000, incomeIn: 4_550_000, bookDelta: 0 },
-  ];
-  const mA = computeDailyMetrics(rowsA);
-  check('#33a 소득 D + 이체 D(장부 0) → 정산: dV + D', mA.get('2026-09-02').dodAbsChange, -12_208_765 + 4_550_000);
+    { date: '2026-09-02', evalAmount: 424_658_290, flowIn: 0, flowOut: 0, memoNet: -4_550_000, bookDelta: -4_550_000 },
+  ]);
+  check('#33a 미반영 출금만 있는 날은 ΔV 그대로', mA.get('2026-09-02').dodAbsChange, 424_658_290 - 436_867_055);
   checkEq('#33a 보류 아님', mA.get('2026-09-02').held, false);
-  checkEq('#33a 흐름 이월 없음', mA.get('2026-09-02').pendingFlow, 0);
-  // (b) 소득 미기록(옛 데이터) → 종전과 동일: unreflected-idle(열림, ΔV, 흐름 이월)
-  const mB = computeDailyMetrics(rowsA.map(r => { const { incomeIn, ...rest } = r; return rest; }));
-  check('#33b 소득 미기록이면 종전 동작(ΔV 표시)', mB.get('2026-09-02').dodAbsChange, -12_208_765);
-  checkEq('#33b 종전 사유 유지', mB.get('2026-09-02').holdReason, 'unreflected-idle');
-  checkEq('#33b 흐름은 이월', mB.get('2026-09-02').pendingFlow, -4_550_000);
-  // (c) 소득만 예수금에 반영(장부 +D)·이체 미반영 → 열림(idle)·흐름 이월 → 다음 날 장부 −D에서 정산.
-  //     ⚠️ 이때 소득은 이미 반영된 것이라 다음 행에 이월하지 않는다(이월하면 이중 차감 → c2가 −3.5M).
+  checkEq('#33a 보류 사유 없음', mA.get('2026-09-02').holdReason, null);
+  checkEq('#33a 이월할 흐름 없음', mA.get('2026-09-02').pendingFlow, 0);
+  // (b) memoNet 미기록(옛 데이터·미반영 행 없음)이면 종전과 동일
+  const mB = computeDailyMetrics([
+    { date: 'b1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: 'b2', evalAmount: 99_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+  ]);
+  check('#33b memoNet 미기록이면 종전 동작', mB.get('b2').dodAbsChange, -1_000_000);
+  // (c) 미반영 행 + **실제 외부 흐름**이 같은 날 있으면 memoNet이 장부 관측을 보정한다.
+  //     분배금 3,000,000 유입(미반영) + 일반 출금 5,000,000(반영), 장부 = +3,000,000 − 5,000,000.
+  //     보정이 없으면 −2,000,000 > −2,500,000이라 '미반영'으로 오판한다.
   const mC = computeDailyMetrics([
-    { date: 'c0', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
-    { date: 'c1', evalAmount: 101_000_000, flowIn: 0, flowOut: 4_000_000, incomeIn: 4_000_000, bookDelta: 4_000_000 },
-    { date: 'c2', evalAmount: 97_500_000, flowIn: 0, flowOut: 0, bookDelta: -4_000_000 },
+    { date: 'c1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: 'c2', evalAmount: 96_000_000, flowIn: 0, flowOut: 5_000_000, memoNet: 3_000_000, bookDelta: -2_000_000 },
   ]);
-  checkEq('#33c 소득만 반영된 날은 idle(열림)', mC.get('c1').holdReason, 'unreflected-idle');
-  check('#33c 열린 행은 ΔV', mC.get('c1').dodAbsChange, 1_000_000);
-  check('#33c 이체 반영일에 정산 (V − 기준V) + 출금', mC.get('c2').dodAbsChange, (97_500_000 - 101_000_000) + 4_000_000);
-  check('#33c Σ = ΔV(전체) + 출금(보존 항등식)', mC.get('c1').dodAbsChange + mC.get('c2').dodAbsChange, (97_500_000 - 100_000_000) + 4_000_000);
-  // (d) 소득 D + 출금 3D, 장부 불변(둘 다 미반영) → 보류, 소득도 함께 이월 → 다음 날 장부 −2D(둘 다 반영)에서 정산
+  checkEq('#33c 미반영 몫을 걷어내면 흡수 판정이 통과한다', mC.get('c2').holdReason, null);
+  check('#33c 값 = ΔV + 출금', mC.get('c2').dodAbsChange, (96_000_000 - 100_000_000) + 5_000_000);
+  // (d) 같은 픽스처에서 memoNet을 빼면 오판(보정이 실제로 일하는지 확인 — 죽은 단언 방지)
   const mD = computeDailyMetrics([
-    { date: 'd0', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
-    { date: 'd1', evalAmount: 100_500_000, flowIn: 0, flowOut: 3_000_000, incomeIn: 1_000_000, bookDelta: 0 },
-    { date: 'd2', evalAmount: 98_800_000, flowIn: 0, flowOut: 0, bookDelta: -2_000_000 },
+    { date: 'd1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: 'd2', evalAmount: 96_000_000, flowIn: 0, flowOut: 5_000_000, bookDelta: -2_000_000 },
   ]);
-  checkEq('#33d 소득·출금 둘 다 미반영 → 보류', mD.get('d1').holdReason, 'unreflected');
-  check('#33d 둘 다 반영된 날 정산: (V − 기준V) + 출금 3D', mD.get('d2').dodAbsChange, (98_800_000 - 100_000_000) + 3_000_000);
+  checkEq('#33d 보정이 없으면 미반영으로 오판한다(대조군)', mD.get('d2').holdReason, 'unreflected');
 }
 
 // #33e 소득 이월 금지(2026-09 적대적 검증이 잡은 회귀) — 소득이 **이미 장부에 반영**됐는데 같은 날 다른
@@ -872,7 +886,7 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
   const rows = [
     { date: 'e0', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
     // 소득 10,000,000(예수금 반영) + 출금 12,000,000(미반영) + 매입원가 정정 +500,000 → 비-idle 보류
-    { date: 'e1', evalAmount: 101_000_000, flowIn: 0, flowOut: 12_000_000, incomeIn: 10_000_000, bookDelta: 10_500_000 },
+    { date: 'e1', evalAmount: 101_000_000, flowIn: 0, flowOut: 12_000_000, memoNet: 10_000_000, bookDelta: 10_500_000 },
     { date: 'e2', evalAmount: 102_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 }, // 장부 불변 → 여전히 미반영
     { date: 'e3', evalAmount: 103_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
   ];
@@ -1159,23 +1173,27 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     //    holdReasonText 를 부르는지(=진단으로 **대체**했는지)를 본다.
     g2("미반영 행(pendingNet !== 0)이 '입출금이 없던 날' 대신 진단 문구를 낸다",
       /pendingNet\s*!==\s*0\s*\n?\s*\?\s*holdReasonText\(/.test(hist));
-    // ── 계좌 내부 소득(incomeIn, 2026-09 D3) 배선 — 미러로 표현할 수 없는 공급자 4곳 ──
+    // ── 미반영(noPrincipal) 원장 행 배선 — 미러로 표현할 수 없는 공급자 5곳 ──
     // ⚠️ 한 곳만 빠져도 그 화면만 소득을 못 걷어내 같은 날짜에 통합/개별/CSV가 갈린다.
     const app = readSrc('src/App.tsx');
-    g2('통합 ①이 noPrincipal 입금을 addIncome으로 실어 보낸다(외부 유입 아님)',
-      /if\s*\(d\.noPrincipal\)\s*\{\s*addIncome\(d\.date,\s*v\);\s*return;\s*\}/.test(intg));
-    g2('통합 rows(intTwrCumByDate·intMonthlyHistory)가 incomeIn을 싣는다(2곳)',
-      (intg.match(/incomeIn:\s*h\.netIncomeIn\s*\|\|\s*0/g) || []).length === 2);
-    g2('개별 추이표 rows가 incomeIn을 싣는다', /incomeIn:\s*flow\.incomeIn\s*\|\|\s*0/.test(hist));
-    g2('개별 차트(App accountDailySeries) rows가 incomeIn을 싣는다', !!app && /incomeIn:\s*flow\.incomeIn\s*\|\|\s*0/.test(app));
-    g2('CSV rows가 incomeIn을 싣는다', (utl.match(/incomeIn:\s*flow\.incomeIn\s*\|\|\s*0/g) || []).length >= 1);
-    g2('소득 조정은 holdReasonOf 호출 전(bookDelta − income)에서 한다',
-      /bookDelta\s*=\s*h\.bookDelta\s*!=\s*null\s*\?\s*h\.bookDelta\s*-\s*income\s*:\s*null/.test(utl));
+    g2('통합 ①이 미반영 입금을 흐름 대신 addMemo로 보낸다',
+      /if\s*\(d\.noPrincipal\)\s*\{\s*addMemo\(d\.date,\s*v\);\s*return;\s*\}/.test(intg));
+    // ⚠️ 미반영 **출금**도 흐름에서 빠져야 한다(2026-09 사용자 확정) — 입금만 빼던 옛 비대칭으로
+    //    되돌리면 '원금 비영향'이 순수 메모라는 계약이 출금 쪽에서만 깨진다.
+    g2('개별 흐름이 미반영 출금을 제외한다', /if\s*\(w\.noPrincipal\)\s*\{\s*memoNet\s*-=\s*v;\s*continue;\s*\}/.test(utl));
+    g2('통합 ①이 미반영 출금을 제외한다', /if\s*\(w\.noPrincipal\)\s*\{\s*addMemo\(w\.date,\s*-v\);\s*return;\s*\}/.test(intg));
+    g2('통합 rows(intTwrCumByDate·intMonthlyHistory)가 memoNet을 싣는다(2곳)',
+      (intg.match(/memoNet:\s*h\.netMemoNet\s*\|\|\s*0/g) || []).length === 2);
+    g2('개별 추이표 rows가 memoNet을 싣는다', /memoNet:\s*flow\.memoNet\s*\|\|\s*0/.test(hist));
+    g2('개별 차트(App accountDailySeries) rows가 memoNet을 싣는다', !!app && /memoNet:\s*flow\.memoNet\s*\|\|\s*0/.test(app));
+    g2('CSV rows가 memoNet을 싣는다', (utl.match(/memoNet:\s*flow\.memoNet\s*\|\|\s*0/g) || []).length >= 1);
+    g2('메모 조정은 holdReasonOf 호출 전(bookDelta − memo)에서 한다',
+      /bookDelta\s*=\s*h\.bookDelta\s*!=\s*null\s*\?\s*h\.bookDelta\s*-\s*memo\s*:\s*null/.test(utl));
     // ⚠️ 소득 **이월**은 순수 이중 차감이다(bookDelta는 하루치 델타 — 그 행에서 이미 걷어낸 소득이
     //    다음 날 raw에는 없는데 또 뺀다). 실측: 장부가 1원도 안 움직인 날의 미반영 출금이 '흡수됨'으로
     //    확정돼 출금액 전액이 가짜 이익(TWR +15.12% vs 정답 +3.00%). 식별자 부재로 못 박는다.
     g2('소득을 이월하지 않는다(carryIncome 식별자 부재)', !/carryIncome/.test(utl));
-    g2('소득 보정은 그 행의 incomeIn만 쓴다', /const\s+income\s*=\s*h\.incomeIn\s*\|\|\s*0;/.test(utl));
+    g2('메모 보정은 그 행의 memoNet만 쓴다', /const\s+memo\s*=\s*h\.memoNet\s*\|\|\s*0;/.test(utl));
     // ── 기준(anchor) 행 규약(2026-09 D1) 배선 ──
     g2('보류 행은 기준을 전진시키지 않는다(no-data만 예외)',
       /if\s*\(!emitHeld\s*\|\|\s*reason\s*===\s*'no-data'\)\s*anchor\s*=\s*h;/.test(utl));
@@ -1189,8 +1207,8 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     const cal = readSrc('src/components/CalendarModal.tsx');
     g2('메모 달력 칸·패드가 구간 합산(spanFrom)을 표시한다',
       !!cal && (cal.match(/spanFromText\(/g) || []).length >= 2 && (cal.match(/\.spanFrom\s*\?/g) || []).length >= 2);
-    // ⚠️ 보류 사유 진단은 **판정에 실제로 쓰인 값**(bookDelta − incomeIn)을 보여야 한다.
-    g2('추이표 보류 툴팁이 소득 보정 후 장부액을 쓴다', /raw\s*-\s*inc;/.test(hist) && /incomeIn\s*\|\|\s*0;?\s*$/m.test(hist));
+    // ⚠️ 보류 사유 진단은 **판정에 실제로 쓰인 값**(bookDelta − memoNet)을 보여야 한다.
+    g2('추이표 보류 툴팁이 메모 보정 후 장부액을 쓴다', /raw\s*-\s*memo;/.test(hist) && /\.memoNet\s*\|\|\s*0;/.test(hist));
     g2("보류 툴팁이 no-data 행에는 붙지 않는다", /m\.holdReason\s*!==\s*'no-data'/.test(hist));
     const cmpX = readSrc('src/evalCompareExcel.ts');
     // ⚠️ '토큰 존재'만 재면 죽은 단언이다(변이 M34 실측) — 조건식을 raw로 되돌려도 값 쪽 토큰이
@@ -1205,6 +1223,9 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
       && !/model\.bookDelta/.test(warnBlock));
     const cmpM = readSrc('src/evalCompare.ts');
     g2('evalCompare가 판정에 쓴 값(bookFlowPart)을 반환한다', !!cmpM && /bookFlowPart,/.test(cmpM));
+    // ⚠️ 반환만 보면 죽은 단언이다(변이 M46 실측) — 보정식 자체를 못 박는다.
+    g2('evalCompare가 미반영 몫을 장부 관측에서 걷어낸다',
+      !!cmpM && /const\s+bookFlowPart\s*=\s*bookDelta\s*!=\s*null\s*\?\s*bookDelta\s*-\s*memoNet\s*:\s*null;/.test(cmpM));
     // ⚠️ `no-data`는 anchor를 전진시키는 유일한 사유라 '다음 산출 행에 합산' 문구가 거짓이 된다.
     g2("holdReasonText에 no-data 전용 문구가 있다", /case 'no-data':/.test(utl));
     // ── 개별 차트 선택기간 ₩ = 누적 Σ dodAbsChange 차분(2026-09 D2) ──
@@ -1277,7 +1298,7 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
       // 이관 오판 차단(#29e)
       ['a1|100000000|0|0|0', 'a2|40000000|0|60000000|-20000000'],
       ['c1|100000000|0|0|0', 'c2|90000000|0|10000000|2000000'],
-      // 계좌 내부 소득(#33 a·c·d) — 6번째 칸 = incomeIn
+      // 미반영 원장 행(#33 a·c·d) — 6번째 칸 = memoNet
       ['2026-09-01|436867055|0|0|0', '2026-09-02|424658290|0|4550000|0|4550000'],
       ['c0|100000000|0|0|0', 'c1|101000000|0|4000000|4000000|4000000', 'c2|97500000|0|0|-4000000'],
       ['d0|100000000|0|0|0', 'd1|100500000|0|3000000|0|1000000', 'd2|98800000|0|0|-2000000'],
@@ -1285,7 +1306,7 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
       const [date, ev, fi, fo, bd, inc] = s.split('|');
       const row = { date, evalAmount: Number(ev), flowIn: Number(fi || 0), flowOut: Number(fo || 0) };
       if (bd !== undefined) row.bookDelta = Number(bd);
-      if (inc !== undefined) row.incomeIn = Number(inc);
+      if (inc !== undefined) row.memoNet = Number(inc);
       return row;
     }));
     const ser = (m) => JSON.stringify([...m.entries()]);
@@ -1311,7 +1332,7 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
       const a = holdReasonOf(...args), b = real.holdReasonOf(...args);
       if (a !== b) { drift++; console.error(`  ✗ #32 사유 ${i} 미러 ${a} vs 실제 ${b}`); }
     });
-    // externalFlowInRange — incomeIn(noPrincipal 입금) 분리까지 미러와 실제가 같아야 한다.
+    // externalFlowInRange — 미반영(noPrincipal) 입금·출금 제외와 memoNet 분리까지 미러와 실제가 같아야 한다.
     {
       const deps = [
         { date: '2026-09-02', amount: 4_550_000, noPrincipal: true }, { date: '2026-09-02', amount: 1_000_000 },

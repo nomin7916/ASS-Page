@@ -188,7 +188,7 @@ export default function DepositPanel({
                         <div className="flex items-center justify-center gap-1">
                           <span
                             className={`font-mono text-[10px] select-none ${h.noPrincipal ? 'text-sky-300 cursor-default' : 'text-gray-300 cursor-pointer hover:text-sky-300'}`}
-                            title={h.noPrincipal ? '원금 비영향 (해제하려면 행 삭제 후 재추가)' : '클릭 → 원금 비영향으로 설정 (배당·이자 등)'}
+                            title={h.noPrincipal ? '미반영 — 어느 계산에도 들어가지 않는 기록입니다 (해제하려면 행 삭제 후 재추가)' : '클릭 → 미반영(기록전용)으로 설정'}
                             onClick={() => {
                               if (h.noPrincipal) return;
                               const n = [...depositHistory];
@@ -257,7 +257,7 @@ export default function DepositPanel({
                         <div className="flex items-center justify-center gap-1">
                           <span
                             className={`font-mono text-[10px] select-none ${h.noPrincipal ? 'text-sky-300 cursor-default' : 'text-gray-300 cursor-pointer hover:text-sky-300'}`}
-                            title={h.noPrincipal ? '원금 비영향 (해제하려면 행 삭제 후 재추가)' : '클릭 → 원금 비영향으로 설정 (배당·이자 등)'}
+                            title={h.noPrincipal ? '미반영 — 어느 계산에도 들어가지 않는 기록입니다 (해제하려면 행 삭제 후 재추가)' : '클릭 → 미반영(기록전용)으로 설정'}
                             onClick={() => {
                               if (h.noPrincipal) return;
                               const n = [...depositHistory2];
@@ -326,14 +326,13 @@ export default function DepositPanel({
                   '날짜 셀의 달력(📅) 아이콘을 클릭합니다.',
                   '달력에서 원하는 날짜를 선택하세요.',
                 ] },
-                { icon: '◐', color: 'text-sky-300', title: '원금 비영향 설정', lines: [
-                  '배당금·이자 등 원금과 무관한 내역 기록 시.',
+                { icon: '◐', color: 'text-sky-300', title: '원금 비영향(미반영) 설정', lines: [
+                  '분배금 이체 등 "기록만 남기고 싶은" 내역에 사용합니다.',
                   '날짜 텍스트(회색)를 클릭하면 파란색으로 변경됩니다.',
-                  '이후 금액 입력 시 원금에 영향을 주지 않습니다.',
-                  '합계(누적) 집계에서도 제외됩니다.',
-                  '⚠ 출금은 원금 비영향이어도 그날의 자금 유출로 계산됩니다(분배금을 다른 계좌로 옮긴 경우 포함).',
-                  '⚠ 그날 예수금이 그만큼 줄지 않으면 추이표가 "-"(보류)로 표시됩니다 — 예수금을 맞추거나 분배금 수령을 원금 비영향 입금으로 함께 기록하세요.',
-                  '   (해외계좌는 장부 관측을 쓰지 않아 이 안내가 적용되지 않습니다.)',
+                  '입금·출금 모두 어떤 계산에도 들어가지 않는 순수 메모가 됩니다.',
+                  '(투자원금·합계·수익률·일간 손익·차트 전부에서 제외)',
+                  '⚠ 실제로 돈이 나가 예수금을 줄였다면, 그 감소분은 시세 변동으로 표시됩니다.',
+                  '   금액을 성과 계산에 반영하려면 미반영을 쓰지 마세요.',
                   '⚠ 해제: 행 삭제 후 새로 추가하세요.',
                 ] },
                 { icon: '✏', color: 'text-gray-300', title: '메모 입력', lines: [

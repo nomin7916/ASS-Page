@@ -1476,7 +1476,7 @@ export default function App() {
       // ⚠️ bookDelta를 빼지 말 것 — 추이표(HistoryPanel)와 같은 관측을 써야 같은 날짜에 두 화면이
       //    같은 일간 수익률을 낸다. 곱셈 체인이라 하루의 불일치가 이후 전 구간에 영구 고정된다.
       return {
-        date: h.date, evalAmount: ev, flowIn: flow.in, flowOut: flow.out, incomeIn: flow.incomeIn || 0,
+        date: h.date, evalAmount: ev, flowIn: flow.in, flowOut: flow.out, memoNet: flow.memoNet || 0,
         bookDelta: prev ? bookDeltaBetween(activeBookByDate, prev.date, h.date) : null,
       };
     });

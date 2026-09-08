@@ -100,21 +100,22 @@ function collectTransferRows(p) {
 
 // utils.ts externalFlowInRange 미러 (개별 계좌 흐름)
 function externalFlowInRange(deps, wds, fromExclusive, toInclusive) {
-  let inFlow = 0, outFlow = 0, incomeIn = 0;
+  let inFlow = 0, outFlow = 0, memoNet = 0;
   const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
   for (const d of deps || []) {
     if (!d || !inRange(d.date || '')) continue;
     const v = cleanNum(d.amount);
-    // noPrincipal 입금(배당·이자) = 계좌 내부 소득 → in 아님, 흡수 판정용 incomeIn(utils.ts와 동일)
-    if (d.noPrincipal) { incomeIn += v; continue; }
+    // 미반영(noPrincipal) 행은 입금·출금 모두 흐름에서 제외(순수 메모). utils.ts와 동일.
+    if (d.noPrincipal) { memoNet += v; continue; }
     if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
   }
   for (const w of wds || []) {
     if (!w || !inRange(w.date || '')) continue;
     const v = cleanNum(w.amount);
+    if (w.noPrincipal) { memoNet -= v; continue; }
     if (v > 0) outFlow += v; else if (v < 0) inFlow += -v;
   }
-  return { in: inFlow, out: outFlow, net: inFlow - outFlow, incomeIn };
+  return { in: inFlow, out: outFlow, net: inFlow - outFlow, memoNet };
 }
 
 // utils.ts cumDepositsUpTo 미러 (원금 anchor 경로)
@@ -568,6 +569,24 @@ console.log('\n── 파트④ 통합 뷰 이관 쌍 상쇄 ──');
   const u = read('src/utils.ts');
   const efr = u.slice(u.indexOf('export const externalFlowInRange'), u.indexOf('export const dailyFlowAdjustedRate'));
   ok('#41e 개별 계좌 흐름(externalFlowInRange)에는 이관 예외가 없다', efr.length > 200 && !/transfer/.test(efr));
+}
+
+// #41f 이 파일의 `externalFlowInRange` 미러가 src와 같은 규약인지 — 미반영(noPrincipal) 행은
+//      입금·출금 **모두** 흐름에서 제외한다(2026-09 사용자 확정). 미러만 낡으면 이 스크립트의
+//      이관 계산이 조용히 src와 갈린다(이관 행은 noPrincipal:false라 값은 같지만, 다음 사람이
+//      이 미러를 참조 구현으로 믿는다).
+{
+  const f = externalFlowInRange(
+    [{ date: '2026-09-02', amount: 1_000_000, noPrincipal: true }],
+    [{ date: '2026-09-02', amount: 2_000_000, noPrincipal: true }], '', '2026-09-02');
+  ok('#41f 미반영 입금은 흐름에서 제외', f.in === 0);
+  ok('#41f 미반영 출금도 흐름에서 제외', f.out === 0);
+  ok('#41f memoNet = 입금 − 출금(부호 보존)', f.memoNet === -1_000_000);
+  // 대조군 — 반영(일반) 행은 종전대로 흐름에 든다(전부 빼는 회귀 차단)
+  const g = externalFlowInRange(
+    [{ date: '2026-09-02', amount: 1_000_000 }],
+    [{ date: '2026-09-02', amount: 2_000_000 }], '', '2026-09-02');
+  ok('#41f 반영 행은 종전대로 흐름에 든다', g.in === 1_000_000 && g.out === 2_000_000 && g.memoNet === 0);
 }
 
 // ── 파트⑤ 동일 코드 병합 — src/utils.ts 직접 import ────────────────────────────

@@ -295,7 +295,7 @@ const cumDepositsUpTo = (date, depositHistory, depositHistory2) => {
 // rateOf: 행 → 환율(해외계좌는 d.fxRate, 국내는 1). 미전달 시 1(원화 계좌).
 export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusive, toInclusive, rateOf) => {
   const rate = typeof rateOf === 'function' ? rateOf : () => 1;
-  let inFlow = 0, outFlow = 0, incomeIn = 0;
+  let inFlow = 0, outFlow = 0, memoNet = 0;
   const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
   // ⚠️ Math.abs 금지 — DepositPanel은 음수 '정정 행'을 빨간 글씨로 명시 지원한다
   //    (DepositPanel.tsx 금액 셀: cleanNum(h.amount) >= 0 ? 파랑 : 빨강).
@@ -305,18 +305,23 @@ export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusi
   for (const d of depositHistory || []) {
     if (!d || !inRange(d.date || '')) continue;
     const v = cleanNum(d.amount) * rate(d);
-    // noPrincipal 입금(배당·이자) = 계좌 **내부** 소득 → 외부 유입(in)이 아니다(Dietz 규약 불변).
-    // 다만 예수금(장부)은 그만큼 움직이므로 흡수 판정용으로 `incomeIn`에 따로(부호 보존) 합산한다.
-    // 소비자가 이 필드를 읽지 않으면 반환값의 in/out/net은 종전과 1바이트도 다르지 않다.
-    if (d.noPrincipal) { incomeIn += v; continue; }
+    if (d.noPrincipal) { memoNet += v; continue; }
     if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
   }
   for (const w of depositHistory2 || []) {
     if (!w || !inRange(w.date || '')) continue;
     const v = cleanNum(w.amount) * rate(w);
+    // ⚠️ **출금도 `noPrincipal`이면 흐름에서 제외**(2026-09 사용자 확정 — 되돌리지 말 것).
+    //    '원금 비영향' 표시는 그 행을 **어떤 집계에도 넣지 않는 순수 메모**로 쓰겠다는 뜻이다.
+    //    분배금은 계좌가 낸 수익이지만 언제 어디에 쓸지는 사용자가 정하므로, 그 이동을 기록만 하고
+    //    성과 계산에서는 빼겠다는 것. 다른 소비자(원금·누적 합계·차트 마커·자산검증)는 이미 전부
+    //    제외하고 있었고 **흐름만 예외**였다 — 그 비대칭을 없앤다.
+    if (w.noPrincipal) { memoNet -= v; continue; }
     if (v > 0) outFlow += v; else if (v < 0) inFlow += -v;
   }
-  return { in: inFlow, out: outFlow, net: inFlow - outFlow, incomeIn };
+  // memoNet = Σ(미반영 입금) − Σ(미반영 출금), 부호 보존. **흐름이 아니다** — 장부(예수금) 관측을
+  // 보정하는 용도뿐이다(같은 날 실제 외부 흐름이 함께 있을 때만 의미가 있다).
+  return { in: inFlow, out: outFlow, net: inFlow - outFlow, memoNet };
 };
 
 // 일간 수익률(%) — 유입은 기초(BOD)·유출은 기말(EOD) 가중한 Modified Dietz.
@@ -501,22 +506,20 @@ export const computeDailyMetricsSeries = (rows) => {
     const dV = h.evalAmount - prevV;
     const ownIn = h.flowIn || 0, ownOut = h.flowOut || 0;
     const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
-    // 원장에 기록된 계좌 내부 소득(noPrincipal 입금 = 배당·이자, externalFlowInRange.incomeIn). 외부 흐름이
-    // 아니라 IN에는 없지만 예수금(장부)은 그만큼 움직이므로, 흡수 판정의 장부 관측에서 이 몫을 걷어내야
-    // '외부 흐름이 V에 반영됐는가'만 남는다. ⚠️ 이게 없으면 같은 날 분배금 수령(+D)과 이체 출금(−D)이 함께
-    // 반영돼 장부가 그대로일 때 '흐름이 V 밖'(unreflected-idle)으로 오판해 −D를 영영 이월·폐기하고 분배 소득
-    // D가 손익에서 사라진다(2026-09 실측 D3). 소득 미기록(0)이면 종전과 1바이트도 다르지 않다.
-    // ⚠️ 소득은 **그 행의 것만** 쓴다(이월 금지). bookDelta는 전일 대비 '하루치 델타'라, 그 행에서 이미
-    //    걷어낸 소득이 다음 날 raw에는 없는데 또 빼면 **순수 이중 차감**이 된다. 실측(2026-09 적대적 검증):
-    //    소득 반영 + 같은 날 다른 장부 변동이 겹쳐 비-idle 보류가 되면 소득이 무기한 이월돼, 장부가 1원도
-    //    안 움직인 날의 미반영 출금이 '흡수됨'으로 확정되고 출금액 전액이 가짜 이익이 된다(TWR +15.12% vs
-    //    정답 +3.00%). 반대로 착지한 입금이 미반영으로 오판돼 15행 뒤 폐기되는 경로도 있다.
-    //    ⚠️ '소득이 장부에 반영됐는가'는 관측으로 알 수 없다 — bookDelta === income(idle)과
-    //    '둘 다 미반영이라 bookDelta가 0'은 구조적으로 구별 불가다. 그래서 이월하지 않는 쪽을 택한다.
-    const income = h.incomeIn || 0;
+    // 미반영(noPrincipal) 원장 행의 순액(`externalFlowInRange.memoNet` — 입금 +, 출금 −).
+    // 흐름(IN/OUT)에는 **들어가지 않지만** 예수금(장부)은 그만큼 움직일 수 있으므로, 흡수 판정의 장부
+    // 관측에서 이 몫을 걷어내야 '외부 흐름이 V에 반영됐는가'만 남는다. 같은 날 실제 외부 흐름이 함께
+    // 있을 때만 의미가 있다(미반영 행만 있으면 f === 0이라 판정 자체를 하지 않는다).
+    // ⚠️ 그 행의 것만 쓴다(이월 금지). bookDelta는 전일 대비 '하루치 델타'라, 그 행에서 이미 걷어낸
+    //    몫이 다음 날 raw에는 없는데 또 빼면 **순수 이중 차감**이 된다. 실측(2026-09 적대적 검증):
+    //    무기한 이월되면 장부가 1원도 안 움직인 날의 미반영 출금이 '흡수됨'으로 확정돼 출금액 전액이
+    //    가짜 이익이 된다(TWR +15.12% vs 정답 +3.00%). 반대로 착지한 입금이 미반영으로 오판돼 15행 뒤
+    //    폐기되는 경로도 있다. ⚠️ '그 몫이 장부에 반영됐는가'는 관측으로 알 수 없다(bookDelta === memo와
+    //    '둘 다 미반영이라 0'이 구조적으로 구별 불가) — 그래서 이월하지 않는 쪽을 택한다.
+    const memo = h.memoNet || 0;
     // 1차 — 이월을 실은 채 판정한다. 이 행이 흐름을 흡수했다면(held=false) 이월을 그대로 소비한다.
     let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
-    const bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
+    const bookDelta = h.bookDelta != null ? h.bookDelta - memo : null;
     let reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
     // ⚠️ `held`는 **이월 판정**이다(종전과 완전히 동일한 값). 화면 보류 여부는 아래 `emitHeld`이며,
     //    둘을 다시 하나로 합치지 말 것 — 이월·폐기 로직이 표시 정책에 끌려다니게 된다.
@@ -1910,7 +1913,7 @@ export const buildHistoryCSV = (history, depositHistory, depositHistory2, rateOf
       ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, rateOf)
       : { in: 0, out: 0 };
     return {
-      date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out, incomeIn: flow.incomeIn || 0,
+      date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out, memoNet: flow.memoNet || 0,
       bookDelta: prev ? bookDeltaBetween(bookByDate, prev.date, h.date) : null,
     };
   });
