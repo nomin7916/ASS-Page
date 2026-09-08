@@ -407,7 +407,10 @@ ok('#G16 통합: 기여일 카운트로 전 구간 보류 판정',
   /noBase = !prev \|\| cp == null \|\| cpP == null \|\| \(n != null && nP != null && n === nP\)/.test(dashNoC));
 ok('#G16b 개별: 같은 규약', /noBase = !prev \|\| cp == null \|\| cpP == null \|\| \(c != null && cP != null && c === cP\)/.test(histNoC));
 ok('#G16c utils가 count를 낸다', /return \{ profit, twr, count \};/.test(utils));
-ok('#G16d 훅이 okCount를 낸다', /return \{ twr, cumProfit, okCount \};/.test(stripComments(intHook)));
+// ⚠️ 2026-09부터 통합 누적은 손복제 대신 공용 `accumulateDailySeries`(profit/twr/count)를 쓴다 —
+//    손익·배율에 같은 게이트(r=−100% 흡수)를 적용하는 유일한 지점이라 손복제하면 %와 ₩이 갈린다.
+ok('#G16d 훅이 okCount를 낸다(공용 누적기의 count)',
+  /return \{ twr, cumProfit: profit, okCount: count \};/.test(stripComments(intHook)));
 
 // #G17 ⚠️ 해외계좌에서 '수익률 차트와 같은 기준'이라 단언하지 않는다 — 표는 원화 프레임,
 //     차트(App.tsx accountTwrByDate)는 USD 프레임이라 구조적으로 다르다(KRW 계좌만 보면 안 드러난다).

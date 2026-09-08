@@ -130,10 +130,11 @@ export function useChartInteraction({
     const sData = finalChartData[Math.min(idx1, idx2)];
     const eData = finalChartData[Math.max(idx1, idx2)];
     // 구간 실손익 = 누적 Σ dodAbsChange 차분(통합 calculateIntSelection·App defaultSelectionResult와 같은 규약).
-    // raw ΔV(입출금 포함)는 cumProfit이 없을 때만 폴백 — 정보패널 ₩이 %(TWR)와 같은 소스라야 한다.
-    const profit = (sData.cumProfit != null && eData.cumProfit != null)
-      ? eData.cumProfit - sData.cumProfit
-      : eData.evalAmount - sData.evalAmount;
+    // ⚠️ **null 처리를 %(myReturnPeriodRate)와 대칭으로** 둘 것 — 그쪽은 시작점 null을 `?? 0`(조회시작
+    //    기준점)으로 흡수하는데 ₩만 "둘 다 있어야"로 두면 시작점이 첫 기록 이전일 때 ₩만 raw ΔV로
+    //    떨어져 **평가액 전액이 기간 손익으로** 찍힌다(조회기간 '전체'·'5년'에서 상시 도달).
+    //    끝점이 없으면 %도 null이라 값 자체가 렌더되지 않으므로 ₩도 null이 맞다.
+    const profit = eData.cumProfit != null ? eData.cumProfit - (sData.cumProfit ?? 0) : null;
     const rate = sData.evalAmount > 0 ? (profit / sData.evalAmount) * 100 : 0;
     const indPeriodRates: Record<string, number | null> = {};
     INDICATOR_CHART_KEYS.forEach(k => {

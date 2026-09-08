@@ -82,7 +82,7 @@ import {
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries, evalSeriesDates,
-  externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
+  externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt,
   buildBookCostSeries, bookDeltaBetween, computeDailyMetricsSeries,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
@@ -1480,15 +1480,11 @@ export default function App() {
         bookDelta: prev ? bookDeltaBetween(activeBookByDate, prev.date, h.date) : null,
       };
     });
-    const metrics = computeDailyMetricsSeries(rows);
-    const cumProfit = new Map();
-    let acc = 0;
-    for (const r of rows) {
-      const m = metrics.get(r.date);
-      if (m && m.dodAbsChange != null) acc += m.dodAbsChange;
-      cumProfit.set(r.date, acc);
-    }
-    return { twr: computeCumulativeTwrSeries(rows), cumProfit };
+    // ⚠️ 누적을 손복제하지 말 것 — `accumulateDailySeries`가 손익·배율에 **같은 게이트**(r=−100% 흡수)를
+    //    적용하는 유일한 지점이다. 따로 더하면 그 행의 −V가 ₩에만 남아 같은 줄의 %와 정면으로 모순된다.
+    //    이 함수의 twr은 `computeCumulativeTwrSeries`와 문자 그대로 같다(verify-period #10이 단언).
+    const { profit, twr } = accumulateDailySeries(rows.map(r => r.date), computeDailyMetricsSeries(rows));
+    return { twr, cumProfit: profit };
   }, [history, activePortfolioAccountType, portfolio, stockHistoryMap, activeCloseEvalByDate, activeBookByDate, depositHistory, depositHistory2]);
   const accountTwrByDate = accountDailySeries.twr;
   const accountCumProfitByDate = accountDailySeries.cumProfit;
@@ -4085,7 +4081,9 @@ export default function App() {
     const e = finalChartData[finalChartData.length - 1];
     // 구간 실손익 = 누적 Σ dodAbsChange 차분(통합 calculateIntSelection과 같은 규약). raw ΔV(입출금 포함)는
     // 두 값이 없을 때만 폴백 — 정보패널 ₩이 %(TWR)와 같은 소스라야 같은 줄에서 모순되지 않는다.
-    const profit = (s.cumProfit != null && e.cumProfit != null) ? e.cumProfit - s.cumProfit : e.evalAmount - s.evalAmount;
+    // ⚠️ null 처리를 %(myReturnPeriodRate: 시작점 null → `?? 0`)와 **대칭으로** 둘 것 — 비대칭이면
+    //    조회기간이 첫 기록보다 길 때 ₩만 raw ΔV로 떨어져 평가액 전액이 기간 손익으로 찍힌다.
+    const profit = e.cumProfit != null ? e.cumProfit - (s.cumProfit ?? 0) : null;
     const indRates = {};
     INDICATOR_CHART_KEYS.forEach(k => {
       const sp = s[`${k}Point`]; const ep = e[`${k}Point`];

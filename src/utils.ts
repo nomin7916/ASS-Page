@@ -482,8 +482,6 @@ const ACTIVE_DRIFT_RATIO = 0.05; // 흐름 대비 이만큼도 안 움직인 행
 export const computeDailyMetricsSeries = (rows) => {
   const out = new Map();
   let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
-  // 아직 장부에 반영되지 않은 것으로 판정된 계좌 내부 소득(noPrincipal 입금)의 이월 — 흐름과 함께 들고 간다.
-  let carryIncome = 0;
   const list = Array.isArray(rows) ? rows : [];
   let prev = null; // ⚠️ list[i-1]이 아니라 '직전 유효 행' — 무효 행을 건너뛰면 기준이 어긋난다
   // 직전 **산출** 행 — 값의 기준. 보류('-') 행에서는 전진하지 않는다(함수 상단 규약 참조).
@@ -508,10 +506,17 @@ export const computeDailyMetricsSeries = (rows) => {
     // '외부 흐름이 V에 반영됐는가'만 남는다. ⚠️ 이게 없으면 같은 날 분배금 수령(+D)과 이체 출금(−D)이 함께
     // 반영돼 장부가 그대로일 때 '흐름이 V 밖'(unreflected-idle)으로 오판해 −D를 영영 이월·폐기하고 분배 소득
     // D가 손익에서 사라진다(2026-09 실측 D3). 소득 미기록(0)이면 종전과 1바이트도 다르지 않다.
-    const ownIncome = h.incomeIn || 0;
+    // ⚠️ 소득은 **그 행의 것만** 쓴다(이월 금지). bookDelta는 전일 대비 '하루치 델타'라, 그 행에서 이미
+    //    걷어낸 소득이 다음 날 raw에는 없는데 또 빼면 **순수 이중 차감**이 된다. 실측(2026-09 적대적 검증):
+    //    소득 반영 + 같은 날 다른 장부 변동이 겹쳐 비-idle 보류가 되면 소득이 무기한 이월돼, 장부가 1원도
+    //    안 움직인 날의 미반영 출금이 '흡수됨'으로 확정되고 출금액 전액이 가짜 이익이 된다(TWR +15.12% vs
+    //    정답 +3.00%). 반대로 착지한 입금이 미반영으로 오판돼 15행 뒤 폐기되는 경로도 있다.
+    //    ⚠️ '소득이 장부에 반영됐는가'는 관측으로 알 수 없다 — bookDelta === income(idle)과
+    //    '둘 다 미반영이라 bookDelta가 0'은 구조적으로 구별 불가다. 그래서 이월하지 않는 쪽을 택한다.
+    const income = h.incomeIn || 0;
     // 1차 — 이월을 실은 채 판정한다. 이 행이 흐름을 흡수했다면(held=false) 이월을 그대로 소비한다.
-    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger, income = ownIncome + carryIncome;
-    let bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
+    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
+    const bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
     let reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
     // ⚠️ `held`는 **이월 판정**이다(종전과 완전히 동일한 값). 화면 보류 여부는 아래 `emitHeld`이며,
     //    둘을 다시 하나로 합치지 말 것 — 이월·폐기 로직이 표시 정책에 끌려다니게 된다.
@@ -524,9 +529,8 @@ export const computeDailyMetricsSeries = (rows) => {
     //    예수금 수정일이 며칠 어긋나는 것은 구조적으로 정상 — DepositPanel은 평가액을 건드리지 않는다).
     //    FROZEN 상한(CARRY_MAX_ROWS)은 그대로 적용돼 무한 이월은 막는다.
     if (held && (carryRows >= CARRY_MAX_ROWS || (bookDelta == null && activeRows >= CARRY_MAX_ACTIVE_ROWS))) {
-      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0; carryIncome = 0;
-      fIn = ownIn; fOut = ownOut; ledger = ownLedger; income = ownIncome;
-      bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
+      fIn = ownIn; fOut = ownOut; ledger = ownLedger;
       reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
       held = reason != null;
     }
@@ -562,16 +566,13 @@ export const computeDailyMetricsSeries = (rows) => {
     // flowSuspect(오늘 라이브 이상치)는 항상 마지막 행이라 이월 대상이 아니다
     if (held && !h.flowSuspect && netFlow !== 0) {
       carryIn = fIn; carryOut = fOut; carryLedger = ledger;
-      // 소득 이월은 '장부가 소득만큼도 안 움직인' 행(비-idle)에서만 — idle(장부 변화 = 소득 정확히)이면
-      // 소득은 이미 반영된 것이라 다음 행에서 한 번 더 걷어내면 이중 차감이 된다.
-      carryIncome = openRow ? 0 : income;
       carryRows += 1;
       // ⚠️ `dV !== 0`으로 세지 말 것 — crypto(24시간 시장)·예적금(일 단위 단리)을 보유하면
       //    비거래일에도 총자산이 몇십만 원씩 움직여, 주말 2행만으로 ACTIVE 예산이 소진되고
       //    월요일에 이월이 폐기돼 원래 버그가 재현된다. 흐름 대비 유의미한 변동만 센다.
       if (Math.abs(dV) > Math.abs(netFlow) * ACTIVE_DRIFT_RATIO) activeRows += 1;
     } else {
-      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0; carryIncome = 0;
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
     }
     prev = h;
     // ⚠️ 보류('-') 행은 기준을 전진시키지 않는다 — 그 ΔV는 다음 산출 행이 합산한다.
@@ -860,9 +861,12 @@ export const periodRateGapLine = ({ prevEval, curEval, rate, unit, basis }) => {
 //    누적 차분은 흡수 판정 입력이 **항상 하루치**라 넷을 동시에 없앤다. 부수 효과로 기간 %가
 //    수익률 차트 라인(누적 TWR)·드래그 구간 수익률과 **같은 규약**이 된다.
 // ⚠️ held 판정은 `dodAbsChange == null`이다 — computeDailyMetricsSeries의 계약이
-//    `dodAbsChange: held ? null : dV - netFlow`이고, intMonthlyHistory는 held 필드를 싣지 않는다.
+//    `dodAbsChange: emitHeld ? null : (openRow ? spanV : spanV - netFlow)`이고(값의 기준은 인접 행이
+//    아니라 직전 산출 행 — 그 함수 상단 '기준(anchor) 행 규약'), intMonthlyHistory는 held 필드를 싣지 않는다.
 // ⚠️ 배율 갱신은 위 computeCumulativeTwrSeries와 **문자 그대로 같아야 한다**
 //    (held → 배율 1.0 유지 / next <= 0 → 배율 유지). 한쪽만 고치면 표와 차트가 갈린다.
+// ⚠️ **개별 차트·통합 차트의 누적도 이 함수를 쓴다**(App.tsx accountDailySeries · useIntegratedData
+//    intTwrCumByDate). 손복제하면 배율 흡수 게이트가 한쪽에만 들어가 %와 ₩이 갈린다(실측 2026-09).
 export const accumulateDailySeries = (ascDates, metricsMap) => {
   // count = 그 날짜까지 **실제로 기여한(= held가 아닌) 날**의 누적 개수.
   // ⚠️ 기간 표의 보류 판정에 반드시 필요하다 — 기간의 모든 날이 held면 profit도 factor도
@@ -875,9 +879,14 @@ export const accumulateDailySeries = (ascDates, metricsMap) => {
     if (!d) continue;
     const m = metricsMap ? metricsMap.get(d) : null;
     const ok = !!(m && m.dodAbsChange != null);
-    if (ok) { acc += m.dodAbsChange; n += 1; }
     const next = factor * (1 + (ok ? (m.dodChange || 0) : 0) / 100);
-    if (Number.isFinite(next) && next > 0) factor = next;
+    // ⚠️ 손익과 배율은 **같은 게이트**를 지나야 한다. `r = −100%`(평가 0 + 출금 없음 = 데이터 누락·
+    //    계좌를 비운 이관)는 배율을 0으로 만들어 이후 전 구간을 −100%에 고정하므로 곱에서 흡수하는데,
+    //    손익만 그대로 더하면 그 행의 −V가 누적에 남아 **같은 줄의 %와 ₩이 정면으로 모순**된다
+    //    (실측 2026-09: 정보패널 `+1.00%` 옆에 `−₩98,995,000`). 흡수된 행은 손익·기여일에서도 뺀다.
+    const usable = Number.isFinite(next) && next > 0;
+    if (ok && usable) { acc += m.dodAbsChange; n += 1; }
+    if (usable) factor = next;
     profit.set(d, acc);
     twr.set(d, (factor - 1) * 100);
     count.set(d, n);

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, computeCumulativeTwrSeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, accumulateDailySeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -576,19 +576,12 @@ export function useIntegratedData({
         ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect, bookDelta,
       };
     });
-    const twr = computeCumulativeTwrSeries(rows);
-    const metrics = computeDailyMetricsSeries(rows);
-    const cumProfit = new Map(), okCount = new Map();
-    let acc = 0, n = 0;
-    for (const r of rows) {
-      const m = metrics.get(r.date);
-      if (m && m.dodAbsChange != null) { acc += m.dodAbsChange; n += 1; }
-      cumProfit.set(r.date, acc);
-      // okCount = 기여일(보류가 아닌 날) 누적 개수. 기간 표가 '그 기간 전체가 보류'를 판별하는 근거다
-      // (경계 차분이 0인 것만으로는 '변동 없음'과 구분되지 않는다 — utils.accumulateDailySeries 주석).
-      okCount.set(r.date, n);
-    }
-    return { twr, cumProfit, okCount };
+    // ⚠️ 누적을 손복제하지 말 것 — `accumulateDailySeries`가 손익·배율·기여일에 **같은 게이트**
+    //    (r=−100% 흡수)를 적용하는 유일한 지점이다. 따로 더하면 그 행의 −V가 ₩에만 남아 %와 갈린다.
+    //    okCount = 기여일(보류가 아닌 날) 누적 개수. 기간 표가 '그 기간 전체가 보류'를 판별하는 근거다
+    //    (경계 차분이 0인 것만으로는 '변동 없음'과 구분되지 않는다 — utils.accumulateDailySeries 주석).
+    const { profit, twr, count } = accumulateDailySeries(rows.map(r => r.date), computeDailyMetricsSeries(rows));
+    return { twr, cumProfit: profit, okCount: count };
   }, [computedIntHistory]);
 
   const intChartData = useMemo(() => {

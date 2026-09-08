@@ -84,7 +84,6 @@ const ACTIVE_DRIFT_RATIO = 0.05;
 const computeDailyMetrics = (rows) => {
   const out = new Map();
   let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
-  let carryIncome = 0;
   const list = Array.isArray(rows) ? rows : [];
   let prev = null;
   // 직전 **산출** 행 — 값의 기준. 보류('-') 행에서는 전진하지 않는다(src/utils.ts 상단 규약).
@@ -102,18 +101,18 @@ const computeDailyMetrics = (rows) => {
     const dV = h.evalAmount - prevV;
     const ownIn = h.flowIn || 0, ownOut = h.flowOut || 0;
     const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
-    // 계좌 내부 소득(noPrincipal 입금) — 장부 관측에서 걷어내 '외부 흐름이 반영됐는가'만 남긴다(src/utils.ts 주석).
-    const ownIncome = h.incomeIn || 0;
-    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger, income = ownIncome + carryIncome;
-    let bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
+    // 계좌 내부 소득(noPrincipal 입금) — 장부 관측에서 걷어내 '외부 흐름이 반영됐는가'만 남긴다.
+    // ⚠️ 그 행의 것만 쓴다(이월 금지) — bookDelta는 하루치 델타라 이월하면 순수 이중 차감(src/utils.ts 주석).
+    const income = h.incomeIn || 0;
+    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
+    const bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
     let reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
     // held = **이월 판정**(종전과 동일한 값). 화면 보류는 아래 emitHeld — 둘을 합치지 말 것.
     let held = reason != null;
     // ACTIVE 폐기는 bookDelta가 없을 때(추측)만 — 관측이 있으면 미반영이 확정이라 폐기 시 가짜 손익
     if (held && (carryRows >= CARRY_MAX_ROWS || (bookDelta == null && activeRows >= CARRY_MAX_ACTIVE_ROWS))) {
-      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0; carryIncome = 0;
-      fIn = ownIn; fOut = ownOut; ledger = ownLedger; income = ownIncome;
-      bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
+      fIn = ownIn; fOut = ownOut; ledger = ownLedger;
       reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
       held = reason != null;
     }
@@ -135,11 +134,10 @@ const computeDailyMetrics = (rows) => {
     });
     if (held && !h.flowSuspect && netFlow !== 0) {
       carryIn = fIn; carryOut = fOut; carryLedger = ledger;
-      carryIncome = openRow ? 0 : income;
       carryRows += 1;
       if (Math.abs(dV) > Math.abs(netFlow) * ACTIVE_DRIFT_RATIO) activeRows += 1;
     } else {
-      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0; carryIncome = 0;
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
     }
     prev = h;
     if (!emitHeld || reason === 'no-data') anchor = h;
@@ -162,6 +160,27 @@ const computeCumulativeTwr = (rows) => {
     out.set(h.date, (factor - 1) * 100);
   }
   return out;
+};
+
+// 누적 손익·배율·기여일 — src/utils.ts accumulateDailySeries 미러.
+// ⚠️ 손익과 배율은 **같은 게이트**(usable)를 지난다 — r=−100% 행을 곱에서만 흡수하고 손익엔 그대로
+//    더하면 같은 줄의 %와 ₩이 정면으로 모순된다(#34).
+const accumulateDaily = (ascDates, metricsMap) => {
+  const profit = new Map(), twr = new Map(), count = new Map();
+  let acc = 0, factor = 1, n = 0;
+  for (const d of ascDates || []) {
+    if (!d) continue;
+    const m = metricsMap ? metricsMap.get(d) : null;
+    const ok = !!(m && m.dodAbsChange != null);
+    const next = factor * (1 + (ok ? (m.dodChange || 0) : 0) / 100);
+    const usable = Number.isFinite(next) && next > 0;
+    if (ok && usable) { acc += m.dodAbsChange; n += 1; }
+    if (usable) factor = next;
+    profit.set(d, acc);
+    twr.set(d, (factor - 1) * 100);
+    count.set(d, n);
+  }
+  return { profit, twr, count };
 };
 
 // 구간 재베이스 — src/utils.ts rebaseTwr 미러
@@ -845,6 +864,48 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
   check('#33d 둘 다 반영된 날 정산: (V − 기준V) + 출금 3D', mD.get('d2').dodAbsChange, (98_800_000 - 100_000_000) + 3_000_000);
 }
 
+// #33e 소득 이월 금지(2026-09 적대적 검증이 잡은 회귀) — 소득이 **이미 장부에 반영**됐는데 같은 날 다른
+//      장부 변동이 겹쳐 비-idle 보류가 되면, 옛 코드는 그 소득을 무기한 이월해 다음 날들의 bookDelta에서
+//      한 번 더 뺐다(순수 이중 차감). 그 결과 장부가 1원도 안 움직인 날의 미반영 출금이 '흡수됨'으로
+//      확정돼 출금액 전액이 가짜 이익이 됐다.
+{
+  const rows = [
+    { date: 'e0', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    // 소득 10,000,000(예수금 반영) + 출금 12,000,000(미반영) + 매입원가 정정 +500,000 → 비-idle 보류
+    { date: 'e1', evalAmount: 101_000_000, flowIn: 0, flowOut: 12_000_000, incomeIn: 10_000_000, bookDelta: 10_500_000 },
+    { date: 'e2', evalAmount: 102_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 }, // 장부 불변 → 여전히 미반영
+    { date: 'e3', evalAmount: 103_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+  ];
+  const m = computeDailyMetrics(rows);
+  checkEq('#33e 소득+다른 장부변동 겹친 날은 보류', m.get('e1').held, true);
+  // ⚠️ 옛 코드는 여기서 +14,000,000(출금 12,000,000이 가짜 이익)을 냈다.
+  check('#33e 장부 불변 날에 이월 소득이 판정을 뒤집지 않는다', m.get('e2').dodAbsChange, 102_000_000 - 100_000_000);
+  checkEq('#33e 흐름은 계속 이월(미반영 유지)', m.get('e2').pendingFlow, -12_000_000);
+  const sum = ['e1', 'e2', 'e3'].reduce((s, d) => s + (m.get(d).dodAbsChange || 0), 0);
+  check('#33e Σ = ΔV(전체) — 출금은 끝까지 미반영', sum, 103_000_000 - 100_000_000);
+  const twr = computeCumulativeTwr(rows);
+  if (twr.get('e3') > 4) { failed++; console.error(`  ✗ #33e 누적 TWR이 부풀었다 (${twr.get('e3').toFixed(2)}% — 옛 코드 15.12%)`); }
+  else console.log(`  ✓ #33e 누적 TWR ${twr.get('e3').toFixed(2)}% (옛 코드는 15.12%)`);
+}
+
+// #34 손익·배율은 **같은 게이트**를 지난다 — `r = −100%`(평가 0 = 데이터 누락·계좌를 비운 이관) 행은
+//     곱에서 흡수되므로 누적 손익에서도 빼야 한다. 한쪽만 흡수하면 같은 줄의 %와 ₩이 정면으로 모순된다
+//     (실측 2026-09: 정보패널 `+1.00%` 옆에 `−₩98,995,000`).
+{
+  const rows = [
+    { date: 'f1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: 'f2', evalAmount: 0, flowIn: 0, flowOut: 0 },            // r = −100% → 배율 1로 흡수
+    { date: 'f3', evalAmount: 100_500_000, flowIn: 0, flowOut: 0 },  // 전일 V=0 → no-data 보류
+    { date: 'f4', evalAmount: 101_505_000, flowIn: 0, flowOut: 0 },  // +1%
+  ];
+  const acc = accumulateDaily(rows.map(r => r.date), computeDailyMetrics(rows));
+  check('#34 −100% 행은 배율에서 흡수(TWR 0%)', acc.twr.get('f2'), 0);
+  check('#34 −100% 행은 손익에서도 흡수(누적 0)', acc.profit.get('f2'), 0);
+  check('#34 복귀 후 TWR +1%', acc.twr.get('f4'), 1);
+  check('#34 복귀 후 누적 손익 = 그 1%분만', acc.profit.get('f4'), 1_005_000);
+  check('#34 기여일 카운트에서도 제외', acc.count.get('f2'), 0);
+}
+
 // #29g 하위호환의 축 — bookDelta 미제공이면 4필드가 **바이트 단위로** 종전과 같아야 한다.
 //      `unreflected-idle`/`frozen-idle`은 `bookDelta === 0`에서만 나오므로 미제공 경로는
 //      그 분기에 **구조적으로 도달할 수 없다**(논증이 아니라 구조로 보장).
@@ -1110,8 +1171,11 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     g2('CSV rows가 incomeIn을 싣는다', (utl.match(/incomeIn:\s*flow\.incomeIn\s*\|\|\s*0/g) || []).length >= 1);
     g2('소득 조정은 holdReasonOf 호출 전(bookDelta − income)에서 한다',
       /bookDelta\s*=\s*h\.bookDelta\s*!=\s*null\s*\?\s*h\.bookDelta\s*-\s*income\s*:\s*null/.test(utl));
-    g2('소득 이월은 비-idle 보류에서만(carryIncome = openRow ? 0 : income)',
-      /carryIncome\s*=\s*openRow\s*\?\s*0\s*:\s*income/.test(utl));
+    // ⚠️ 소득 **이월**은 순수 이중 차감이다(bookDelta는 하루치 델타 — 그 행에서 이미 걷어낸 소득이
+    //    다음 날 raw에는 없는데 또 뺀다). 실측: 장부가 1원도 안 움직인 날의 미반영 출금이 '흡수됨'으로
+    //    확정돼 출금액 전액이 가짜 이익(TWR +15.12% vs 정답 +3.00%). 식별자 부재로 못 박는다.
+    g2('소득을 이월하지 않는다(carryIncome 식별자 부재)', !/carryIncome/.test(utl));
+    g2('소득 보정은 그 행의 incomeIn만 쓴다', /const\s+income\s*=\s*h\.incomeIn\s*\|\|\s*0;/.test(utl));
     // ── 기준(anchor) 행 규약(2026-09 D1) 배선 ──
     g2('보류 행은 기준을 전진시키지 않는다(no-data만 예외)',
       /if\s*\(!emitHeld\s*\|\|\s*reason\s*===\s*'no-data'\)\s*anchor\s*=\s*h;/.test(utl));
@@ -1129,16 +1193,26 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     // ⚠️ '표현식 존재'만 재면 **죽은 단언**이다(변이 M8·M9 실측) — 삼항의 then 절만 남기고 조건을
     //    `false &&`로 죽여도, 개별(4088)을 지워도 통합 대시보드의 같은 패턴이 대신 통과시킨다.
     //    조건식과 폴백까지 **한 덩어리로** 못 박고, App은 개별 계좌 effect 구간을 잘라서 본다.
-    g2('드래그 선택 profit이 cumProfit 차분이다',
-      !!inter && /const\s+profit\s*=\s*\(sData\.cumProfit\s*!=\s*null\s*&&\s*eData\.cumProfit\s*!=\s*null\)\s*\?\s*eData\.cumProfit\s*-\s*sData\.cumProfit/.test(inter));
+    // ⚠️ null 처리가 %(시작점 null → `?? 0`)와 **대칭**이어야 한다 — "둘 다 있어야" 조건으로 되돌리면
+    //    시작점이 첫 기록 이전일 때 ₩만 raw ΔV로 떨어져 평가액 전액이 기간 손익으로 찍힌다.
+    g2('드래그 선택 profit이 cumProfit 차분이고 시작점 null을 0으로 흡수한다',
+      !!inter && /const\s+profit\s*=\s*eData\.cumProfit\s*!=\s*null\s*\?\s*eData\.cumProfit\s*-\s*\(sData\.cumProfit\s*\?\?\s*0\)\s*:\s*null;/.test(inter));
     const defBlock = (() => {
       if (!app) return '';
       const a = app.indexOf('setDefaultSelectionResult(null)');
       const b = app.indexOf('setDefaultSelectionResult({', a + 1);
       return (a >= 0 && b > a) ? app.slice(a, b) : '';
     })();
-    g2('조회기간 기본 선택(개별 계좌) profit이 cumProfit 차분이다',
-      /const\s+profit\s*=\s*\(s\.cumProfit\s*!=\s*null\s*&&\s*e\.cumProfit\s*!=\s*null\)\s*\?\s*e\.cumProfit\s*-\s*s\.cumProfit\s*:\s*e\.evalAmount\s*-\s*s\.evalAmount;/.test(defBlock));
+    g2('조회기간 기본 선택(개별 계좌) profit이 cumProfit 차분이고 시작점 null을 0으로 흡수한다',
+      /const\s+profit\s*=\s*e\.cumProfit\s*!=\s*null\s*\?\s*e\.cumProfit\s*-\s*\(s\.cumProfit\s*\?\?\s*0\)\s*:\s*null;/.test(defBlock));
+    // ⚠️ 누적을 손복제하면 배율 흡수 게이트가 한쪽에만 들어가 %와 ₩이 갈린다(#34).
+    g2('개별 차트 누적이 공용 accumulateDailySeries를 쓴다',
+      !!app && /accumulateDailySeries\(rows\.map\(r\s*=>\s*r\.date\),\s*computeDailyMetricsSeries\(rows\)\)/.test(app));
+    g2('통합 차트 누적이 공용 accumulateDailySeries를 쓴다',
+      /accumulateDailySeries\(rows\.map\(r\s*=>\s*r\.date\),\s*computeDailyMetricsSeries\(rows\)\)/.test(intg));
+    g2('누적기가 손익·배율에 같은 게이트를 쓴다(usable)',
+      /const\s+usable\s*=\s*Number\.isFinite\(next\)\s*&&\s*next\s*>\s*0;/.test(utl)
+      && /if\s*\(ok\s*&&\s*usable\)\s*\{\s*acc\s*\+=\s*m\.dodAbsChange;\s*n\s*\+=\s*1;\s*\}/.test(utl));
     g2('finalChartData가 cumProfit을 싣는다', !!app && /cumProfit:\s*item\.principalReturnRate\s*!=\s*null\s*\?/.test(app));
   }
 }
@@ -1197,6 +1271,11 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
       if (a !== b) { drift++; console.error(`  ✗ #32 픽스처 ${i} 일간 지표가 미러와 다름\n      미러 ${a}\n      실제 ${b}`); }
       const ta = ser(computeCumulativeTwr(rows)), tb = ser(real.computeCumulativeTwrSeries(rows));
       if (ta !== tb) { drift++; console.error(`  ✗ #32 픽스처 ${i} 누적 TWR이 미러와 다름\n      미러 ${ta}\n      실제 ${tb}`); }
+      // accumulateDailySeries — 개별·통합 차트와 기간 표가 공유하는 누적기(손익·배율·기여일)
+      const ds = rows.map(r => r.date);
+      const aa = JSON.stringify(['profit', 'twr', 'count'].map(k => [...accumulateDaily(ds, computeDailyMetrics(rows))[k].entries()]));
+      const ab = JSON.stringify(['profit', 'twr', 'count'].map(k => [...real.accumulateDailySeries(ds, real.computeDailyMetricsSeries(rows))[k].entries()]));
+      if (aa !== ab) { drift++; console.error(`  ✗ #32 픽스처 ${i} accumulateDailySeries가 미러와 다름\n      미러 ${aa}\n      실제 ${ab}`); }
     });
     const reasons = [
       [100_000_000, 100_500_000, -2_000_000, 0], [100_000_000, 100_500_000, -2_000_000, -500_000],
