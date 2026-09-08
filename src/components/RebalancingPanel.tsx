@@ -719,10 +719,12 @@ export default function RebalancingPanel({
   const ladderTotalAction = ladderSignOk ? ladderAction : 0;
   const ladderTargetAmount = ladderSignOk ? Math.abs(ladderAction) * ladderPrice : 0;
   const ladderSideLabel = ladderModal && ladderModal.side === 'sell' ? '매도' : '매수';
+  // ⚠️ 옛 문구('닫고 현재가를 다시 누르세요')로 되돌리지 말 것 — 계산기 안에 매수/매도 토글과
+  //    목표 금액 입력이 생겨 **창을 닫지 않고** 그 자리에서 해결된다. 탈출구를 그대로 안내한다.
   const ladderEmptyReason = (ladderRow && !ladderSignOk)
     ? (ladderAction === 0
-        ? `추가 수량·시세가 바뀌어 지금은 ${ladderSideLabel}할 수량이 없습니다.`
-        : `추가 수량·시세가 바뀌어 지금은 ${ladderAction < 0 ? '매도' : '매수'} ${formatNumber(Math.abs(ladderAction))}주가 필요합니다 — 이 창은 분할${ladderSideLabel} 계산기입니다. 닫고 현재가를 다시 누르세요.`)
+        ? `리밸런싱은 지금 이 종목의 매매를 지시하지 않습니다 — 위에서 방향을 고르고 목표 금액을 직접 입력하세요.`
+        : `리밸런싱은 지금 ${ladderAction < 0 ? '매도' : '매수'} ${formatNumber(Math.abs(ladderAction))}주를 지시합니다 — 위에서 방향을 ${ladderAction < 0 ? '매도' : '매수'}로 바꾸거나, 분할${ladderSideLabel} 목표 금액을 직접 입력하세요.`)
     : null;
   // 전일 종가 복원용 — 이 표의 '등락률' 열과 같은 값. 모르면 null(0%가 아니다).
   const ladderChangeRate = ladderRow ? (ladderRow.changeRate ?? null) : null;
@@ -1490,13 +1492,16 @@ export default function RebalancingPanel({
                           <td className="py-3 px-3 text-gray-400 text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.curEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.curEval * usdkrw)}</span></div> : formatCurrency(item.curEval)}</td>
                         )}
                         {!H('currentPrice') && (() => {
-                          // 매수(+)·매도(−) 모두 분할 계산기를 연다. 가격이 0인 행(예적금·기준가 미로드
-                          // 펀드)은 사다리가 만들어지지 않으므로 빈 모달 대신 클릭 자체를 막는다.
-                          const ladderOpenable = totalAction !== 0 && itemPrice > 0;
+                          // 매수(+)·매도(−)뿐 아니라 **수량 0인 행도** 분할 계산기를 연다 — 계산기 안에서
+                          // 방향을 직접 고르고 목표 금액을 입력할 수 있으므로(사용자 요청 2026-09), 리밸런싱이
+                          // 지금 매매를 지시하지 않는 종목에서도 "얼마어치 나눠 살까"를 따져볼 수 있어야 한다.
+                          // ⚠️ 가격이 0인 행(예적금·기준가 미로드 펀드)만은 계속 막는다 — 사다리가 원리적으로
+                          //    만들어지지 않아(호가 격자가 없다) 빈 모달만 뜬다.
+                          const ladderOpenable = itemPrice > 0;
                           const isSellAction = totalAction < 0;
                           return (
                           <td
-                            className={`py-3 px-3 font-mono text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none transition-colors ${ladderOpenable ? (isSellAction ? 'text-gray-300 cursor-pointer hover:bg-red-900/30 hover:text-red-300' : 'text-gray-300 cursor-pointer hover:bg-blue-900/30 hover:text-blue-300') : 'text-gray-500'}`}
+                            className={`py-3 px-3 font-mono text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none transition-colors ${!ladderOpenable ? 'text-gray-500' : totalAction === 0 ? 'text-gray-300 cursor-pointer hover:bg-gray-700/40 hover:text-gray-100' : isSellAction ? 'text-gray-300 cursor-pointer hover:bg-red-900/30 hover:text-red-300' : 'text-gray-300 cursor-pointer hover:bg-blue-900/30 hover:text-blue-300'}`}
                             tabIndex={0}
                             onKeyDown={handleReadonlyCellNav}
                             onClick={ladderOpenable ? (e) => {
@@ -1508,15 +1513,16 @@ export default function RebalancingPanel({
                               // ⚠️ 가격·수량·목표금액을 여기서 복사하지 말 것 — 바로 아래에서 그 종목의
                               //    현재가를 재조회하므로, 스냅샷을 담으면 새 가격이 모달에 닿지 않는다.
                               //    모달 props는 위 '라이브 파생' 블록이 rebalanceData에서 매 렌더 만든다.
-                              // ⚠️ side만은 스냅샷이다 — 사용자가 '분할매도 계산기 열기'를 눌러 연 창의
-                              //    정체성이라 열린 뒤 '추가' 칸 편집으로 뒤집히면 안 된다(위 파생 블록 참조).
+                              // ⚠️ side만은 스냅샷이다 — 열린 뒤 '추가' 칸 편집으로 뒤집히면 안 된다(위 파생 블록).
+                              //    여는 시점의 기본값은 리밸런싱이 지시하는 방향이고, 그 뒤로는 계산기 안의
+                              //    매수/매도 토글(onSideChange)만이 이 값을 바꾼다.
                               setLadderModal({ itemId: item.id, pos: { x, y }, side: isSellAction ? 'sell' : 'buy' });
                               // 계산기를 여는 시점에 그 종목의 현재가를 새로 받아온다 — 목표 금액이
                               // 현재가에서 파생되므로 낡은 가격으로 열면 사다리 전체가 낡는다.
                               // await 하지 않는다(모달은 먼저 열리고, 결과는 재계산을 거쳐 흘러든다).
                               if (item.code && onRefreshPrice) onRefreshPrice(item.id, item.code);
                             } : undefined}
-                            title={ladderOpenable ? (isSellAction ? '클릭하여 분할매도 계산기 열기' : '클릭하여 분할매수 계산기 열기') : undefined}
+                            title={ladderOpenable ? (totalAction === 0 ? '클릭하여 분할매수·매도 계산기 열기 (방향은 계산기에서 고릅니다)' : isSellAction ? '클릭하여 분할매도 계산기 열기' : '클릭하여 분할매수 계산기 열기') : undefined}
                           >
                             {isSavings ? <span className="text-gray-600">-</span> : isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}
                           </td>
@@ -2252,6 +2258,7 @@ export default function RebalancingPanel({
           <LadderTradeModal
             key={ladderModal.itemId}
             side={ladderModal.side}
+            onSideChange={(next) => setLadderModal(m => (m && m.side !== next) ? { ...m, side: next } : m)}
             itemName={ladderRow.name}
             currentPrice={ladderPrice}
             totalAction={ladderTotalAction}

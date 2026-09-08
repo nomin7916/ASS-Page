@@ -749,7 +749,13 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
     /\}, \[currentPrice, tickSize, targetAmount, side, mult\]\);/.test(src));
 
   const panel = readFileSync(join(ROOT, 'src/components/RebalancingPanel.tsx'), 'utf8');
-  ok('#54 현재가 셀이 매도(−)에서도 열린다', /const ladderOpenable = totalAction !== 0 && itemPrice > 0;/.test(panel));
+  // ⚠️ 계약 변경(2026-09): 매수·매도뿐 아니라 **수량 0인 행도** 연다 — 계산기 안에서 방향과 목표
+  //    금액을 직접 고를 수 있게 됐기 때문이다. 옛 게이트(totalAction !== 0)로 되돌리면 리밸런싱이
+  //    매매를 지시하지 않는 종목에서 계산기에 닿을 방법이 사라진다.
+  // ⚠️ itemPrice > 0만은 남긴다 — 호가 격자가 없어 사다리가 원리적으로 만들어지지 않는다.
+  ok('#54 현재가 셀이 매도(−)·수량 0에서도 열리고, 가격 0만 막는다',
+    /const ladderOpenable = itemPrice > 0;/.test(panel)
+    && !/const ladderOpenable = totalAction !== 0/.test(panel));
   // ⚠️ 아래 3건(#55·#56·#96)은 스냅샷 리터럴에서 **라이브 파생 블록**으로 자리를 옮겼다.
   //    계약(방향·앵커·등락률 소스)은 그대로다 — 옛 정규식으로 되돌리지 말 것.
   // ⚠️ side는 **여는 시점 스냅샷**이다 — ladderAction에서 라이브 파생하면 '추가' 칸 편집만으로
@@ -865,7 +871,7 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
     && /const ladderTotalAction = ladderSignOk \? ladderAction : 0;/.test(panel)
     // 부호가 어긋난 이유가 화면에 남아야 한다(빈 사다리 기본 문구는 거짓 설명이 된다)
     && /emptyReason=\{ladderEmptyReason\}/.test(panel)
-    && /\{emptyReason \|\| `목표 금액\(\$\{fmt\(targetAmount\)\}\)이 1주 값보다 작습니다\.`\}/.test(src)
+    && /\{\(manualAmount === null && emptyReason\) \|\| `목표 금액\(\$\{fmt\(targetAmount\)\}\)이 1주 값보다 작습니다\.`\}/.test(src)
     // 라이브 파생으로 되돌리면 실패한다
     && !/side=\{ladderAction/.test(panel));
   ok('#118 종목을 바꿔 열면 계산기가 다시 마운트된다 (다른 종목의 지정 단가 오염 방지)',
@@ -1227,6 +1233,86 @@ console.log('\n■ 사용 이력 · 별도 창 배선 가드 (미러로는 표�
     /export const MAX_LADDER_LOG_TRADES = \d+;/.test(utl)
     && /while \(trades\.length > MAX_LADDER_LOG_TRADES\) trades\.shift\(\);/.test(utl)
     && /if \(out\.length >= MAX_LADDER_LOG_ROWS\) break;/.test(utl));
+
+
+  // ── 방향 선택 · 목표 금액 직접 입력 (사용자 요청 2026-09) ──────────────────────────
+  // 계산기 안에서 매수/매도를 고르고, 리밸런싱이 지시하지 않는 방향·수량 0인 종목에서도
+  // 목표 금액을 직접 넣어 쓸 수 있다. 아래 가드는 **선언이 아니라 사용부**를 단언한다.
+  const modalNC = stripComments(src);
+  const panelNC = stripComments(panel);
+
+  // ⚠️ side의 소유자는 호출부다 — 모달이 자체 state로 들면 부모(ladderModal.side)와 갈려
+  //    ⧉ 확장·'열려 있는 창' 표시가 화면과 다른 방향을 가리킨다.
+  ok('#180 모달이 방향 토글을 렌더하되 side를 자체 state로 들지 않는다',
+    /\{SIDE_CHOICES\.map\(s => \(/.test(src)
+    && /onClick=\{\(\) => \{ if \(s !== side\) onSideChange\(s\); \}\}/.test(src)
+    && !/setSide\b/.test(modalNC));
+
+  // ⚠️ 미전달이면 토글을 그리지 않는다 — 눌러도 아무 일이 없는 죽은 버튼을 두지 않는다
+  //    (onExpand·onSaveLog와 같은 규약).
+  ok('#180b 방향 토글은 onSideChange가 있을 때만 렌더한다',
+    /\{onSideChange && \([\s\S]{0,400}?SIDE_CHOICES\.map/.test(src));
+
+  ok('#181 인앱 팝업이 방향 전환을 부모 state로 커밋한다',
+    /onSideChange=\{\(next\) => setLadderModal\(m => \(m && m\.side !== next\) \? \{ \.\.\.m, side: next \} : m\)\}/.test(panel));
+
+  // ⚠️ 창은 URL의 SIDE를 **초기값으로만** 쓴다. WIN_ID까지 파생시키면 방향을 바꿀 때마다 같은
+  //    종목의 창이 다른 창으로 인식돼 앱의 '열려 있는 창' 표시와 어긋난다.
+  ok('#181b 별도 창도 방향을 바꿀 수 있고, WIN_ID는 URL SIDE로 고정된다',
+    /const \[ladderSide, setLadderSide\] = useState\(SIDE\);/.test(cw)
+    && /side=\{ladderSide\}/.test(cw)
+    && /onSideChange=\{setLadderSide\}/.test(cw)
+    && /const lSignOk = ladderSide === 'sell' \? lAction < 0 : lAction > 0;/.test(cw)
+    && /const WIN_ID = CARD === 'ladder' \? ladderWinId\(PID, ITEM, SIDE\) :/.test(cw));
+
+  // ⚠️ 목표 금액은 사다리의 앵커다(1급 계약). 그 앵커를 직접 세우는 칸이 없으면 방향을 바꿔
+  //    자동값이 0이 된 종목·수량 0인 종목에서 계산기가 통째로 빈다.
+  ok('#182 목표 금액을 직접 입력할 수 있다 (읽기 전용 복귀 금지)',
+    /value=\{amountInput\}/.test(src)
+    && /onChange=\{e => setAmountInput\(e\.target\.value\)\}/.test(src)
+    && /onBlur=\{e => applyAmount\(e\.target\.value\)\}/.test(src)
+    && !/\{fmt\(targetAmount\)\}\{wonLine\(targetAmount\)\}/.test(src));
+
+  // ⚠️ 커밋은 blur/Enter뿐이다 — onChange 커밋은 targetAmount가 재생성 effect의 deps라
+  //    타이핑 한 글자마다(1 → 10 → 100 …) 사다리를 다시 깔고 수량 편집·단가 초안을 지운다.
+  ok('#182b 금액 커밋은 blur/Enter뿐이다 (타이핑마다 재생성 금지)',
+    !/onChange=\{e => applyAmount/.test(src)
+    && /if \(e\.key === 'Enter'\) \{ applyAmount\(\(e\.target as HTMLInputElement\)\.value\);/.test(src));
+
+  // ⚠️ 빈 칸은 '자동값 사용'(null)이지 0이 아니다 — 0을 앵커로 받으면 사다리가 통째로 빈다.
+  ok('#183 직접 입력이 자동값을 이기고, 빈 칸·무효 입력은 자동값으로 떨어진다',
+    /const targetAmount = manualAmount \?\? autoTargetAmount;/.test(src)
+    && /const next = Number\.isFinite\(v\) && v > 0 \? v : null;/.test(src)
+    && /targetAmount: autoTargetAmount,/.test(src));
+
+  // ⚠️ deps에 autoTargetAmount를 넣지 말 것 — 계산기는 열 때와 ⟳에서 현재가를 재조회하므로
+  //    자동값이 미세하게 바뀌고, 그때마다 사용자가 방금 넣은 금액이 날아간다.
+  ok('#184 방향을 바꾸면 금액이 그 방향의 자동값으로 돌아간다',
+    /useEffect\(\(\) => \{ setAmountInput\(''\); setManualAmount\(null\); \}, \[side\]\);/.test(src));
+
+  // ⚠️ 옛 값(totalAction)을 그대로 두면 요약의 '기준 N주'와 푸터 툴팁이 지금 화면에 없는
+  //    옛 금액을 근거로 말한다.
+  ok('#185 기준 수량이 직접 입력한 금액에서 재계산된다',
+    /const baseQty = manualAmount !== null\s*\?\s*\(cleanNum\(currentPrice\) > 0 \? Math\.trunc\(manualAmount \/ cleanNum\(currentPrice\)\) : 0\)\s*: Math\.abs\(cleanNum\(totalAction\)\);/.test(src));
+
+  // ⚠️ 토글이 생긴 뒤로 '닫고 다시 누르세요'는 **거짓**이다 — 창을 닫지 않고 그 자리에서 해결된다.
+  //    주석에는 그 옛 문구가 근거로 남아 있으므로 반드시 주석을 걷어낸 본문에서 잰다.
+  ok('#186 빈 사다리 안내가 그 자리의 탈출구(방향·금액)를 가리킨다',
+    !/닫고 현재가를 다시 누르세요/.test(panelNC)
+    && /위에서 방향을 고르고 목표 금액을 직접 입력하세요/.test(panel)
+    && /위에서 방향을 고르고 목표 금액을 직접 입력하세요/.test(cw));
+
+  // ⚠️ 호출부의 사유('리밸런싱이 이 방향을 지시하지 않는다')는 자동값을 쓰는 동안만 참이다 —
+  //    사용자가 금액을 직접 넣어 비었다면 원인은 그 금액이 1주 값보다 작은 것이지 방향이 아니다.
+  ok('#186b 직접 입력한 금액에서는 호출부의 방향 사유를 쓰지 않는다',
+    /\{\(manualAmount === null && emptyReason\) \|\| `목표 금액/.test(src));
+
+  // ⚠️ 토글 옆 한 줄이 '지금 이 금액이 어디서 왔는가'를 밝힌다. 자동값 0에서 아무 말도 없으면
+  //    사용자는 빈 사다리만 보고 계산기가 고장난 줄 안다.
+  ok('#187 방향 토글 옆에서 금액의 출처를 밝힌다',
+    /const autoAvailable = cleanNum\(autoTargetAmount\) > 0;/.test(src)
+    && /\{sideHint\}/.test(src)
+    && /목표 금액을 직접 입력하세요/.test(src));
 }
 
 console.log(`\n${fail ? '❌' : '✅'} verify:ladder — ${pass} passed, ${fail} failed`);

@@ -5,6 +5,9 @@ import { formatNumber, formatCurrency, formatChangeRate, cleanNum } from '../uti
 
 type LadderSide = 'buy' | 'sell';
 
+// 방향 토글의 순서 — 매수가 왼쪽(리밸런싱 표의 기본값이자 수량 0일 때의 기본 방향).
+const SIDE_CHOICES: LadderSide[] = ['buy', 'sell'];
+
 interface LadderRow {
   id: string;
   price: number;
@@ -14,11 +17,18 @@ interface LadderRow {
 
 interface Props {
   side?: LadderSide;
+  // 방향 전환 — 사용자가 계산기 안에서 매수/매도를 직접 고른다(사용자 요청 2026-09).
+  // ⚠️ side의 소유자는 여전히 **호출부**다(라이브 파생 금지 규약 유지) — 모달은 전환을 '요청'만
+  //    하고 실제 커밋은 부모가 한다. 그래야 열린 창의 정체성이 '추가' 칸 편집이나 시세 변동이
+  //    아니라 **사용자의 명시적 클릭으로만** 바뀐다. 미전달이면 토글을 렌더하지 않는다.
+  onSideChange?: ((side: LadderSide) => void) | null;
   itemName: string;
   currentPrice: number;
   totalAction: number;
   // 목표 금액 = |리밸런싱 수량| × 현재가 = 그 종목의 증가분(매수)·부족분(매도) 금액.
   // ⚠️ 이 값이 사다리의 앵커다. 수량은 여기서 파생된다(머리주석 참조).
+  // ⚠️ 리밸런싱이 지시하지 않는 방향(사용자가 토글로 고른 반대편)·수량 0인 종목에서는 0이 온다.
+  //    그때는 사용자가 금액을 직접 입력해 앵커를 세운다(아래 amountInput).
   targetAmount: number;
   // 그 종목의 전일 대비 등락률(%) — 리밸런싱 표 '등락률' 열과 같은 값.
   // 여기서 전일 종가를 복원해 각 호가가 전일 대비 몇 %인지 보여 준다. 모르면 null(0%가 아니다).
@@ -263,15 +273,11 @@ function seedLadder(rows: LadderRow[], basePrice: number, tickSize: number, targ
   return out;
 }
 
-export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, changeRate = null, currency = 'KRW', fxRate = 1, pos, onRefreshPrice = null, refreshState = null, emptyReason = null, onSaveLog = null, onExpand = null, expandOpen = false, variant = 'popup', onClose }: Props) {
+export default function LadderTradeModal({ side = 'buy', onSideChange = null, itemName, currentPrice, totalAction, targetAmount: autoTargetAmount, changeRate = null, currency = 'KRW', fxRate = 1, pos, onRefreshPrice = null, refreshState = null, emptyReason = null, onSaveLog = null, onExpand = null, expandOpen = false, variant = 'popup', onClose }: Props) {
   const isPage = variant === 'page';
   const isSell = side === 'sell';
   const dir = isSell ? 1 : -1;
   const sideLabel = isSell ? '매도' : '매수';
-  // 기준 수량 = 리밸런싱 표의 수량 = 목표금액 ÷ 현재가. **사다리 수량을 정하지 않는다** —
-  // 사다리는 금액에서 수량을 풀고(solveQtyForAmount), 이 값은 '현재가로 그냥 거래하면 몇 주인가'를
-  // 보여 주는 비교 기준으로만 쓴다. 여기에 사다리를 고정하면 목표금액을 초과 매매한다.
-  const baseQty = Math.abs(cleanNum(totalAction));
 
   // ── 전일 종가 대비 등락률 ──
   // 각 호가가 '전일 종가' 대비 몇 %인지 = 리밸런싱 표의 등락률 열과 같은 기준.
@@ -303,6 +309,39 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   }).format(cleanNum(n));
   // 현재가격은 KRW에서 원본대로 소수 보존(formatNumber), USD는 2자리 고정.
   const fmtCurPrice = (n: number) => isUSD ? fmt(n) : formatNumber(n);
+
+  // ── 목표 금액 = 리밸런싱 자동값 또는 사용자 직접 입력 ──
+  // 사용자가 방향을 직접 고를 수 있게 되면서(onSideChange) 리밸런싱이 지시하지 않는 방향과
+  // 수량 0인 종목에서도 계산기가 열린다. 그때 자동값은 0이라 사다리가 비므로 금액을 직접 넣는다.
+  // ⚠️ 1급 계약은 그대로다 — 사다리는 여전히 **금액을 고정하고 수량을 푼다**. 바뀐 것은 그
+  //    앵커의 출처가 '리밸런싱 파생' 하나에서 '파생 또는 사용자 입력' 둘로 늘어난 것뿐이다.
+  // ⚠️ 빈 칸이 곧 '자동값 사용'이다(0이 아니다) — 지우면 리밸런싱 값으로 되돌아간다. 0·음수·문자도
+  //    자동값으로 떨어뜨린다: 0을 앵커로 받으면 사다리가 통째로 비는데 그 상태는 '0원어치 사겠다'가
+  //    아니라 '아직 안 정했다'이고, 입력칸에 그 문자가 그대로 남아 있어 사용자가 알아챌 수 있다.
+  // ⚠️ 초안(amountInput)과 커밋값(manualAmount)을 분리한다 — 호가 간격·배수와 같은 규약.
+  //    onChange마다 커밋하면 targetAmount가 재생성 effect의 deps라 **타이핑 한 글자마다** 사다리가
+  //    다시 깔려(1 → 10 → 100 …) 그때마다 수량 편집(locked)과 단가 초안이 날아간다.
+  const [amountInput, setAmountInput] = useState('');
+  const [manualAmount, setManualAmount] = useState<number | null>(null);
+  // ⚠️ 이름을 targetAmount로 되돌려 아래 사용부 전체(재생성 effect·잔여·이득·기록 payload)를
+  //    무수정으로 둔다 — 금액의 출처가 늘었을 뿐 '이 값이 앵커'라는 계약은 한 글자도 바뀌지 않는다.
+  const targetAmount = manualAmount ?? autoTargetAmount;
+  // ⚠️ 방향을 바꾸면 그 방향의 자동값으로 되돌린다 — 매수 30만을 넣고 매도로 뒤집었을 때 그 금액이
+  //    승계되면 매도 자동값(리밸런싱이 실제로 지시한 금액)이 조용히 무시된다.
+  // ⚠️ deps에 autoTargetAmount를 넣지 말 것 — 계산기는 열 때와 ⟳에서 현재가를 재조회하므로
+  //    자동값이 미세하게 바뀌고, 그때마다 사용자가 방금 넣은 금액이 날아간다.
+  useEffect(() => { setAmountInput(''); setManualAmount(null); }, [side]);
+
+  // 기준 수량 = '이 목표 금액을 현재가로 한 번에 거래하면 몇 주인가'. **사다리 수량을 정하지 않는다** —
+  // 사다리는 금액에서 수량을 풀고(solveQtyForAmount), 이 값은 비교 기준으로만 쓴다. 여기에 사다리를
+  // 고정하면 목표금액을 초과 매매한다.
+  // ⚠️ 자동값일 때는 리밸런싱 표의 수량(totalAction)과 **정확히 같다** — action이 trunc(금액 ÷ 현재가)라서다.
+  //    직접 입력한 금액에서는 그 정의를 그대로 이어 재계산한다. 옛 값(totalAction)을 그대로 두면 요약의
+  //    '기준 N주'와 푸터 툴팁('같은 목표 금액을 한 번에 거래하면 N주')이 **지금 화면에 없는 옛 금액**을
+  //    근거로 말하게 된다.
+  const baseQty = manualAmount !== null
+    ? (cleanNum(currentPrice) > 0 ? Math.trunc(manualAmount / cleanNum(currentPrice)) : 0)
+    : Math.abs(cleanNum(totalAction));
 
   const [tickInput, setTickInput] = useState(String(defaultTick));
   const [tickSize, setTickSize] = useState(defaultTick);
@@ -418,6 +457,22 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   const droppedPins = Object.keys(pinnedPrices)
     .filter(id => !rows.some(r => r.id === id && r.locked && r.price === pinnedPrices[id])).length;
 
+  // 방향 토글 옆 한 줄 — '지금 이 금액이 어디서 왔는가'를 밝힌다.
+  // ⚠️ 자동값이 0이라는 것은 곧 '리밸런싱이 이 방향을 지시하지 않는다'는 뜻이다(호출부가 방향이
+  //    어긋나거나 수량이 0이면 0을 넘긴다). 그때 아무 말도 없으면 사용자는 빈 사다리만 보고
+  //    계산기가 고장난 줄 안다 — 직접 입력이라는 탈출구를 반드시 알린다.
+  const autoAvailable = cleanNum(autoTargetAmount) > 0;
+  const sideHint = manualAmount !== null
+    ? `직접 입력한 금액 ${fmt(manualAmount)}`
+    : autoAvailable
+      ? `리밸런싱 지시 ${fmt(autoTargetAmount)}`
+      : '목표 금액을 직접 입력하세요';
+  const sideHintTitle = manualAmount !== null
+    ? '목표 금액을 직접 입력한 상태입니다 — 그 칸을 비우면 리밸런싱이 정한 금액으로 돌아갑니다.'
+    : autoAvailable
+      ? `리밸런싱이 정한 ${sideLabel} 금액입니다 — 목표 금액 칸에 직접 입력하면 그 값이 이깁니다.`
+      : `리밸런싱은 지금 이 종목의 ${sideLabel}를 지시하지 않습니다(수량 0 또는 반대 방향). 목표 금액을 직접 입력하거나 방향을 바꾸세요.`;
+
   // 지금 화면의 사다리를 그날 계산기 이력으로 남긴다(사용자가 버튼을 눌렀을 때만 — 확정 규약).
   // ⚠️ 화면이 계산한 요약(avgPrice·totalCost)을 넘기지 않고 **행만** 넘긴다 — 총수량·총액·평균단가는
   //    utils.buildLadderTrade가 그 행에서 다시 계산하므로 기록과 화면이 갈릴 여지가 없다.
@@ -462,6 +517,18 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
     const t = normalizeTick(cleanNum(val));
     setTickSize(t);
     setTickInput(String(t));
+  };
+
+  // 목표 금액 직접 입력의 커밋 — 빈 칸은 '자동값 사용'(null)이지 0이 아니다.
+  // ⚠️ 0·음수·문자도 자동값으로 떨어뜨린다: 0을 앵커로 받으면 사다리가 통째로 비는데 그 상태는
+  //    '0원어치 사겠다'가 아니라 '아직 안 정했다'이다. 그리고 입력칸을 커밋값으로 되돌리므로
+  //    (applyTick과 같은 규약) 무효 입력이 자동값으로 떨어진 사실이 화면에 그대로 드러난다.
+  const applyAmount = (val: string) => {
+    const raw = String(val ?? '').trim();
+    const v = raw ? cleanNum(raw) : 0;
+    const next = Number.isFinite(v) && v > 0 ? v : null;
+    setManualAmount(next);
+    setAmountInput(next === null ? '' : fmt(next));
   };
 
   // ⚠️ 배수는 '주식 수'를 곱하므로 1 이상 정수여야 한다 — 1.5면 1.5주가 나온다.
@@ -622,6 +689,33 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
 
       {/* Summary */}
       <div className="px-3 py-2.5 bg-[#080e1c] border-b border-gray-700/60 text-[11px]">
+        {/* 방향 선택 — 리밸런싱이 지시한 방향이 기본값이고, 사용자가 반대로 바꿔 쓸 수 있다.
+            ⚠️ 여기서 side를 직접 state로 들지 말 것 — 소유자는 호출부다(Props 주석 참조).
+            ⚠️ onSideChange 미전달이면 통째로 렌더하지 않는다 — 눌러도 아무 일이 없는 죽은 버튼을
+               두지 않는다(onExpand·onSaveLog와 같은 규약). */}
+        {onSideChange && (
+          <div className="flex items-center gap-2 mb-2.5 pb-2.5 border-b border-gray-700/40">
+            <div className="flex rounded-md overflow-hidden border border-gray-600 shrink-0">
+              {SIDE_CHOICES.map(s => (
+                <button
+                  key={s}
+                  onClick={() => { if (s !== side) onSideChange(s); }}
+                  className={`px-3.5 py-1 text-[11px] font-bold transition-colors ${
+                    side === s
+                      ? (s === 'sell' ? 'bg-red-900/60 text-red-300' : 'bg-sky-900/60 text-sky-300')
+                      : 'bg-gray-800/60 text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+                  }`}
+                  title={s === 'sell'
+                    ? '분할매도 — 현재가에서 호가를 올리며 배치합니다(비쌀수록 많이 판다)'
+                    : '분할매수 — 현재가에서 호가를 내리며 배치합니다(쌀수록 많이 산다)'}
+                >{s === 'sell' ? '매도' : '매수'}</button>
+              ))}
+            </div>
+            <span className="text-[10px] text-gray-500 leading-tight min-w-0 truncate" title={sideHintTitle}>
+              {sideHint}
+            </span>
+          </div>
+        )}
         <div className="grid grid-cols-[auto_1fr_auto_1fr] gap-x-3 gap-y-1.5 items-center">
           <span className="text-gray-500 whitespace-nowrap">호가 간격</span>
           <input
@@ -668,8 +762,27 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
               </span>
             )}
           </span>
-          <span className="text-gray-500 whitespace-nowrap" title={`리밸런싱이 정한 ${isSell ? '부족분' : '증가분'} 금액 = 기준 수량 × 현재가. 사다리는 이 금액을 넘지 않는 최대 수량을 배분합니다.`}>목표 금액</span>
-          <span className="text-sky-300 font-bold text-right">{fmt(targetAmount)}{wonLine(targetAmount)}</span>
+          <span className="text-gray-500 whitespace-nowrap" title={`리밸런싱이 정한 ${isSell ? '부족분' : '증가분'} 금액 = 기준 수량 × 현재가. 사다리는 이 금액을 넘지 않는 최대 수량을 배분합니다. 직접 입력하면 그 금액이 이깁니다(비우면 자동값으로 복귀).`}>목표 금액</span>
+          {/* ⚠️ 사다리의 앵커를 직접 고치는 칸이다 — 방향을 바꿔 자동값이 0이 된 종목·수량 0인
+              종목에서 계산기를 쓸 수 있는 유일한 통로다. 읽기 전용으로 되돌리지 말 것.
+              ⚠️ 커밋은 blur/Enter뿐이다(applyAmount) — onChange 커밋은 타이핑마다 사다리를 다시 깐다. */}
+          <span className="text-right">
+            <input
+              className={`w-full bg-gray-800 border rounded px-2 py-0.5 text-right font-bold outline-none text-[11px] select-text text-sky-300 ${manualAmount !== null ? 'border-sky-500 focus:border-sky-400' : 'border-gray-600 focus:border-sky-400'}`}
+              title={manualAmount !== null
+                ? '직접 입력한 목표 금액입니다 — 비우면 리밸런싱이 정한 금액으로 돌아갑니다.'
+                : autoAvailable
+                  ? '리밸런싱이 정한 금액입니다 — 직접 입력하면 그 값으로 사다리를 다시 깝니다.'
+                  : '리밸런싱이 지시한 금액이 없습니다 — 얼마어치 거래할지 직접 입력하세요.'}
+              placeholder={autoAvailable ? fmt(autoTargetAmount) : '금액 입력'}
+              value={amountInput}
+              onChange={e => setAmountInput(e.target.value)}
+              onBlur={e => applyAmount(e.target.value)}
+              onFocus={e => e.target.select()}
+              onKeyDown={e => { if (e.key === 'Enter') { applyAmount((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur(); } }}
+            />
+            {wonLine(targetAmount)}
+          </span>
 
           <span className="text-gray-500 whitespace-nowrap">평균단가</span>
           <span className="text-yellow-400 font-bold">
@@ -731,7 +844,10 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
                 <td colSpan={colCount} className="py-6 px-3 text-center text-[10px] text-gray-500 leading-relaxed">
                   배분할 수량이 없습니다.
                   <span className="block text-gray-600">
-                    {emptyReason || `목표 금액(${fmt(targetAmount)})이 1주 값보다 작습니다.`}
+                    {/* ⚠️ 호출부의 사유(리밸런싱이 이 방향을 지시하지 않는다)는 **자동값을 쓰는 동안만**
+                        참이다. 사용자가 금액을 직접 넣어 비었다면 원인은 그 금액이 1주 값보다 작은
+                        것이지 방향이 아니다 — 그대로 두면 방금 입력한 사람에게 거짓 설명을 한다. */}
+                    {(manualAmount === null && emptyReason) || `목표 금액(${fmt(targetAmount)})이 1주 값보다 작습니다.`}
                   </span>
                 </td>
               </tr>

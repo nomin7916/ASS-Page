@@ -78,6 +78,10 @@ export default function CardWindow() {
 
   // 창 로컬(앱과 공유하지 않는다 — 전부 세션 스크래치)
   const [rebalExtraQty, setRebalExtraQty] = useState({});
+  // 분할 계산기(card=ladder)의 방향 — URL의 SIDE가 초기값이고, 그 뒤로는 계산기 안의 토글이 바꾼다.
+  // ⚠️ WIN_ID는 URL의 SIDE로 **고정**한다(아래) — 창의 정체성이라 여기서 파생시키면 같은 종목의
+  //    창이 방향을 바꿀 때마다 다른 창으로 인식돼 앱의 '열려 있는 창' 표시와 어긋난다.
+  const [ladderSide, setLadderSide] = useState(SIDE);
   // 평가액 추이 표 기간 단위 — **창 로컬**(rebalanceSortConfig와 같은 등급, 저장 지점 0곳).
   // 앱의 값은 card:data로 **1회만** 시드된다(아래 수신부). 창의 변경은 앱으로 역전파되지 않는다.
   const [histPeriod, setHistPeriod] = useState('day');
@@ -415,12 +419,13 @@ export default function CardWindow() {
       // ⚠️ rebalExtraQty('추가' 수량)는 앱 탭에서도 창에서도 **세션 스크래치**라 창에서는 항상 0이다
       //    (이 창에는 그 입력 UI가 없다). 앱 탭에서 넣은 '추가'는 반영되지 않는다 — 알려진 한계.
       const lAction = row.action + (rebalExtraQty[row.id] || 0);
-      const lSignOk = SIDE === 'sell' ? lAction < 0 : lAction > 0;
-      const lSideLabel = SIDE === 'sell' ? '매도' : '매수';
+      const lSignOk = ladderSide === 'sell' ? lAction < 0 : lAction > 0;
+      const lSideLabel = ladderSide === 'sell' ? '매도' : '매수';
       return (
         <LadderTradeModal
           variant="page"
-          side={SIDE}
+          side={ladderSide}
+          onSideChange={setLadderSide}
           itemName={row.name}
           currentPrice={lPrice}
           totalAction={lSignOk ? lAction : 0}
@@ -432,8 +437,8 @@ export default function CardWindow() {
           onRefreshPrice={row.code ? () => fire('refreshPrice', { pid: PID, id: row.id, code: row.code }) : null}
           refreshState={row.code ? (stockFetchStatus?.[row.code] ?? null) : null}
           emptyReason={lSignOk ? null : (lAction === 0
-            ? `지금은 ${lSideLabel}할 수량이 없습니다 — 목표비중·시세가 바뀌었습니다.`
-            : `지금은 ${lAction < 0 ? '매도' : '매수'}가 필요합니다 — 이 창은 분할${lSideLabel} 계산기입니다.`)}
+            ? `리밸런싱은 지금 이 종목의 매매를 지시하지 않습니다 — 위에서 방향을 고르고 목표 금액을 직접 입력하세요.`
+            : `리밸런싱은 지금 ${lAction < 0 ? '매도' : '매수'}를 지시합니다 — 위에서 방향을 바꾸거나 목표 금액을 직접 입력하세요.`)}
           onSaveLog={writable ? (payload) => sendLadderLog({ ...payload, name: row.name, code: row.code }) : null}
           onExpand={null}
           onClose={() => {}}
