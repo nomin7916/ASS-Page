@@ -39,6 +39,19 @@ export type FlowSide = 'auto' | 'l' | 'r' | 't' | 'b';
 export type FlowArrow = 'to' | 'from' | 'both' | 'none';
 
 /**
+ * 선 종류. 종전 `dashed: boolean`(실선/점선 2택)을 대체한다.
+ * ⚠️ 값 목록은 이 배열이 정본 — 화면·정규화·검증이 전부 여기서 파생된다.
+ * ⚠️ 'none'(선 안 보임)은 **일부러 넣지 않았다** — 선이 사라지면 사용자가 지워진 줄 알고
+ *    같은 연결을 다시 긋는다. 안 그릴 선은 삭제하는 것이 맞다.
+ */
+export const FLOW_LINE_STYLES = ['solid', 'dot', 'dash', 'longDash', 'dashDot', 'dashDotDot', 'double'] as const;
+export type FlowLineStyle = (typeof FLOW_LINE_STYLES)[number];
+
+/** 선 굵기. 저장은 이름으로(px를 저장하면 나중에 굵기 체계를 못 바꾼다). */
+export const FLOW_LINE_WIDTHS = ['thin', 'normal', 'thick'] as const;
+export type FlowLineWidth = (typeof FLOW_LINE_WIDTHS)[number];
+
+/**
  * 팬/줌 상태. **저장 대상** — 보드를 닫고 다시 열면 마지막으로 보던 화면으로 돌아온다.
  * ⚠️ 값은 반드시 normalizeFlowViewport를 거쳐 저장한다(정수·유효자리 정리) — 휠 줌이 만드는
  *    1.3310000000000004 같은 부동소수 노이즈가 지문에 새면 화면을 훑기만 해도 Drive 저장이 나간다.
@@ -105,7 +118,16 @@ export interface FlowEdge {
   fromSide?: FlowSide;
   toSide?: FlowSide;
   stroke?: string;
+  /**
+   * @deprecated 레거시 2택(실선/점선). **새로 쓰지 말 것** — `normalizeFlowMaps`가 로드 시
+   *    `lineStyle`로 1회 이관하고 이 필드를 지운다. 읽어야 할 때는 반드시
+   *    `resolveFlowLineStyle(e.lineStyle, e.dashed)`를 통과시킬 것(직접 읽으면 새 종류를 놓친다).
+   */
   dashed?: boolean;
+  /** 기본값 'solid'는 **저장하지 않는다**(생략 = solid) — 기존 선이 전부 '변경됨'이 되는 것 방지. */
+  lineStyle?: FlowLineStyle;
+  /** 기본값 'normal'은 저장하지 않는다. */
+  lineWidth?: FlowLineWidth;
   arrow?: FlowArrow;
 }
 
@@ -163,6 +185,31 @@ const VIEWPORT_XY_LIMIT = 200000;
 /** 도형 기본 채우기 / 연결선 기본 색. ⚠️ 리터럴을 화면마다 손복제하지 말 것. */
 export const DEFAULT_NODE_FILL = '#2E75B6';
 export const DEFAULT_EDGE_STROKE = '#60a5fa';
+
+/**
+ * 캔버스 배경색.
+ * ⚠️ **이중선(double)의 가운데 틈을 이 색으로 덮어 그린다** — 캔버스 배경과 한 글자라도 다르면
+ *    선 한가운데에 다른 색 띠가 생긴다. 인스펙터의 미리보기 버튼 배경도 같은 값을 써야
+ *    미리보기와 실제 렌더가 일치한다.
+ */
+export const FLOW_CANVAS_BG = '#0b1120';
+
+/** 굵기 이름 → px. 'normal' 2는 **종전 연결선 굵기와 같은 값**(기존 흐름도 렌더 불변). */
+const LINE_WIDTH_PX: Record<FlowLineWidth, number> = { thin: 1.2, normal: 2, thick: 3.5 };
+
+/**
+ * 파선 패턴 — **굵기의 배수**로 정의한다. px로 고정하면 굵은 선에서 점선이 뭉개지고
+ * 얇은 선에서는 실선처럼 보인다.
+ * ⚠️ `dash`의 [3, 2]는 굵기 normal(2)에서 정확히 '6 4' — 종전 `dashed:true` 렌더와 픽셀 동일하다.
+ *    기존 점선 흐름도의 모양이 배포만으로 바뀌지 않게 하는 값이니 건드리지 말 것.
+ */
+const LINE_DASH_UNITS: Partial<Record<FlowLineStyle, number[]>> = {
+  dot: [1, 3],
+  dash: [3, 2],
+  longDash: [7, 3],
+  dashDot: [5, 2, 1, 2],
+  dashDotDot: [5, 2, 1, 2, 1, 2],
+};
 
 /* ===========================================================================
  * C. 라이브 파생 타입 (절대 저장하지 않음)
@@ -277,6 +324,45 @@ export function normalizeFlowArrow(v: unknown): FlowArrow {
 export function arrowHeads(arrow: unknown): { start: boolean; end: boolean } {
   const a = normalizeFlowArrow(arrow);
   return { start: a === 'both' || a === 'from', end: a === 'both' || a === 'to' };
+}
+
+/**
+ * 선 종류 해석 — **레거시 `dashed`를 흡수하는 단일 지점**.
+ * ⚠️ 소비처에서 `e.lineStyle`을 직접 읽지 말 것: 이 앱 이전에 만든 선은 `lineStyle`이 없고
+ *    `dashed`만 있어서, 직접 읽으면 사용자가 점선으로 그려 둔 선이 전부 실선이 된다.
+ */
+export function resolveFlowLineStyle(lineStyle: unknown, dashed?: unknown): FlowLineStyle {
+  if ((FLOW_LINE_STYLES as readonly string[]).includes(lineStyle as string)) return lineStyle as FlowLineStyle;
+  return dashed ? 'dash' : 'solid';
+}
+
+export function normalizeFlowLineWidth(v: unknown): FlowLineWidth {
+  return (FLOW_LINE_WIDTHS as readonly string[]).includes(v as string) ? (v as FlowLineWidth) : 'normal';
+}
+
+/**
+ * 선 하나를 어떻게 그릴지 — **캔버스 렌더와 인스펙터 미리보기가 이 함수 하나를 공유**한다.
+ * 손복제하면 고른 모양과 실제로 그려지는 모양이 갈려서, 미리보기가 존재할 이유가 사라진다.
+ *
+ * 이중선은 굵은 선(width) 위에 배경색 선(innerWidth)을 덮어 가운데를 비우는 방식이다.
+ * ⚠️ 화살촉은 **안쪽 path**에 달아야 한다 — marker는 기본이 `markerUnits="strokeWidth"`라
+ *    바깥 굵기(3배)에 붙이면 화살촉만 3배로 커진다.
+ */
+export function flowLineRender(edge: any): {
+  width: number;
+  dash: string | undefined;
+  double: boolean;
+  innerWidth: number;
+} {
+  const style = resolveFlowLineStyle(edge?.lineStyle, edge?.dashed);
+  const w = LINE_WIDTH_PX[normalizeFlowLineWidth(edge?.lineWidth)];
+  const units = LINE_DASH_UNITS[style];
+  return {
+    width: style === 'double' ? Math.round(w * 3 * 100) / 100 : w,
+    dash: units ? units.map(u => Math.round(u * w * 100) / 100).join(' ') : undefined,
+    double: style === 'double',
+    innerWidth: w,
+  };
 }
 
 /** 두 팬/줌이 같은가. null/undefined는 '저장된 위치 없음'으로 같게 본다. */
@@ -408,7 +494,10 @@ export function flowFingerprint(maps: unknown): string {
         eg: (Array.isArray(m?.edges) ? m.edges : []).map((e: any) => [
           e?.id ?? '', e?.from ?? '', e?.to ?? '', e?.label ?? '',
           e?.fromSide ?? '', e?.toSide ?? '', e?.stroke ?? '',
-          e?.dashed ? 1 : 0, e?.arrow ?? '',
+          // ⚠️ raw `dashed`가 아니라 **해석된 선 종류**를 담는다 — 레거시 이관(dashed:true →
+          //    lineStyle:'dash')이 지문을 바꾸지 않아야 '아무것도 안 고쳤는데 저장이 나가는' 일이 없다.
+          resolveFlowLineStyle(e?.lineStyle, e?.dashed), normalizeFlowLineWidth(e?.lineWidth),
+          e?.arrow ?? '',
         ]),
       })),
     );
@@ -483,15 +572,23 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
       seenEdgeIds.add(eid);
       const label = asStr(e.label);
       const arrow: FlowArrow = normalizeFlowArrow(e.arrow);
-      const dashed = !!e.dashed;
       const stroke = sanitizeHexColor(e.stroke);
       const strokeChanged = e.stroke === undefined ? stroke !== '' : stroke !== e.stroke;
-      if (label !== e.label || arrow !== e.arrow || dashed !== e.dashed || strokeChanged) mapChanged = true;
+      // ⚠️ 레거시 `dashed:boolean` → `lineStyle` 1회 이관. 기본값(solid/normal)은 **저장하지 않는다**
+      //    — 저장하면 기존 선이 전부 '변경됨'이 되어 원본 참조 보존 계약이 깨진다.
+      const outStyle = resolveFlowLineStyle(e.lineStyle, e.dashed);
+      const outWidth = normalizeFlowLineWidth(e.lineWidth);
+      const keepStyle = outStyle === 'solid' ? undefined : outStyle;
+      const keepWidth = outWidth === 'normal' ? undefined : outWidth;
+      const lineChanged = keepStyle !== e.lineStyle || keepWidth !== e.lineWidth || e.dashed !== undefined;
+      if (label !== e.label || arrow !== e.arrow || strokeChanged || lineChanged) mapChanged = true;
       edges.push({
-        id: eid, from, to, label, arrow, dashed,
+        id: eid, from, to, label, arrow,
         ...(e.fromSide ? { fromSide: e.fromSide as FlowSide } : {}),
         ...(e.toSide ? { toSide: e.toSide as FlowSide } : {}),
         ...(stroke ? { stroke } : {}),
+        ...(keepStyle ? { lineStyle: keepStyle } : {}),
+        ...(keepWidth ? { lineWidth: keepWidth } : {}),
       });
     }
 

@@ -46,6 +46,17 @@ const FLOW_MIN_SCALE = 0.25, FLOW_MAX_SCALE = 2.5;
 const DEFAULT_FLOW_VIEWPORT = { x: 80, y: 80, scale: 1 };
 const VIEWPORT_XY_LIMIT = 200000;
 const DEFAULT_NODE_FILL = '#2E75B6', DEFAULT_EDGE_STROKE = '#60a5fa';
+const FLOW_CANVAS_BG = '#0b1120';
+const FLOW_LINE_STYLES = ['solid', 'dot', 'dash', 'longDash', 'dashDot', 'dashDotDot', 'double'];
+const FLOW_LINE_WIDTHS = ['thin', 'normal', 'thick'];
+const LINE_WIDTH_PX = { thin: 1.2, normal: 2, thick: 3.5 };
+const LINE_DASH_UNITS = {
+  dot: [1, 3],
+  dash: [3, 2],
+  longDash: [7, 3],
+  dashDot: [5, 2, 1, 2],
+  dashDotDot: [5, 2, 1, 2, 1, 2],
+};
 
 const isFiniteNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const asStr = (v) => (typeof v === 'string' ? v : '');
@@ -86,6 +97,27 @@ function normalizeFlowViewport(v) {
 
 function normalizeFlowArrow(v) {
   return v === 'both' || v === 'none' || v === 'from' ? v : 'to';
+}
+
+function resolveFlowLineStyle(lineStyle, dashed) {
+  if (FLOW_LINE_STYLES.includes(lineStyle)) return lineStyle;
+  return dashed ? 'dash' : 'solid';
+}
+
+function normalizeFlowLineWidth(v) {
+  return FLOW_LINE_WIDTHS.includes(v) ? v : 'normal';
+}
+
+function flowLineRender(edge) {
+  const style = resolveFlowLineStyle(edge?.lineStyle, edge?.dashed);
+  const w = LINE_WIDTH_PX[normalizeFlowLineWidth(edge?.lineWidth)];
+  const units = LINE_DASH_UNITS[style];
+  return {
+    width: style === 'double' ? Math.round(w * 3 * 100) / 100 : w,
+    dash: units ? units.map(u => Math.round(u * w * 100) / 100).join(' ') : undefined,
+    double: style === 'double',
+    innerWidth: w,
+  };
 }
 
 function arrowHeads(arrow) {
@@ -166,7 +198,9 @@ function flowFingerprint(maps) {
       ]),
       eg: (Array.isArray(m?.edges) ? m.edges : []).map(e => [
         e?.id ?? '', e?.from ?? '', e?.to ?? '', e?.label ?? '',
-        e?.fromSide ?? '', e?.toSide ?? '', e?.stroke ?? '', e?.dashed ? 1 : 0, e?.arrow ?? '',
+        e?.fromSide ?? '', e?.toSide ?? '', e?.stroke ?? '',
+        resolveFlowLineStyle(e?.lineStyle, e?.dashed), normalizeFlowLineWidth(e?.lineWidth),
+        e?.arrow ?? '',
       ]),
     })));
   } catch { return 'ERR'; }
@@ -221,15 +255,21 @@ function normalizeFlowMaps(raw) {
       seenEdgeIds.add(eid);
       const label = asStr(e.label);
       const arrow = normalizeFlowArrow(e.arrow);
-      const dashed = !!e.dashed;
       const stroke = sanitizeHexColor(e.stroke);
       const strokeChanged = e.stroke === undefined ? stroke !== '' : stroke !== e.stroke;
-      if (label !== e.label || arrow !== e.arrow || dashed !== e.dashed || strokeChanged) mapChanged = true;
+      const outStyle = resolveFlowLineStyle(e.lineStyle, e.dashed);
+      const outWidth = normalizeFlowLineWidth(e.lineWidth);
+      const keepStyle = outStyle === 'solid' ? undefined : outStyle;
+      const keepWidth = outWidth === 'normal' ? undefined : outWidth;
+      const lineChanged = keepStyle !== e.lineStyle || keepWidth !== e.lineWidth || e.dashed !== undefined;
+      if (label !== e.label || arrow !== e.arrow || strokeChanged || lineChanged) mapChanged = true;
       edges.push({
-        id: eid, from, to, label, arrow, dashed,
+        id: eid, from, to, label, arrow,
         ...(e.fromSide ? { fromSide: e.fromSide } : {}),
         ...(e.toSide ? { toSide: e.toSide } : {}),
         ...(stroke ? { stroke } : {}),
+        ...(keepStyle ? { lineStyle: keepStyle } : {}),
+        ...(keepWidth ? { lineWidth: keepWidth } : {}),
       });
     }
 
@@ -346,7 +386,7 @@ const mkNode = (o) => makeFlowNode(o);
 const cleanMap = (o = {}) => ({
   id: 'm1', name: '흐름도', createdAt: 1, updatedAt: 1,
   nodes: [mkNode({ id: 'n1', x: 0, y: 0 }), mkNode({ id: 'n2', x: 400, y: 0 })],
-  edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', dashed: false }],
+  edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to' }],
   ...o,
 });
 
@@ -588,9 +628,9 @@ eq('#45e 대소문자를 바꾸지 않는다', sanitizeHexColor('#2E75B6'), '#2E
   ok('#46d 색이 없으면 흰 글자(기본 채우기가 진한 파랑)', readableTextColor(undefined) === '#ffffff');
 }
 {
-  const r = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', dashed: false, stroke: '#C00000' }] })]);
+  const r = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', stroke: '#C00000' }] })]);
   eq('#47 연결선 색은 보존된다', r[0].edges[0].stroke, '#C00000');
-  const bad = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', dashed: false, stroke: 'red' }] })]);
+  const bad = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', stroke: 'red' }] })]);
   ok('#47b 손상된 선 색은 버려지고(기본색 사용) 변경으로 표시된다', bad[0].edges[0].stroke === undefined);
   const node = mkNode({ id: 'n', fill: 'rgb(1,2,3)' });
   ok('#47c 도형 채우기도 같은 규칙', node.fill === undefined);
@@ -599,7 +639,7 @@ eq('#45e 대소문자를 바꾸지 않는다', sanitizeHexColor('#2E75B6'), '#2E
 {
   // ⚠️ 색만 바꾼 세션도 저장되어야 한다
   const a = [cleanMap()];
-  const b = [cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', dashed: false, stroke: '#FF0000' }] })];
+  const b = [cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', stroke: '#FF0000' }] })];
   ok('#48 연결선 색 변경을 지문이 감지', flowFingerprint(a) !== flowFingerprint(b));
   const c = [cleanMap({ nodes: [mkNode({ id: 'n1', fill: '#FF0000' }), mkNode({ id: 'n2' })] })];
   ok('#48b 도형 채우기 변경을 지문이 감지', flowFingerprint(a) !== flowFingerprint(c));
@@ -618,18 +658,18 @@ deep('#59e arrow 미설정 레거시는 종전대로 끝에만', arrowHeads(unde
 {
   // ⚠️ 최대 회귀 지점 — normalizeFlowMaps 는 화이트리스트 재구축기다. 'from' 을 빠뜨리면
   //    사용자가 고른 방향이 Drive 로드·별도 창 저장 왕복마다 'to' 로 되돌아간다.
-  const withFrom = cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'from', dashed: false }] });
+  const withFrom = cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'from' }] });
   eq('#60 저장된 시작 화살촉이 정규화를 통과한다', normalizeFlowMaps([withFrom])[0].edges[0].arrow, 'from');
   const src = [withFrom];
   ok('#60b 정규형이면 원본 배열 참조 그대로(폴링마다 재저장 방지)', normalizeFlowMaps(src) === src);
   ok('#60c 맵 객체도 동일 참조', normalizeFlowMaps(src)[0] === src[0]);
-  const bad = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'sideways', dashed: false }] })]);
+  const bad = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'sideways' }] })]);
   eq('#60d 손상된 방향 값은 기본값으로 교정', bad[0].edges[0].arrow, 'to');
 }
 {
   // ⚠️ 지문 누락 = portfolioUpdatedAt 미상승 = STATE 저장 통째 스킵
   const a = [cleanMap()];
-  const b = [cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'from', dashed: false }] })];
+  const b = [cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'from' }] })];
   ok('#61 방향만 바꾼 세션도 지문이 감지', flowFingerprint(a) !== flowFingerprint(b));
 }
 {
@@ -647,6 +687,92 @@ deep('#59e arrow 미설정 레거시는 종전대로 끝에만', arrowHeads(unde
   eq('#62b 시작 화살촉이면 **반대로** 설명(이 기능의 요점)', flowText('from', ends), '자금 흐름: COVERD 4 → CMA 2');
   eq('#62c 양쪽', flowText('both', ends), '양방향 — CMA 2 ↔ COVERD 4');
   eq('#62d 이름을 못 구해도 문장이 성립', flowText('to', null), '자금 흐름: 시작 도형 → 끝 도형');
+}
+
+console.log('\n■ 선 종류 — 레거시 dashed 이관 · 렌더 판정 (resolveFlowLineStyle · flowLineRender)');
+{
+  // ⚠️ 이 기능의 최대 위험: 기존 사용자가 점선으로 그려 둔 선이 배포만으로 실선이 되는 것.
+  eq('#67 레거시 dashed:true → 파선', resolveFlowLineStyle(undefined, true), 'dash');
+  eq('#67b 레거시 dashed:false → 실선', resolveFlowLineStyle(undefined, false), 'solid');
+  eq('#67c 새 값이 있으면 레거시보다 우선', resolveFlowLineStyle('dot', true), 'dot');
+  eq('#67d 알 수 없는 값은 레거시로 폴백', resolveFlowLineStyle('zigzag', true), 'dash');
+  eq('#67e 둘 다 없으면 실선', resolveFlowLineStyle(undefined, undefined), 'solid');
+  ok('#67f 7종이 전부 통과', FLOW_LINE_STYLES.every(k => resolveFlowLineStyle(k) === k));
+}
+{
+  // ⚠️ 종전 렌더와 픽셀 동일해야 한다 — 이 두 값이 바뀌면 기존 흐름도의 모양이 배포만으로 달라진다.
+  const legacyDash = flowLineRender({ dashed: true });
+  eq('#68 레거시 점선의 dasharray가 종전과 동일', legacyDash.dash, '6 4');
+  eq('#68b 레거시 점선의 굵기가 종전과 동일', legacyDash.width, 2);
+  const legacySolid = flowLineRender({ dashed: false });
+  eq('#68c 레거시 실선은 dasharray 없음', legacySolid.dash, undefined);
+  eq('#68d 레거시 실선 굵기도 종전과 동일', legacySolid.width, 2);
+  eq('#68e 값이 아예 없는 선도 실선 2px', flowLineRender({}).width, 2);
+  eq('#68f null 입력도 던지지 않는다', flowLineRender(null).width, 2);
+}
+{
+  // 패턴은 굵기 배수 — 굵은 선에서 점선이 뭉개지지 않는다
+  eq('#69 얇게 파선', flowLineRender({ lineStyle: 'dash', lineWidth: 'thin' }).dash, '3.6 2.4');
+  eq('#69b 굵게 파선', flowLineRender({ lineStyle: 'dash', lineWidth: 'thick' }).dash, '10.5 7');
+  eq('#69c 일점쇄선은 4구간', flowLineRender({ lineStyle: 'dashDot' }).dash, '10 4 2 4');
+  eq('#69d 이점쇄선은 6구간', flowLineRender({ lineStyle: 'dashDotDot' }).dash, '10 4 2 4 2 4');
+  eq('#69e 점선', flowLineRender({ lineStyle: 'dot' }).dash, '2 6');
+  eq('#69f 긴 파선', flowLineRender({ lineStyle: 'longDash' }).dash, '14 6');
+  eq('#69g 굵기 이름이 손상되면 보통으로', flowLineRender({ lineWidth: 'huge' }).width, 2);
+  ok('#69h 굵기 3종이 서로 다르다',
+    new Set(FLOW_LINE_WIDTHS.map(w => flowLineRender({ lineWidth: w }).width)).size === 3);
+}
+{
+  // 이중선 = 굵은 선 위에 배경색 선을 덮어 가운데를 비운다
+  const d = flowLineRender({ lineStyle: 'double' });
+  ok('#70 이중선 플래그', d.double === true);
+  eq('#70b 바깥 굵기는 3배', d.width, 6);
+  eq('#70c 안쪽(배경색) 굵기는 원래 굵기', d.innerWidth, 2);
+  eq('#70d 이중선에는 dasharray 없음', d.dash, undefined);
+  ok('#70e 다른 종류는 double=false', FLOW_LINE_STYLES.filter(k => k !== 'double').every(k => !flowLineRender({ lineStyle: k }).double));
+}
+{
+  // ⚠️ 화이트리스트 재구축기 — 새 필드를 등록하지 않으면 Drive 로드·별도 창 저장마다 사라진다
+  const styled = cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', lineStyle: 'dashDot', lineWidth: 'thick' }] });
+  const r = normalizeFlowMaps([styled]);
+  eq('#71 선 종류가 정규화를 통과한다', r[0].edges[0].lineStyle, 'dashDot');
+  eq('#71b 선 굵기도 통과', r[0].edges[0].lineWidth, 'thick');
+  const src = [styled];
+  ok('#71c 정규형이면 원본 배열 참조 그대로', normalizeFlowMaps(src) === src);
+  ok('#71d 맵 객체도 동일 참조', normalizeFlowMaps(src)[0] === src[0]);
+}
+{
+  // ⚠️ 기본값(실선/보통)은 저장하지 않는다 — 저장하면 기존 선이 전부 '변경됨'이 되어
+  //    폴링마다 재저장 + 보드 로컬 사본이 갈아엎어진다.
+  const plain = cleanMap();
+  const r = normalizeFlowMaps([plain]);
+  ok('#72 기본값은 필드를 만들지 않는다', r[0].edges[0].lineStyle === undefined && r[0].edges[0].lineWidth === undefined);
+  ok('#72b 그래서 원본 참조가 보존된다', normalizeFlowMaps([plain])[0] === plain);
+  const explicitDefault = cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', lineStyle: 'solid', lineWidth: 'normal' }] });
+  ok('#72c 명시된 기본값은 지워서 정규형으로 수렴', normalizeFlowMaps([explicitDefault])[0].edges[0].lineStyle === undefined);
+  const badStyle = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', lineStyle: 'zigzag' }] })]);
+  ok('#72d 손상된 종류는 실선으로 교정', badStyle[0].edges[0].lineStyle === undefined);
+}
+{
+  // 레거시 이관 — 로드 1회로 dashed 가 사라지고 lineStyle 로 바뀐다(백업 복원 경로도 같은 함수)
+  const legacy = cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', dashed: true }] });
+  const r = normalizeFlowMaps([legacy]);
+  eq('#73 dashed:true 가 파선으로 이관', r[0].edges[0].lineStyle, 'dash');
+  ok('#73b 레거시 필드는 제거된다(두 소스 공존 금지)', !('dashed' in r[0].edges[0]));
+  ok('#73c 이관은 1회로 수렴(두 번째 정규화는 원본 참조)', normalizeFlowMaps(r) === r);
+  const legacyFalse = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', dashed: false }] })]);
+  ok('#73d dashed:false 도 필드를 남기지 않는다',
+    legacyFalse[0].edges[0].lineStyle === undefined && !('dashed' in legacyFalse[0].edges[0]));
+}
+{
+  // ⚠️ 지문이 raw dashed 를 담으면 **이관만으로 저장이 트리거**된다(사용자는 아무것도 안 고쳤다).
+  const legacy = [cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', dashed: true }] })];
+  const migrated = [cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', lineStyle: 'dash' }] })];
+  eq('#74 레거시와 이관본의 지문이 같다', flowFingerprint(legacy), flowFingerprint(migrated));
+  const a = [cleanMap()];
+  ok('#74b 선 종류를 바꾸면 지문이 달라진다', flowFingerprint(a) !== flowFingerprint(migrated));
+  const thick = [cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'to', lineWidth: 'thick' }] })];
+  ok('#74c 굵기만 바꿔도 지문이 달라진다(저장 스킵 방지)', flowFingerprint(a) !== flowFingerprint(thick));
 }
 
 // ───────── 파트② 소스 텍스트 가드 ─────────
@@ -693,6 +819,14 @@ const sliceBetween = (s, a, b) => {
   const j = s.indexOf(b, i + a.length);
   return j < 0 ? '' : s.slice(i, j);
 };
+
+// 연결선 렌더의 두 분기(이중선 / 일반선) — 여러 가드가 공유한다.
+// ⚠️ 파일 전역으로 재지 말 것: 같은 문자열이 두 분기에 있어서 **한쪽만 되돌리는 변이가 그대로
+//    통과한다**. 실측으로 죽은 단언 3건을 이렇게 잡았다(일반선 굵기 고정 · 바깥 path 에 화살촉
+//    추가 · markerStart 제거).
+// ⚠️ 끝 앵커로 JSX 주석을 쓰지 말 것 — stripComments 가 지워 구간을 못 찾고 가드가 통째로 실패한다.
+const edgeTernary = sliceBetween(canvasNC, 'line.double ? (', 'stroke="transparent"');
+const [doubleBranch = '', singleBranch = ''] = edgeTernary.split(') : (');
 
 // 보드를 열 때 저장된 화면으로 복원하는 것이 이 기능의 전부다.
 ok('#49 FlowBoard: 보드를 열 때 저장된 화면을 복원', /setViewport\(\s*initialViewportOf\(\s*seeded\[0\]\s*\)\s*\)/.test(boardNC));
@@ -746,9 +880,10 @@ ok('#54b FlowCanvas: 단일 하드코딩 marker(url(#flowArrow))로 되돌리지
 ok('#54c FlowCanvas: 기본색을 marker 집합에 반드시 포함(기본색 선의 화살촉 소실 방지)',
   /new Set\(\[\s*DEFAULT_EDGE_STROKE\s*\]\)/.test(canvasNC));
 ok('#54d FlowCanvas: 선과 화살촉이 같은 색을 쓴다',
-  /stroke=\{color\}/.test(canvasNC) && /markerEnd=\{heads\.end \? marker : undefined\}/.test(canvasNC));
-ok('#54e FlowCanvas: 선택된 선을 색과 무관하게 알아볼 수 있다(후광 + 굵기)',
-  /edgeSel && \(\s*<path[\s\S]{0,200}strokeOpacity=\{0\.35\}/.test(canvasNC) && /strokeWidth=\{edgeSel \? 3 : 2\}/.test(canvasNC));
+  /stroke=\{color\}/.test(singleBranch) && /markerEnd=\{heads\.end \? marker : undefined\}/.test(singleBranch));
+// ⚠️ 후광 굵기는 선 굵기에서 파생시킨다 — 고정값(옛 9)이면 '굵게' 선에 묻혀 선택 표시가 사라진다.
+ok('#54e FlowCanvas: 선택된 선을 색·굵기와 무관하게 알아볼 수 있다(후광)',
+  /edgeSel && \(\s*<path[\s\S]{0,220}strokeOpacity=\{0\.35\}/.test(canvasNC) && /strokeWidth=\{line\.width \+ 7\}/.test(canvasNC));
 ok('#55 FlowCanvas: 도형 글자색이 채우기 밝기를 따른다(흰 글자 묻힘 방지)',
   /readableTextColor\(fillColor\)/.test(canvasNC) && /style=\{\{ color: textColor \}\}/.test(canvasNC));
 ok('#55b FlowCanvas: 기본 채우기 리터럴을 손복제하지 않았다', !/'#2E75B6'/.test(canvasNC) && /DEFAULT_NODE_FILL/.test(canvasNC));
@@ -772,8 +907,13 @@ ok('#57c FlowInspector: 색 팔레트를 부동 팝오버로 만들지 않았다
 console.log('\n■ 소스 텍스트 가드 — 화살촉 방향 배선');
 // ⚠️ 캔버스와 인스펙터가 arrowHeads 한 함수를 공유해야 '그려진 방향'과 '설명하는 방향'이 안 갈린다.
 ok('#63 FlowCanvas: 화살촉 위치를 arrowHeads가 단독 판정', /const heads = arrowHeads\(e\.arrow\)/.test(canvasNC));
-ok('#63b FlowCanvas: markerStart/End가 그 판정을 그대로 쓴다',
-  /markerStart=\{heads\.start \? marker : undefined\}/.test(canvasNC));
+// ⚠️ **두 분기 모두** 본다 — 전역으로 재면 한쪽만 지우는 변이를 놓친다(실측 죽은 단언).
+ok('#63b FlowCanvas: 일반 선이 그 판정을 그대로 쓴다',
+  /markerStart=\{heads\.start \? marker : undefined\}/.test(singleBranch)
+  && /markerEnd=\{heads\.end \? marker : undefined\}/.test(singleBranch));
+ok('#63d FlowCanvas: 이중선도 같은 판정을 쓴다',
+  /markerStart=\{heads\.start \? marker : undefined\}/.test(doubleBranch)
+  && /markerEnd=\{heads\.end \? marker : undefined\}/.test(doubleBranch));
 // ⚠️ e.arrow 를 캔버스에서 직접 비교로 되돌리면 인스펙터 안내 문구와 조용히 갈린다.
 ok('#63c FlowCanvas: arrow 값을 직접 문자열 비교하지 않는다', !/e\.arrow === '(to|from|both|none)'/.test(canvasNC));
 {
@@ -800,6 +940,58 @@ ok('#66 FlowBoard: 선 양 끝 도형 이름을 인스펙터로 넘긴다', /edg
 ok('#66b FlowBoard: 이름은 라이브 파생(viewOf)이고 노드가 없으면 안전 폴백',
   /const selEdgeEnds = selEdge \? \{ from: edgeEndName\(selEdge\.from\), to: edgeEndName\(selEdge\.to\) \} : null/.test(boardNC)
   && /viewOf\(n\)\.displayName/.test(boardNC));
+
+console.log('\n■ 소스 텍스트 가드 — 선 종류 배선');
+// ⚠️ 캔버스와 인스펙터 미리보기가 flowLineRender 하나를 공유해야 '고른 모양 = 그려지는 모양'이다.
+ok('#75 FlowCanvas: 선 렌더 판정을 flowLineRender가 단독으로 한다', /const line = flowLineRender\(e\)/.test(canvasNC));
+// ⚠️ 파일 전역으로 재지 말 것 — `strokeWidth={line.width}` 는 이중선 바깥 path 에도 있어서,
+//    전역으로 재면 **일반 선의 굵기를 2로 고정하는 변이가 그대로 통과한다**(실측 죽은 단언).
+//    두 분기를 잘라서 각각 본다.
+ok('#75b FlowCanvas: 일반 선이 굵기·패턴을 그 판정에서 쓴다',
+  /strokeWidth=\{line\.width\}/.test(singleBranch) && /strokeDasharray=\{line\.dash\}/.test(singleBranch));
+// ⚠️ 레거시 dashed 를 캔버스에서 직접 읽으면 점선으로 그려 둔 기존 선이 전부 실선이 된다.
+ok('#75c FlowCanvas: e.dashed를 직접 읽지 않는다', !/e\.dashed/.test(canvasNC));
+ok('#75d FlowCanvas: 옛 하드코딩 dasharray("6 4")를 되살리지 않았다', !/'6 4'/.test(canvasNC));
+{
+  // 이중선: 바깥(색) 위에 안쪽(배경색)을 덮고, 화살촉은 **안쪽**에 단다(바깥에 달면 3배로 커진다).
+  ok('#76 FlowCanvas: 이중선은 배경색으로 가운데를 덮는다', /stroke=\{FLOW_CANVAS_BG\}/.test(doubleBranch));
+  ok('#76b FlowCanvas: 안쪽 굵기를 쓴다', /strokeWidth=\{line\.innerWidth\}/.test(doubleBranch));
+  // ⚠️ '안쪽이 바깥보다 뒤에 있나'로 재면 죽은 단언이다 — 바깥 path 에 markerEnd 를 **추가**해도
+  //    같은 줄이라 순서 비교를 통과한다(실측). 바깥 path 안에 marker 가 **없음**을 봐야 한다.
+  const outerPath = sliceBetween(doubleBranch, '<path', '/>');
+  ok('#76c FlowCanvas: 바깥(3배 굵기) path에는 화살촉을 붙이지 않는다(화살촉만 3배 확대 방지)',
+    outerPath.includes('strokeWidth={line.width}') && !outerPath.includes('marker'));
+  ok('#76c2 FlowCanvas: 화살촉은 안쪽 path에 붙는다',
+    /stroke=\{FLOW_CANVAS_BG\}[\s\S]{0,240}markerEnd=\{heads\.end \? marker : undefined\}/.test(doubleBranch));
+}
+// ⚠️ 이중선 가운데 색은 캔버스 배경과 **같은 상수**여야 한다 — 다르면 선 한가운데 다른 색 띠가 생긴다.
+ok('#76d FlowCanvas: 배경색 리터럴을 손복제하지 않았다', !/#0b1120/.test(canvasNC) && /FLOW_CANVAS_BG/.test(canvasNC));
+{
+  const lp = sliceBetween(inspNC, 'function LinePreview', 'function Swatch');
+  ok('#77 FlowInspector: 미리보기가 캔버스와 같은 flowLineRender를 쓴다',
+    /flowLineRender\(\{ lineStyle: style, lineWidth: width \}\)/.test(lp));
+  ok('#77b FlowInspector: 미리보기가 dasharray를 손으로 적지 않는다', !/strokeDasharray="/.test(lp));
+  ok('#77c FlowInspector: 이중선 미리보기도 배경색 덮기 방식', /stroke=\{r\.double \? FLOW_CANVAS_BG : color\}/.test(lp));
+}
+ok('#78 FlowInspector: 선 종류 선택지가 7종', (sliceBetween(inspNC, 'const LINE_STYLE_CHOICES = [', '];').match(/\{ k: '/g) || []).length === 7);
+ok('#78b FlowInspector: 굵기 선택지가 3종', (sliceBetween(inspNC, 'const LINE_WIDTH_CHOICES = [', '];').match(/\{ k: '/g) || []).length === 3);
+ok('#78c FlowInspector: 미리보기를 실제로 렌더한다', /<LinePreview style=\{k\} width=\{curLineWidth\} color=\{curEdgeColor\}/.test(inspNC));
+// ⚠️ 기본값을 저장값으로 박으면 기존 선이 전부 '변경됨'이 되어 원본 참조 보존 계약이 깨진다.
+ok('#78d FlowInspector: 기본값(실선/보통)은 필드를 지운다',
+  /lineStyle: k === 'solid' \? undefined : k/.test(inspNC) && /lineWidth: k === 'normal' \? undefined : k/.test(inspNC));
+// ⚠️ 옛 2택 토글로 되돌리면 새 5종을 고를 방법이 화면에서 사라진다.
+ok('#78e FlowInspector: 옛 dashed 토글을 되살리지 않았다', !/dashed: !edge\.dashed/.test(inspNC));
+// ⚠️ 현재값은 resolveFlowLineStyle 로 읽는다 — 직접 읽으면 레거시 점선 선택이 '실선'으로 표시된다.
+ok('#78f FlowInspector: 현재 선 종류를 레거시까지 해석해서 읽는다',
+  /const curLineStyle = resolveFlowLineStyle\(edge\?\.lineStyle, edge\?\.dashed\)/.test(inspNC));
+// ⚠️ 렌더 스코프 선언 — 다른 최상위 블록의 지역 변수를 참조하면 런타임 ReferenceError 로
+//    화면이 통째로 오류 페이지가 되는데 빌드도 undefcheck 도 잡지 못한다(initTradeRest 선례).
+ok('#78g FlowInspector: 미리보기 인자 3종이 컴포넌트 렌더 스코프에 선언돼 있다',
+  /const curLineWidth = normalizeFlowLineWidth\(edge\?\.lineWidth\)/.test(inspNC)
+  && /const curEdgeColor = sanitizeHexColor\(edge\?\.stroke\) \|\| DEFAULT_EDGE_STROKE/.test(inspNC));
+// ⚠️ 새 선에 기본값을 박으면 normalizeFlowMaps 가 매번 '변경됨'으로 본다.
+ok('#79 FlowBoard: 새 연결선에 레거시 dashed·기본값을 넣지 않는다',
+  /const e = \{ id: generateId\(\), from, to, label: '', arrow: 'to' \};/.test(boardNC));
 
 // ⚠️ #37 은 흐름도 전용 계약이 아니라 **빌드 차단 사고 재발 방지**다. 이 저장소에서 두 번 났다:
 //    ① `(` 직후(표현식 위치)에 `{/* */}` 를 두어 빈 객체 리터럴로 파싱된 사고

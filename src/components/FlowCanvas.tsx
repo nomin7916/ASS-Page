@@ -2,8 +2,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   edgePath, anchorPoint, roundNode, snapToGrid, sanitizeHexColor, readableTextColor, arrowHeads,
+  flowLineRender,
   MIN_NODE_W, MIN_NODE_H, FLOW_GRID, FLOW_MIN_SCALE, FLOW_MAX_SCALE,
-  DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE,
+  DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, FLOW_CANVAS_BG,
 } from '../flowMap';
 
 /**
@@ -193,7 +194,7 @@ function FlowCanvasInner({
     <svg
       ref={svgRef}
       className="w-full h-full block"
-      style={{ touchAction: 'none', background: '#0b1120', cursor: pan ? 'grabbing' : 'default' }}
+      style={{ touchAction: 'none', background: FLOW_CANVAS_BG, cursor: pan ? 'grabbing' : 'default' }}
       onPointerDown={onBgPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
@@ -225,22 +226,43 @@ function FlowCanvasInner({
           // ⚠️ 어느 끝에 화살촉을 그릴지는 flowMap.arrowHeads가 단독 판정한다 —
           //    여기서 e.arrow를 직접 비교하면 인스펙터 안내 문구와 갈린다.
           const heads = arrowHeads(e.arrow);
+          // ⚠️ 선 종류·굵기 판정은 flowMap.flowLineRender가 단독으로 한다(인스펙터 미리보기와 공유).
+          //    레거시 dashed 흡수도 그 안에서 끝난다 — 여기서 e.dashed를 직접 읽지 말 것.
+          const line = flowLineRender(e);
           return (
             <g key={e.id}>
               {/* ⚠️ 선택 표시(후광)를 지우지 말 것 — 색을 바꿀 수 있게 되면서 '어느 선을 고쳤는지'를
-                  색으로는 알 수 없게 됐다(라벨 없는 선은 종전에 선택 피드백이 아예 없었다). */}
+                  색으로는 알 수 없게 됐다(라벨 없는 선은 종전에 선택 피드백이 아예 없었다).
+                  굵기를 고를 수 있으므로 후광도 선 굵기에서 파생시킨다(고정 9면 굵은 선에 묻힌다). */}
               {edgeSel && (
-                <path d={p.d} fill="none" stroke="#818cf8" strokeWidth={9} strokeOpacity={0.35} strokeLinecap="round" pointerEvents="none" />
+                <path d={p.d} fill="none" stroke="#818cf8" strokeWidth={line.width + 7} strokeOpacity={0.35} strokeLinecap="round" pointerEvents="none" />
               )}
-              <path
-                d={p.d}
-                fill="none"
-                stroke={color}
-                strokeWidth={edgeSel ? 3 : 2}
-                strokeDasharray={e.dashed ? '6 4' : undefined}
-                markerEnd={heads.end ? marker : undefined}
-                markerStart={heads.start ? marker : undefined}
-              />
+              {line.double ? (
+                <>
+                  <path d={p.d} fill="none" stroke={color} strokeWidth={line.width} />
+                  {/* ⚠️ 가운데를 캔버스 배경색으로 덮어 이중선을 만든다. 화살촉은 **안쪽 path**에 —
+                      marker는 markerUnits="strokeWidth"가 기본이라 바깥(3배)에 붙이면 3배로 커진다.
+                      marker의 색은 정의부 fill이 정하므로 이 path의 stroke 색과 무관하다. */}
+                  <path
+                    d={p.d}
+                    fill="none"
+                    stroke={FLOW_CANVAS_BG}
+                    strokeWidth={line.innerWidth}
+                    markerEnd={heads.end ? marker : undefined}
+                    markerStart={heads.start ? marker : undefined}
+                  />
+                </>
+              ) : (
+                <path
+                  d={p.d}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth={line.width}
+                  strokeDasharray={line.dash}
+                  markerEnd={heads.end ? marker : undefined}
+                  markerStart={heads.start ? marker : undefined}
+                />
+              )}
               {/* 클릭 히트박스 — 얇은 선을 잡기 쉽게 */}
               <path
                 d={p.d}
@@ -258,7 +280,7 @@ function FlowCanvasInner({
                     width={Math.min(240, e.label.length * 12 + 16)}
                     height={22}
                     rx={5}
-                    fill="#0b1120"
+                    fill={FLOW_CANVAS_BG}
                     stroke={edgeSel ? '#818cf8' : color}
                     strokeOpacity={edgeSel ? 1 : 0.6}
                   />
@@ -331,7 +353,7 @@ function FlowCanvasInner({
                     cx={anchorPoint(n, 'r').x}
                     cy={anchorPoint(n, 'r').y}
                     r={6}
-                    fill={isConnectSrc ? '#818cf8' : '#0b1120'}
+                    fill={isConnectSrc ? '#818cf8' : FLOW_CANVAS_BG}
                     stroke="#818cf8"
                     strokeWidth={2}
                     style={{ cursor: 'crosshair' }}
@@ -344,7 +366,7 @@ function FlowCanvasInner({
                     width={12}
                     height={12}
                     rx={2}
-                    fill="#0b1120"
+                    fill={FLOW_CANVAS_BG}
                     stroke="#818cf8"
                     strokeWidth={2}
                     style={{ cursor: 'nwse-resize' }}

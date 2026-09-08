@@ -4,6 +4,7 @@ import { Trash2, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { cleanNum } from '../utils';
 import {
   sanitizeHexColor, DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, normalizeFlowArrow, arrowHeads,
+  flowLineRender, resolveFlowLineStyle, normalizeFlowLineWidth, FLOW_CANVAS_BG,
 } from '../flowMap';
 
 /**
@@ -51,6 +52,47 @@ const arrowFlowText = (arrow, ends) => {
   if (!h.start && !h.end) return `방향 표시 없음 — ${a} · ${b}`;
   return h.end ? `자금 흐름: ${a} → ${b}` : `자금 흐름: ${b} → ${a}`;
 };
+
+/** 선 종류 — 값은 flowMap.FLOW_LINE_STYLES 순서와 같게 유지한다. */
+const LINE_STYLE_CHOICES = [
+  { k: 'solid', t: '실선' },
+  { k: 'dot', t: '점선' },
+  { k: 'dash', t: '파선' },
+  { k: 'longDash', t: '긴 파선' },
+  { k: 'dashDot', t: '일점쇄선' },
+  { k: 'dashDotDot', t: '이점쇄선' },
+  { k: 'double', t: '이중선' },
+];
+
+const LINE_WIDTH_CHOICES = [
+  { k: 'thin', t: '얇게' },
+  { k: 'normal', t: '보통' },
+  { k: 'thick', t: '굵게' },
+];
+
+/**
+ * 선 종류 미리보기 — 캔버스와 **같은 `flowLineRender`**로 그린다. 손으로 dasharray를 적으면
+ * 고른 모양과 실제로 그려지는 모양이 갈려서 미리보기가 존재할 이유가 사라진다.
+ * ⚠️ 배경을 FLOW_CANVAS_BG로 두는 것이 이중선의 전제다 — 이중선은 가운데를 배경색으로 덮어
+ *    만들기 때문에, 버튼 배경이 캔버스와 다르면 미리보기의 가운데 띠만 다른 색이 된다.
+ */
+function LinePreview({ style, width, color }) {
+  const r = flowLineRender({ lineStyle: style, lineWidth: width });
+  return (
+    <svg className="w-full block" height="14" aria-hidden="true">
+      {r.double && <line x1="2" y1="7" x2="100%" y2="7" stroke={color} strokeWidth={r.width} />}
+      <line
+        x1="2"
+        y1="7"
+        x2="100%"
+        y2="7"
+        stroke={r.double ? FLOW_CANVAS_BG : color}
+        strokeWidth={r.double ? r.innerWidth : r.width}
+        strokeDasharray={r.dash}
+      />
+    </svg>
+  );
+}
 
 /** 한 번에 누를 수 있는 자주 쓰는 색(기존 8색 그대로 — 이미 이 색으로 칠해 둔 도형이 있다). */
 const QUICK_COLORS = [
@@ -323,6 +365,14 @@ export default function FlowInspector({
   const patch = (o) => { if (!readOnly && node) onPatchNodeById?.(node.id, o); };
   const patchEdge = (o) => { if (!readOnly && edge) onPatchEdgeById?.(edge.id, o); };
 
+  // ⚠️ 이 세 값은 **이 컴포넌트 렌더 스코프**에 있어야 한다 — 다른 최상위 블록(LinePreview 등)의
+  //    지역 변수를 JSX가 참조하면 런타임 ReferenceError로 화면이 통째로 오류 페이지가 되는데
+  //    @ts-nocheck + esbuild라 빌드도 undefcheck도 잡지 못한다(initTradeRest 프로덕션 장애와 동일).
+  // ⚠️ 선 종류는 resolveFlowLineStyle로 읽는다 — 레거시 `dashed:true` 선을 직접 읽으면 실선으로 표시된다.
+  const curLineStyle = resolveFlowLineStyle(edge?.lineStyle, edge?.dashed);
+  const curLineWidth = normalizeFlowLineWidth(edge?.lineWidth);
+  const curEdgeColor = sanitizeHexColor(edge?.stroke) || DEFAULT_EDGE_STROKE;
+
   return (
     <div className="w-64 shrink-0 h-full overflow-y-auto bg-[#0f1623] border-l border-gray-700 p-3">
       <div className="flex items-center justify-between mb-3">
@@ -509,12 +559,36 @@ export default function FlowInspector({
               {arrowFlowText(edge.arrow, edgeEnds)}
             </div>
           </Field>
-          <Field label="선 모양">
-            <button
-              disabled={readOnly}
-              onClick={() => patchEdge({ dashed: !edge.dashed })}
-              className={`w-full text-[11px] py-1 rounded border transition ${edge.dashed ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
-            >{edge.dashed ? '점선' : '실선'}</button>
+          {/* ⚠️ 미리보기는 지금 고른 **색·굵기**로 그린다 — 검은 실선 견본만 보여주면 굵게 골랐을 때
+              어떻게 보일지 알 수 없다. 기본값(실선/보통)은 저장하지 않는다(undefined로 지운다). */}
+          <Field label="선 종류">
+            <div className="grid grid-cols-2 gap-1">
+              {LINE_STYLE_CHOICES.map(({ k, t }) => (
+                <button
+                  key={k}
+                  disabled={readOnly}
+                  title={t}
+                  onClick={() => patchEdge({ lineStyle: k === 'solid' ? undefined : k })}
+                  className={`px-1.5 py-1 rounded border transition ${curLineStyle === k ? 'border-indigo-500 ring-1 ring-indigo-500/50' : 'border-gray-700 hover:border-gray-500'}`}
+                  style={{ background: FLOW_CANVAS_BG }}
+                >
+                  <LinePreview style={k} width={curLineWidth} color={curEdgeColor} />
+                  <span className={`block text-[9px] mt-0.5 ${curLineStyle === k ? 'text-indigo-300' : 'text-gray-500'}`}>{t}</span>
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="선 굵기">
+            <div className="grid grid-cols-3 gap-1">
+              {LINE_WIDTH_CHOICES.map(({ k, t }) => (
+                <button
+                  key={k}
+                  disabled={readOnly}
+                  onClick={() => patchEdge({ lineWidth: k === 'normal' ? undefined : k })}
+                  className={`text-[10px] py-1 rounded border transition ${curLineWidth === k ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                >{t}</button>
+              ))}
+            </div>
           </Field>
           {!readOnly && (
             <button

@@ -303,7 +303,9 @@ export default function FlowBoard({
       return;
     }
     if (cur.edges.some(e => e.from === from && e.to === to)) return; // 같은 방향 중복 연결 금지
-    const e = { id: generateId(), from, to, label: '', arrow: 'to', dashed: false };
+    // ⚠️ 기본값(lineStyle 'solid' · lineWidth 'normal')은 **넣지 않는다** — 생략이 곧 기본값이라
+    //    normalizeFlowMaps가 새 선을 '변경됨'으로 보지 않는다(원본 참조 보존). 레거시 `dashed`도 금지.
+    const e = { id: generateId(), from, to, label: '', arrow: 'to' };
     patchMap(m => ({ ...m, edges: [...m.edges, e] }));
     setSelectedId(`edge:${e.id}`);
   }, [patchMap]);
