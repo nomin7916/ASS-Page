@@ -1262,6 +1262,35 @@ ok('#92d FlowBoard: 시트 전환 시 캔버스를 remount', /key=\{map\?\.id \|
     && /const cancelled = renameCancelRef\.current;/.test(boardNC));
 }
 
+// ── 툴바 좌측 상단 제목 = 활성 시트 이름 (2026-09 사용자 요청) ──────────────────
+// ⚠️ 파일 전역 정규식으로 재지 말 것 — 탭 입력과 제목 입력이 같은 문자열
+//    (`data-flow-sheet-rename=""` 등)을 쓰므로 **한쪽만 되돌리는 변이가 그대로 통과**한다.
+{
+  const titleBlk = sliceBetween(boardNC, 'border-b border-gray-700 bg-[#0f1623] shrink-0 flex-wrap', "addNode('rect')");
+  const tabBlk = sliceBetween(boardNC, '(mapsLocal || []).map(m => (', 'onClick={addSheet}');
+  ok('#94 FlowBoard: 툴바 제목·탭 구간을 찾았다', titleBlk.length > 0 && tabBlk.length > 0);
+  // ⚠️ 같은 문자열이 편집 버튼과 readOnly span **두 분기**에 있다 → '한 번이라도 등장하는가'로
+  //    재면 한쪽만 하드코딩으로 되돌리는 변이가 다른 쪽으로 통과한다(실측 죽은 단언).
+  ok('#94b FlowBoard: 제목이 활성 시트 이름을 렌더한다(하드코딩 아님, 두 분기 모두)',
+    /\{map\?\.name \|\| '자금 흐름도'\}\s*<\/button>/.test(titleBlk)
+    && /\{map\?\.name \|\| '자금 흐름도'\}<\/span>/.test(titleBlk));
+  ok('#94c FlowBoard: 제목 클릭이 이름 편집을 연다',
+    /onClick=\{\(\) => startRename\(map, 'title'\)\}/.test(titleBlk));
+  ok('#94d FlowBoard: 제목 입력도 키 분기 속성을 단다(Escape 취소가 저장이 되지 않게)',
+    /data-flow-sheet-rename=""/.test(titleBlk));
+  ok('#94e FlowBoard: 제목 커밋은 탭과 같은 commitRename 경유(renameFlowMap 단일 쓰기 경로)',
+    /onBlur=\{\(\) => commitRename\(map\.id\)\}/.test(titleBlk));
+  ok('#94f FlowBoard: readOnly 면 제목을 편집하지 않는다', /\) : readOnly \? \(/.test(titleBlk));
+  // ⚠️ 판별자가 없으면 두 입력이 같은 `renameId` 로 **동시에** 마운트돼 한 이름을 두 칸에서 고친다.
+  ok('#94g FlowBoard: 제목 입력은 편집 위치가 title 일 때만 마운트',
+    /renameId === map\?\.id && renameWhere === 'title'/.test(titleBlk));
+  ok('#94h FlowBoard: 탭 입력은 제목을 편집 중이면 마운트하지 않는다',
+    /renameId === m\.id && renameWhere !== 'title'/.test(tabBlk));
+  ok('#94i FlowBoard: startRename 이 편집 위치를 받아 판별자를 세운다',
+    /const startRename = useCallback\(\(m, where\) =>/.test(boardNC)
+    && /setRenameWhere\(where === 'title' \? 'title' : 'tab'\)/.test(boardNC));
+}
+
 // ⚠️ #37 은 흐름도 전용 계약이 아니라 **빌드 차단 사고 재발 방지**다. 이 저장소에서 두 번 났다:
 //    ① `(` 직후(표현식 위치)에 `{/* */}` 를 두어 빈 객체 리터럴로 파싱된 사고
 //    ② JSX 주석 **본문에 `*/` 를 포함**시켜(주석 안에서 주석 문법을 설명하다) 주석이 조기 종료된 사고

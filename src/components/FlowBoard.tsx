@@ -118,6 +118,10 @@ export default function FlowBoard({
   const activeIdRef = useRef(null);
   const [renameId, setRenameId] = useState(null);     // 이름 편집 중인 시트
   const [renameDraft, setRenameDraft] = useState(''); // 원시 문자열 draft(커밋은 blur/Enter)
+  // ⚠️ 편집 위치 판별자. 툴바 제목과 하단 탭이 **같은 `renameId`**를 공유하므로, 이게 없으면
+  //    두 입력이 동시에 마운트돼 같은 시트 이름을 두 칸에서 고치게 된다(어느 쪽 blur가 이기는지
+  //    브라우저가 정한다). 탭 기본값 'tab', 제목은 'title'.
+  const [renameWhere, setRenameWhere] = useState('tab');
   const renameCancelRef = useRef(false);
   const [delArmId, setDelArmId] = useState(null);     // 별도 창(confirm 없음)용 인라인 2단계 확인
   const delArmRef = useRef(null);
@@ -525,9 +529,10 @@ export default function FlowBoard({
     }
   }, [readOnly, confirm, commit, switchSheet]);
 
-  const startRename = useCallback((m) => {
+  const startRename = useCallback((m, where) => {
     if (readOnly || !m) return;
     renameCancelRef.current = false;
+    setRenameWhere(where === 'title' ? 'title' : 'tab');
     setRenameId(m.id);
     setRenameDraft(m.name || '');
   }, [readOnly]);
@@ -592,7 +597,34 @@ export default function FlowBoard({
     >
       {/* 툴바 */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-[#0f1623] shrink-0 flex-wrap">
-        <span className="text-sm font-semibold text-indigo-300 mr-1">자금 흐름도</span>
+        {/* 좌측 상단 제목 = **활성 시트 이름**. 고쳐 쓰면 하단 탭 이름이 함께 바뀐다(같은
+            `renameFlowMap` 순수 함수 = 단일 쓰기 경로). 탭은 클릭이 '전환'이라 더블클릭이지만
+            제목은 다른 동작이 없어 한 번 클릭으로 연다. */}
+        {renameId === map?.id && renameWhere === 'title' ? (
+          <input
+            data-flow-sheet-rename=""
+            autoFocus
+            value={renameDraft}
+            maxLength={MAX_FLOW_MAP_NAME}
+            onChange={e => setRenameDraft(e.target.value)}
+            onBlur={() => commitRename(map.id)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.currentTarget.blur(); }
+              else if (e.key === 'Escape') { renameCancelRef.current = true; setRenameId(null); }
+            }}
+            className="mr-1 w-44 text-sm font-semibold px-2 py-0.5 rounded border border-indigo-600 bg-[#0b1120] text-white outline-none"
+          />
+        ) : readOnly ? (
+          <span title={map?.name || ''} className="mr-1 inline-block max-w-[240px] truncate align-middle text-sm font-semibold text-indigo-300">{map?.name || '자금 흐름도'}</span>
+        ) : (
+          <button
+            onClick={() => startRename(map, 'title')}
+            title={`${map?.name || ''} — 클릭하면 이름을 바꿉니다(하단 시트 탭에도 반영)`}
+            className="mr-1 max-w-[240px] truncate text-sm font-semibold text-indigo-300 px-1 -mx-1 rounded hover:bg-gray-800 hover:text-indigo-200 transition"
+          >
+            {map?.name || '자금 흐름도'}
+          </button>
+        )}
         {!readOnly && (
           <>
             <button onClick={() => addNode('rect')} className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white hover:border-indigo-600 transition">
@@ -698,7 +730,7 @@ export default function FlowBoard({
       <div className="flex items-center gap-2 px-2 py-1.5 border-t border-gray-700 bg-[#0f1623] shrink-0">
         <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto">
           {(mapsLocal || []).map(m => (
-            renameId === m.id ? (
+            renameId === m.id && renameWhere !== 'title' ? (
               <input
                 key={m.id}
                 data-flow-sheet-rename=""
