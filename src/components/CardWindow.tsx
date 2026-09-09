@@ -10,6 +10,7 @@ import HistoryPanel from './HistoryPanel';
 import DepositPanel from './DepositPanel';
 import DividendSummaryTable from './DividendSummaryTable';
 import LadderTradeModal from './LadderTradeModal';
+import InvestmentNotesPanel from './InvestmentNotesPanel';
 import { CARD_LABELS, cardWindowTitle, isCardKey, isCardWindowSupported, baseKeyOf, ladderWinId } from '../cardWindow';
 import { buildRebalTargetEntryFrom, buildBookCostSeries, cleanNum, normalizeHistPeriod } from '../utils';
 
@@ -403,6 +404,20 @@ export default function CardWindow() {
       );
     }
 
+    // ── 투자 기록(card=notes) ──
+    // ⚠️ isCardWindowSupported 가드보다 **앞**에 둔다(ladder와 같은 근거 — 카드 헤더의 확장 버튼
+    //    목록에 없는 화면이다). 렌더는 인앱과 **같은 컴포넌트**를 쓴다(창용 복제 금지).
+    if (CARD === 'notes') {
+      return (
+        <InvestmentNotesPanel
+          variant="page"
+          notes={acct.investmentNotes || []}
+          onUpdate={(next) => fire('updateInvestmentNotes', { pid: PID, notes: next, base: baseKeyOf(acct.investmentNotes || []) })}
+          readOnly={!writable}
+        />
+      );
+    }
+
     // ── 분할 계산기(card=ladder) ──
     // ⚠️ isCardWindowSupported 가드보다 **앞**에 둔다 — 그 목록은 '카드 헤더의 확장 버튼을
     //    렌더할 카드'이고, 계산기는 카드가 아니라 리밸런싱 표에서 열리는 모달이라 거기 없다.
@@ -571,6 +586,7 @@ export default function CardWindow() {
           onLadderLog={writable ? sendLadderLog : null}
           // ⚠️ 창에서 window.open을 직접 부르면 새 창의 opener가 **이 창**이 되어 앱 탭과 영영
           //    연결되지 않는다(읽기 전용으로 굳는다) → 앱 탭에 위임한다.
+          onExpandNotes={() => { fire('openNotesWindow', { pid: PID }); }}
           onExpandLadder={(itemId, side) => fire('openLadderWindow', { pid: PID, itemId, side })}
           // 창은 다른 창의 열림 여부를 모른다(앱 탭의 레지스트리에만 있다) → 표기만 생략한다.
           ladderWindowOpenSet={null}

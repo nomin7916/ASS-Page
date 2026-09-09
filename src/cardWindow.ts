@@ -32,6 +32,11 @@ export const CARD_DEFS = [
   //    rebalanceData의 그 종목 행에서 파생되는데, 창이 **원자재를 받아 스스로 파생을 계산**하는
   //    이 인프라가 그 계약(INV-2)을 이미 만족한다. 새 창 종류를 만들면 앱이 파생값을 push해야 한다.
   { key: 'ladder', label: '분할 계산기' },
+  // ⚠️ notes도 '카드'가 아니라 리밸런싱 패널 안의 **투자 기록 메모장**이다 — CARD_WINDOW_SUPPORTED에
+  //    넣지 않는다(진입점은 목록·메모장 헤더의 ⧉ 하나뿐). 별도 창을 두는 이유: 인앱에서는 목록·
+  //    메모장이 자산관리 대시보드 위에 떠 겹치는데, 장문 메모를 쓰는 동안 뒤의 표를 함께 보려면
+  //    화면이 분리돼야 한다(사용자 요청 2026-09).
+  { key: 'notes', label: '투자 기록' },
 ] as const;
 
 export type CardKey = typeof CARD_DEFS[number]['key'];
@@ -112,6 +117,8 @@ export const CARD_NEEDS: Record<string, { prices?: boolean; dividend?: boolean; 
   // 분할 계산기 — 리밸런싱과 같은 원자재(계좌 객체)로 rebalanceData를 계산하고, 현재가 재조회
   // 상태점(refreshState)을 그리므로 fetchStatus가 필요하다.
   ladder: { fetchStatus: true },
+  // 투자 기록 — 계좌 객체(investmentNotes)만 있으면 되고 시세·분배금은 한 줄도 읽지 않는다.
+  notes: {},
 };
 
 // 창→앱 커맨드 이름 — **App의 핸들러가 실제로 구현한 것과 1:1**이어야 한다.
@@ -134,6 +141,9 @@ export const CARD_OPS = [
   // ⚠️ 창에서 window.open을 직접 부르면 새 창의 opener가 **그 창**이 되어 앱 탭과 영영 연결되지
   //    않는다(읽기 전용으로 굳는다) → 앱 탭에 위임한다(CalendarWindow의 calendar:openLedger 선례).
   'saveLadderLog', 'openLadderWindow',
+  // 투자 기록 별도 창 열기 — 같은 근거로 앱 탭에 위임한다(창에서 window.open을 부르면 그 창이
+  // 새 창의 opener가 되어 앱 탭과 영영 연결되지 않는다).
+  'openNotesWindow',
   // 분배금 — 하부 by-id 라이터 20종을 fn 이름으로 라우팅한다
   'dividendCall',
 ] as const;

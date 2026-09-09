@@ -1,17 +1,17 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Plus, Maximize2, Trash2, Check, CalendarClock } from 'lucide-react';
+import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Maximize2, CalendarClock } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources } from '../utils';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
-import { getTodayKST } from '../hooks/useMarketCalendar';
 import { ladderWinId } from '../cardWindow';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import CardExpandButton from './CardExpandButton';
 import RebalanceTargetRestoreModal from './RebalanceTargetRestoreModal';
 import LadderTradeModal from './LadderTradeModal';
+import InvestmentNotesPanel, { formatNoteDate, sortNotesDesc } from './InvestmentNotesPanel';
 
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
 const getItemUrl = (item) => {
@@ -144,6 +144,11 @@ export default function RebalancingPanel({
   readOnly = false,
   // PIN 검증 위임(창 전용) — 창의 sessionStorage는 열린 시점 사본이라 로컬 검증이 낡는다.
   pinVerify = null,
+  // 투자 기록을 별도 브라우저 창으로 열기 — () => boolean('창이 실제로 떴는가').
+  // ⚠️ true를 반환해야 인앱 팝업을 닫는다 — 팝업이 차단됐는데 닫으면 작성 중이던 화면을 통째로 잃는다.
+  //    미전달이면 확장 버튼을 렌더하지 않는다(죽은 버튼 방지 — onExpandLadder와 같은 규약).
+  onExpandNotes = null,
+  notesWindowOpen = false,
   // 카드 확장(별도 창) — 표·도넛이 각각 별도 창이라 진입점도 둘이다(별도 창에는 미전달).
   onExpandTable = null,
   onExpandDonut = null,
@@ -191,92 +196,21 @@ export default function RebalancingPanel({
   const datePickerRef = useRef(null);
 
   // ── 투자 기록 노트패드 ──
+  // ⚠️ 목록·메모장 UI는 InvestmentNotesPanel 하나가 소유한다(별도 브라우저 창과 공유).
+  //    여기서는 '열려 있는가 / 어떤 메모로 열 것인가'만 들고 있는다.
   const [noteLogOpen, setNoteLogOpen] = useState(false);
-  const [noteLogPos, setNoteLogPos] = useState({ x: 0, y: 0 });
-  const noteLogDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
-  const [noteExpandModal, setNoteExpandModal] = useState(null); // { id, date, val }
-  const [noteExpandPos, setNoteExpandPos] = useState({ x: 0, y: 0 });
-  const noteExpandDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
+  const [noteOpenSeq, setNoteOpenSeq] = useState(0);
+  const [noteInitialId, setNoteInitialId] = useState(null);
 
-  const openNoteLog = () => {
-    setNoteLogPos({ x: Math.max(8, window.innerWidth / 2 - 192), y: Math.max(8, window.innerHeight / 2 - 240) });
+  // ⚠️ openSeq를 함께 올린다 — 이미 열려 있는 상태에서 다시 요청해도 초기 화면이 다시 정해진다
+  //    (안 그러면 메모장을 보는 중에 '투자 기록'을 눌러도 아무 일도 일어나지 않는다).
+  const openNoteLog = (noteId = null) => {
+    setNoteInitialId(noteId);
+    setNoteOpenSeq(n => n + 1);
     setNoteLogOpen(true);
   };
 
-  const handleNoteLogDragStart = (e) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    noteLogDrag.current = { active: true, offsetX: e.clientX - noteLogPos.x, offsetY: e.clientY - noteLogPos.y };
-    const onMove = (ev) => {
-      if (!noteLogDrag.current.active) return;
-      setNoteLogPos({ x: ev.clientX - noteLogDrag.current.offsetX, y: ev.clientY - noteLogDrag.current.offsetY });
-    };
-    const onUp = () => {
-      noteLogDrag.current.active = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
-
-  const handleNoteExpandDragStart = (e) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    noteExpandDrag.current = { active: true, offsetX: e.clientX - noteExpandPos.x, offsetY: e.clientY - noteExpandPos.y };
-    const onMove = (ev) => {
-      if (!noteExpandDrag.current.active) return;
-      setNoteExpandPos({ x: ev.clientX - noteExpandDrag.current.offsetX, y: ev.clientY - noteExpandDrag.current.offsetY });
-    };
-    const onUp = () => {
-      noteExpandDrag.current.active = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
-
-  const openNoteExpand = (note) => {
-    setNoteLogOpen(false);
-    // 세로 2배(rows 30)라 중앙 오프셋(-180)으로 열면 아래가 화면 밖으로 잘린다 → 상단 근처에서 시작
-    setNoteExpandPos({ x: Math.max(8, window.innerWidth / 2 - 192), y: Math.max(8, Math.round(window.innerHeight * 0.05)) });
-    setNoteExpandModal({ id: note.id, date: note.date, val: note.content ?? '' });
-  };
-
-  const addNewNote = () => {
-    if (!onUpdateInvestmentNotes) return;
-    // ⚠️ toISOString()은 UTC라 한국 00:00~09:00에 쓴 기록이 '어제' 날짜로 찍힌다. 투자기록은
-    // 메모 달력 칸(dayKey, KST 로컬 조립)에 매칭되므로 반드시 KST로 맞춰야 하루가 어긋나지 않는다.
-    const today = getTodayKST();
-    const newNote = { id: generateId(), date: today, content: '' };
-    const updated = [newNote, ...(investmentNotes || [])];
-    onUpdateInvestmentNotes(updated);
-    setNoteExpandPos({ x: Math.max(8, window.innerWidth / 2 - 192), y: Math.max(8, Math.round(window.innerHeight * 0.05)) });
-    setNoteExpandModal({ id: newNote.id, date: newNote.date, val: '' });
-  };
-
-  const saveNoteExpand = () => {
-    if (!noteExpandModal || !onUpdateInvestmentNotes) return;
-    const updated = (investmentNotes || []).map(n =>
-      n.id === noteExpandModal.id ? { ...n, date: noteExpandModal.date, content: noteExpandModal.val } : n
-    );
-    onUpdateInvestmentNotes(updated);
-    setNoteExpandModal(null);
-  };
-
-  const deleteNote = (id) => {
-    if (!onUpdateInvestmentNotes) return;
-    onUpdateInvestmentNotes((investmentNotes || []).filter(n => n.id !== id));
-  };
-
-  const formatNoteDate = (iso) => {
-    if (!iso) return '날짜';
-    const p = iso.split('-');
-    return p.length === 3 ? `${p[0].slice(2)}/${p[1]}/${p[2]}` : iso;
-  };
-
-  const sortedNotes = [...(investmentNotes || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const sortedNotes = sortNotesDesc(investmentNotes);
   const latestNote = sortedNotes[0] ?? null;
   const openHelp = () => {
     setHelpPos({ x: Math.max(8, window.innerWidth / 2 - 220), y: Math.max(8, window.innerHeight / 2 - 280) });
@@ -981,7 +915,7 @@ export default function RebalancingPanel({
           {onUpdateInvestmentNotes && (
             <div
               className="flex items-center gap-3 px-4 py-2 bg-[#080e1c] border-b border-gray-800/60 cursor-pointer hover:bg-[#0b1322] transition-colors group"
-              onClick={openNoteLog}
+              onClick={() => openNoteLog()}
               title="투자 기록 메모장 열기"
             >
               <div className="flex items-center gap-1.5 text-gray-500 group-hover:text-gray-400 transition-colors shrink-0">
@@ -999,7 +933,7 @@ export default function RebalancingPanel({
               )}
               {latestNote && (
                 <button
-                  onClick={e => { e.stopPropagation(); openNoteExpand(latestNote); }}
+                  onClick={e => { e.stopPropagation(); openNoteLog(latestNote.id); }}
                   className="shrink-0 text-gray-600 hover:text-blue-400 transition-colors"
                   title="메모 바로 열기"
                 >
@@ -2276,88 +2210,20 @@ export default function RebalancingPanel({
             onClose={() => setLadderModal(null)}
           />
         )}
-        {noteLogOpen && (
-          <div className="fixed w-[576px] shadow-2xl overflow-hidden" style={{ left: noteLogPos.x, top: noteLogPos.y, zIndex: 1000 }}>
-              <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleNoteLogDragStart}>
-                <button onClick={() => setNoteLogOpen(false)} className="w-[18px] h-[18px] rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={10} className="text-white" /></button>
-                <span className="text-[17px] font-bold tracking-[0.18em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">투자 기록</span>
-                <button onClick={addNewNote} className="text-gray-500 hover:text-emerald-400 transition-colors" title="새 메모 추가"><Plus size={19} /></button>
-              </div>
-              <div className="overflow-y-auto max-h-[60vh]" style={{
-                backgroundColor: '#000',
-                backgroundImage: 'repeating-linear-gradient(transparent 0px, transparent 35px, rgba(99,130,255,0.25) 35px, rgba(99,130,255,0.25) 36px)',
-                backgroundSize: '100% 36px',
-                backgroundPosition: '0 0',
-                lineHeight: '36px',
-              }}>
-                {sortedNotes.length === 0 && (
-                  <div className="px-4 py-5 text-gray-600 text-[17px] text-center select-none">
-                    아직 기록이 없습니다.<br />
-                    <span className="text-gray-700">오른쪽 상단 + 버튼으로 추가하세요.</span>
-                  </div>
-                )}
-                {sortedNotes.map(note => (
-                  <div
-                    key={note.id}
-                    className="flex items-center gap-2 px-3 border-b border-gray-900/60 hover:bg-white/5 transition-colors group"
-                    style={{ minHeight: '36px' }}
-                  >
-                    <span className="shrink-0 text-[15px] font-mono text-sky-500 w-[76px]">{formatNoteDate(note.date)}</span>
-                    <span className="flex-1 text-[17px] text-gray-300 truncate overflow-hidden whitespace-nowrap">{note.content || <span className="text-gray-700 italic">내용 없음</span>}</span>
-                    <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => openNoteExpand(note)} className="text-gray-500 hover:text-blue-400 transition-colors" title="전체 보기/편집"><Maximize2 size={15} /></button>
-                      <button onClick={() => deleteNote(note.id)} className="text-gray-500 hover:text-red-400 transition-colors" title="삭제"><Trash2 size={15} /></button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-          </div>
-        )}
-        {noteExpandModal && (
-          <div className="fixed w-[576px] shadow-2xl overflow-hidden" style={{ left: noteExpandPos.x, top: noteExpandPos.y, zIndex: 1010 }}>
-              <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleNoteExpandDragStart}>
-                <div className="flex items-center gap-3">
-                  <button onClick={() => setNoteExpandModal(null)} className="w-[18px] h-[18px] rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="취소 (Esc)"><X size={10} className="text-white" /></button>
-                  <button onClick={saveNoteExpand} className="w-[18px] h-[18px] rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center transition-all" title="저장 (Ctrl+Enter)"><Check size={10} className="text-white" /></button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="date"
-                    className="bg-transparent border-0 outline-none text-[15px] text-gray-500 font-mono cursor-pointer"
-                    value={noteExpandModal.date}
-                    onChange={e => setNoteExpandModal(prev => ({ ...prev, date: e.target.value }))}
-                  />
-                  <span className="text-[17px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">MEMO</span>
-                </div>
-                <div className="w-10" />
-              </div>
-              <textarea
-                className="w-full text-gray-200 text-[18px] font-bold outline-none resize-none caret-sky-400 placeholder-gray-700"
-                style={{
-                  backgroundColor: '#000',
-                  backgroundImage: `repeating-linear-gradient(transparent 0px, transparent 35px, rgba(99,130,255,0.3) 35px, rgba(99,130,255,0.3) 36px)`,
-                  backgroundSize: '100% 36px',
-                  backgroundPosition: '0 8px',
-                  lineHeight: '36px',
-                  paddingLeft: '10px',
-                  paddingRight: '10px',
-                  paddingTop: '8px',
-                  paddingBottom: '8px',
-                  // 세로 2배(rows 30)라도 패드 전체가 화면을 넘지 않도록 상한 — 초과분은 내부 스크롤
-                  maxHeight: 'calc(100vh - 160px)',
-                }}
-                rows={30}
-                autoFocus
-                placeholder="메모를 입력하세요..."
-                value={noteExpandModal.val}
-                onChange={e => setNoteExpandModal(prev => ({ ...prev, val: e.target.value }))}
-                onKeyDown={e => {
-                  if (e.key === 'Escape') setNoteExpandModal(null);
-                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') saveNoteExpand();
-                }}
-              />
-          </div>
-        )}
+        {/* 투자 기록 — 목록과 메모장은 **상호 배타**다(사용자 요청 2026-09). 둘이 동시에 뜨면
+            뒤의 자산관리 대시보드까지 3중으로 겹쳐 어느 것도 읽을 수 없다. 겹침을 아예 피하려면
+            헤더의 ⧉로 별도 브라우저 창에서 작성한다. */}
+        <InvestmentNotesPanel
+          open={noteLogOpen}
+          openSeq={noteOpenSeq}
+          initialNoteId={noteInitialId}
+          notes={investmentNotes}
+          onUpdate={onUpdateInvestmentNotes}
+          onClose={() => setNoteLogOpen(false)}
+          onExpand={onExpandNotes}
+          expandOpen={notesWindowOpen}
+          readOnly={readOnly}
+        />
         {helpOpen && (
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setHelpOpen(false)}>
             <div className="absolute w-[440px] shadow-2xl overflow-hidden" style={{ left: helpPos.x, top: helpPos.y }} onClick={e => e.stopPropagation()}>

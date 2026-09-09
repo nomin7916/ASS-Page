@@ -429,7 +429,7 @@ ok('#G32 PIN 검증 실패와 통신 실패를 구분한다 (연결 끊김이 "�
   // ⚠️ 계약 파일에 NUL 바이트가 섞이면 git이 **바이너리로 취급**해 diff·`git log -p`·`-S` 검색이
   //    통째로 막힌다(실제로 한 번 그랬다 — 불변식이 전부 적힌 파일이 리뷰 불가가 됐다).
   const files = ['src/cardWindow.ts', 'src/components/CardWindow.tsx', 'src/components/CardWinFeed.tsx',
-    'src/components/CardExpandButton.tsx'];
+    'src/components/CardExpandButton.tsx', 'src/components/InvestmentNotesPanel.tsx'];
   ok('#G33 ⚠️ 신규 파일에 NUL 바이트가 없다 (git이 바이너리로 취급 → 리뷰 불가)',
     files.every(f => readFileSync(join(ROOT, f)).indexOf(0) === -1));
 }
@@ -454,6 +454,70 @@ ok('#G23b 로드 2경로(정식·백업)가 모두 그 함수를 지난다',
 // ── 영속화(선행 결함) ──
 ok('#G17 ⚠️ 지문에 actualDividendQty·dividendTaxAmounts가 있다 (분배금 전용 창의 무음 유실 방지)',
   /actualDividendQty: p\.actualDividendQty,/.test(app) && /dividendTaxAmounts: p\.dividendTaxAmounts,/.test(app));
+
+// ── 투자 기록(card=notes) 별도 창 ─────────────────────────────────────────────
+// ⚠️ 목록과 메모장은 **상호 배타**다(사용자 요청 2026-09). 예전에는 메모장이 목록 위에 겹쳐 떠서
+//    목록 · 메모장 · 뒤의 자산관리 대시보드가 3중으로 겹쳐 어느 것도 읽을 수 없었다 — 그 겹침이
+//    이 기능의 발단이므로, 둘을 동시에 렌더하는 형태로 되돌리는 변경을 여기서 잡는다.
+{
+  const slice = (s, from, to) => {
+    const i = s.indexOf(from);
+    if (i < 0) return '';
+    const j = s.indexOf(to, i + from.length);
+    return j < 0 ? '' : s.slice(i, j);
+  };
+  const notes = stripComments(read('src/components/InvestmentNotesPanel.tsx'));
+  const iEdit = notes.indexOf('if (edit) {');
+  const iEditRet = notes.indexOf('return isPage', iEdit);
+  const iList = notes.indexOf('const list = (');
+  ok('#G34 ⚠️ 목록·메모장 상호 배타 — 메모장 분기가 **먼저 반환**해 둘이 함께 뜨지 않는다',
+    iEdit > 0 && iEditRet > iEdit && iList > iEditRet);
+
+  const addBody = slice(notes, 'const addNote = () => {', 'const saveEdit');
+  ok('#G34b ⚠️ + 는 목록을 덮는 대신 메모장 화면으로 **전환**한다 (startEdit)',
+    /startEdit\(newNote\);/.test(addBody));
+  ok('#G34c ⚠️ 새 메모 날짜는 KST다 (toISOString은 UTC라 00:00~09:00에 어제로 찍힌다)',
+    /date: getTodayKST\(\)/.test(addBody));
+
+  const saveBody = slice(notes, 'const saveEdit = () => {', 'const deleteNote');
+  ok('#G34d ⚠️ 저장(✓)하면 목록으로 복귀한다 — setEdit(null)',
+    saveBody.length > 0 && /setEdit\(null\);/.test(saveBody));
+  ok('#G34e ⚠️ 저장은 id를 못 찾으면 새로 넣는다 (map만 쓰면 별도 창에서 왕복 전 새 메모의 본문이 조용히 사라진다)',
+    /const found = list\.some\(/.test(saveBody)
+    && /\[\{ id: edit\.id, date: edit\.date, content: edit\.val \}, \.\.\.list\]/.test(saveBody));
+
+  const expBody = slice(notes, 'const handleExpand = () => {', 'if (!isPage && !open)');
+  ok('#G34f ⚠️ 확장은 창이 **실제로 떴을 때만** 인앱 화면을 닫는다 (팝업 차단 시 작성 화면을 통째로 잃지 않게)',
+    /if \(opened !== true\) return;/.test(expBody) && /onClose\?\.\(\);/.test(expBody));
+  ok('#G34g ⚠️ 확장 직전에 작성 중이던 초안을 커밋한다 (안 하면 새 창으로 넘어가지 않고 사라진다)',
+    /if \(edit\) saveEdit\(\);/.test(expBody));
+
+  const panelNC = stripComments(panel);
+  ok('#G34h ⚠️ RebalancingPanel은 노트 UI를 복제하지 않고 공유 컴포넌트를 쓴다 (창용 복제 금지)',
+    /<InvestmentNotesPanel/.test(panelNC)
+    && !/noteExpandModal/.test(panelNC) && !/addNewNote/.test(panelNC));
+
+  const winNC = stripComments(win);
+  const iNotes = winNC.indexOf("if (CARD === 'notes')");
+  ok('#G34i ⚠️ notes 분기는 isCardWindowSupported 가드보다 앞이다 (그 목록에 없는 화면이라 뒤에 두면 도달 불가)',
+    iNotes > 0 && iNotes < winNC.indexOf('if (!isCardWindowSupported(CARD))'));
+  ok('#G34j ⚠️ 창의 투자기록 쓰기도 base 지문을 함께 보낸다 (INV-4)',
+    /fire\('updateInvestmentNotes', \{ pid: PID, notes: next, base: baseKeyOf\(acct\.investmentNotes \|\| \[\]\) \}\)/.test(win));
+
+  const openBody = slice(app, 'const openNotesWindow = useCallback', '}, [syncCardWinKeys]);');
+  ok('#G34k ⚠️ openNotesWindow는 창이 실제로 떴는지 boolean으로 알린다 (호출부가 인앱을 닫을 유일한 근거)',
+    openBody.length > 0
+    && /if \(!w\) \{ setCardWinBlocked\(true\); return false; \}/.test(openBody)
+    && /return true;/.test(openBody));
+  ok('#G34l ⚠️ winId는 CardWindow의 WIN_ID(notes:<pid>)와 같다 — 갈리면 열려 있는데 닫힘으로 표시된다',
+    app.includes('const winId = `notes:${pid}`;')
+    && app.includes('cardWinOpenSet.has(`notes:${activePortfolioId}`)')
+    && win.includes('const WIN_ID = CARD === \'ladder\' ? ladderWinId(PID, ITEM, SIDE) : `${CARD}:${PID}`;'));
+  if (CW) {
+    ok('#G34m ⚠️ notes는 카드 확장 버튼 목록에 없다 (진입점은 투자 기록 헤더의 ⧉ 하나뿐)',
+      CW.isCardKey('notes') && !CW.isCardWindowSupported('notes'));
+  }
+}
 
 console.log(`\n${fail ? '❌' : '✅'} verify:card-window — ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

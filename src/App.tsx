@@ -2098,7 +2098,7 @@ export default function App() {
   // ⚠️ 기록은 사용자가 계산기의 기록 버튼을 눌렀을 때만 일어난다(사용자 확정 2026-09).
   //    자동 기록이면 '얼마에 사면 될까'를 훑어보려 연 종목까지 쌓여 실제 주문 기록을 못 찾는다.
   // ⚠️ 날짜는 **getTodayKST()** — new Date().toISOString()(UTC)은 한국 00:00~09:00에 어제 칸에
-  //    꽂힌다(RebalancingPanel.addNewNote가 실제로 그 버그를 냈다).
+  //    꽂힌다(투자 기록의 새 메모 추가가 실제로 그 버그를 냈다 — InvestmentNotesPanel.addNote).
   // ⚠️ 저장 위치는 calendarMemos 재사용이라 **영속화 신규 지점이 0곳**이다 — portfolioStructureKey의
   //    JSON.stringify(calendarMemos)가 지문을 올려 Drive STATE 저장이 자동으로 트리거된다.
   // 반환은 계산기 타이틀바의 인라인 플래시 전용('saved' | 'nochange' | 'fail').
@@ -2728,6 +2728,11 @@ export default function App() {
         if (r === 'fail') return { ok: false, reason: '기록할 사다리가 없습니다.' };
         return { ok: true, result: r };
       }
+      case 'openNotesWindow':
+        // ⚠️ openLadderWindow와 같은 근거 — 창에서 window.open을 직접 부르면 새 창의 opener가
+        //    그 창이 되어 앱 탭과 영영 연결되지 않는다(읽기 전용으로 굳는다).
+        openNotesWindow(a.pid);
+        return { ok: true };
       case 'openLadderWindow':
         // ⚠️ 창에서 window.open을 직접 부르면 새 창의 opener가 **그 창**이 되어 앱 탭과 영영
         //    연결되지 않는다(읽기 전용으로 굳는다) → 앱 탭이 대신 연다.
@@ -2821,6 +2826,28 @@ export default function App() {
     if (!w) { setCardWinBlocked(true); return false; }
     setCardWinBlocked(false);
     cardWinsRef.current.set(winId, { id: winId, card: 'ladder', pid, win: w });
+    syncCardWinKeys();
+    setCardWinNonce(n => n + 1);
+    return true;
+  }, [syncCardWinKeys]);
+
+  // 투자 기록 별도 창 — 계좌당 하나(winId는 카드 기본형 `notes:<pid>`라 CardWindow의 WIN_ID와 같다).
+  // 카드 확장 버튼 목록(CARD_WINDOW_SUPPORTED)에는 없어 openCardWindow로는 열 수 없다 —
+  // 진입점은 투자 기록 목록·메모장 헤더의 ⧉ 하나뿐이다.
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다. noopener 금지(브릿지가 전부).
+  // ⚠️ 반환값 true = '창이 실제로 떴다'. 호출부가 이 값으로 인앱 팝업을 닫을지 정한다 —
+  //    팝업이 차단됐는데 닫으면 작성 중이던 메모 화면을 통째로 잃는다.
+  const openNotesWindow = useCallback((pid) => {
+    if (!pid) return false;
+    const winId = `notes:${pid}`;
+    const existing = cardWinsRef.current.get(winId);
+    if (existing?.win && !existing.win.closed) { try { existing.win.focus(); } catch {} return true; }
+    const sw = Math.min(760, (window.screen && window.screen.availWidth) || 760);
+    const sh = (window.screen && window.screen.availHeight) || 900;
+    const w = window.open(cardWindowUrl(pid, 'notes'), cardWindowName(pid, 'notes'), `width=${sw},height=${sh},left=0,top=0`);
+    if (!w) { setCardWinBlocked(true); return false; }
+    setCardWinBlocked(false);
+    cardWinsRef.current.set(winId, { id: winId, card: 'notes', pid, win: w });
     syncCardWinKeys();
     setCardWinNonce(n => n + 1);
     return true;
@@ -4967,6 +4994,8 @@ export default function App() {
             onLadderLog={adminViewingAs ? null : handleLadderLog}
             onDeleteLadderTrade={adminViewingAs ? null : handleDeleteLadderTrade}
             ladderLogs={ladderLogs}
+            onExpandNotes={() => openNotesWindow(activePortfolioId)}
+            notesWindowOpen={cardWinOpenSet.has(`notes:${activePortfolioId}`)}
             onExpandLadder={(itemId, side) => openLadderWindow(activePortfolioId, itemId, side)}
             ladderWindowOpenSet={cardWinOpenSet}
             onExpandTable={() => openCardWindow('rebalancing', activePortfolioId)}
