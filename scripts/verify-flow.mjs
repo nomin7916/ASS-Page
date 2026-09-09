@@ -40,7 +40,8 @@ const deep = (name, got, want) => eq(name, JSON.stringify(got), JSON.stringify(w
 let idSeq = 0;
 const generateId = () => `gen${++idSeq}`;
 
-const MAX_FLOW_MAPS = 5, MAX_FLOW_NODES = 150, MAX_FLOW_EDGES = 300;
+const MAX_FLOW_MAPS = 20, MAX_FLOW_NODES = 150, MAX_FLOW_EDGES = 300;
+const MAX_FLOW_MAP_NAME = 40;
 const DEFAULT_NODE_W = 180, DEFAULT_NODE_H = 120, MIN_NODE_W = 60, MIN_NODE_H = 44;
 const FLOW_MIN_SCALE = 0.25, FLOW_MAX_SCALE = 2.5;
 const DEFAULT_FLOW_VIEWPORT = { x: 80, y: 80, scale: 1 };
@@ -179,6 +180,11 @@ function makeFlowNode(partial = {}) {
   };
 }
 
+function makeFlowMap(name = '흐름도') {
+  const ts = Date.now();
+  return { id: generateId(), name, nodes: [], edges: [], createdAt: ts, updatedAt: ts };
+}
+
 function flowMapsHaveContent(maps) {
   if (!Array.isArray(maps)) return false;
   return maps.some(m => !!m && ((Array.isArray(m.nodes) && m.nodes.length > 0) || (Array.isArray(m.edges) && m.edges.length > 0)));
@@ -298,6 +304,93 @@ function pruneOrphanEdges(map) {
   const edges = map.edges.filter(e => ids.has(e.from) && ids.has(e.to));
   if (edges.length === map.edges.length) return map;
   return { ...map, edges };
+}
+
+// ── 시트(맵) 단위 조작 (src/flowMap.ts D-2 미러) ──
+const asMapList = (maps) => (Array.isArray(maps) ? maps : []);
+
+function nextFlowMapName(maps, base = '시트') {
+  const used = new Set(asMapList(maps).map(m => asStr(m?.name)));
+  for (let i = 1; i <= MAX_FLOW_MAPS + 1; i++) {
+    const cand = `${base} ${i}`;
+    if (!used.has(cand)) return cand;
+  }
+  return `${base} ${Date.now()}`;
+}
+
+function copyNameOf(list, name) {
+  const base = `${asStr(name) || '시트'} 복사`;
+  const used = new Set(list.map(m => asStr(m?.name)));
+  if (!used.has(base)) return base;
+  for (let i = 2; i <= MAX_FLOW_MAPS + 1; i++) {
+    const cand = `${base} ${i}`;
+    if (!used.has(cand)) return cand;
+  }
+  return base;
+}
+
+function addFlowMap(maps, name) {
+  const list = asMapList(maps);
+  if (list.length >= MAX_FLOW_MAPS) return list;
+  return [...list, makeFlowMap(asStr(name).trim().slice(0, MAX_FLOW_MAP_NAME) || nextFlowMapName(list))];
+}
+
+function duplicateFlowMap(maps, id) {
+  const list = asMapList(maps);
+  const idx = list.findIndex(m => m?.id === id);
+  if (idx < 0 || list.length >= MAX_FLOW_MAPS) return list;
+  const src = list[idx];
+  const ts = Date.now();
+
+  const idMap = new Map();
+  const nodes = (Array.isArray(src.nodes) ? src.nodes : []).map(n => {
+    const nid = generateId();
+    idMap.set(n.id, nid);
+    return { ...n, id: nid };
+  });
+  const edges = [];
+  for (const e of Array.isArray(src.edges) ? src.edges : []) {
+    const from = idMap.get(e.from);
+    const to = idMap.get(e.to);
+    if (!from || !to) continue;
+    edges.push({ ...e, id: generateId(), from, to });
+  }
+
+  const copy = { ...src, id: generateId(), name: copyNameOf(list, src.name), nodes, edges, createdAt: ts, updatedAt: ts };
+  const out = list.slice();
+  out.splice(idx + 1, 0, copy);
+  return out;
+}
+
+function removeFlowMap(maps, id) {
+  const list = asMapList(maps);
+  if (list.length <= 1) return list;
+  const out = list.filter(m => m?.id !== id);
+  return out.length === list.length ? list : out;
+}
+
+function renameFlowMap(maps, id, name) {
+  const list = asMapList(maps);
+  const idx = list.findIndex(m => m?.id === id);
+  if (idx < 0) return list;
+  const next = asStr(name).trim().slice(0, MAX_FLOW_MAP_NAME) || asStr(list[idx].name) || '시트';
+  if (next === list[idx].name) return list;
+  const out = list.slice();
+  out[idx] = { ...list[idx], name: next, updatedAt: Date.now() };
+  return out;
+}
+
+function moveFlowMap(maps, id, delta) {
+  const list = asMapList(maps);
+  if (!delta || !Number.isFinite(delta)) return list;
+  const from = list.findIndex(m => m?.id === id);
+  if (from < 0) return list;
+  const to = from + (delta < 0 ? -1 : 1);
+  if (to < 0 || to >= list.length) return list;
+  const out = list.slice();
+  const [m] = out.splice(from, 1);
+  out.splice(to, 0, m);
+  return out;
 }
 
 const nodeCenter = (n) => ({ x: n.x + n.w / 2, y: n.y + n.h / 2 });
@@ -424,7 +517,7 @@ deep('#2b 문자열 입력 → 빈 배열', normalizeFlowMaps('corrupt'), []);
     Number.isFinite(n.x) && Number.isFinite(n.y) && Number.isFinite(n.w) && Number.isFinite(n.h));
   eq('#7b w 는 기본값', n.w, DEFAULT_NODE_W);
 }
-eq('#8 맵 개수 상한 절단', normalizeFlowMaps(Array.from({ length: 9 }, (_, i) => cleanMap({ id: `m${i}` }))).length, MAX_FLOW_MAPS);
+eq('#8 맵 개수 상한 절단', normalizeFlowMaps(Array.from({ length: MAX_FLOW_MAPS + 4 }, (_, i) => cleanMap({ id: `m${i}` }))).length, MAX_FLOW_MAPS);
 
 console.log('\n■ flowMapsHaveContent — sticky 복원 판정 (App.tsx ⟷ useDriveSync 공유)');
 ok('#9 빈 배열 → 내용 없음', flowMapsHaveContent([]) === false);
@@ -775,6 +868,97 @@ console.log('\n■ 선 종류 — 레거시 dashed 이관 · 렌더 판정 (reso
   ok('#74c 굵기만 바꿔도 지문이 달라진다(저장 스킵 방지)', flowFingerprint(a) !== flowFingerprint(thick));
 }
 
+console.log('\n■ 시트(맵) 단위 조작 — 엑셀 시트식 다중 흐름도');
+{
+  const one = [cleanMap({ id: 'm1', name: '시트 1' })];
+  const added = addFlowMap(one);
+  eq('#80 시트 추가 — 뒤에 붙는다', added.length, 2);
+  eq('#80b 새 시트 이름은 안 쓰는 가장 작은 번호', added[1].name, '시트 2');
+  ok('#80c 새 시트는 빈 캔버스', added[1].nodes.length === 0 && added[1].edges.length === 0);
+  ok('#80d 기존 시트는 같은 참조(불필요한 저장·재렌더 방지)', added[0] === one[0]);
+  eq('#80e 이름을 직접 주면 그대로', addFlowMap(one, '2026 자금계획')[1].name, '2026 자금계획');
+  eq('#80f 긴 이름은 상한에서 자른다', addFlowMap(one, 'x'.repeat(200))[1].name.length, MAX_FLOW_MAP_NAME);
+  const full = Array.from({ length: MAX_FLOW_MAPS }, (_, i) => cleanMap({ id: `m${i}`, name: `s${i}` }));
+  ok('#81 상한을 넘기면 원본 참조(호출부가 안내 문구를 띄운다)', addFlowMap(full) === full);
+  ok('#81b 비배열 입력에도 throw하지 않는다', Array.isArray(addFlowMap(null)) && addFlowMap(null).length === 1);
+}
+{
+  // ⚠️ 이 기능 최대의 조용한 유실 지점 — 사본의 엣지가 **원본 노드 id**를 가리키면
+  //    normalizeFlowMaps의 고아 제거가 다음 로드에서 사본의 연결선을 전부 지운다.
+  const src = [cleanMap({ id: 'm1', name: '계획 A' })];
+  const dup = duplicateFlowMap(src, 'm1');
+  eq('#82 복제 — 원본 바로 뒤에 꽂는다', dup.length, 2);
+  eq('#82b 사본 이름', dup[1].name, '계획 A 복사');
+  ok('#82c 사본은 새 맵 id', dup[1].id !== 'm1');
+  ok('#82d 노드 id가 전부 새로 만들어진다',
+    dup[1].nodes.every(n => !src[0].nodes.some(o => o.id === n.id)) && dup[1].nodes.length === 2);
+  {
+    const ids = new Set(dup[1].nodes.map(n => n.id));
+    ok('#82e ⚠️ 엣지 from/to가 사본 노드로 다시 이어진다(고아 제거로 선이 사라지지 않는다)',
+      dup[1].edges.length === 1 && ids.has(dup[1].edges[0].from) && ids.has(dup[1].edges[0].to));
+    // 실제 정규화를 통과시켜 '다음 로드에서 살아남는가'를 값으로 고정한다.
+    const loaded = normalizeFlowMaps(dup);
+    eq('#82f 정규화를 통과해도 사본의 연결선이 남는다', loaded[1].edges.length, 1);
+  }
+  ok('#82g 원본 시트는 손대지 않는다(같은 참조)', dup[0] === src[0]);
+  ok('#82h 사본은 마지막 화면(viewport)을 물려받는다',
+    JSON.stringify(duplicateFlowMap([cleanMap({ id: 'm1', viewport: { x: 5, y: 6, scale: 1.5 } })], 'm1')[1].viewport)
+    === JSON.stringify({ x: 5, y: 6, scale: 1.5 }));
+  ok('#82i 없는 시트를 복제하면 원본 참조', duplicateFlowMap(src, 'nope') === src);
+  {
+    // 원본이 이미 고아 엣지를 들고 있으면 사본에는 만들지 않는다(정규화 결과와 미리 일치).
+    const orphan = [cleanMap({ id: 'm1', edges: [{ id: 'e1', from: 'n1', to: 'ghost', label: '', arrow: 'to' }] })];
+    eq('#82j 원본의 고아 엣지는 사본에 복제하지 않는다', duplicateFlowMap(orphan, 'm1')[1].edges.length, 0);
+  }
+  {
+    const two = [cleanMap({ id: 'm1', name: '계획 A' }), cleanMap({ id: 'm2', name: '계획 A 복사' })];
+    eq('#82k 이름이 겹치면 번호를 붙인다', duplicateFlowMap(two, 'm1')[1].name, '계획 A 복사 2');
+  }
+}
+{
+  const two = [cleanMap({ id: 'm1' }), cleanMap({ id: 'm2' })];
+  eq('#83 시트 삭제', removeFlowMap(two, 'm1').length, 1);
+  eq('#83b 남은 시트는 그대로', removeFlowMap(two, 'm1')[0].id, 'm2');
+  // ⚠️ 0장이 되면 보드 시드가 빈 맵을 새로 만들어 '지웠는데 초기화된 시트가 남는' 혼란이 된다.
+  const one = [cleanMap({ id: 'm1' })];
+  ok('#83c 마지막 한 장은 지우지 않는다(원본 참조)', removeFlowMap(one, 'm1') === one);
+  ok('#83d 없는 id면 원본 참조', removeFlowMap(two, 'nope') === two);
+}
+{
+  const two = [cleanMap({ id: 'm1', name: 'A' }), cleanMap({ id: 'm2', name: 'B' })];
+  eq('#84 이름 변경', renameFlowMap(two, 'm1', '2026 계획')[0].name, '2026 계획');
+  eq('#84b 앞뒤 공백 제거', renameFlowMap(two, 'm1', '  X  ')[0].name, 'X');
+  eq('#84c 상한에서 자른다', renameFlowMap(two, 'm1', 'y'.repeat(120))[0].name.length, MAX_FLOW_MAP_NAME);
+  // ⚠️ 이름 없는 탭은 고를 수가 없다 → 빈 이름은 거부하고 원래 이름을 유지한다.
+  ok('#84d 빈 이름은 거부(원본 참조)', renameFlowMap(two, 'm1', '   ') === two);
+  ok('#84e 같은 이름이면 원본 참조(헛된 저장 방지)', renameFlowMap(two, 'm1', 'A') === two);
+  ok('#84f 다른 시트는 같은 참조', renameFlowMap(two, 'm1', 'Z')[1] === two[1]);
+  ok('#84g 없는 id면 원본 참조', renameFlowMap(two, 'nope', 'Z') === two);
+}
+{
+  const three = [cleanMap({ id: 'm1' }), cleanMap({ id: 'm2' }), cleanMap({ id: 'm3' })];
+  deep('#85 오른쪽 이동', moveFlowMap(three, 'm1', 1).map(m => m.id), ['m2', 'm1', 'm3']);
+  deep('#85b 왼쪽 이동', moveFlowMap(three, 'm3', -1).map(m => m.id), ['m1', 'm3', 'm2']);
+  ok('#85c 왼쪽 끝에서 더 밀면 원본 참조', moveFlowMap(three, 'm1', -1) === three);
+  ok('#85d 오른쪽 끝에서 더 밀면 원본 참조', moveFlowMap(three, 'm3', 1) === three);
+  ok('#85e delta 0 은 no-op', moveFlowMap(three, 'm2', 0) === three);
+  ok('#85f 없는 id면 원본 참조', moveFlowMap(three, 'nope', 1) === three);
+  // ⚠️ 순서는 배열 순서가 곧 저장값이다(`order` 필드 금지) → 지문이 순서 변경을 잡아야 한다.
+  ok('#85g 순서만 바꿔도 지문이 달라진다(저장 스킵 방지)',
+    flowFingerprint(three) !== flowFingerprint(moveFlowMap(three, 'm1', 1)));
+}
+{
+  // 여러 시트가 각자 자기 팬/줌을 들고 있어야 한다(시트 전환이 남의 화면을 덮지 않는 근거).
+  const two = normalizeFlowMaps([
+    cleanMap({ id: 'm1', viewport: { x: 10, y: 20, scale: 1 } }),
+    cleanMap({ id: 'm2', viewport: { x: -300, y: 40, scale: 0.5 } }),
+  ]);
+  eq('#86 시트마다 자기 viewport 를 보존한다', two[1].viewport.x, -300);
+  ok('#86b 다중 시트도 정규화가 원본 참조를 보존', normalizeFlowMaps(two) === two);
+  ok('#86c 내용이 뒤쪽 시트에만 있어도 sticky 복원 대상',
+    flowMapsHaveContent([{ id: 'a', nodes: [], edges: [] }, cleanMap({ id: 'b' })]) === true);
+}
+
 // ───────── 파트② 소스 텍스트 가드 ─────────
 // ⚠️ 실패하면 먼저 '정규식이 낡았는지' 확인할 것. 계약이 바뀐 게 아니면 정규식을 고친다.
 
@@ -830,8 +1014,10 @@ const [doubleBranch = '', singleBranch = ''] = edgeTernary.split(') : (');
 
 // 보드를 열 때 저장된 화면으로 복원하는 것이 이 기능의 전부다.
 ok('#49 FlowBoard: 보드를 열 때 저장된 화면을 복원', /setViewport\(\s*initialViewportOf\(\s*seeded\[0\]\s*\)\s*\)/.test(boardNC));
+// ⚠️ 다중 시트가 되면서 대상이 maps[0]이 아니라 **활성 시트**다(사용자가 시트를 바꾼 뒤 늦은
+//    데이터가 도착하면 그 시트의 화면을 복원해야 한다).
 ok('#49b FlowBoard: 늦게 도착한 Drive 데이터의 저장 위치도 채택(단, 사용자가 안 움직였을 때만)',
-  /if\s*\(\s*!vpTouchedRef\.current\s*\)\s*setViewport\(\s*initialViewportOf\(\s*maps\[0\]\s*\)\s*\)/.test(boardNC));
+  /if\s*\(\s*!vpTouchedRef\.current\s*\)\s*setViewport\(\s*initialViewportOf\(\s*findMap\(maps, activeIdRef\.current\)\s*\|\|\s*maps\[0\]\s*\)\s*\)/.test(boardNC));
 // ⚠️ 복원·자동 맞춤에 applyViewport(=touched)를 쓰면 '보드를 열기만 해도 Drive 저장'이 된다.
 {
   const seed = sliceBetween(boardNC, 'const seeded = Array.isArray(maps)', 'const dang = countDanglingNodes');
@@ -993,6 +1179,89 @@ ok('#78g FlowInspector: 미리보기 인자 3종이 컴포넌트 렌더 스코�
 ok('#79 FlowBoard: 새 연결선에 레거시 dashed·기본값을 넣지 않는다',
   /const e = \{ id: generateId\(\), from, to, label: '', arrow: 'to' \};/.test(boardNC));
 
+console.log('\n■ 소스 텍스트 가드 — 시트(다중 흐름도) 배선');
+// ⚠️ 상한을 **낮추면** normalizeFlowMaps 가 초과분을 slice 로 잘라 그 뒤 시트가 다음 로드에서
+//    영구 삭제된다(sticky 복원 대상이라 백업으로도 못 되살린다). 관계로 단언한다.
+{
+  const m = mod.match(/export const MAX_FLOW_MAPS = (\d+)/);
+  ok('#87 flowMap.ts: 시트 상한이 배포값(20) 아래로 내려가지 않았다(초과분 영구 절단 방지)',
+    !!m && Number(m[1]) >= 20);
+  ok('#87b 미러 상수가 src와 일치(드리프트 가드)', !!m && Number(m[1]) === MAX_FLOW_MAPS);
+}
+// ⚠️ 활성 시트를 저장하면 인앱 보드와 별도 창이 같은 flowMaps 를 공유하므로 한쪽에서 시트를
+//    바꿀 때 다른 쪽 화면이 따라 움직인다 → 세션 로컬로 둔다(영속화 신규 지점 0곳).
+ok('#87c flowMap.ts: 활성 시트를 저장 필드로 만들지 않았다', !/activeMapId|activeSheet/.test(mod));
+ok('#87d App.tsx: 활성 시트 state 를 앱 레벨로 올리지 않았다', !/flowActiveId|setFlowActiveId/.test(app));
+{
+  // ⚠️ 최대 회귀 지점 — prev[0] 로 되돌리면 2번 시트를 보면서 그린 도형이 1번 시트에 꽂힌다.
+  const pm = sliceBetween(boardNC, 'const patchMap = useCallback((fn) => {', '}, [commit]);');
+  ok('#88 FlowBoard: 편집 커밋이 **활성 시트 id** 기준',
+    /const id = activeIdRef\.current;/.test(pm) && /findIndex\(m => m\?\.id === id\)/.test(pm));
+  ok('#88b FlowBoard: 인덱스 고정(prev[0]/prev.slice(1))으로 되돌리지 않았다',
+    !/prev\?\.\[0\]/.test(pm) && !/prev\.slice\(1\)/.test(pm));
+  const cv = sliceBetween(boardNC, 'const commitViewport = useCallback(() => {', 'commitViewportRef.current = commitViewport;');
+  ok('#88c FlowBoard: 팬/줌 커밋도 활성 시트 id 기준(A 시트 화면이 B 시트에 기록되는 것 방지)',
+    /const id = activeIdRef\.current;/.test(cv) && /findIndex\(m => m\?\.id === id\)/.test(cv)
+    && !/prev\?\.\[0\]/.test(cv) && !/prev\.slice\(1\)/.test(cv));
+}
+{
+  // 시트 전환 순서가 곧 계약이다: 떠나는 시트 커밋 → 활성 id 교체 → 새 시트 화면 복원.
+  const sw = sliceBetween(boardNC, 'const switchSheet = useCallback((id) => {', '}, []);');
+  const iCommit = sw.indexOf('commitViewportRef.current?.()');
+  const iSwap = sw.indexOf('activeIdRef.current = id');
+  const iRestore = sw.indexOf('setViewport(initialViewportOf(');
+  ok('#89 FlowBoard: 전환은 **떠나는 시트를 먼저 커밋**한 뒤 활성 id 를 바꾼다',
+    iCommit >= 0 && iSwap > iCommit && iRestore > iSwap);
+  ok('#89b FlowBoard: 전환 복원은 사용자 제스처가 아니다(applyViewport 금지 + touched 리셋)',
+    !sw.includes('applyViewport(') && /vpTouchedRef\.current = false;/.test(sw));
+  ok('#89c FlowBoard: 전환 시 선택·연결 상태를 초기화(다른 시트의 도형이 선택된 채 남지 않게)',
+    sw.includes('setSelectedId(null)') && sw.includes('setConnectFrom(null)'));
+}
+{
+  // 늦게 도착한 배열에는 시드 시트의 id 가 없다 → 활성 id 를 유효한 것으로 되돌리지 않으면
+  // 화면은 1번 시트인데 커밋은 전부 조용한 no-op 이 된다(그리는데 아무것도 안 남는다).
+  const adopt = sliceBetween(boardNC, 'if (!open || dirtyRef.current) return;', '}, [open, maps]);');
+  ok('#89d FlowBoard: 늦게 도착한 배열에 활성 시트가 없으면 첫 시트로 되돌린다',
+    /!maps\.some\(m => m\?\.id === activeIdRef\.current\)/.test(adopt) && /activeIdRef\.current = maps\[0\]\?\.id/.test(adopt));
+}
+// ⚠️ 배열 변형은 flowMap.ts 순수 함수만 쓴다 — 손 splice 는 '변경 없으면 원본 참조' 계약을 깨고,
+//    무엇보다 복제의 **노드 id 재매핑**을 빠뜨려 사본의 연결선이 다음 로드에서 통째로 사라진다.
+ok('#90 FlowBoard: 시트 배열 변형은 공유 순수 함수 경유',
+  /addFlowMap\(prev\)/.test(boardNC) && /duplicateFlowMap\(prev, id\)/.test(boardNC)
+  && /removeFlowMap\(cur, id\)/.test(boardNC) && /renameFlowMap\(prev, id, renameDraft\)/.test(boardNC)
+  && /moveFlowMap\(prev, id, delta\)/.test(boardNC));
+ok('#90b FlowBoard: 배열을 손으로 splice 하지 않는다', !/\.splice\(/.test(boardNC));
+{
+  // ⚠️ 시트 삭제는 도형·선이 통째로 사라지고 undo 가 없다. 별도 창(confirm 없음)에서도
+  //    확인 없는 즉시 삭제로 후퇴하지 말 것 → 인라인 2단계.
+  const ds = sliceBetween(boardNC, 'const deleteSheet = useCallback(async (id) => {', '}, [readOnly, confirm, commit, switchSheet]);');
+  ok('#91 FlowBoard: 삭제는 확인창 또는 인라인 2단계를 거친다',
+    /if \(confirm\) \{/.test(ds) && /delArmRef\.current !== id/.test(ds));
+  ok('#91b FlowBoard: 마지막 한 장은 지우지 않는다', /\(prev\?\.length \|\| 0\) <= 1/.test(ds));
+  ok('#91c FlowBoard: 삭제 후 이웃 시트로 전환한다(빈 화면 방지)', /switchSheet\(/.test(ds));
+}
+ok('#91d FlowBoard: 시트가 한 장이면 삭제 버튼을 잠근다',
+  /disabled=\{\(mapsLocal\?\.length \|\| 0\) <= 1\}/.test(boardNC));
+// 탭 바 — 이 기능의 유일한 진입점이다.
+ok('#92 FlowBoard: 탭 바가 전 시트를 렌더하고 클릭이 전환',
+  /\(mapsLocal \|\| \[\]\)\.map\(m => \(/.test(boardNC) && /onClick=\{\(\) => switchSheet\(m\.id\)\}/.test(boardNC));
+ok('#92b FlowBoard: 더블클릭으로 이름 변경', /onDoubleClick=\{\(\) => startRename\(m\)\}/.test(boardNC));
+ok('#92c FlowBoard: 추가·복제·이동·이름·삭제 버튼 배선',
+  /onClick=\{addSheet\}/.test(boardNC) && /duplicateSheet\(map\.id\)/.test(boardNC)
+  && /moveSheet\(map\.id, -1\)/.test(boardNC) && /moveSheet\(map\.id, 1\)/.test(boardNC)
+  && /startRename\(map\)/.test(boardNC) && /deleteSheet\(map\.id\)/.test(boardNC));
+// ⚠️ 캔버스의 드래그·hover 로컬 상태는 노드 id 를 들고 있다 → 시트 전환 시 remount 로 비운다.
+ok('#92d FlowBoard: 시트 전환 시 캔버스를 remount', /key=\{map\?\.id \|\| 'none'\}/.test(boardNC));
+{
+  // ⚠️ Escape 가 일반 typing 분기로 새면 target.blur() → blur 커밋이라 '취소'가 저장이 된다.
+  ok('#93 FlowBoard: 시트 이름 입력은 자기 핸들러가 Enter/Escape 를 처리',
+    /e\.target\?\.dataset\?\.flowSheetRename !== undefined/.test(boardNC)
+    && /data-flow-sheet-rename=""/.test(boardNC));
+  ok('#93b FlowBoard: Escape 취소는 ref 플래그로 판정(언마운트 시 blur 미발화 대비)',
+    /renameCancelRef\.current = true; setRenameId\(null\);/.test(boardNC)
+    && /const cancelled = renameCancelRef\.current;/.test(boardNC));
+}
+
 // ⚠️ #37 은 흐름도 전용 계약이 아니라 **빌드 차단 사고 재발 방지**다. 이 저장소에서 두 번 났다:
 //    ① `(` 직후(표현식 위치)에 `{/* */}` 를 두어 빈 객체 리터럴로 파싱된 사고
 //    ② JSX 주석 **본문에 `*/` 를 포함**시켜(주석 안에서 주석 문법을 설명하다) 주석이 조기 종료된 사고
@@ -1029,6 +1298,77 @@ console.log('\n■ JSX 주석 안전성 (빌드 차단 사고 재발 방지)');
   }
   ok(`#37 JSX 주석이 조기 종료되지 않는다${bad.length ? `\n      ${bad.join('\n      ')}` : ''}`, bad.length === 0);
 }
+
+// ───────── 파트③ 실모듈 드리프트 가드 ─────────
+// ⚠️ 위 파트① 미러 테스트는 **미러만** 검사한다 — src/flowMap.ts 에만(또는 미러에만) 반영한
+//    변경은 전부 통과한다(실측: 시트 조작 5종의 변이가 미러 테스트를 그대로 뚫었다).
+//    실제 모듈을 로드해 같은 픽스처를 돌리고 결과를 대조해 그 구멍을 막는다.
+//    (Node 22.6+ 타입 스트리핑 필요. 지원하지 않는 런타임에서는 명시적으로 건너뛴다.)
+console.log('\n■ 실모듈 드리프트 가드 (src/flowMap.ts ↔ 미러)');
+await (async () => {
+  const canStrip = typeof process.features?.typescript === 'string';
+  if (!canStrip) {
+    console.log('  – #95 실모듈 드리프트 가드: 이 런타임은 .ts 스트리핑을 지원하지 않아 건너뜁니다');
+    return;
+  }
+  let real = null;
+  try {
+    const os = await import('node:os');
+    const { mkdtempSync, copyFileSync, writeFileSync } = await import('node:fs');
+    const { pathToFileURL } = await import('node:url');
+    const dir = mkdtempSync(join(os.tmpdir(), 'flowdrift-'));
+    copyFileSync(join(ROOT, 'src/utils.ts'), join(dir, 'utils.ts'));
+    writeFileSync(join(dir, 'flowMap.ts'),
+      readFileSync(join(ROOT, 'src/flowMap.ts'), 'utf8').replace(/from '\.\/utils'/g, "from './utils.ts'"));
+    real = await import(pathToFileURL(join(dir, 'flowMap.ts')).href);
+  } catch (e) {
+    ok(`#95 실모듈 로드 실패 — ${String(e && e.message).slice(0, 140)}`, false);
+    return;
+  }
+
+  // 생성 id 는 양쪽이 다르므로(실모듈은 난수) **등장 순서 토큰**으로 정규화해 비교한다.
+  // ⚠️ 위치 기반으로 뭉개면 안 된다 — '사본이 원본 노드 id 를 그대로 쓰는' 얕은 복사 회귀가
+  //    정규화에 지워져 죽은 단언이 된다. 같은 문자열은 같은 토큰이어야 그 관계가 드러난다.
+  const norm = (list) => {
+    const m = new Map();
+    const t = (v) => {
+      if (typeof v !== 'string') return v;
+      if (!m.has(v)) m.set(v, `#${m.size}`);
+      return m.get(v);
+    };
+    return JSON.stringify((list || []).map(x => ({
+      id: t(x.id), name: x.name, vp: x.viewport ?? null,
+      nodes: (x.nodes || []).map(n => [t(n.id), n.x, n.y, n.label]),
+      edges: (x.edges || []).map(e => [t(e.id), t(e.from), t(e.to), e.label]),
+    })));
+  };
+
+  const one = [cleanMap({ id: 'm1', name: '계획 A', viewport: { x: 5, y: 6, scale: 1.5 } })];
+  const two = [cleanMap({ id: 'm1', name: 'A' }), cleanMap({ id: 'm2', name: 'B' })];
+  const three = [cleanMap({ id: 'm1' }), cleanMap({ id: 'm2' }), cleanMap({ id: 'm3' })];
+  const full = Array.from({ length: MAX_FLOW_MAPS }, (_, i) => cleanMap({ id: `m${i}`, name: `s${i}` }));
+
+  eq('#95 상한 상수가 실모듈과 일치', real.MAX_FLOW_MAPS, MAX_FLOW_MAPS);
+  eq('#95b 이름 상한도 일치', real.MAX_FLOW_MAP_NAME, MAX_FLOW_MAP_NAME);
+  eq('#96 addFlowMap 결과 일치', norm(real.addFlowMap(one)), norm(addFlowMap(one)));
+  ok('#96b addFlowMap 상한 초과 시 원본 참조(실모듈)', real.addFlowMap(full) === full);
+  // ⚠️ 이 한 줄이 '사본의 연결선이 다음 로드에서 통째로 사라지는' 회귀의 유일한 실모듈 방어선이다.
+  eq('#97 duplicateFlowMap 결과 일치(노드 id 재매핑 포함)',
+    norm(real.duplicateFlowMap(one, 'm1')), norm(duplicateFlowMap(one, 'm1')));
+  eq('#97b duplicateFlowMap 이름 충돌 처리 일치',
+    norm(real.duplicateFlowMap([cleanMap({ id: 'm1', name: 'A' }), cleanMap({ id: 'm2', name: 'A 복사' })], 'm1')),
+    norm(duplicateFlowMap([cleanMap({ id: 'm1', name: 'A' }), cleanMap({ id: 'm2', name: 'A 복사' })], 'm1')));
+  eq('#98 removeFlowMap 결과 일치', norm(real.removeFlowMap(two, 'm1')), norm(removeFlowMap(two, 'm1')));
+  ok('#98b 마지막 한 장은 실모듈도 지우지 않는다(원본 참조)', real.removeFlowMap(one, 'm1') === one);
+  eq('#99 renameFlowMap 결과 일치', norm(real.renameFlowMap(two, 'm1', ' 2026 계획 ')), norm(renameFlowMap(two, 'm1', ' 2026 계획 ')));
+  ok('#99b 빈 이름은 실모듈도 거부(원본 참조)', real.renameFlowMap(two, 'm1', '   ') === two);
+  eq('#100 moveFlowMap 결과 일치', norm(real.moveFlowMap(three, 'm1', 1)), norm(moveFlowMap(three, 'm1', 1)));
+  ok('#100b 경계 밖 이동은 실모듈도 원본 참조',
+    real.moveFlowMap(three, 'm1', -1) === three && real.moveFlowMap(three, 'm3', 1) === three);
+  eq('#101 nextFlowMapName 일치', real.nextFlowMapName([cleanMap({ name: '시트 1' })]), nextFlowMapName([cleanMap({ name: '시트 1' })]));
+  eq('#102 normalizeFlowMaps 결과 일치(다중 시트)', norm(real.normalizeFlowMaps(three)), norm(normalizeFlowMaps(three)));
+  eq('#102b flowFingerprint 일치', real.flowFingerprint(three), flowFingerprint(three));
+})();
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:flow — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

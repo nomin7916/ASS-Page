@@ -57,7 +57,7 @@ src/
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
     ├── LoginGate.tsx             # 로그인 / PIN 인증 게이트
     ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회)
-    ├── FlowBoard.tsx             # 자금 흐름도 보드(z=990) — 로컬 사본 + idle 승격, overlay/page 겸용
+    ├── FlowBoard.tsx             # 자금 흐름도 보드(z=990) — 시트 탭 바, 로컬 사본 + idle 승격, overlay/page 겸용
     ├── FlowCanvas.tsx            # 흐름도 SVG 캔버스(React.memo) — 드래그·리사이즈·연결
     ├── FlowInspector.tsx         # 흐름도 속성 패널(날짜·이름·계좌연결·금액·메모) — id 앵커 draft
     ├── FlowWindow.tsx            # 흐름도 별도 브라우저 창(/?flowWindow=1) — postMessage 브릿지
@@ -3400,8 +3400,54 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   없어 Vercel이 매 배포마다 `npm install`을 재해석하고, 정확히 그 원인으로 프로덕션 흰 화면이 났던
   이력이 있다. lucide 아이콘도 **저장소에서 이미 쓰는 것만** 사용하고 새 아이콘은 인라인 SVG로 만든다
   (`AccountTabBar`의 `FlowIcon` — `Workflow`/`Share2`/`Network`가 이 버전에 있다는 근거가 없다).
-- **소프트 상한**: 맵 5 / 노드 150 / 엣지 300(≈85KB). 백업 22본·관리자 포털 순차 로드로 복제되므로
+- **소프트 상한**: 시트 20 / 노드 150 / 엣지 300(≈85KB). 백업 22본·관리자 포털 순차 로드로 복제되므로
   무한 증식만 막는다. 상한 도달 시 툴바 배너로 알린다.
+  ⚠️ **`MAX_FLOW_MAPS`를 낮추지 말 것** — `normalizeFlowMaps`가 초과분을 `slice(0, MAX_FLOW_MAPS)`로
+  **잘라 버려** 그 뒤 시트가 다음 로드에서 조용히 영구 삭제된다(undo 없음 + sticky 대상이라 백업으로도
+  못 되살린다). 올리는 방향은 데이터 손실이 없다. 가드 `#87`이 관계(≥20)로 단언한다.
+
+**시트(다중 흐름도) — 엑셀식 탭 바 (2026-09 사용자 요청, ⚠️ 회귀 주의)**
+
+`flowMaps`는 처음부터 **배열**이었지만 화면이 `maps[0]` 하나로 고정돼 있었다. 이제 보드 하단 탭 바로
+시트를 **추가·복제·이름변경·순서이동·삭제**한다("자금 계획에 따라 여러가지를 만들고 저장·불러오기").
+배열 변형은 전부 `flowMap.ts`의 순수 함수(`addFlowMap`·`duplicateFlowMap`·`removeFlowMap`·
+`renameFlowMap`·`moveFlowMap`)를 쓰고 **변경이 없으면 원본 배열 참조를 그대로 반환**한다
+(FlowBoard의 `commit`이 `next === prev`면 dirty를 세우지 않으므로, 이 계약이 곧 "아무 일도 없는
+클릭에는 Drive 저장이 나가지 않는다"는 보장이다).
+
+- **영속화 신규 지점 0곳** — 시트 순서는 **배열 순서**가 곧 저장값이고(`order` 필드를 만들지 말 것)
+  `flowFingerprint`가 배열을 순서대로 투영하므로 순서 변경만으로도 저장이 트리거된다. App.tsx 7지점·
+  sticky 복원·별도 창 브릿지가 배열을 통째로 나른다(관심종목 그룹 순서 드래그와 같은 규약).
+- **⚠️ 복제는 노드 id를 전부 새로 만들고 엣지 `from`/`to`를 그 새 id로 다시 잇는다** — 얕은 복사로
+  되돌리면 사본의 엣지가 **원본 시트의 노드 id**를 가리키고, `normalizeFlowMaps`의 고아 엣지 제거가
+  **다음 로드에서 사본의 연결선을 전부 조용히 삭제**한다(도형은 남고 선만 사라져 원인 추적 불가,
+  지문에도 안 잡힌다). 원본이 이미 고아 엣지를 들고 있으면 사본에는 만들지 않는다(정규화 결과와 미리 일치).
+- **⚠️ 편집·팬줌 커밋은 활성 시트 **id 기준**(`activeIdRef`)** — `prev[0]`으로 되돌리면 2번 시트를
+  보면서 그린 도형이 1번 시트에 꽂힌다. 대상이 사라졌으면 조용한 no-op이 되는 것도 이 방식의
+  안전장치다(`patchNodeById`와 같은 규약).
+- **⚠️ 시트 전환 순서가 곧 계약**: ① 떠나는 시트의 미승격 화면을 **먼저** 커밋(`activeIdRef`를 바꾸기
+  전에) ② 활성 id 교체 + 선택·연결 초기화 ③ 새 시트의 저장 화면을 **`setViewport`**(`applyViewport`
+  아님)로 복원하고 `vpTouchedRef`를 내린다. `applyViewport`로 되돌리면 '탭을 눌렀을 뿐인데 Drive 저장'이
+  되고, 리셋을 빼먹으면 복원값이 곧바로 새 시트에 다시 기록된다.
+- **⚠️ 활성 시트 선택은 세션 로컬**(저장하지 않는다) — 인앱 보드와 별도 창이 같은 `flowMaps`를
+  공유하므로, 저장하면 한쪽에서 시트를 바꿀 때 다른 쪽 화면이 따라 움직인다. 보드는 항상 첫 시트로 연다.
+- **⚠️ 늦게 도착한 Drive 배열에 활성 시트가 없으면 첫 시트로 되돌린다** — 시드가 만든 임시 시트 id는
+  그 배열에 없다. 안 고치면 화면은 1번 시트를 보여주는데 커밋은 `findIndex` 실패로 전부 조용한
+  no-op이 된다(그리는데 아무것도 안 남는다).
+- **⚠️ 캔버스는 `key={map.id}`로 remount** — 드래그·리사이즈·hover 로컬 상태가 노드 id를 들고 있어
+  시트를 바꿀 때 비우지 않으면 다른 시트의 노드를 가리킨다.
+- **⚠️ 삭제는 확인창 또는 인라인 2단계** — 도형·선이 통째로 사라지고 undo가 없다. overlay는
+  `ConfirmDialog`(z-1000 > 보드 990), **별도 창은 App이 없어 확인창이 안 뜨므로 인라인 2단계**로
+  되받는다(백테스트·가계부 별도 창과 같은 근거). 확인 없는 즉시 삭제로 후퇴하지 말 것.
+  **마지막 한 장은 지우지 않는다**(엑셀과 같은 규약) — 0장이 되면 보드 시드가 빈 맵을 새로 만들어
+  "지웠는데 초기화된 시트가 남는" 혼란이 되고, 그 사이 승격이 끼면 `flowMapsHaveContent`가 false가
+  되어 sticky 복원 경로까지 흔들린다.
+- **⚠️ 이름 입력(더블클릭·✏️)의 Escape는 자기 핸들러가 처리** — 보드의 `onKeyDownCapture`가 일반
+  `typing` 분기로 흘려보내면 Escape가 `target.blur()`를 먼저 불러 그 blur가 커밋이 되고 '취소'가
+  오히려 저장이 된다(`data-flow-sheet-rename` 분기로 먼저 걸러낸다). 취소 판정은 **ref 플래그**로
+  한다 — 입력이 언마운트될 때 브라우저가 blur를 발화하지 않는 경우가 있어 상태로는 판정할 수 없다.
+- **범위 밖(의도)**: 활성 시트 영속화 · 탭 드래그 재정렬(◀▶ 버튼만) · 시트 간 도형 복사·이동 ·
+  시트별 접근 권한. **알려진 한계**: 보드를 닫았다 열면 항상 첫 시트다(탭 한 번이면 돌아간다).
 
 **팬/줌(마지막 화면)도 저장한다 — `map.viewport` (2026-09, ⚠️ 회귀 주의)**
 
@@ -3510,19 +3556,32 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   삭제가 맞다), 굵기 자유 입력, 선 끝모양(linecap), 곡선/직각 라우팅.
 - **범위 밖(의도)**: undo/redo(Drive 폴링이 타 기기 편집을 받아온 뒤 undo가 최신값을 덮는다 —
   `RebalanceTargetRestoreModal`이 같은 이유로 포기), PNG 내보내기, 자동 레이아웃,
-  다중 캔버스 UI(데이터 모델은 배열이나 현재 1장 고정), 계좌 삭제 시 노드 캐스케이드 정리.
+  계좌 삭제 시 노드 캐스케이드 정리.
   **알려진 한계**: 인앱 보드와 새 창을 동시에 열면 이론상 마지막 쓰기가 이긴다(아이콘이 새 창을 열 때
   인앱 보드를 닫으므로 실사용에서 겹치는 구간은 짧다 — 메모 달력 창과 동일 절충).
   계좌가 0개면 저장 effect가 조기 반환해 흐름도가 저장되지 않는다(chartPrefs와 동일한 기존 한계).
-- 검증: `npm run verify:flow` (221건 — 미러 #1~#26 + **팬/줌 #38~#44b** + **색 #45~#48b** +
-  **화살촉 방향 #58~#62d** + **선 종류 #67~#74c** + 소스 텍스트 가드 #27~#36·**#49~#57c**·
-  **#63~#66b**·**#75~#79** + JSX 주석 #37).
+- 검증: `npm run verify:flow` (299건 — 미러 #1~#26 + **팬/줌 #38~#44b** + **색 #45~#48b** +
+  **화살촉 방향 #58~#62d** + **선 종류 #67~#74c** + **시트 #80~#86c** + 소스 텍스트 가드
+  #27~#36·**#49~#57c**·**#63~#66b**·**#75~#79**·**#87~#93b** + JSX 주석 #37
+  + **파트③ 실모듈 드리프트 가드 #95~#102b**).
   참조 구현은 `flowMap.ts`의 `normalizeFlowMaps`·`flowMapsHaveContent`·`flowFingerprint`·`edgePath`·
   `removeNode`·`pruneOrphanEdges`·`roundNode`·`resolveFlowNodeView`·`countDanglingNodes`·
-  **`sanitizeHexColor`·`readableTextColor`·`normalizeFlowViewport`·`sameFlowViewport`·`fitFlowViewport`·
-  `normalizeFlowArrow`·`arrowHeads`·`resolveFlowLineStyle`·`normalizeFlowLineWidth`·`flowLineRender`**
-  본문과 **항상 1:1 동기화**할 것. 가드는 영속화 배선을 정규식으로 단언하므로, 실패 시 **먼저
-  정규식이 낡았는지 확인**하고 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+  `sanitizeHexColor`·`readableTextColor`·`normalizeFlowViewport`·`sameFlowViewport`·`fitFlowViewport`·
+  `normalizeFlowArrow`·`arrowHeads`·`resolveFlowLineStyle`·`normalizeFlowLineWidth`·`flowLineRender`·
+  **`makeFlowMap`·`nextFlowMapName`·`addFlowMap`·`duplicateFlowMap`·`removeFlowMap`·`renameFlowMap`·
+  `moveFlowMap`** 본문과 **항상 1:1 동기화**할 것. 가드는 영속화 배선을 정규식으로 단언하므로, 실패 시
+  **먼저 정규식이 낡았는지 확인**하고 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+  ⚠️ **파트③(#95~)은 `src/flowMap.ts` 실모듈을 임시 폴더에 복사해 import한 뒤 미러와 대조하는
+  드리프트 가드다**(verify:backtest #450 선례) — 파트①이 **미러만** 검사하므로, 이 가드가 없으면
+  src에만 반영한 변경이 그대로 통과한다(실측: 시트 조작 변이 5종이 미러 테스트를 전부 뚫었고
+  이 가드를 넣은 뒤 5종 모두 잡혔다). 생성 id는 양쪽이 다르므로 **등장 순서 토큰**으로 정규화해
+  비교한다 — 위치 기반으로 뭉개면 '사본이 원본 노드 id를 그대로 쓰는' 얕은 복사 회귀가 지워져
+  죽은 단언이 된다. 지원하지 않는 런타임에서는 명시적으로 건너뛴다고 출력한다.
+  ⚠️ 시트 가드도 **변이 18종 + 음성 대조 1종**(patchMap·commitViewport를 `prev[0]` 고정으로 ·
+  전환 순서 뒤집기 · 전환 복원을 `applyViewport`로 · touched 리셋 삭제 · 복제 얕은 복사 ·
+  마지막 시트 삭제 허용 · 시트 상한 무시 · 순서 이동 경계 삭제 · 빈 이름 허용 · 캔버스 `key` 제거 ·
+  늦은 배열의 활성 id 복구 삭제 · 확인 없는 즉시 삭제 · 이름 입력 키 분기 삭제 · 상한 5로 되돌림 ·
+  탭 바 렌더 삭제 · 손 splice · 삭제 버튼 잠금 해제)으로 **실제 검출을 확인**했다.
   ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 28종 + 음성 대조 1종**(정규화가 viewport를
   삼킴 · 지문에서 viewport 누락 · 레거시를 매번 변경으로 판정 · 배율 클램프 제거 · hex 소문자화 ·
   글자색 문턱 하향 · 선 색 정규화 제거 · seed 복원 삭제 · 복원이 touched를 세움 · 늦은 데이터의

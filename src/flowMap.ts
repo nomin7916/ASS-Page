@@ -160,7 +160,16 @@ export type FlowMaps = FlowMap[];
  *    노드 150 + 엣지 300 ≈ 85KB → 백업 22본 ≈ 1.9MB (수용 범위).
  * =========================================================================== */
 
-export const MAX_FLOW_MAPS = 5;
+/**
+ * 시트(맵) 개수 상한. 2026-09 사용자 요청("자금 계획에 따라 엑셀 시트처럼 원하는 만큼")으로
+ * 5 → 20으로 올렸다.
+ * ⚠️ **줄이지 말 것** — normalizeFlowMaps가 초과분을 `slice(0, MAX_FLOW_MAPS)`로 **잘라 버리므로**
+ *    상한을 낮추는 순간 그 뒤 시트가 다음 로드에서 조용히 영구 삭제된다(undo 없음 + sticky 복원
+ *    대상이라 백업으로도 못 되살린다). 올리는 방향은 데이터 손실이 없어 안전하다.
+ * ⚠️ 노드·엣지 상한은 **시트마다** 적용되므로 최악의 STATE는 20배가 된다. 현실적인 흐름도는
+ *    도형 수십 개라 문제되지 않지만, 상한을 더 올릴 때는 백업 22본 복제를 함께 계산할 것.
+ */
+export const MAX_FLOW_MAPS = 20;
 export const MAX_FLOW_NODES = 150;
 export const MAX_FLOW_EDGES = 300;
 
@@ -629,6 +638,126 @@ export function pruneOrphanEdges(map: FlowMap): FlowMap {
   const edges = map.edges.filter(e => ids.has(e.from) && ids.has(e.to));
   if (edges.length === map.edges.length) return map;
   return { ...map, edges };
+}
+
+/* ---------------------------------------------------------------------------
+ * D-2. 시트(맵) 단위 조작 — 엑셀 시트식 다중 흐름도
+ *
+ * ⚠️ 전부 **변경이 없으면 원본 배열 참조를 그대로 반환**한다. FlowBoard의 commit이
+ *    `next === prev`면 dirty를 세우지 않으므로, 이 계약이 곧 "아무 일도 일어나지 않은
+ *    클릭에는 Drive 저장(STATE+VERSION+STOCK+MARKET)이 나가지 않는다"는 보장이다.
+ * ⚠️ 시트 순서는 **배열 순서**가 곧 저장값이다(`order` 필드를 만들지 말 것). flowFingerprint가
+ *    배열을 순서대로 투영하므로 순서 변경만으로도 저장이 트리거되고, 정규화·복원·별도 창
+ *    브릿지가 배열을 통째로 나르므로 **영속화 신규 지점이 0곳**이다
+ *    (관심종목 그룹 순서 드래그와 같은 규약).
+ * ------------------------------------------------------------------------- */
+
+/** 시트 이름 길이 상한. 탭 바 폭과 STATE 크기를 함께 지킨다. */
+export const MAX_FLOW_MAP_NAME = 40;
+
+const asMapList = (maps: unknown): FlowMap[] => (Array.isArray(maps) ? (maps as FlowMap[]) : []);
+
+/** '시트 1', '시트 2' … 중 아직 쓰지 않은 가장 작은 번호. */
+export function nextFlowMapName(maps: unknown, base: string = '시트'): string {
+  const used = new Set(asMapList(maps).map(m => asStr(m?.name)));
+  for (let i = 1; i <= MAX_FLOW_MAPS + 1; i++) {
+    const cand = `${base} ${i}`;
+    if (!used.has(cand)) return cand;
+  }
+  return `${base} ${Date.now()}`;
+}
+
+function copyNameOf(list: FlowMap[], name: unknown): string {
+  const base = `${asStr(name) || '시트'} 복사`;
+  const used = new Set(list.map(m => asStr(m?.name)));
+  if (!used.has(base)) return base;
+  for (let i = 2; i <= MAX_FLOW_MAPS + 1; i++) {
+    const cand = `${base} ${i}`;
+    if (!used.has(cand)) return cand;
+  }
+  return base;
+}
+
+/** 시트 추가. 상한 초과면 원본 참조(호출부가 안내 문구를 띄운다). */
+export function addFlowMap(maps: unknown, name?: string): FlowMaps {
+  const list = asMapList(maps);
+  if (list.length >= MAX_FLOW_MAPS) return list;
+  return [...list, makeFlowMap(asStr(name).trim().slice(0, MAX_FLOW_MAP_NAME) || nextFlowMapName(list))];
+}
+
+/**
+ * 시트 복제 — 원본 **바로 뒤**에 꽂는다(엑셀 '시트 이동/복사'와 같은 위치).
+ *
+ * ⚠️ 노드 id를 전부 새로 만들고 **엣지의 from/to를 그 새 id로 다시 잇는다**. 안 하면 사본의
+ *    엣지가 원본 시트의 노드 id를 가리키게 되는데, normalizeFlowMaps의 고아 엣지 제거가
+ *    **다음 로드에서 사본의 연결선을 전부 조용히 삭제**한다(도형은 남고 선만 사라져 원인을
+ *    추적할 수 없다). 지문에도 안 잡히는 종류의 유실이므로 절대 얕은 복사로 되돌리지 말 것.
+ * ⚠️ 원본이 이미 고아 엣지를 들고 있으면 사본에는 만들지 않는다(정규화 결과와 미리 일치시킨다).
+ */
+export function duplicateFlowMap(maps: unknown, id: string): FlowMaps {
+  const list = asMapList(maps);
+  const idx = list.findIndex(m => m?.id === id);
+  if (idx < 0 || list.length >= MAX_FLOW_MAPS) return list;
+  const src = list[idx];
+  const ts = Date.now();
+
+  const idMap = new Map<string, string>();
+  const nodes = (Array.isArray(src.nodes) ? src.nodes : []).map(n => {
+    const nid = generateId();
+    idMap.set(n.id, nid);
+    return { ...n, id: nid };
+  });
+  const edges: FlowEdge[] = [];
+  for (const e of Array.isArray(src.edges) ? src.edges : []) {
+    const from = idMap.get(e.from);
+    const to = idMap.get(e.to);
+    if (!from || !to) continue;
+    edges.push({ ...e, id: generateId(), from, to });
+  }
+
+  const copy: FlowMap = { ...src, id: generateId(), name: copyNameOf(list, src.name), nodes, edges, createdAt: ts, updatedAt: ts };
+  const out = list.slice();
+  out.splice(idx + 1, 0, copy);
+  return out;
+}
+
+/**
+ * 시트 삭제.
+ * ⚠️ 마지막 1장은 지우지 않는다(엑셀과 같은 규약) — 0장이 되면 FlowBoard의 시드 로직이 빈 맵을
+ *    새로 만들어 "지웠는데 이름만 초기화된 시트가 남는" 혼란이 되고, 그 사이 승격이 끼면
+ *    flowMapsHaveContent가 false가 되어 sticky 복원 경로까지 흔들린다.
+ */
+export function removeFlowMap(maps: unknown, id: string): FlowMaps {
+  const list = asMapList(maps);
+  if (list.length <= 1) return list;
+  const out = list.filter(m => m?.id !== id);
+  return out.length === list.length ? list : out;
+}
+
+/** 시트 이름 변경. 빈 이름은 거부(원래 이름 유지) — 이름 없는 탭은 고를 수가 없다. */
+export function renameFlowMap(maps: unknown, id: string, name: unknown): FlowMaps {
+  const list = asMapList(maps);
+  const idx = list.findIndex(m => m?.id === id);
+  if (idx < 0) return list;
+  const next = asStr(name).trim().slice(0, MAX_FLOW_MAP_NAME) || asStr(list[idx].name) || '시트';
+  if (next === list[idx].name) return list;
+  const out = list.slice();
+  out[idx] = { ...list[idx], name: next, updatedAt: Date.now() };
+  return out;
+}
+
+/** 시트 순서 이동(delta: -1 왼쪽 / +1 오른쪽). 끝에서 더 밀면 원본 참조. */
+export function moveFlowMap(maps: unknown, id: string, delta: number): FlowMaps {
+  const list = asMapList(maps);
+  if (!delta || !Number.isFinite(delta)) return list;
+  const from = list.findIndex(m => m?.id === id);
+  if (from < 0) return list;
+  const to = from + (delta < 0 ? -1 : 1);
+  if (to < 0 || to >= list.length) return list;
+  const out = list.slice();
+  const [m] = out.splice(from, 1);
+  out.splice(to, 0, m);
+  return out;
 }
 
 export function nodeCenter(n: FlowNode): { x: number; y: number } {

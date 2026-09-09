@@ -1,13 +1,14 @@
 // @ts-nocheck
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Plus, X, RotateCcw, Maximize2, Save } from 'lucide-react';
+import { Plus, X, RotateCcw, Maximize2, Save, Pencil, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import FlowCanvas from './FlowCanvas';
 import FlowInspector from './FlowInspector';
 import { useFlowMapData } from '../hooks/useFlowMapData';
 import {
   makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView,
-  countDanglingNodes, MAX_FLOW_NODES, MAX_FLOW_EDGES,
+  countDanglingNodes, MAX_FLOW_NODES, MAX_FLOW_EDGES, MAX_FLOW_MAPS, MAX_FLOW_MAP_NAME,
   DEFAULT_FLOW_VIEWPORT, normalizeFlowViewport, sameFlowViewport, fitFlowViewport,
+  addFlowMap, duplicateFlowMap, removeFlowMap, renameFlowMap, moveFlowMap,
 } from '../flowMap';
 import { generateId, formatCurrency } from '../utils';
 
@@ -40,6 +41,19 @@ import { generateId, formatCurrency } from '../utils';
  *  2) dirtyRef(내용 편집)가 아니라 **vpDirtyRef**를 세운다 — dirtyRef는 늦게 도착한 Drive
  *     데이터 채택을 막는 가드라, 화면만 훑어도 그게 서면 시드된 빈 맵이 저장본을 덮는다.
  *  3) flush가 항상 직전 화면을 먼저 반영한다 — 디바운스가 안 터진 채 닫아도 위치가 남는다.
+ *
+ * ── 시트(다중 흐름도) (⚠️ 회귀 주의) ────────────────────────────────────────
+ * flowMaps는 처음부터 **배열**이었지만 화면이 `maps[0]` 하나로 고정돼 있었다. 지금은 하단
+ * 탭 바로 시트를 추가·복제·이름변경·순서이동·삭제한다(엑셀 시트 metaphor, 사용자 요청 2026-09).
+ * 지켜야 하는 것 셋:
+ *  1) 편집·팬줌 커밋은 **활성 시트 id 기준**(activeIdRef)이다. `prev[0]`으로 되돌리면 2번 시트를
+ *     보면서 그린 도형이 1번 시트에 꽂힌다. 대상이 사라졌으면 조용한 no-op이 되는 것도 이 방식의
+ *     안전장치다(patchNodeById와 같은 규약).
+ *  2) 시트를 바꾸기 **전에** 떠나는 시트의 미승격 화면을 커밋하고, 새 시트의 저장 화면을
+ *     setViewport(applyViewport 아님)로 복원하며 vpTouchedRef를 내린다. 안 그러면 A 시트의
+ *     팬/줌이 B 시트에 기록된다.
+ *  3) 활성 시트 선택은 **세션 로컬**이다(저장하지 않는다) — 인앱 보드와 별도 창이 같은 flowMaps를
+ *     공유하므로, 저장하면 한쪽에서 시트를 바꿀 때 다른 쪽 화면이 따라 움직인다.
  */
 
 const FLOW_Z = 990;
@@ -63,6 +77,9 @@ const canvasBox = () => ({
  * 저장된 위치가 있으면 그대로, 없으면(이 기능 이전에 만든 흐름도) 전체가 보이게 1회 맞춘다 —
  * 그 경우가 정확히 "닫았다 열면 엉뚱한 데를 보고 있다"는 사용자 보고의 상황이다.
  */
+/** 배열에서 id로 시트를 찾는다(없으면 null). 커밋 경로가 **인덱스가 아니라 id**로 도는 근거. */
+const findMap = (arr, id) => (Array.isArray(arr) ? arr.find(m => m?.id === id) : null) || null;
+
 const initialViewportOf = (m) => {
   const saved = normalizeFlowViewport(m?.viewport);
   if (saved) return saved;
@@ -93,6 +110,18 @@ export default function FlowBoard({
   const [viewport, setViewport] = useState(() => ({ ...DEFAULT_FLOW_VIEWPORT }));
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState('');
+
+  // ── 시트 ────────────────────────────────────────────────────────────────────
+  // ⚠️ 활성 시트는 **세션 로컬**(저장하지 않는다 — 위 헤더 주석 3번). 커밋 경로가 읽는 것은
+  //    state가 아니라 activeIdRef다(이벤트 핸들러·타이머에서 동기로 읽어야 하기 때문).
+  const [activeId, setActiveId] = useState(null);
+  const activeIdRef = useRef(null);
+  const [renameId, setRenameId] = useState(null);     // 이름 편집 중인 시트
+  const [renameDraft, setRenameDraft] = useState(''); // 원시 문자열 draft(커밋은 blur/Enter)
+  const renameCancelRef = useRef(false);
+  const [delArmId, setDelArmId] = useState(null);     // 별도 창(confirm 없음)용 인라인 2단계 확인
+  const delArmRef = useRef(null);
+  delArmRef.current = delArmId;
 
   const localRef = useRef(maps);
   const dirtyRef = useRef(false);
@@ -134,6 +163,11 @@ export default function FlowBoard({
     setDirty(false);
     setSelectedId(null);
     setConnectFrom(null);
+    // 항상 첫 시트로 연다(활성 시트는 저장하지 않는다 — 헤더 주석 3번).
+    activeIdRef.current = seeded[0]?.id || null;
+    setActiveId(activeIdRef.current);
+    setRenameId(null);
+    setDelArmId(null);
     // ⚠️ 마지막으로 보던 화면 복원. setViewport(applyViewport 아님) — 복원 자체는 사용자 동작이
     //    아니므로 touched를 세우면 안 된다(열기만 해도 Drive 저장이 나간다).
     setViewport(initialViewportOf(seeded[0]));
@@ -153,9 +187,18 @@ export default function FlowBoard({
     if (maps === localRef.current) return;
     localRef.current = maps;
     setMapsLocal(maps);
+    // ⚠️ 늦게 도착한 배열에는 시드가 만든 임시 시트 id가 없다 → 활성 시트를 유효한 것으로 되돌린다.
+    //    안 하면 activeId가 어디에도 없는 id를 가리켜, 아래 `map` 폴백 덕에 화면은 1번 시트를
+    //    보여주는데 커밋은 findIndex 실패로 전부 조용한 no-op이 된다(그리는데 아무것도 안 남는다).
+    if (!maps.some(m => m?.id === activeIdRef.current)) {
+      activeIdRef.current = maps[0]?.id || null;
+      setActiveId(activeIdRef.current);
+      setSelectedId(null);
+      setConnectFrom(null);
+    }
     // 아직 사용자가 화면을 움직이지 않았다면 늦게 도착한 **저장 위치**도 함께 채택한다.
     // (움직였다면 그 화면을 유지하고, 디바운스가 채택한 맵 위에 다시 커밋한다.)
-    if (!vpTouchedRef.current) setViewport(initialViewportOf(maps[0]));
+    if (!vpTouchedRef.current) setViewport(initialViewportOf(findMap(maps, activeIdRef.current) || maps[0]));
   }, [open, maps]);
 
   // ⚠️ 미승격 편집이 없으면 반드시 null — 항상 값을 반환하면 alt-tab마다 4파일 write가 강제된다.
@@ -226,16 +269,24 @@ export default function FlowBoard({
     onUpdateRef.current?.(() => pending);
   }, []);
 
-  const map = mapsLocal?.[0];
+  // ⚠️ 활성 시트가 사라졌으면 첫 시트로 폴백해 **그리기는 계속 되게** 한다(빈 화면 방지).
+  //    다만 커밋 경로는 폴백하지 않는다 — 아래 patchMap은 activeIdRef를 못 찾으면 no-op이다.
+  const map = findMap(mapsLocal, activeId) || mapsLocal?.[0];
   const { portfolioById, summaryById, accountOptions } = useFlowMapData(open, portfolios, portfolioSummaries);
 
+  // ⚠️ **활성 시트 id 기준** 패치. `prev[0]`으로 되돌리면 2번 시트를 보면서 그린 도형이 1번
+  //    시트에 꽂힌다(화면과 저장이 갈리는 최악의 형태 — 사용자는 한참 뒤에야 알아챈다).
   const patchMap = useCallback((fn) => {
+    const id = activeIdRef.current;
     commit(prev => {
-      const cur = prev?.[0];
-      if (!cur) return prev;
+      const idx = Array.isArray(prev) ? prev.findIndex(m => m?.id === id) : -1;
+      if (idx < 0) return prev;
+      const cur = prev[idx];
       const nextMap = fn(cur);
       if (nextMap === cur) return prev;
-      return [{ ...nextMap, updatedAt: Date.now() }, ...prev.slice(1)];
+      const out = prev.slice();
+      out[idx] = { ...nextMap, updatedAt: Date.now() };
+      return out;
     });
   }, [commit]);
 
@@ -248,10 +299,17 @@ export default function FlowBoard({
     if (readOnlyRef.current || !vpTouchedRef.current) return;
     const vp = normalizeFlowViewport(viewportRef.current);
     if (!vp) return;
+    // ⚠️ 시트 전환은 이 함수를 **먼저** 부른 뒤 activeIdRef를 바꾼다 → 여기서는 항상 '떠나기 전
+    //    시트'가 대상이다. 인덱스(prev[0])로 되돌리면 A 시트의 팬/줌이 B 시트에 기록된다.
+    const id = activeIdRef.current;
     commit(prev => {
-      const cur = prev?.[0];
-      if (!cur || sameFlowViewport(cur.viewport, vp)) return prev;   // no-op이면 원본 참조
-      return [{ ...cur, viewport: vp }, ...prev.slice(1)];
+      const idx = Array.isArray(prev) ? prev.findIndex(m => m?.id === id) : -1;
+      if (idx < 0) return prev;
+      const cur = prev[idx];
+      if (sameFlowViewport(cur.viewport, vp)) return prev;   // no-op이면 원본 참조
+      const out = prev.slice();
+      out[idx] = { ...cur, viewport: vp };
+      return out;
     }, { viewportOnly: true });
   }, [commit]);
   commitViewportRef.current = commitViewport;
@@ -279,7 +337,7 @@ export default function FlowBoard({
 
   // ⚠️ 노드/엣지 생성(generateId)과 선택 변경은 업데이터 **밖**에서 수행한다(위 commit 주석 참조).
   const addNode = useCallback((kind) => {
-    const cur = localRef.current?.[0];
+    const cur = findMap(localRef.current, activeIdRef.current);
     if (!cur) return;
     if (cur.nodes.length >= MAX_FLOW_NODES) {
       setNotice(`도형은 최대 ${MAX_FLOW_NODES}개까지 만들 수 있습니다.`);
@@ -296,7 +354,7 @@ export default function FlowBoard({
   const onNodesChange = useCallback((nodes) => patchMap(cur => ({ ...cur, nodes })), [patchMap]);
 
   const onAddEdge = useCallback((from, to) => {
-    const cur = localRef.current?.[0];
+    const cur = findMap(localRef.current, activeIdRef.current);
     if (!cur) return;
     if (cur.edges.length >= MAX_FLOW_EDGES) {
       setNotice(`연결선은 최대 ${MAX_FLOW_EDGES}개까지 만들 수 있습니다.`);
@@ -374,10 +432,115 @@ export default function FlowBoard({
   //    데이터인데 '열었을 때'와 '맞춤 버튼'이 다른 화면을 준다.
   const fitView = useCallback(() => {
     const box = canvasBox();
-    applyViewport(fitFlowViewport(localRef.current?.[0]?.nodes, box.w, box.h));
+    applyViewport(fitFlowViewport(findMap(localRef.current, activeIdRef.current)?.nodes, box.w, box.h));
   }, [applyViewport]);
 
   const resetView = useCallback(() => applyViewport({ ...DEFAULT_FLOW_VIEWPORT }), [applyViewport]);
+
+  /* ── 시트 조작 ──────────────────────────────────────────────────────────────
+   * ⚠️ 배열 변형은 전부 flowMap.ts의 순수 함수(addFlowMap·duplicateFlowMap·…)를 쓴다.
+   *    여기서 손으로 splice 하면 '변경 없으면 원본 참조' 계약이 깨져 아무 일도 없는 클릭마다
+   *    Drive 저장이 나가고, 무엇보다 복제의 **id 재매핑**을 빠뜨리기 쉽다(사본의 연결선이 다음
+   *    로드에서 통째로 사라진다 — duplicateFlowMap 주석 참조).
+   * ⚠️ generateId를 부르는 순수 함수는 commit **업데이터 밖**에서 호출한다(StrictMode 이중 호출). */
+
+  /**
+   * 시트 전환. 순서가 곧 계약이다:
+   *   ① 떠나는 시트의 미승격 화면 커밋(activeIdRef를 바꾸기 **전에**)
+   *   ② 활성 id 교체 + 선택/연결 초기화
+   *   ③ 새 시트의 저장 화면 복원 — setViewport(applyViewport 아님) + vpTouchedRef 리셋.
+   *      applyViewport로 되돌리면 '탭을 눌렀을 뿐인데 Drive 저장'이 되고, 리셋을 빼먹으면
+   *      복원값이 곧바로 새 시트에 다시 기록된다.
+   */
+  const switchSheet = useCallback((id) => {
+    if (!id || id === activeIdRef.current) return;
+    commitViewportRef.current?.();
+    activeIdRef.current = id;
+    setActiveId(id);
+    setSelectedId(null);
+    setConnectFrom(null);
+    setRenameId(null);
+    setDelArmId(null);
+    vpTouchedRef.current = false;
+    setViewport(initialViewportOf(findMap(localRef.current, id)));
+  }, []);
+
+  const addSheet = useCallback(() => {
+    if (readOnly) return;
+    const prev = localRef.current;
+    const next = addFlowMap(prev);
+    if (next === prev) { setNotice(`시트는 최대 ${MAX_FLOW_MAPS}장까지 만들 수 있습니다.`); return; }
+    const created = next[next.length - 1];
+    commit(() => next);
+    switchSheet(created.id);
+  }, [readOnly, commit, switchSheet]);
+
+  const duplicateSheet = useCallback((id) => {
+    if (readOnly) return;
+    const prev = localRef.current;
+    // ⚠️ duplicateFlowMap의 no-op 사유는 '상한 초과'와 '없는 id' 둘이다 — 뭉뚱그려 상한 안내를
+    //    띄우면 있지도 않은 이유를 단언하게 된다. 상한만 미리 판정하고 나머지는 조용히 no-op.
+    if ((prev?.length || 0) >= MAX_FLOW_MAPS) { setNotice(`시트는 최대 ${MAX_FLOW_MAPS}장까지 만들 수 있습니다.`); return; }
+    const next = duplicateFlowMap(prev, id);
+    if (next === prev) return;
+    const created = next[next.findIndex(m => m.id === id) + 1];
+    commit(() => next);
+    switchSheet(created.id);
+  }, [readOnly, commit, switchSheet]);
+
+  const moveSheet = useCallback((id, delta) => {
+    if (readOnly) return;
+    commit(prev => moveFlowMap(prev, id, delta));
+  }, [readOnly, commit]);
+
+  /**
+   * 시트 삭제 — 도형·선이 통째로 사라지고 undo가 없다.
+   * ⚠️ overlay는 ConfirmDialog(z-1000 > 보드 990), page(별도 창)는 App이 없어 확인창이 뜨지
+   *    않으므로 **인라인 2단계**로 되받는다(백테스트·가계부 별도 창과 같은 근거). 확인 없는
+   *    즉시 삭제로 후퇴하지 말 것.
+   */
+  const deleteSheet = useCallback(async (id) => {
+    if (readOnly) return;
+    const prev = localRef.current;
+    const target = findMap(prev, id);
+    if (!target) return;
+    if ((prev?.length || 0) <= 1) { setNotice('시트는 최소 한 장이 남아 있어야 합니다.'); return; }
+    const msg = `'${target.name}' 시트를 삭제할까요? 도형 ${target.nodes?.length || 0}개와 선 ${target.edges?.length || 0}개가 함께 사라집니다.`;
+    if (confirm) {
+      if (!(await confirm(msg, '삭제'))) return;
+    } else if (delArmRef.current !== id) {
+      setDelArmId(id);
+      setNotice(`${msg} 삭제 버튼을 한 번 더 누르세요.`);
+      return;
+    }
+    const cur = localRef.current;
+    const next = removeFlowMap(cur, id);
+    if (next === cur) return;
+    setDelArmId(null);
+    setNotice('');
+    commit(() => next);
+    if (activeIdRef.current === id) {
+      const idx = cur.findIndex(m => m.id === id);
+      switchSheet((next[Math.min(idx, next.length - 1)] || next[0]).id);
+    }
+  }, [readOnly, confirm, commit, switchSheet]);
+
+  const startRename = useCallback((m) => {
+    if (readOnly || !m) return;
+    renameCancelRef.current = false;
+    setRenameId(m.id);
+    setRenameDraft(m.name || '');
+  }, [readOnly]);
+
+  /** ⚠️ Escape 취소는 ref 플래그로 판정한다 — 입력이 언마운트될 때 브라우저가 blur를 발화하지
+   *    않는 경우가 있어(그때만 커밋되면 취소가 무작위로 실패한다) 상태로 판정할 수 없다. */
+  const commitRename = useCallback((id) => {
+    const cancelled = renameCancelRef.current;
+    renameCancelRef.current = false;
+    setRenameId(null);
+    if (cancelled || readOnly) return;
+    commit(prev => renameFlowMap(prev, id, renameDraft));
+  }, [readOnly, commit, renameDraft]);
 
   // ⚠️ 보드 키를 **먼저 처리한 뒤** stopPropagation 한다. 그냥 흘려보내면 FloatingCalculator가
   //    열려 있을 때 그 window keydown 핸들러가 Delete/Escape/화살표를 수식 입력으로 삼킨다
@@ -386,6 +549,13 @@ export default function FlowBoard({
   const onKeyDownCapture = (e) => {
     const tag = (e.target?.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable;
+    // ⚠️ 시트 이름 입력은 **자기 핸들러가** Enter(커밋)·Escape(취소)를 처리한다. 여기서 일반
+    //    `typing` 분기로 흘려보내면 Escape가 target.blur()를 먼저 부르고, 그 blur가 커밋으로
+    //    이어져 '취소'가 오히려 저장이 된다.
+    if (e.target?.dataset?.flowSheetRename !== undefined) {
+      if (e.key === 'Escape' || e.key === 'Enter') e.stopPropagation();
+      return;
+    }
     if (!typing) {
       if (e.key === 'Escape') {
         // 한 단계씩: 연결 취소 → 선택 해제 → 보드 닫기
@@ -473,7 +643,10 @@ export default function FlowBoard({
 
       <div className="flex-1 flex min-h-0">
         <div className="flex-1 min-w-0 relative">
+          {/* key = 시트 id. 캔버스가 들고 있는 드래그·리사이즈·hover 로컬 상태는 노드 id를
+              참조하므로, 시트를 바꿀 때 remount로 비워 다른 시트의 노드를 가리키지 않게 한다. */}
           <FlowCanvas
+            key={map?.id || 'none'}
             map={map}
             viewOf={viewOf}
             selectedId={selectedId}
@@ -519,6 +692,73 @@ export default function FlowBoard({
             readOnly={readOnly}
           />
         )}
+      </div>
+
+      {/* 시트 탭 바 — 엑셀 시트 metaphor. 탭 클릭=전환 / 더블클릭=이름 변경. */}
+      <div className="flex items-center gap-2 px-2 py-1.5 border-t border-gray-700 bg-[#0f1623] shrink-0">
+        <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto">
+          {(mapsLocal || []).map(m => (
+            renameId === m.id ? (
+              <input
+                key={m.id}
+                data-flow-sheet-rename=""
+                autoFocus
+                value={renameDraft}
+                maxLength={MAX_FLOW_MAP_NAME}
+                onChange={e => setRenameDraft(e.target.value)}
+                onBlur={() => commitRename(m.id)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.currentTarget.blur(); }
+                  else if (e.key === 'Escape') { renameCancelRef.current = true; setRenameId(null); }
+                }}
+                className="shrink-0 w-28 text-[11px] px-2 py-1 rounded-t border border-indigo-600 bg-[#0b1120] text-white outline-none"
+              />
+            ) : (
+              <button
+                key={m.id}
+                onClick={() => switchSheet(m.id)}
+                onDoubleClick={() => startRename(m)}
+                title={`${m.name} — 도형 ${m.nodes?.length || 0} · 선 ${m.edges?.length || 0}${readOnly ? '' : ' (더블클릭하면 이름을 바꿉니다)'}`}
+                className={`shrink-0 max-w-[160px] truncate text-[11px] px-3 py-1 rounded-t border-t border-l border-r transition ${
+                  m.id === activeId
+                    ? 'border-indigo-600 bg-[#0b1120] text-indigo-200 font-semibold'
+                    : 'border-gray-700 bg-[#0f1623] text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {m.name}
+              </button>
+            )
+          ))}
+          {!readOnly && (
+            <button onClick={addSheet} title="시트 추가" className="shrink-0 flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:border-indigo-600 transition">
+              <Plus size={12} /> 시트
+            </button>
+          )}
+        </div>
+
+        {!readOnly && map && (
+          <div className="shrink-0 flex items-center gap-1">
+            <button onClick={() => moveSheet(map.id, -1)} title="왼쪽으로 이동" className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition"><ChevronLeft size={14} /></button>
+            <button onClick={() => moveSheet(map.id, 1)} title="오른쪽으로 이동" className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition"><ChevronRight size={14} /></button>
+            <button onClick={() => startRename(map)} title="이름 변경" className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition"><Pencil size={13} /></button>
+            <button onClick={() => duplicateSheet(map.id)} title="이 시트를 복제" className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:border-indigo-600 transition">복제</button>
+            <button
+              onClick={() => deleteSheet(map.id)}
+              disabled={(mapsLocal?.length || 0) <= 1}
+              title={(mapsLocal?.length || 0) <= 1 ? '시트는 최소 한 장이 남아 있어야 합니다' : '이 시트를 삭제'}
+              className={`p-1 rounded transition ${
+                (mapsLocal?.length || 0) <= 1
+                  ? 'text-gray-700'
+                  : delArmId === map.id
+                    ? 'text-red-300 bg-red-900/40'
+                    : 'text-gray-400 hover:text-red-300 hover:bg-gray-800'
+              }`}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )}
+        <span className="shrink-0 text-[10px] text-gray-500">시트 {(mapsLocal?.length || 0)}/{MAX_FLOW_MAPS}</span>
       </div>
     </div>
   );
