@@ -296,6 +296,9 @@ function Field({ label, children, hint }) {
   );
 }
 
+/** 표 선 표시 라벨 — FlowNodeEditor와 같은 문구를 쓴다(두 화면이 다른 이름을 쓰면 안 된다). */
+const BORDER_LABEL = { none: '없음', outline: '바깥만', all: '전체' };
+
 const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:border-indigo-500 outline-none';
 
 export default function FlowInspector({
@@ -303,12 +306,13 @@ export default function FlowInspector({
   /** { from, to } — 선택된 연결선 양 끝 도형의 **표시 이름**(라이브 파생, 저장하지 않는다). */
   edgeEnds,
   accountOptions,
+  onOpenEditor,
   onPatchNodeById, onPatchEdgeById,
   onDeleteNode, onDeleteEdge,
   onClose,
   readOnly,
 }) {
-  const EMPTY_DRAFT = { label: '', date: '', memo: '', amountManual: '', edgeLabel: '' };
+  const EMPTY_DRAFT = { label: '', date: '', amountManual: '', edgeLabel: '' };
   const [d, setD] = useState(EMPTY_DRAFT);
 
   // 최신 값 미러 — flush는 effect cleanup/언마운트에서 호출되므로 클로저가 아니라 ref를 읽어야 한다
@@ -323,7 +327,7 @@ export default function FlowInspector({
   readOnlyRef.current = readOnly;
 
   const draftOf = (n, e) => (n
-    ? { label: n.label ?? '', date: n.date ?? '', memo: n.memo ?? '',
+    ? { label: n.label ?? '', date: n.date ?? '',
         amountManual: n.amountManual == null ? '' : String(n.amountManual), edgeLabel: '' }
     : { ...EMPTY_DRAFT, edgeLabel: e?.label ?? '' });
 
@@ -337,7 +341,6 @@ export default function FlowInspector({
       const o = {};
       if (cur.label !== base.label) o.label = cur.label;
       if (cur.date !== base.date) o.date = cur.date;
-      if (cur.memo !== base.memo) o.memo = cur.memo;
       const raw = String(cur.amountManual ?? '').trim();
       const v = raw === '' ? null : cleanNum(raw);
       const baseRaw = String(base.amountManual ?? '').trim();
@@ -382,6 +385,9 @@ export default function FlowInspector({
   //    지역 변수를 JSX가 참조하면 런타임 ReferenceError로 화면이 통째로 오류 페이지가 되는데
   //    @ts-nocheck + esbuild라 빌드도 undefcheck도 잡지 못한다(initTradeRest 프로덕션 장애와 동일).
   // ⚠️ 선 종류는 resolveFlowLineStyle로 읽는다 — 레거시 `dashed:true` 선을 직접 읽으면 실선으로 표시된다.
+  // ⚠️ 렌더 스코프 선언 — JSX가 다른 최상위 블록의 지역 변수를 참조하면 런타임 ReferenceError로
+  //    화면이 통째로 오류 페이지가 되는데 @ts-nocheck + esbuild라 빌드도 undefcheck도 못 잡는다.
+  const tableRowCount = Array.isArray(node?.table?.rows) ? node.table.rows.length : 0;
   const curLineStyle = resolveFlowLineStyle(edge?.lineStyle, edge?.dashed);
   const curLineWidth = normalizeFlowLineWidth(edge?.lineWidth);
   const curEdgeColor = sanitizeHexColor(edge?.stroke) || DEFAULT_EDGE_STROKE;
@@ -509,16 +515,33 @@ export default function FlowInspector({
             )}
           </Field>
 
+          {/* ⚠️ 여기서 메모를 **편집하지 않는다** — 같은 값을 팝업과 두 곳에서 고치면, 팝업에서
+              쓴 뒤 이 패널의 미커밋 draft가 나중에 flush되며 방금 쓴 내용을 옛 값으로 덮는다
+              (이 패널의 flush는 대상 변경·언마운트에서 도는데 팝업 닫힘은 그 트리거가 아니다).
+              편집은 팝업 한 곳에서만 하고 여기는 미리보기 + 진입점이다. */}
           <Field label="메모">
-            <textarea
-              className={`${inputCls} resize-y`}
-              rows={5}
-              value={d.memo}
-              readOnly={readOnly}
-              placeholder={'여러 줄 입력 가능\n예) 月 100만원\n    한도 1.7억'}
-              onChange={e => setD(p => ({ ...p, memo: e.target.value }))}
-              onBlur={flushDraft}
-            />
+            <button
+              onClick={() => onOpenEditor?.('memo')}
+              className="w-full text-left bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-100 hover:border-indigo-500 transition min-h-[56px] max-h-[112px] overflow-hidden"
+              title={node.memo ? '클릭하면 크게 열어 편집합니다' : '클릭하면 메모를 씁니다'}
+            >
+              {node.memo
+                ? <span className="whitespace-pre-wrap break-words leading-snug">{node.memo}</span>
+                : <span className="text-gray-500">클릭하면 큰 창에서 메모를 씁니다</span>}
+            </button>
+          </Field>
+
+          {/* 표 — 메모로는 열을 맞출 수 없는 '목록 + 소계 + 잔액'용. 편집은 같은 팝업의 [표] 탭. */}
+          <Field label="표" hint="소계 = 바로 위 구분선 이후 항목의 합 · 잔액 = 총액 합 − 항목 합">
+            <button
+              onClick={() => onOpenEditor?.('table')}
+              className="w-full text-left bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-100 hover:border-indigo-500 transition"
+              title="클릭하면 표를 만들거나 고칩니다"
+            >
+              {tableRowCount
+                ? <span>{tableRowCount}행 · 선 {BORDER_LABEL[node.table?.border] || '없음'}</span>
+                : <span className="text-gray-500">+ 표 만들기</span>}
+            </button>
           </Field>
 
           {!readOnly && (

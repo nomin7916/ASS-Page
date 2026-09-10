@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   edgePath, anchorPoint, roundNode, snapToGrid, sanitizeHexColor, readableTextColor, arrowHeads,
   flowLineRender, buildFlowBundles, resolveNodeDrag, snapTolerance, layoutFlowLabels, flowLabelSize,
+  computeFlowTable,
   MIN_NODE_W, MIN_NODE_H, FLOW_GRID, FLOW_MIN_SCALE, FLOW_MAX_SCALE,
   DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, FLOW_CANVAS_BG, FLOW_LABEL_DOT_R, FLOW_LABEL_FONT,
 } from '../flowMap';
@@ -459,6 +460,13 @@ function FlowCanvasInner({
           const darkText = textColor !== '#ffffff';
           const amountText =
             v.shownAmount == null ? '' : hideAmounts ? '••••••' : formatAmount(v.shownAmount, v.accountType);
+          // ⚠️ 렌더 스코프 선언 — 다른 최상위 블록의 지역 변수를 JSX가 참조하면 런타임
+          //    ReferenceError로 화면이 통째로 오류 페이지가 되는데 @ts-nocheck + esbuild라
+          //    빌드도 undefcheck도 잡지 못한다(initTradeRest 프로덕션 장애와 동일).
+          const tableRows = raw.table ? computeFlowTable(raw.table) : [];
+          const border = raw.table?.border || 'none';
+          // 표 선은 글자색을 옅게 쓴다 — 채우기가 밝든 어둡든 같은 규칙으로 읽힌다.
+          const gridColor = darkText ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.35)';
           return (
             // ⚠️ hover 핸들러는 **바깥 <g>**에 둔다 — 안쪽 도형에만 걸면 리사이즈·연결 핸들
             //    (도형 경계 밖으로 절반 튀어나온다) 위로 커서를 옮기는 순간 pointerleave가 발화해
@@ -490,6 +498,38 @@ function FlowCanvasInner({
                   {n.memo && (
                     <div className="text-[10px] leading-snug mt-0.5 opacity-85 w-full whitespace-pre-wrap break-words overflow-hidden">
                       {n.memo}
+                    </div>
+                  )}
+                  {/* 표 — 메모로는 열을 맞출 수 없는 '목록 + 소계 + 잔액'.
+                      ⚠️ 계산은 flowMap.computeFlowTable이 단독으로 한다. 여기서 합을 다시 구하면
+                      편집 팝업이 보여 준 값과 도형에 그려진 값이 갈린다. */}
+                  {tableRows.length > 0 && (
+                    <div
+                      className={`w-full mt-1 text-[10px] leading-tight ${border !== 'none' ? 'border' : ''}`}
+                      style={border !== 'none' ? { borderColor: gridColor } : undefined}
+                    >
+                      {tableRows.map((r, i) => (
+                        r.kind === 'rule' ? (
+                          <div key={i} style={{ borderTop: `1px solid ${gridColor}`, margin: '2px 0' }} />
+                        ) : (
+                          <div
+                            key={i}
+                            className="flex items-baseline gap-1 px-1"
+                            style={{
+                              // ⚠️ '전체' 선일 때만 행 사이에 선을 긋는다. 첫 행에는 긋지 않는다
+                              //    (바깥 테두리와 겹쳐 두 줄로 보인다).
+                              ...(border === 'all' && i > 0 ? { borderTop: `1px solid ${gridColor}` } : {}),
+                              ...(r.kind === 'total' || r.kind === 'balance' ? { fontWeight: 700 } : {}),
+                            }}
+                          >
+                            <span className="flex-1 min-w-0 truncate text-left">{r.label}</span>
+                            <span
+                              className={`shrink-0 tabular-nums ${r.computed ? 'italic opacity-80' : ''}`}
+                              style={border === 'all' ? { borderLeft: `1px solid ${gridColor}`, paddingLeft: 4 } : undefined}
+                            >{r.text}</span>
+                          </div>
+                        )
+                      ))}
                     </div>
                   )}
                   {/* 밝은 채우기에서는 amber-300이 배경에 묻힌다 — 글자색과 같은 규칙으로 강도를 바꾼다 */}

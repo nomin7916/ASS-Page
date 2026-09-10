@@ -54,6 +54,9 @@ const FLOW_TRUNK_RATIO = 0.45, FLOW_TRUNK_MAX = 96, FLOW_TRUNK_MIN = 16;
 const SNAP_TOL_PX = 6, SNAP_GUIDE_MAX_REFS = 6;
 const FLOW_GRID = 8;
 const FLOW_LABEL_FONT = 12, FLOW_LABEL_H = 22, FLOW_LABEL_PAD = 8, FLOW_LABEL_DOT_R = 5;
+const MAX_FLOW_TABLE_ROWS = 30, MAX_FLOW_TABLE_TEXT = 80;
+const FLOW_TABLE_ROW_KINDS = ['item', 'subtotal', 'total', 'balance', 'rule'];
+const FLOW_TABLE_BORDERS = ['none', 'outline', 'all'];
 const LINE_WIDTH_PX = { thin: 1.2, normal: 2, thick: 3.5 };
 const LINE_DASH_UNITS = {
   dot: [1, 3],
@@ -169,6 +172,7 @@ function roundNode(n) {
 function makeFlowNode(partial = {}) {
   const fill = sanitizeHexColor(partial.fill);
   const stroke = sanitizeHexColor(partial.stroke);
+  const table = normalizeFlowTable(partial.table);
   return {
     id: partial.id || generateId(),
     kind: partial.kind === 'ellipse' ? 'ellipse' : 'rect',
@@ -183,6 +187,7 @@ function makeFlowNode(partial = {}) {
     portfolioId: typeof partial.portfolioId === 'string' && partial.portfolioId ? partial.portfolioId : null,
     accountNameSnapshot: asStr(partial.accountNameSnapshot),
     amountSource: partial.amountSource === 'account' || partial.amountSource === 'manual' ? partial.amountSource : 'none',
+    ...(table ? { table } : {}),
     ...(fill ? { fill } : {}),
     ...(stroke ? { stroke } : {}),
   };
@@ -210,6 +215,9 @@ function flowFingerprint(maps) {
         n?.label ?? '', n?.date ?? '', n?.amountManual ?? null, n?.memo ?? '',
         n?.portfolioId ?? null, n?.accountNameSnapshot ?? '', n?.amountSource ?? '',
         n?.fill ?? '', n?.stroke ?? '',
+        n?.table
+          ? [n.table.border ?? '', (Array.isArray(n.table.rows) ? n.table.rows : []).map(r => [r?.kind ?? '', r?.label ?? '', r?.value ?? ''])]
+          : null,
       ]),
       eg: (Array.isArray(m?.edges) ? m.edges : []).map(e => [
         e?.id ?? '', e?.from ?? '', e?.to ?? '', e?.label ?? '',
@@ -253,7 +261,8 @@ function normalizeFlowMaps(raw) {
         fixed.label !== n.label || fixed.date !== n.date || fixed.amountManual !== (n.amountManual ?? null) ||
         fixed.memo !== n.memo || fixed.portfolioId !== (n.portfolioId ?? null) ||
         fixed.accountNameSnapshot !== n.accountNameSnapshot || fixed.amountSource !== n.amountSource ||
-        fixed.fill !== n.fill || fixed.stroke !== n.stroke
+        fixed.fill !== n.fill || fixed.stroke !== n.stroke ||
+        !sameFlowTable(fixed.table, n.table)
       ) mapChanged = true;
       nodes.push(fixed);
     }
@@ -469,6 +478,101 @@ function edgePath(a, b, e, bundle) {
   const labelY = (q0.y + 3 * p1.y + 3 * p2.y + q3.y) / 8;
   const r = (v) => Math.round(v * 100) / 100;
   return { d: `M ${r(q0.x)} ${r(q0.y)} C ${r(p1.x)} ${r(p1.y)}, ${r(p2.x)} ${r(p2.y)}, ${r(q3.x)} ${r(q3.y)}`, labelX: r(labelX), labelY: r(labelY) };
+}
+
+function parseFlowNumber(raw) {
+  const s = asStr(raw).trim();
+  if (!s) return null;
+  const cleaned = s.replace(/[,\s]/g, '').replace(/^[₩$€£¥]/, '');
+  if (!/^[+-]?\d+(\.\d+)?$/.test(cleaned)) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatFlowNumber(n) {
+  if (!isFiniteNum(n)) return '';
+  const neg = n < 0;
+  const abs = Math.abs(n);
+  const int = Math.floor(abs);
+  const frac = abs - int;
+  let s = String(int).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  if (frac > 0) s += String(Math.round(frac * 1e6) / 1e6).slice(1);
+  return (neg ? '-' : '') + s;
+}
+
+const asRowKind = (v) => (FLOW_TABLE_ROW_KINDS.includes(v) ? v : 'item');
+const asBorder = (v) => (FLOW_TABLE_BORDERS.includes(v) ? v : 'none');
+
+function normalizeFlowTable(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const rawRows = Array.isArray(raw.rows) ? raw.rows : [];
+  const rows = [];
+  for (const r of rawRows) {
+    if (rows.length >= MAX_FLOW_TABLE_ROWS) break;
+    if (!r || typeof r !== 'object') continue;
+    const kind = asRowKind(r.kind);
+    rows.push({
+      kind,
+      label: kind === 'rule' ? '' : asStr(r.label).slice(0, MAX_FLOW_TABLE_TEXT),
+      value: kind === 'rule' ? '' : asStr(r.value).slice(0, MAX_FLOW_TABLE_TEXT),
+    });
+  }
+  if (rows.length === 0) return undefined;
+  return { rows, border: asBorder(raw.border) };
+}
+
+function sameFlowTable(a, b) {
+  if (!a || !b) return !a && !b;
+  if (a === b) return true;
+  if (a.border !== b.border) return false;
+  const ar = Array.isArray(a.rows) ? a.rows : [];
+  const br = Array.isArray(b.rows) ? b.rows : [];
+  if (ar.length !== br.length) return false;
+  for (let i = 0; i < ar.length; i++) {
+    if (ar[i].kind !== br[i].kind || ar[i].label !== br[i].label || ar[i].value !== br[i].value) return false;
+  }
+  return true;
+}
+
+function computeFlowTable(table) {
+  const rows = table && Array.isArray(table.rows) ? table.rows : [];
+  const out = [];
+  let sumItemAll = 0, sumTotal = 0;
+  for (const r of rows) {
+    if (!r) continue;
+    const v = parseFlowNumber(r.value);
+    if (v === null) continue;
+    if (r.kind === 'item') sumItemAll += v;
+    else if (r.kind === 'total') sumTotal += v;
+  }
+  let section = 0;
+  for (const r of rows) {
+    if (!r) continue;
+    if (r.kind === 'rule') { section = 0; out.push({ kind: 'rule', label: '', text: '', computed: false }); continue; }
+    if (r.kind === 'subtotal') { out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true }); continue; }
+    if (r.kind === 'balance') { out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true }); continue; }
+    const v = parseFlowNumber(r.value);
+    if (r.kind === 'item' && v !== null) section += v;
+    out.push({ kind: r.kind, label: r.label, text: v === null ? asStr(r.value) : formatFlowNumber(v), computed: false });
+  }
+  return out;
+}
+
+function flowTableFromText(text) {
+  const lines = asStr(text).split(/\r?\n/);
+  const rows = [];
+  for (const raw of lines) {
+    if (rows.length >= MAX_FLOW_TABLE_ROWS) break;
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    if (/^[\s|]*[-=─━_]{3,}[\s|]*$/.test(line)) { rows.push({ kind: 'rule', label: '', value: '' }); continue; }
+    const cells = line.includes('\t') ? line.split('\t') : line.split(/\s{2,}/);
+    const label = asStr(cells[0]).trim().slice(0, MAX_FLOW_TABLE_TEXT);
+    const value = asStr(cells.length > 1 ? cells[cells.length - 1] : '').trim().slice(0, MAX_FLOW_TABLE_TEXT);
+    if (!label && !value) continue;
+    rows.push({ kind: 'item', label, value });
+  }
+  return rows;
 }
 
 function flowBundleEnabled(v) { return v !== false; }
@@ -1020,6 +1124,141 @@ console.log('\n■ 선 위 라벨');
   eq('#122c 점도 제자리를 지킨다', [boxed[0].x, boxed[0].y].join(','), '100,100');
   eq('#123 손상 입력은 조용히 건너뛴다', JSON.stringify(layoutFlowLabels([{ id: 'a', cx: NaN, cy: 1, w: 1, h: 1 }, null], [])), '[]');
   eq('#123b 빈 입력은 빈 결과', JSON.stringify(layoutFlowLabels(null, null)), '[]');
+}
+
+console.log('\n■ 도형 안 표 — 값 파싱·포맷');
+{
+  eq('#140 콤마·통화기호를 벗긴다', [parseFlowNumber('30,000,000'), parseFlowNumber('₩1,000'), parseFlowNumber(' 42 ')].join(','), '30000000,1000,42');
+  eq('#140b 음수·소수', [parseFlowNumber('-1,500'), parseFlowNumber('12.5')].join(','), '-1500,12.5');
+  // ⚠️ '값 없음'과 '0'은 다른 사건이다 — cleanNum을 쓰면 빈칸이 0이 되어 합계에 들어간다.
+  eq('#140c 빈칸은 null(0이 아니다)', parseFlowNumber(''), null);
+  eq('#140d 0은 0', parseFlowNumber('0'), 0);
+  // ⚠️ 가운데 섞인 글자를 통과시키면 '12x34'가 1234가 된다.
+  eq('#140e 숫자가 아니면 null', ['약 3억', '12x34', '1,2,3원', null, {}].map(v => parseFlowNumber(v)).join(','), ',,,,');
+  // ⚠️ `Number()`는 관대해서 16진수·지수 표기를 조용히 받아들인다 — 금액 칸에 `0x1A`를 치면
+  //    26으로 계상된다. 정규식이 그 통로를 막는 유일한 장치이므로 반드시 테스트한다
+  //    (Number.isFinite 가드만으로는 이 셋이 전부 통과한다 — 실측으로 죽은 단언이었다).
+  eq('#140f 16진수·지수·앞점 표기는 받지 않는다',
+    ['0x1A', '1e5', '.5', 'Infinity'].map(v => parseFlowNumber(v)).join(','), ',,,');
+  eq('#141 천단위 콤마', [formatFlowNumber(30000000), formatFlowNumber(-1500), formatFlowNumber(0)].join(' / '), '30,000,000 / -1,500 / 0');
+  eq('#141b 소수 유지', formatFlowNumber(1234.5), '1,234.5');
+}
+
+console.log('\n■ 도형 안 표 — 계산 (소계 = 직전 구분선 이후 항목 합 · 잔액 = Σ총액 − Σ항목)');
+{
+  const R = (kind, label, value = '') => ({ kind, label, value });
+  // 사용자 화면(CMA 1)의 실제 구조
+  const cma = {
+    border: 'none',
+    rows: [
+      R('total', '총액', '360,000,000'),
+      R('item', '자동차 구매', '30,000,000'),
+      R('item', '마통', '90,000,000'),
+      R('subtotal', '소계'),
+      R('rule', ''),
+      R('item', '해외 계좌 이전', '130,000,000'),
+      R('subtotal', '소계'),
+      R('rule', ''),
+      R('item', '27년 ISA 일반', '20,000,000'),
+      R('item', '27년 ISA 국내', '20,000,000'),
+      R('item', '27년 연금저축', '18,000,000'),
+      R('subtotal', '소계'),
+      R('rule', ''),
+      R('balance', '잔액'),
+    ],
+  };
+  const c = computeFlowTable(cma);
+  eq('#142 첫 소계 = 30,000,000 + 90,000,000', c[3].text, '120,000,000');
+  eq('#142b 구분선 뒤 소계는 그 구역만', c[6].text, '130,000,000');
+  eq('#142c 세 번째 소계', c[11].text, '58,000,000');
+  // ⚠️ 잔액을 `Σtotal − Σsubtotal`로 바꾸면 이 값이 같아 보이지만, 소계를 안 쓰는 표에서
+  //    총액 그대로가 되고 한 구역만 소계를 단 표에서는 나머지 항목이 통째로 빠진다.
+  eq('#142d 잔액 = 360,000,000 − 308,000,000', c[13].text, '52,000,000');
+  eq('#142e 자동 계산 행에 표시가 붙는다', [c[3].computed, c[13].computed, c[1].computed].join(','), 'true,true,false');
+  eq('#142f 구분선은 빈 행', [c[4].kind, c[4].text].join(','), 'rule,');
+
+  // 소계를 하나도 쓰지 않아도 잔액이 같아야 한다(그게 Σitem으로 정의한 이유다)
+  const noSub = { border: 'none', rows: [R('total', '총액', '360,000,000'), R('item', 'a', '30,000,000'), R('item', 'b', '90,000,000'), R('balance', '잔액')] };
+  eq('#143 소계가 없어도 잔액은 Σtotal − Σitem', computeFlowTable(noSub)[3].text, '240,000,000');
+  // 한 구역에만 소계를 단 표 — Σsubtotal 방식이면 여기서 갈린다
+  const partial = { border: 'none', rows: [R('total', '총액', '100'), R('item', 'a', '10'), R('subtotal', '소계'), R('rule', ''), R('item', 'b', '20'), R('balance', '잔액')] };
+  eq('#143b 소계를 단 구역만 있어도 나머지 항목이 빠지지 않는다', computeFlowTable(partial)[5].text, '70');
+
+  // ⚠️ 숫자로 안 읽히는 값은 합계에서 빼고 원문 그대로 보여 준다(0으로 떨어뜨리면 조용히 계산에 들어간다)
+  const memoish = { border: 'none', rows: [R('total', '총액', '100'), R('item', 'a', '약 3억'), R('item', 'b', '30'), R('balance', '잔액')] };
+  const mc = computeFlowTable(memoish);
+  eq('#144 숫자가 아닌 값은 원문 그대로', mc[1].text, '약 3억');
+  eq('#144b 합계에서는 빠진다', mc[3].text, '70');
+  eq('#145 빈 표·손상 입력은 빈 결과', [computeFlowTable(null).length, computeFlowTable({ rows: null }).length].join(','), '0,0');
+  eq('#145b 총액이 없으면 잔액은 음수(Σitem을 그대로 뺀다)', computeFlowTable({ rows: [R('item', 'a', '50'), R('balance', 'b')] })[1].text, '-50');
+}
+
+console.log('\n■ 도형 안 표 — 정규화·영속화');
+{
+  const R = (kind, label, value = '') => ({ kind, label, value });
+  eq('#146 값이 없으면 undefined(빈 표를 만들지 않는다)', normalizeFlowTable({ rows: [], border: 'all' }), undefined);
+  eq('#146b 표가 아니면 undefined', [normalizeFlowTable(null), normalizeFlowTable('x'), normalizeFlowTable(7)].filter(v => v !== undefined).length, 0);
+  eq('#146c 손상 행 종류는 항목으로', normalizeFlowTable({ rows: [{ kind: 'zzz', label: 'a', value: '1' }] }).rows[0].kind, 'item');
+  eq('#146d 손상 선 표시는 없음으로', normalizeFlowTable({ rows: [R('item', 'a')], border: 'zzz' }).border, 'none');
+  // ⚠️ 구분선이 라벨·값을 들면 화면에 안 보이는 유령 텍스트가 남는다.
+  eq('#146e 구분선은 라벨·값을 버린다', JSON.stringify(normalizeFlowTable({ rows: [R('rule', 'x', '9')] }).rows[0]), JSON.stringify({ kind: 'rule', label: '', value: '' }));
+  eq('#146f 행 상한', normalizeFlowTable({ rows: Array.from({ length: 60 }, () => R('item', 'a', '1')) }).rows.length, MAX_FLOW_TABLE_ROWS);
+  eq('#146g 텍스트 상한', normalizeFlowTable({ rows: [R('item', 'x'.repeat(200), 'y'.repeat(200))] }).rows[0].label.length, MAX_FLOW_TABLE_TEXT);
+  // ⚠️ 멱등 — 두 번 정규화해도 같아야 폴링마다 재저장이 돌지 않는다.
+  const once = normalizeFlowTable({ rows: [R('item', 'a', '1'), R('rule', '')], border: 'all' });
+  eq('#146h 멱등', JSON.stringify(normalizeFlowTable(once)), JSON.stringify(once));
+
+  // ⚠️ 객체라 `!==`로는 판정할 수 없다 — 참조가 다르면 항상 '변경됨'이 되어 매 로드 재구축이 돈다.
+  ok('#147 같은 내용이면 같다고 본다', sameFlowTable({ rows: [R('item', 'a', '1')], border: 'none' }, { rows: [R('item', 'a', '1')], border: 'none' }));
+  ok('#147b 값이 다르면 다르다', !sameFlowTable({ rows: [R('item', 'a', '1')], border: 'none' }, { rows: [R('item', 'a', '2')], border: 'none' }));
+  ok('#147c 선 표시가 다르면 다르다', !sameFlowTable({ rows: [R('item', 'a', '1')], border: 'none' }, { rows: [R('item', 'a', '1')], border: 'all' }));
+  ok('#147d 둘 다 없으면 같다', sameFlowTable(undefined, undefined) && !sameFlowTable(undefined, { rows: [R('item', 'a')], border: 'none' }));
+
+  // 노드 화이트리스트 — 빠지면 재구축 경로에서 표가 조용히 사라진다
+  eq('#148 makeFlowNode가 표를 보존', makeFlowNode({ id: 'n', table: { rows: [R('item', 'a', '1')], border: 'all' } }).table?.rows?.length, 1);
+  eq('#148b 표가 없으면 필드를 만들지 않는다', 'table' in makeFlowNode({ id: 'n' }), false);
+  eq('#148c 빈 표도 필드를 만들지 않는다', 'table' in makeFlowNode({ id: 'n', table: { rows: [] } }), false);
+
+  // ⚠️ 최우선 회귀 — 정규형이면 원본 참조라 살아남고, mapChanged가 서는 순간 사라진다.
+  //    반드시 **재구축을 강제한** 픽스처로 재야 한다.
+  const withTbl = { id: 'n1', kind: 'rect', x: 0, y: 0, w: 180, h: 120, label: '', date: '', amountManual: null, memo: '', portfolioId: null, accountNameSnapshot: '', amountSource: 'none', table: { rows: [R('item', 'a', '1')], border: 'all' } };
+  const forced = normalizeFlowMaps([cleanMap({ id: 'm1', name: 123, nodes: [withTbl], edges: [] })]);
+  eq('#149 재구축 경로에서도 표가 보존된다', forced[0]?.nodes?.[0]?.table?.rows?.[0]?.label, 'a');
+  eq('#149b 재구축이 실제로 일어났다(픽스처가 유효한가)', forced[0].name, '흐름도');
+  const clean = [cleanMap({ id: 'm1', nodes: [withTbl], edges: [] })];
+  eq('#149c 표만 있고 나머지가 정규형이면 원본 참조(멱등)', normalizeFlowMaps(clean) === clean, true);
+  // ⚠️ 노드 비교에서 표를 빼면 '표가 사라진다'가 아니라 **손상된 표가 교정되지 않고 남는다**.
+  //    다른 필드가 전부 정규형이면 mapChanged가 서지 않아 원본 노드가 그대로 push되기 때문이다
+  //    → 상한을 넘는 행과 손상된 선 표시가 저장에 그대로 굳는다(실측: 이 픽스처가 없으면
+  //    `!sameFlowTable(...)`을 `false`로 바꿔도 전 항목이 통과했다).
+  const dirtyNode = { ...withTbl, table: { rows: Array.from({ length: MAX_FLOW_TABLE_ROWS + 20 }, () => R('item', 'a', '1')), border: 'bad' } };
+  const fixedMap = normalizeFlowMaps([cleanMap({ id: 'm1', nodes: [dirtyNode], edges: [] })]);
+  eq('#149d 손상된 표는 다른 필드가 정규형이어도 교정된다(행 절단)', fixedMap[0]?.nodes?.[0]?.table?.rows?.length, MAX_FLOW_TABLE_ROWS);
+  eq('#149e 손상된 선 표시도 교정된다', fixedMap[0]?.nodes?.[0]?.table?.border, 'none');
+
+  // ⚠️ 지문 누락 = '표만 고친 세션'의 STATE 저장 통째 스킵.
+  const a = [cleanMap({ id: 'm1', nodes: [withTbl], edges: [] })];
+  const b = [cleanMap({ id: 'm1', nodes: [{ ...withTbl, table: { rows: [R('item', 'a', '2')], border: 'all' } }], edges: [] })];
+  ok('#150 표 값을 고치면 지문이 달라진다', flowFingerprint(a) !== flowFingerprint(b));
+  const c2 = [cleanMap({ id: 'm1', nodes: [{ ...withTbl, table: { rows: [R('item', 'a', '1')], border: 'none' } }], edges: [] })];
+  ok('#150b 선 표시만 바꿔도 지문이 달라진다', flowFingerprint(a) !== flowFingerprint(c2));
+  // ⚠️ 표가 없는 도형은 null이라 기존 흐름도의 지문이 배포만으로 달라지지 않는다.
+  const noTbl = { ...withTbl };
+  delete noTbl.table;
+  eq('#150c 표가 없는 도형의 지문에 표 자리는 null',
+    JSON.parse(flowFingerprint([cleanMap({ id: 'm1', nodes: [noTbl], edges: [] })]))[0].nd[0].slice(-1)[0], null);
+}
+
+console.log('\n■ 도형 안 표 — 엑셀 붙여넣기');
+{
+  eq('#151 탭 구분', JSON.stringify(flowTableFromText('자동차\t30,000,000\n마통\t90,000,000')),
+    JSON.stringify([{ kind: 'item', label: '자동차', value: '30,000,000' }, { kind: 'item', label: '마통', value: '90,000,000' }]));
+  eq('#151b 2칸 이상 공백도 열 구분', flowTableFromText('자동차   30,000,000')[0].value, '30,000,000');
+  eq('#151c 구분선처럼 보이는 줄은 구분선 행', flowTableFromText('a\t1\n-----\nb\t2').map(r => r.kind).join(','), 'item,rule,item');
+  eq('#151d 빈 줄은 건너뛴다', flowTableFromText('a\t1\n\n\nb\t2').length, 2);
+  eq('#151e 값 없는 줄도 항목으로', JSON.stringify(flowTableFromText('메모만')), JSON.stringify([{ kind: 'item', label: '메모만', value: '' }]));
+  eq('#151f 행 상한', flowTableFromText(Array.from({ length: 60 }, (_, i) => `a${i}\t1`).join('\n')).length, MAX_FLOW_TABLE_ROWS);
+  eq('#151g 빈 입력', flowTableFromText('').length, 0);
 }
 
 console.log('\n■ removeNode / pruneOrphanEdges');
@@ -1909,6 +2148,76 @@ ok('#G150d FlowCanvas: 옛 길이 추정(length * 12)을 되살리지 않았다'
 }
 ok('#G152 FlowCanvas: 즉시 툴팁을 최상단에 그린다', /\{hoverLabel && \(\(\) => \{/.test(canvasNC));
 
+console.log('\n■ 소스 텍스트 가드 — 메모 팝업·표 배선');
+const editor = readFileSync(join(ROOT, 'src/components/FlowNodeEditor.tsx'), 'utf8');
+const edNC = stripComments(editor);
+{
+  // ⚠️ **최우선 회귀** — 같은 값을 인스펙터와 팝업 두 곳에서 편집하면, 팝업에서 쓴 뒤 인스펙터의
+  //    미커밋 draft가 나중에 flush되며 방금 쓴 메모를 옛 값으로 덮는다(인스펙터 flush는 대상
+  //    변경·언마운트에서 도는데 팝업 닫힘은 그 트리거가 아니다).
+  ok('#G170 FlowInspector: 메모 draft를 들지 않는다(편집 경로는 팝업 하나)',
+    !/memo:\s*''/.test(inspNC) && !/cur\.memo/.test(inspNC) && !/p\.memo/.test(inspNC));
+  ok('#G170b FlowInspector: 메모 칸은 미리보기 + 팝업 진입점',
+    /onOpenEditor\?\.\('memo'\)/.test(inspNC) && /\{node\.memo\}/.test(inspNC));
+  ok('#G170c FlowInspector: 표 칸도 같은 팝업으로 연다', /onOpenEditor\?\.\('table'\)/.test(inspNC));
+  // ⚠️ 렌더 스코프 선언 — 다른 최상위 블록의 지역 변수를 JSX가 참조하면 런타임 ReferenceError로
+  //    화면이 통째로 오류 페이지가 되는데 @ts-nocheck + esbuild라 빌드도 undefcheck도 못 잡는다.
+  ok('#G170d FlowInspector: 표 행 수가 렌더 스코프에 선언돼 있다',
+    /const tableRowCount = Array\.isArray\(node\?\.table\?\.rows\) \? node\.table\.rows\.length : 0;/.test(inspNC));
+}
+{
+  // ⚠️ 대상은 **id로 다시 찾는다** — 스냅샷을 들면 편집 중 폴링·다른 창이 바꾼 값이 화면에 안 붙고,
+  //    도형이 지워졌을 때 사라진 대상에 계속 쓴다.
+  ok('#G171 FlowBoard: 팝업 대상을 매 렌더 id로 다시 찾는다',
+    /const editorNode = editor && map \? map\.nodes\.find\(n => n\.id === editor\.nodeId\) \|\| null : null;/.test(boardNC));
+  ok('#G171b FlowBoard: 대상이 사라지면 팝업을 닫는다',
+    /if \(editor && !editorNode\) setEditor\(null\);/.test(boardNC));
+  ok('#G171c FlowBoard: 팝업을 실제로 렌더하고 id 기준 라이터를 넘긴다',
+    /<FlowNodeEditor/.test(boardNC) && /onPatch=\{patchNodeById\}/.test(boardNC));
+  ok('#G171d FlowBoard: 인스펙터에 진입점을 배선', /onOpenEditor=\{\(tab\) => selNode && setEditor\(/.test(boardNC));
+  // ⚠️ 활성 시트를 저장하지 않는 것과 같은 이유로, 열린 팝업도 저장 필드가 아니다(세션 로컬).
+  ok('#G171e flowMap.ts: 팝업 상태를 저장 필드로 만들지 않았다', !/editorOpen|openEditor/.test(mod));
+}
+{
+  // ⚠️ 커밋은 **id 기준**이어야 한다 — 현재 선택에 바인딩하면 편집 중 다른 도형을 고른 순간
+  //    그쪽에 기록된다(인스펙터가 ownerRef로 막아 둔 것과 같은 사고).
+  const fl = sliceBetween(edNC, 'const flush = useCallback(() => {', '}, []);');
+  ok('#G172 FlowNodeEditor: 커밋 대상이 id 기준', /const id = idRef\.current;/.test(fl) && /patchRef\.current\?\.\(id, o\)/.test(fl));
+  ok('#G172b FlowNodeEditor: 값이 그대로면 아무것도 쓰지 않는다(헛된 Drive 저장 방지)',
+    /if \(Object\.keys\(o\)\.length === 0\) return;/.test(fl));
+  ok('#G172c FlowNodeEditor: 표 비교는 sameFlowTable 공유 함수', /!sameFlowTable\(nextTbl, base\.table\)/.test(fl));
+  ok('#G172d FlowNodeEditor: 커밋 전 정규화를 거친다(상한·손상값이 저장에 새지 않게)',
+    /const nextTbl = normalizeFlowTable\(tblRef\.current\);/.test(fl));
+  // ⚠️ passive effect는 discrete 이벤트인 blur보다 뒤처지고, 제거된 DOM에는 blur가 발화하지 않는다.
+  ok('#G173 FlowNodeEditor: 언마운트 flush가 useLayoutEffect',
+    /useLayoutEffect\(\(\) => \(\) => \{ flush\(\); \}, \[flush\]\)/.test(edNC));
+  ok('#G173b FlowNodeEditor: 키스트로크마다 커밋하지 않는다(onChange는 로컬 state만)',
+    /onChange=\{e => setMemo\(e\.target\.value\)\}/.test(edNC) && /onBlur=\{flush\}/.test(edNC));
+  // ⚠️ 보드의 onKeyDownCapture가 Escape를 소비하면 팝업이 아니라 보드가 닫힌다.
+  ok('#G173c FlowNodeEditor: Escape를 팝업이 먼저 소비한다',
+    /if \(e\.key === 'Escape'\) \{ e\.stopPropagation\(\); onClose\?\.\(\); \}/.test(edNC));
+  ok('#G174 FlowNodeEditor: 계산은 flowMap 공유 함수가 한다(팝업이 합을 다시 구하지 않는다)',
+    /const computed = computeFlowTable\(tbl\);/.test(edNC));
+  ok('#G174b FlowNodeEditor: 자동 계산 행은 값 입력을 막고 계산 결과를 보여 준다',
+    /const auto = r\.kind === 'subtotal' \|\| r\.kind === 'balance';/.test(edNC) && /\{computed\[i\]\?\.text \|\| '0'\}/.test(edNC));
+  ok('#G174c FlowNodeEditor: 붙여넣기도 공유 파서를 쓴다', /flowTableFromText\(pasteText\)/.test(edNC));
+  ok('#G174d FlowNodeEditor: 선 표시 선택지를 flowMap 상수에서 만든다(손나열 금지)',
+    /FLOW_TABLE_BORDERS\.map\(/.test(edNC));
+}
+{
+  // ⚠️ 도형 안 표도 같은 계산을 써야 팝업이 보여 준 값과 화면이 갈리지 않는다.
+  ok('#G175 FlowCanvas: 표를 flowMap 공유 함수로 계산',
+    /const tableRows = raw\.table \? computeFlowTable\(raw\.table\) : \[\];/.test(canvasNC));
+  ok('#G175b FlowCanvas: 표를 실제로 렌더한다', /\{tableRows\.map\(\(r, i\) => \(/.test(canvasNC));
+  ok('#G175c FlowCanvas: 선 표시가 저장값을 따른다',
+    /const border = raw\.table\?\.border \|\| 'none';/.test(canvasNC) && /border !== 'none'/.test(canvasNC));
+  ok('#G175d FlowCanvas: 자동 계산 행을 시각적으로 구분한다', /r\.computed \? 'italic opacity-80' : ''/.test(canvasNC));
+  ok('#G175e FlowCanvas: 구분선 행은 가로선만 그린다', /r\.kind === 'rule' \? \(/.test(canvasNC));
+  // ⚠️ 표 선 색을 하드코딩하면 밝은 채우기에서 사라진다 — 글자색과 같은 규칙을 따른다.
+  ok('#G175f FlowCanvas: 표 선 색이 채우기 밝기를 따른다',
+    /const gridColor = darkText \? 'rgba\(0,0,0,0\.35\)' : 'rgba\(255,255,255,0\.35\)';/.test(canvasNC));
+}
+
 console.log('\n■ 소스 텍스트 가드 — 연결 위치(fromSide/toSide) 배선');
 {
   const sc2 = sliceBetween(inspNC, 'const SIDE_CHOICES = [', '];');
@@ -1965,7 +2274,7 @@ await (async () => {
       // ⚠️ 새 map 레벨 필드를 이 투영에 넣지 않으면 드리프트 가드가 그 필드에 **눈이 먼다**
       //    (src에서 화이트리스트 push를 빼도 통과 = 죽은 단언).
       nb: x.bundleEdges ?? null,
-      nodes: (x.nodes || []).map(n => [t(n.id), n.x, n.y, n.label]),
+      nodes: (x.nodes || []).map(n => [t(n.id), n.x, n.y, n.label, n.table ?? null]),
       edges: (x.edges || []).map(e => [t(e.id), t(e.from), t(e.to), e.label, e.fromSide ?? '', e.toSide ?? '']),
     })));
   };
@@ -2111,6 +2420,75 @@ await (async () => {
       const lItems = [{ id: 'a', cx: 100, cy: 100, w: 80, h: 22 }];
       eq('#134i 점 강등 경로 일치',
         JSON.stringify(real.layoutFlowLabels(lItems, wall)), JSON.stringify(layoutFlowLabels(lItems, wall)));
+
+      // (6) 도형 안 표 — 값 파싱·계산·정규화·붙여넣기
+      const R = (kind, label, value = '') => ({ kind, label, value });
+      const tbl = {
+        border: 'all',
+        rows: [
+          R('total', '총액', '360,000,000'), R('item', 'a', '30,000,000'), R('item', 'b', '90,000,000'),
+          R('subtotal', '소계'), R('rule', ''), R('item', 'c', '130,000,000'), R('subtotal', '소계'),
+          R('rule', ''), R('item', 'd', '58,000,000'), R('balance', '잔액'), R('item', 'memo', '약 3억'),
+        ],
+      };
+      eq('#135 computeFlowTable 일치', JSON.stringify(real.computeFlowTable(tbl)), JSON.stringify(computeFlowTable(tbl)));
+      eq('#135b 값 파싱 일치',
+        JSON.stringify(['30,000,000', '', '0', '약 3억', '-1.5', '₩900', '12x34', '0x1A', '1e5', '.5'].map(v => real.parseFlowNumber(v))),
+        JSON.stringify(['30,000,000', '', '0', '약 3억', '-1.5', '₩900', '12x34', '0x1A', '1e5', '.5'].map(v => parseFlowNumber(v))));
+      eq('#135c 숫자 포맷 일치',
+        JSON.stringify([0, -1500, 30000000, 1234.5].map(v => real.formatFlowNumber(v))),
+        JSON.stringify([0, -1500, 30000000, 1234.5].map(v => formatFlowNumber(v))));
+      eq('#135d normalizeFlowTable 일치(손상값·상한 포함)',
+        JSON.stringify(real.normalizeFlowTable({ rows: [{ kind: 'zzz', label: 'x'.repeat(200), value: '1' }, R('rule', 'a', '9')], border: 'bad' })),
+        JSON.stringify(normalizeFlowTable({ rows: [{ kind: 'zzz', label: 'x'.repeat(200), value: '1' }, R('rule', 'a', '9')], border: 'bad' })));
+      eq('#135e 빈 표는 양쪽 모두 undefined',
+        String(real.normalizeFlowTable({ rows: [] })), String(normalizeFlowTable({ rows: [] })));
+      eq('#135f sameFlowTable 일치',
+        JSON.stringify([[tbl, tbl], [tbl, { ...tbl, border: 'none' }], [undefined, undefined], [tbl, undefined]].map(([a2, b2]) => real.sameFlowTable(a2, b2))),
+        JSON.stringify([[tbl, tbl], [tbl, { ...tbl, border: 'none' }], [undefined, undefined], [tbl, undefined]].map(([a2, b2]) => sameFlowTable(a2, b2))));
+      eq('#135g flowTableFromText 일치',
+        JSON.stringify(real.flowTableFromText('자동차\t30,000,000\n-----\n마통   90,000,000\n\n메모만')),
+        JSON.stringify(flowTableFromText('자동차\t30,000,000\n-----\n마통   90,000,000\n\n메모만')));
+      // ⚠️ 재구축 경로 — 화이트리스트에서 표를 빼면 여기서만 잡힌다(정규형이면 원본 참조라 살아남는다).
+      const nodeT = { id: 'n1', kind: 'rect', x: 0, y: 0, w: 180, h: 120, label: '', date: '', amountManual: null, memo: '', portfolioId: null, accountNameSnapshot: '', amountSource: 'none', table: { rows: [R('item', 'a', '1')], border: 'all' } };
+      const forcedT = [cleanMap({ id: 'm1', name: 123, nodes: [nodeT], edges: [] })];
+      eq('#135h 표를 든 노드의 재구축 경로 일치', norm(real.normalizeFlowMaps(forcedT)), norm(normalizeFlowMaps(forcedT)));
+      eq('#135i 실모듈도 재구축에서 표를 보존', real.normalizeFlowMaps(forcedT)[0]?.nodes?.[0]?.table?.rows?.[0]?.label, 'a');
+      eq('#135j 표 지문 일치', real.flowFingerprint(forcedT), flowFingerprint(forcedT));
+      {
+        // ⚠️ 노드 비교에서 표를 빼면 손상된 표가 교정되지 않고 남는다(다른 필드가 정규형이면
+        //    mapChanged가 서지 않아 원본 노드가 그대로 push된다). 정규형 픽스처로는 안 잡힌다.
+        const dirtyT = [cleanMap({ id: 'm1', nodes: [{ ...nodeT, table: { rows: Array.from({ length: MAX_FLOW_TABLE_ROWS + 20 }, () => R('item', 'a', '1')), border: 'bad' } }], edges: [] })];
+        eq('#135s 손상된 표의 교정 결과 일치', norm(real.normalizeFlowMaps(dirtyT)), norm(normalizeFlowMaps(dirtyT)));
+        eq('#135t 실모듈도 손상된 표를 교정한다', real.normalizeFlowMaps(dirtyT)[0]?.nodes?.[0]?.table?.rows?.length, MAX_FLOW_TABLE_ROWS);
+      }
+      ok('#135k 실모듈 지문도 표 값에 반응',
+        real.flowFingerprint(forcedT) !== real.flowFingerprint([cleanMap({ id: 'm1', name: 123, nodes: [{ ...nodeT, table: { rows: [R('item', 'a', '2')], border: 'all' } }], edges: [] })]));
+      eq('#135l 상한 상수 일치',
+        [real.MAX_FLOW_TABLE_ROWS, real.MAX_FLOW_TABLE_TEXT].join(','), [MAX_FLOW_TABLE_ROWS, MAX_FLOW_TABLE_TEXT].join(','));
+      // ⚠️ 행 종류 목록이 갈리면 asRowKind가 조용히 'item'으로 떨어뜨려 사용자가 고른 종류가
+      //    저장에서 사라진다. 위 픽스처들은 그 목록을 밟지 않으므로 여기서 직접 대조한다.
+      eq('#135m 행 종류·선 표시 목록 일치',
+        JSON.stringify([real.FLOW_TABLE_ROW_KINDS, real.FLOW_TABLE_BORDERS]),
+        JSON.stringify([FLOW_TABLE_ROW_KINDS, FLOW_TABLE_BORDERS]));
+      eq('#135n 모든 행 종류가 정규화를 통과한다',
+        JSON.stringify(real.normalizeFlowTable({ rows: FLOW_TABLE_ROW_KINDS.map(k => R(k, k, '1')) })),
+        JSON.stringify(normalizeFlowTable({ rows: FLOW_TABLE_ROW_KINDS.map(k => R(k, k, '1')) })));
+      // ⚠️ 상한을 밟는 픽스처가 없으면 `break` 한 줄을 지워도 드리프트 가드가 통과한다(실측).
+      eq('#135o 행 상한 절단 일치',
+        real.normalizeFlowTable({ rows: Array.from({ length: MAX_FLOW_TABLE_ROWS + 25 }, () => R('item', 'a', '1')) }).rows.length,
+        normalizeFlowTable({ rows: Array.from({ length: MAX_FLOW_TABLE_ROWS + 25 }, () => R('item', 'a', '1')) }).rows.length);
+      eq('#135p 붙여넣기 행 상한 일치',
+        real.flowTableFromText(Array.from({ length: MAX_FLOW_TABLE_ROWS + 25 }, (_, i) => `a${i}\t1`).join('\n')).length,
+        flowTableFromText(Array.from({ length: MAX_FLOW_TABLE_ROWS + 25 }, (_, i) => `a${i}\t1`).join('\n')).length);
+      // ⚠️ **내용은 같은데 참조가 다른** 짝이 없으면 sameFlowTable을 참조 비교로 바꿔도 통과한다(실측).
+      {
+        const t1 = { border: 'all', rows: [R('item', 'a', '1'), R('rule', ''), R('subtotal', 's')] };
+        const t2 = JSON.parse(JSON.stringify(t1));
+        eq('#135q 내용 같고 참조 다른 표를 같다고 본다',
+          String(real.sameFlowTable(t1, t2)), String(sameFlowTable(t1, t2)));
+        ok('#135r 실모듈도 참조가 아니라 내용으로 판정한다', real.sameFlowTable(t1, t2) === true);
+      }
     }
     eq('#133c layoutFlowLabels 무작위 400세트 일치', badLabel, 0);
     eq('#133d approxLabelWidth 일치',

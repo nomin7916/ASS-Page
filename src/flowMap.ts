@@ -102,10 +102,53 @@ export interface FlowNode {
   accountNameSnapshot: string;
   amountSource: FlowAmountSource;
 
+  /**
+   * 도형 안 표(선택). 메모로는 열을 맞출 수 없는 '목록 + 소계 + 잔액'을 위한 것.
+   * ⚠️ 없으면 **필드를 두지 않는다**(생략 = 표 없음) — 빈 표를 저장하면 기존 도형이 전부
+   *    정규화에서 '변경됨'이 되어 '변경 없으면 원본 참조 반환' 계약이 깨진다.
+   */
+  table?: FlowTable;
+
   // ── 스타일 ──
   /** ⚠️ hex만 사용. `bg-${x}-500` 류 동적 Tailwind 클래스 금지(빌드타임 content 스캔이 못 잡는다). */
   fill?: string;
   stroke?: string;
+}
+
+/**
+ * 표 행의 종류.
+ *   item     — 사용자가 값을 적는 일반 항목
+ *   subtotal — **직전 구분선 이후의 item 합**(자동 계산, 값 입력 무시)
+ *   total    — 사용자가 적는 총액
+ *   balance  — **Σtotal − Σitem**(자동 계산)
+ *   rule     — 구분선(라벨·값 없음)
+ *
+ * ⚠️ 계산 규칙은 **이 둘뿐**이고 그 이상 늘리지 말 것. `잔액 = Σtotal − Σsubtotal`처럼 보이지만
+ *    subtotal은 그 구역 item의 부분합이므로 **Σitem 하나로 충분하다**(이중 차감 방지). 규칙이
+ *    둘이라야 사용자가 화면에서 눈으로 검산할 수 있고, 그게 이 표의 존재 이유다.
+ */
+export const FLOW_TABLE_ROW_KINDS = ['item', 'subtotal', 'total', 'balance', 'rule'] as const;
+export type FlowTableRowKind = (typeof FLOW_TABLE_ROW_KINDS)[number];
+
+/** 표 선 표시. 사용자가 표마다 고른다(요구: "선을 나타내기도 하고 안 나타내기도"). */
+export const FLOW_TABLE_BORDERS = ['none', 'outline', 'all'] as const;
+export type FlowTableBorder = (typeof FLOW_TABLE_BORDERS)[number];
+
+export interface FlowTableRow {
+  kind: FlowTableRowKind;
+  label: string;
+  /**
+   * 사용자가 친 **원시 문자열**. 숫자로 파싱되면 표시할 때 천단위 콤마를 붙이고, 아니면
+   * 적은 그대로 보여 준다('약 3억' 같은 메모성 값도 쓸 수 있게).
+   * ⚠️ 숫자로 정규화해 저장하지 말 것 — 소수·단위·빈칸이 사용자 조작 없이 바뀐다.
+   * ⚠️ 자동 계산 행(subtotal·balance)에서는 무시된다.
+   */
+  value: string;
+}
+
+export interface FlowTable {
+  rows: FlowTableRow[];
+  border: FlowTableBorder;
 }
 
 export interface FlowEdge {
@@ -234,6 +277,15 @@ export const FLOW_TRUNK_MIN = 16;
 export const SNAP_TOL_PX = 6;
 /** 가이드선을 그릴 때 참조로 삼는 도형 수 상한(밀집 시트에서 화면을 가로지르는 난반사 방지). */
 export const SNAP_GUIDE_MAX_REFS = 6;
+
+/* ── 도형 안 표 상한 ────────────────────────────────────────────────────────
+ * ⚠️ STATE는 백업 22본으로 복제되고 관리자 포털이 전 사용자 STATE를 순차 로드한다.
+ *    노드 150 × 30행 × 약 60바이트 ≈ 270KB → 백업 포함 약 6MB. 무한 증식만 막는다.
+ * ⚠️ 상한을 **낮추는 방향은 위험하다** — normalizeFlowTable이 초과분을 잘라 버려 그 뒤 행이
+ *    다음 로드에서 영구 삭제된다(sticky 복원 대상이라 백업으로도 못 되살린다).
+ */
+export const MAX_FLOW_TABLE_ROWS = 30;
+export const MAX_FLOW_TABLE_TEXT = 80;
 
 /* ── 선 위 라벨 상수 ────────────────────────────────────────────────────────
  * ⚠️ 라벨은 **충돌이 실제로 있을 때만** 옮긴다(아래 layoutFlowLabels). 무조건 재배치하면
@@ -544,6 +596,7 @@ export function roundNode(n: FlowNode): FlowNode {
 export function makeFlowNode(partial: Partial<FlowNode> = {}): FlowNode {
   const fill = sanitizeHexColor(partial.fill);
   const stroke = sanitizeHexColor(partial.stroke);
+  const table = normalizeFlowTable(partial.table);
   return {
     id: partial.id || generateId(),
     kind: partial.kind === 'ellipse' ? 'ellipse' : 'rect',
@@ -559,6 +612,9 @@ export function makeFlowNode(partial: Partial<FlowNode> = {}): FlowNode {
     accountNameSnapshot: asStr(partial.accountNameSnapshot),
     amountSource:
       partial.amountSource === 'account' || partial.amountSource === 'manual' ? partial.amountSource : 'none',
+    // ⚠️ 표는 **값이 있을 때만** 필드를 만든다(생략 = 표 없음). 빈 표를 넣으면 기존 도형이 전부
+    //    정규화에서 '변경됨'이 되어 원본 참조 보존 계약이 깨진다.
+    ...(table ? { table } : {}),
     ...(fill ? { fill } : {}),
     ...(stroke ? { stroke } : {}),
   };
@@ -615,6 +671,12 @@ export function flowFingerprint(maps: unknown): string {
           n?.label ?? '', n?.date ?? '', n?.amountManual ?? null, n?.memo ?? '',
           n?.portfolioId ?? null, n?.accountNameSnapshot ?? '', n?.amountSource ?? '',
           n?.fill ?? '', n?.stroke ?? '',
+          // ⚠️ 표 지문 — 없으면 '표만 고친 세션'이 portfolioUpdatedAt을 올리지 못해 STATE 저장이
+          //    통째로 스킵된다(bundleEdges·historyVerifyKey와 동일 버그 클래스). 표가 없는 도형은
+          //    `null`이라 기존 흐름도의 지문이 배포만으로 달라지지 않는다.
+          n?.table
+            ? [n.table.border ?? '', (Array.isArray(n.table.rows) ? n.table.rows : []).map((r: any) => [r?.kind ?? '', r?.label ?? '', r?.value ?? ''])]
+            : null,
         ]),
         eg: (Array.isArray(m?.edges) ? m.edges : []).map((e: any) => [
           e?.id ?? '', e?.from ?? '', e?.to ?? '', e?.label ?? '',
@@ -677,7 +739,10 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
         fixed.accountNameSnapshot !== n.accountNameSnapshot || fixed.amountSource !== n.amountSource ||
         // ⚠️ 색상도 비교 대상 — 빠뜨리면 makeFlowNode가 손상된 hex를 걸러내도 mapChanged가 서지
         //    않아 원본 m이 그대로 push되고 정규화가 조용히 무효가 된다.
-        fixed.fill !== n.fill || fixed.stroke !== n.stroke
+        fixed.fill !== n.fill || fixed.stroke !== n.stroke ||
+        // ⚠️ 표는 객체라 `!==`로는 판정할 수 없다(참조가 다르면 항상 '변경됨'이 되어 매 로드
+        //    재구축 + 폴링 재저장이 돈다) → 반드시 sameFlowTable 공유 함수로 비교한다.
+        !sameFlowTable(fixed.table, (n as FlowNode).table)
       ) mapChanged = true;
       nodes.push(fixed);
     }
@@ -997,6 +1062,167 @@ export function edgePath(
   const r = (v: number) => Math.round(v * 100) / 100;
   const d = `M ${r(q0.x)} ${r(q0.y)} C ${r(p1.x)} ${r(p1.y)}, ${r(p2.x)} ${r(p2.y)}, ${r(q3.x)} ${r(q3.y)}`;
   return { d, labelX: r(labelX), labelY: r(labelY) };
+}
+
+/* ── 도형 안 표 ─────────────────────────────────────────────────────────────
+ * 사용자 요구: "총액과 총액에서 지출의 합계를 빼는 목록을 엑셀처럼 표로 넣고, 표의 선은
+ * 보이게도 안 보이게도 할 수 있어야 한다."
+ */
+
+/**
+ * 표 값 파싱. 숫자로 읽히면 number, 아니면 null(= 원문 그대로 보여 준다).
+ * ⚠️ `cleanNum`을 쓰지 말 것 — 그 함수는 빈 문자열을 0으로 만들어 **'값 없음'과 '0'을 구분할 수
+ *    없게** 한다. 이 표에서는 그 둘이 다른 사건이다(합계에 들어가는가가 갈린다).
+ * 통화기호·공백·콤마는 벗기지만 가운데 섞인 글자는 통과시키지 않는다('12x34'가 1234가 되면 안 된다).
+ */
+export function parseFlowNumber(raw: unknown): number | null {
+  const s = asStr(raw).trim();
+  if (!s) return null;
+  const cleaned = s.replace(/[,\s]/g, '').replace(/^[₩$€£¥]/, '');
+  if (!/^[+-]?\d+(\.\d+)?$/.test(cleaned)) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 천단위 콤마. ⚠️ `toLocaleString`은 런타임 로캘에 따라 결과가 달라져 미러 대조가 깨진다. */
+export function formatFlowNumber(n: number): string {
+  if (!isFiniteNum(n)) return '';
+  const neg = n < 0;
+  const abs = Math.abs(n);
+  const int = Math.floor(abs);
+  const frac = abs - int;
+  let s = String(int).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  if (frac > 0) s += String(Math.round(frac * 1e6) / 1e6).slice(1);
+  return (neg ? '-' : '') + s;
+}
+
+const asRowKind = (v: unknown): FlowTableRowKind =>
+  (FLOW_TABLE_ROW_KINDS as readonly string[]).includes(v as string) ? (v as FlowTableRowKind) : 'item';
+
+const asBorder = (v: unknown): FlowTableBorder =>
+  (FLOW_TABLE_BORDERS as readonly string[]).includes(v as string) ? (v as FlowTableBorder) : 'none';
+
+/**
+ * 표 정규화. 값이 없으면 **undefined**(= 필드를 두지 않는다).
+ * ⚠️ 행이 하나도 없으면 표 자체를 없앤다 — 빈 표를 남기면 지문만 흔들리고 화면에는 아무것도
+ *    나타나지 않는다("아무것도 안 했는데 저장이 나간다"의 전형).
+ */
+export function normalizeFlowTable(raw: unknown): FlowTable | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const src = raw as { rows?: unknown; border?: unknown };
+  const rawRows = Array.isArray(src.rows) ? src.rows : [];
+  const rows: FlowTableRow[] = [];
+  for (const r of rawRows) {
+    if (rows.length >= MAX_FLOW_TABLE_ROWS) break;
+    if (!r || typeof r !== 'object') continue;
+    const row = r as Partial<FlowTableRow>;
+    const kind = asRowKind(row.kind);
+    rows.push({
+      kind,
+      // 구분선은 라벨·값을 갖지 않는다(가지면 화면에 안 보이는 유령 텍스트가 남는다).
+      label: kind === 'rule' ? '' : asStr(row.label).slice(0, MAX_FLOW_TABLE_TEXT),
+      value: kind === 'rule' ? '' : asStr(row.value).slice(0, MAX_FLOW_TABLE_TEXT),
+    });
+  }
+  if (rows.length === 0) return undefined;
+  return { rows, border: asBorder(src.border) };
+}
+
+/** 두 표가 같은가. ⚠️ 정규화 비교에 필요 — 객체라 `!==`로는 판정할 수 없다. */
+export function sameFlowTable(a: unknown, b: unknown): boolean {
+  const x = a as FlowTable | undefined;
+  const y = b as FlowTable | undefined;
+  if (!x || !y) return !x && !y;
+  if (x === y) return true;
+  if (x.border !== y.border) return false;
+  const ar = Array.isArray(x.rows) ? x.rows : [];
+  const br = Array.isArray(y.rows) ? y.rows : [];
+  if (ar.length !== br.length) return false;
+  for (let i = 0; i < ar.length; i++) {
+    if (ar[i].kind !== br[i].kind || ar[i].label !== br[i].label || ar[i].value !== br[i].value) return false;
+  }
+  return true;
+}
+
+export interface FlowTableComputedRow {
+  kind: FlowTableRowKind;
+  label: string;
+  /** 화면에 그릴 값(포맷 완료). 구분선이면 ''. */
+  text: string;
+  /** 자동 계산된 행인가(회색·기울임 등 시각 구분용) */
+  computed: boolean;
+}
+
+/**
+ * 표 계산.
+ *   소계 = 직전 구분선 이후의 item 합
+ *   잔액 = Σtotal − Σitem
+ *
+ * ⚠️ 잔액을 `Σtotal − Σsubtotal`로 바꾸지 말 것 — 소계를 안 쓰는 표에서 잔액이 총액 그대로가
+ *    되고, 한 구역만 소계를 단 표에서는 나머지 항목이 통째로 빠진다. `Σitem`이라야 소계 유무와
+ *    무관하게 항상 같은 뜻이다.
+ * ⚠️ **숫자로 읽히지 않는 값은 합계에서 제외**하고 원문 그대로 보여 준다. 0으로 떨어뜨리면
+ *    '약 3억'이라 적은 행이 조용히 0원으로 계산에 들어간다.
+ */
+export function computeFlowTable(table: unknown): FlowTableComputedRow[] {
+  const t = table as FlowTable | undefined;
+  const rows = t && Array.isArray(t.rows) ? t.rows : [];
+  const out: FlowTableComputedRow[] = [];
+
+  let sumItemAll = 0;
+  let sumTotal = 0;
+  for (const r of rows) {
+    if (!r) continue;
+    const v = parseFlowNumber(r.value);
+    if (v === null) continue;
+    if (r.kind === 'item') sumItemAll += v;
+    else if (r.kind === 'total') sumTotal += v;
+  }
+
+  let section = 0;   // 직전 구분선 이후의 item 합
+  for (const r of rows) {
+    if (!r) continue;
+    if (r.kind === 'rule') {
+      section = 0;
+      out.push({ kind: 'rule', label: '', text: '', computed: false });
+      continue;
+    }
+    if (r.kind === 'subtotal') {
+      out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true });
+      continue;
+    }
+    if (r.kind === 'balance') {
+      out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true });
+      continue;
+    }
+    const v = parseFlowNumber(r.value);
+    if (r.kind === 'item' && v !== null) section += v;
+    out.push({ kind: r.kind, label: r.label, text: v === null ? asStr(r.value) : formatFlowNumber(v), computed: false });
+  }
+  return out;
+}
+
+/**
+ * 엑셀·스프레드시트에서 복사한 텍스트를 표로. 탭(또는 2칸 이상 공백)이 열 구분.
+ * ⚠️ 붙여넣기는 **덧붙이는 게 아니라 그 자리에서 표를 만드는** 입력이다 — 호출부가 기존 행에
+ *    이어붙일지 대체할지 정한다(현재 UI는 '이어붙이기').
+ */
+export function flowTableFromText(text: unknown): FlowTableRow[] {
+  const lines = asStr(text).split(/\r?\n/);
+  const rows: FlowTableRow[] = [];
+  for (const raw of lines) {
+    if (rows.length >= MAX_FLOW_TABLE_ROWS) break;
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    // 구분선처럼 보이는 줄(-----, ===== 등)은 구분선 행으로
+    if (/^[\s|]*[-=─━_]{3,}[\s|]*$/.test(line)) { rows.push({ kind: 'rule', label: '', value: '' }); continue; }
+    const cells = line.includes('\t') ? line.split('\t') : line.split(/\s{2,}/);
+    const label = asStr(cells[0]).trim().slice(0, MAX_FLOW_TABLE_TEXT);
+    const value = asStr(cells.length > 1 ? cells[cells.length - 1] : '').trim().slice(0, MAX_FLOW_TABLE_TEXT);
+    if (!label && !value) continue;
+    rows.push({ kind: 'item', label, value });
+  }
+  return rows;
 }
 
 /**

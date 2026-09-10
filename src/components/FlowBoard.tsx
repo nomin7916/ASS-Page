@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, X, RotateCcw, Maximize2, Save, Pencil, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import FlowCanvas from './FlowCanvas';
 import FlowInspector from './FlowInspector';
+import FlowNodeEditor from './FlowNodeEditor';
 import { useFlowMapData } from '../hooks/useFlowMapData';
 import {
   makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView,
@@ -116,6 +117,11 @@ export default function FlowBoard({
    * (showTaxHelp·sidebarOpen과 같은 등급). 한 번만 끄고 싶을 때는 Alt(또는 Cmd)를 누른 채 끈다.
    */
   const [snapOn, setSnapOn] = useState(true);
+  /**
+   * 메모·표 편집 팝업. `{ nodeId, tab }` — **id로 들고** 있어야 그 사이 시트를 바꾸거나 도형이
+   * 지워져도 엉뚱한 도형에 쓰지 않는다(대상이 사라지면 아래에서 조용히 닫힌다).
+   */
+  const [editor, setEditor] = useState(null);
 
   // ── 시트 ────────────────────────────────────────────────────────────────────
   // ⚠️ 활성 시트는 **세션 로컬**(저장하지 않는다 — 위 헤더 주석 3번). 커밋 경로가 읽는 것은
@@ -394,6 +400,11 @@ export default function FlowBoard({
     patchMap(m => ({ ...m, edges: [...m.edges, e] }));
     setSelectedId(`edge:${e.id}`);
   }, [patchMap]);
+
+  // 팝업이 연 도형을 **매 렌더 id로 다시 찾는다**(스냅샷을 들고 있으면 편집 중 다른 창·폴링이
+  // 계좌를 바꿔도 옛 값이 화면에 남는다). 대상이 사라지면 null → 아래 effect가 팝업을 닫는다.
+  const editorNode = editor && map ? map.nodes.find(n => n.id === editor.nodeId) || null : null;
+  useEffect(() => { if (editor && !editorNode) setEditor(null); }, [editor, editorNode]);
 
   const selNode = map && selectedId && !String(selectedId).startsWith('edge:')
     ? map.nodes.find(n => n.id === selectedId) : null;
@@ -762,6 +773,7 @@ export default function FlowBoard({
             edge={selEdge}
             edgeEnds={selEdgeEnds}
             accountOptions={accountOptions}
+            onOpenEditor={(tab) => selNode && setEditor({ nodeId: selNode.id, tab })}
             onPatchNodeById={patchNodeById}
             onPatchEdgeById={patchEdgeById}
             onDeleteNode={deleteNode}
@@ -838,6 +850,21 @@ export default function FlowBoard({
         )}
         <span className="shrink-0 text-[10px] text-gray-500">시트 {(mapsLocal?.length || 0)}/{MAX_FLOW_MAPS}</span>
       </div>
+
+      {/* 메모·표 편집 팝업 — 보드의 자식이라 보드 안에서 최상단에 뜬다(App의 ConfirmDialog는
+          여전히 이 위). ⚠️ 대상 도형을 **id로 다시 찾아** 넘긴다: 그 사이 시트를 바꾸거나 도형이
+          지워졌으면 editorNode가 null이 되어 아래 effect가 조용히 닫는다. */}
+      {editorNode && (
+        <FlowNodeEditor
+          key={editorNode.id}
+          node={editorNode}
+          title={viewOf(editorNode).displayName || '(이름 없음)'}
+          onPatch={patchNodeById}
+          onClose={() => setEditor(null)}
+          readOnly={readOnly}
+          initialTab={editor?.tab || 'memo'}
+        />
+      )}
     </div>
   );
 }
