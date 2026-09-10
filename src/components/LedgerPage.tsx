@@ -921,13 +921,35 @@ export default function LedgerPage({
    *    사용자가 그 돈을 영영 찾을 수 없다(위 `toggleScope`와 같은 근거).
    * ⚠️ 변동비 **외 그룹은 항상 true** — 고정비·대출은 매달 반복되는 항목이라 값이 없어도 보여야
    *    입력할 수 있다.
+   * ⚠️ **적용범위가 '전체'인 변동비는 활성을 근거로 쓰지 않는다**(사용자 보고 2026-09-10):
+   *    `activeFrom`/`activeTo`가 둘 다 비어 있으면 `isItemActive`가 12개월 모두 참이라 위 규칙이
+   *    **구조적으로 무력화**된다(9월에만 값이 있는 행이 9월을 숨겨도 그대로 남는다). 그 상태는
+   *    사용자가 고른 것이 아니라 '변동비는 추가한 달에만' 배포 **이전에 만든 항목의 잔재**이고
+   *    (기존 항목은 규약상 마이그레이션하지 않는다 — `addItem` 주석), 변동비에서 '전체'는
+   *    '매달 반복' = 고정비 성격이라 의미도 거의 없다 → 그런 행은 **값이 있는 달로만** 판정한다.
+   * ⚠️ 그 경로에서는 `planOverride`도 '값'이다 — '전체'는 모든 달이 활성이라 그 계획이 **살아
+   *    있고**(`planOf`는 비활성 달의 오버라이드를 애초에 읽지 않는다) 소계·연 합계에 들어간다.
+   *    값 기준으로 접으면서 그 달을 빠뜨리면 사용자가 넣은 계획이 화면에서만 사라진다.
+   * ⚠️ 그 해에 값이 하나도 없는 행은 **항상 보여 준다** — 숨기면 입력도 삭제도 못 하는 유령 행이
+   *    된다(칩으로 '전체'로 되돌린 빈 행이 그 경로다).
+   * ⚠️ 적용범위가 있는 행(`scoped`)의 판정은 **한 글자도 바뀌지 않았다** — 새로 추가한 변동비는
+   *    전부 이 경로라 하위호환이 논증이 아니라 구조로 보장된다.
    */
   const rowInView = (it) => {
     if (!it || it.group !== 'variable') return true;
-    return visibleMonths.some((m) => {
+    const scoped = isValidYm(it.activeFrom) || isValidYm(it.activeTo);
+    if (scoped) {
+      return visibleMonths.some((m) => {
+        const k = makeYm(year, m);
+        return isItemActive(it, k) || actualOf(it, k) !== null;
+      });
+    }
+    const hasValueAt = (m) => {
       const k = makeYm(year, m);
-      return isItemActive(it, k) || actualOf(it, k) !== null;
-    });
+      return actualOf(it, k) !== null || finiteOr(it.planOverride && it.planOverride[k]) !== null;
+    };
+    if (!MONTHS.some(hasValueAt)) return true;
+    return visibleMonths.some(hasValueAt);
   };
 
   const addItem = (group, pay = null) => {

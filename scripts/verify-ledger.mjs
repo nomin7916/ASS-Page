@@ -2190,6 +2190,42 @@ console.log('\n── §G19 거래 레이어 제거 / 변동비 그 달만 / 보
   ok('#G44g 적용범위 칩이 변동비 행에 렌더된다',
     /\{it\.group === 'variable' && \(/.test(LP_RAW) && /onClick=\{\(\) => toggleScope\(it\)\}/.test(LP));
 
+  /* ── 적용범위가 '전체'인 변동비 (사용자 보고 2026-09-10) ──────────────────────────
+     ⚠️ `activeFrom`/`activeTo`가 둘 다 비면 `isItemActive`가 12개월 모두 참이라 위 (2)의 규칙이
+        **구조적으로 무력화**된다 — 9월에만 값이 있는 행이 9월을 숨겨도 그대로 남는다(사용자
+        스크린샷의 '삼성 카드 계획대비 초과금액'). 그 상태는 사용자가 고른 것이 아니라 '변동비는
+        추가한 달에만' 배포 **이전에 만든 항목의 잔재**다(기존 항목은 규약상 마이그레이션하지
+        않는다). → 그런 행은 **값이 있는 달로만** 판정한다.
+     ⚠️ 슬라이스가 비면 부재 가드(#G44i)가 조용히 통과한다 — 길이를 먼저 단언한다. */
+  const RIV = sliceBlock(LP, 'const rowInView = (it) => {', 'const addItem = (group');
+  ok('#G44h ⚠️ rowInView가 적용범위 유무로 갈린다(전체 = 활성을 근거로 쓰지 않는다)',
+    RIV.length > 0
+    && /const scoped = isValidYm\(it\.activeFrom\) \|\| isValidYm\(it\.activeTo\);/.test(RIV)
+    && /if \(scoped\) \{/.test(RIV));
+  /* ⚠️ 적용범위가 있는 행의 판정은 **한 글자도 바뀌지 않았다**(하위호환의 축) — 새로 추가한
+        변동비는 전부 이 경로다. #G44c가 그 줄을 이미 리터럴로 못 박고 있고, 여기서는 그 줄이
+        `scoped` 분기 **안**에 있는지를 위치로 본다. */
+  ok('#G44h2 ⚠️ 종전 판정은 scoped 분기 안에 그대로 있다',
+    RIV.indexOf('if (scoped) {') >= 0
+    && RIV.indexOf('return isItemActive(it, k) || actualOf(it, k) !== null;') > RIV.indexOf('if (scoped) {'));
+  /* ⚠️ '전체' 경로에 `isItemActive`가 한 번이라도 들어오면 그 순간 규칙이 다시 무력화된다
+        (이 변경이 고친 결함 그 자체다). 사용부 부재로 단언한다. */
+  const RIV_ALL = RIV.slice(RIV.indexOf('const hasValueAt'));
+  ok('#G44i ⚠️ 전체 경로는 isItemActive를 근거로 쓰지 않는다',
+    RIV_ALL.length > 0 && !/isItemActive/.test(RIV_ALL));
+  /* ⚠️ `planOverride`도 '값'이다 — '전체'는 모든 달이 활성이라 그 계획이 **살아 있고**
+        (`planOf`는 비활성 달의 오버라이드를 애초에 읽지 않는다) 소계·연 합계에 들어간다.
+        값 기준으로 접으면서 그 달을 빠뜨리면 사용자가 넣은 계획이 화면에서만 사라진다. */
+  ok('#G44j ⚠️ 전체 경로가 actual·planOverride 둘 다 값으로 본다',
+    /actualOf\(it, k\) !== null \|\| finiteOr\(it\.planOverride && it\.planOverride\[k\]\) !== null/.test(RIV));
+  /* ⚠️ 그 해에 값이 하나도 없는 행은 **항상 보여 준다** — 숨기면 입력도 삭제도 못 하는 유령 행이
+        된다(칩으로 '전체'로 되돌린 빈 행이 그 경로다). 판정 기준은 `visibleMonths`가 아니라
+        `MONTHS`(그 해 12개월)여야 한다 — 보이는 달로 재면 값이 숨긴 달에만 있는 행이 이 구제에
+        걸려 되살아나 고치려던 증상이 그대로 남는다. */
+  ok('#G44k ⚠️ 값이 하나도 없는 전체 행은 항상 보인다(그 해 12개월 기준)',
+    /if \(!MONTHS\.some\(hasValueAt\)\) return true;/.test(RIV)
+    && /return visibleMonths\.some\(hasValueAt\);/.test(RIV));
+
   /* ══ (3) 보기 상태 영속화 — 닫았다 열어도 마지막 조작 상태 (사용자 요청 2026-09) ══
      ⚠️ 저장 위치는 `LedgerBook.view` — 장부 **안**이라 App.tsx의 영속화 7지점을 자동 상속한다
         (영속화 신규 지점 0곳). 밖으로 빼면 그 7곳을 새로 배선해야 하고 하나만 빠지면 유실된다. */
