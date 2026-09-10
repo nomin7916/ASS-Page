@@ -1622,6 +1622,30 @@ ok('#G13g-7 각주가 실제 fold 규칙을 서술한다(4개 + 기타로 되돌
 // ⚠️ 바깥 라벨은 슬롯이 4를 넘으면 라벨선이 충돌해 유일한 보조 부호가 무력화된다.
 ok('#G13h ⚠️ 도넛이 옆 목록 + 안쪽 % 방식이다(labelLine 되돌림 금지)',
   /function DonutWithList/.test(LP) && /labelLine=\{false\}/.test(LP) && !/labelLine=\{\{ stroke/.test(LP));
+// ── 합계 표시(사용자 요청 2026-09) — 두 도넛이 같은 컴포넌트를 쓰므로 여기 한 곳이 계약이다.
+const DWL = sliceBlock(LP, 'function DonutWithList', 'function CategoryManager');
+ok('#G13o DonutWithList 구간을 찾았다', DWL.length > 400);
+ok('#G13o-2 ⚠️ 도넛 가운데에 합계를 렌더한다(사용부)',
+  /absolute inset-0[^"]*pointer-events-none/.test(DWL) && /\{sumText\}/.test(DWL));
+ok('#G13o-3 ⚠️ 가운데 합계가 축약 없는 정확 금액이다(fmtWonShort 되돌림 금지)',
+  /const sumText = fmtWon\(sum, hideAmounts\)/.test(DWL));
+ok('#G13o-4 목록 맨 아래에도 합계 행이 있다',
+  />합계<\/span>/.test(DWL) && /fmtWonShort\(sum, hideAmounts\)/.test(DWL));
+// ⚠️ 조각이 12개가 넘는 상세 도넛에서 합계가 스크롤에 가리면 표시한 의미가 없다.
+// ⚠️ **등장 순서로 재지 말 것** — 합계 행을 스크롤 div 안으로 옮겨도 `overflow-y-auto` 뒤에
+//    오므로 순서 비교는 그 변이를 통과시킨다(죽은 단언, 실측 확인). 스크롤 div가 합계 행보다
+//    **먼저 닫혔는가**를 `<div>` 균형으로 잰다(닫혔다면 `</div>`가 정확히 하나 더 많다).
+const iScrollDiv = DWL.indexOf('flex-1 min-h-0 overflow-y-auto');
+const iSumCls = DWL.indexOf('shrink-0 flex items-center gap-1.5 text-[10px] pt-1');
+const iSumTag = iSumCls < 0 ? -1 : DWL.lastIndexOf('<div', iSumCls);
+const betweenScrollAndSum = (iScrollDiv >= 0 && iSumTag > iScrollDiv) ? DWL.slice(iScrollDiv, iSumTag) : '';
+ok('#G13o-5 ⚠️ 합계 행이 스크롤 영역 밖이다',
+  betweenScrollAndSum !== ''
+  && (betweenScrollAndSum.match(/<\/div>/g) || []).length
+     - (betweenScrollAndSum.match(/<div/g) || []).length === 1);
+// ⚠️ 손으로 더하면 음수 클램프·필터를 지난 조각 합과 갈려 "조각 합 ≠ 합계"가 된다.
+ok('#G13o-6 ⚠️ 합계를 여기서 다시 더하지 않는다(donutRows의 sum이 단일 소스)',
+  !/rows\.reduce/.test(DWL));
 // ⚠️ LP(주석 제거본)가 아니라 LP_RAW를 자른다 — 구간 경계가 `{/* */}` 주석이라
 //    stripComments가 지우면 구간을 못 찾아 가드가 영구히 실패한다.
 const BAR = sliceBlock(LP_RAW, '{/* ⑤ 결제수단별 지출 */}', '{/* ④ 수지 균형 */}');

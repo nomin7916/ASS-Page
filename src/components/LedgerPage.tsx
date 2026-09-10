@@ -2573,12 +2573,21 @@ function SnapshotModal({ snapshots, readOnly, canSave, onSave, onRestore, onRemo
  *    대신 조각마다 옆 목록에 색칩 + 이름 + 금액 + %를 두고, 큰 조각에만 안쪽 %를 얹는다.
  * ⚠️ 목록은 도넛과 **같은 순서**(recharts는 data 순서대로 시계방향으로 그린다)라
  *    조각↔행 대응이 위치로 복원된다.
+ * ⚠️ 합계는 **도넛 가운데 + 목록 맨 아래** 두 곳에 표시한다(사용자 요청 2026-09).
+ *    그 값은 `donutRows`가 낸 `sum` 하나이고 **여기서 다시 더하지 않는다** — 손으로 더하면
+ *    음수 클램프·필터를 지난 조각 합과 갈려 "조각 합 ≠ 합계"가 된다.
+ *    가운데 숫자는 **축약 없는 정확 금액**이다(합계를 검산하는 자리라 '577만'은 쓰지 않는다 —
+ *    `fmtNum` 주석과 같은 규약). 목록 합계 행만 다른 행과 같은 축약을 써서 열 정렬을 지킨다.
+ * ⚠️ 가운데 오버레이는 `pointer-events-none` 필수 — 아니면 도넛 툴팁·조각 hover를 가로챈다.
  */
 function DonutWithList({ rows, sum, hideAmounts }) {
   const pct = (v) => (sum > 0 ? (v / sum) * 100 : 0);
+  // 구멍 지름이 108px(innerRadius 54)이라 긴 금액은 폰트를 한 단계 줄여 넘침을 막는다.
+  const sumText = fmtWon(sum, hideAmounts);
+  const sumFont = sumText.length > 12 ? 11 : sumText.length > 10 ? 12 : 13;
   return (
     <div className="flex gap-2 items-center">
-      <div className="shrink-0" style={{ width: 190, height: 240 }}>
+      <div className="shrink-0 relative" style={{ width: 190, height: 240 }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie data={rows} dataKey="value" nameKey="name" innerRadius={54} outerRadius={88}
@@ -2600,17 +2609,34 @@ function DonutWithList({ rows, sum, hideAmounts }) {
             <RTooltip {...TOOLTIP_STYLE} formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
           </PieChart>
         </ResponsiveContainer>
+        {/* 도넛 가운데 합계 — 조각이 아니라 구멍 위라 클릭·hover 대상이 되면 안 된다. */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
+          title={`합계 ${sumText}`}>
+          <span className="text-[9px] text-gray-500 leading-none">합계</span>
+          <span className="font-bold text-gray-100 tabular-nums leading-tight whitespace-nowrap"
+            style={{ fontSize: sumFont }}>{sumText}</span>
+        </div>
       </div>
-      <div className="flex-1 min-w-0 max-h-[240px] overflow-y-auto pr-1">
-        {rows.map((r) => (
-          <div key={r.key} className="flex items-center gap-1.5 text-[10px] py-0.5 border-b border-gray-800/50 last:border-0"
-            title={`${r.name} ${fmtWon(r.value, hideAmounts)} · ${pct(r.value).toFixed(1)}%`}>
-            <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: r.color }} />
-            <span className="text-gray-300 truncate flex-1 min-w-0">{r.name}</span>
-            <span className="text-gray-400 shrink-0 tabular-nums">{fmtWonShort(r.value, hideAmounts)}</span>
-            <span className="text-gray-600 shrink-0 tabular-nums w-8 text-right">{Math.round(pct(r.value))}%</span>
-          </div>
-        ))}
+      <div className="flex-1 min-w-0 flex flex-col" style={{ maxHeight: 240 }}>
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+          {rows.map((r) => (
+            <div key={r.key} className="flex items-center gap-1.5 text-[10px] py-0.5 border-b border-gray-800/50 last:border-0"
+              title={`${r.name} ${fmtWon(r.value, hideAmounts)} · ${pct(r.value).toFixed(1)}%`}>
+              <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: r.color }} />
+              <span className="text-gray-300 truncate flex-1 min-w-0">{r.name}</span>
+              <span className="text-gray-400 shrink-0 tabular-nums">{fmtWonShort(r.value, hideAmounts)}</span>
+              <span className="text-gray-600 shrink-0 tabular-nums w-8 text-right">{Math.round(pct(r.value))}%</span>
+            </div>
+          ))}
+        </div>
+        {/* ⚠️ 스크롤 영역 **밖**이다 — 안에 두면 조각이 많은 상세 도넛에서 합계가 스크롤에 가린다. */}
+        <div className="shrink-0 flex items-center gap-1.5 text-[10px] pt-1 mt-0.5 border-t border-gray-700"
+          title={`합계 ${sumText}`}>
+          <span className="inline-block w-2.5 h-2.5 shrink-0" />
+          <span className="text-gray-200 font-semibold flex-1 min-w-0">합계</span>
+          <span className="text-gray-100 font-semibold shrink-0 tabular-nums">{fmtWonShort(sum, hideAmounts)}</span>
+          <span className="text-gray-500 shrink-0 tabular-nums w-8 text-right">{sum > 0 ? '100%' : '-'}</span>
+        </div>
       </div>
     </div>
   );
