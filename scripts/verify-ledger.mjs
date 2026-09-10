@@ -1232,6 +1232,66 @@ if (LE && L) {
   // ⚠️ 스냅샷은 장부가 통째로 덮이는 사고에서도 살아남아야 한다 — 그게 이 기능의 존재 이유다.
   ok('#102 ⚠️ 스냅샷은 LedgerBook 안에 있지 않다(장부와 다른 저장 슬롯)',
     !Object.prototype.hasOwnProperty.call(mkBook(), 'snapshots'));
+
+  /* ── §18 계획 미입력 ≠ 산출 불가 (2026-09 사용자 확정) ──────────────────────
+   * "변동비는 계획성 지출이 아니기 때문에 차이가 당연히 발생할 수 없습니다. 오류가 아니니
+   *  오류 표시 하지 않습니다."
+   * ⚠️ 값 집계(`value`가 하한인가)와 `unresolvedIds` 집합 비교(R-7)는 **종전 그대로**여야 한다 —
+   *    화면 경고만 `unresolvedFailures`로 좁힌 것이다. 그 경계가 이 절의 전부다.
+   * ⚠️ 기능마다 '동작 케이스 + 거래/변동비 0건 무영향 케이스'를 쌍으로 둔다.
+   */
+  console.log('\n  §18 계획 미입력 ≠ 산출 불가');
+  // ⚠️ 이 블록은 파트①의 다른 절과 스코프가 달라 필요한 이름을 직접 들여온다(#0 목록과 별개).
+  const {
+    planMissingKind, unresolvedFailures, expectedTotal, reflectedCompare,
+    makeLedgerItem, makeLedgerLoan, makeLedgerBook,
+  } = L;
+  ok('#120 필요한 export가 있다', [planMissingKind, unresolvedFailures].every((f) => typeof f === 'function'));
+
+  const ex = (o) => makeLedgerItem({ group: 'fixed', ...o });
+  const varNoPlan = makeLedgerItem({ id: 'v', group: 'variable', pay: 'card' });         // 계획 없음 = 정상
+  const loanBroken = makeLedgerItem({                                                     // 계획 산출 실패
+    id: 'l', group: 'loan', pay: 'transfer', loan: makeLedgerLoan({ principal: 1e8, annualRate: 4 }),
+  });
+  eq('#121 계획을 입력한 적 없는 변동비 = unset', planMissingKind(varNoPlan, '2026-08'), 'unset');
+  eq('#121b ⚠️ 대출은 완납·기준월 미상이어도 failed다(R-3이 지키는 경로)', planMissingKind(loanBroken, '2026-08'), 'failed');
+  eq('#121c 계획이 있으면 none', planMissingKind(makeLedgerItem({ id: 'f', plan: 1000 }), '2026-08'), 'none');
+  // ⚠️ 연단위는 계획이 있어도 납부월을 모르면 '어느 달에 놓을지'를 실패한 것이다 — 사용자가 채워야 한다.
+  eq('#121d 연단위 납부월 미상 = failed',
+    planMissingKind(makeLedgerItem({ id: 'a', group: 'annual', plan: 1200 }), '2026-08'), 'failed');
+  eq('#121e 적용기간 밖은 none(계획 얘기 자체가 아니다)',
+    planMissingKind(makeLedgerItem({ id: 'f2', plan: 1000, activeFrom: '2026-09' }), '2026-08'), 'none');
+
+  const mixed = expectedTotal([
+    ex({ id: 'ok', plan: 1000, actual: { '2026-08': 1200 } }),
+    varNoPlan,
+    loanBroken,
+  ], '2026-08');
+  eq('#122 ⚠️ unresolved는 둘 다 센다(값이 하한이라는 사실·집합 비교는 종전 그대로)',
+    [mixed.unresolved, mixed.unresolvedIds], [2, ['l', 'v']]);
+  eq('#122b noPlan은 계획 미입력만 센다', mixed.noPlan, 1);
+  eq('#122c ⚠️ 화면이 경고하는 수 = 산출 실패분만', unresolvedFailures(mixed), 1);
+  eq('#122d 값은 그대로(하위호환) — 실제 1200만 잡힌다', mixed.value, 1200);
+  // 변동비만 있는 소계 = 사용자가 지목한 그 행. 경고 0건이어야 한다.
+  const varOnly = expectedTotal([varNoPlan, makeLedgerItem({ id: 'v2', group: 'variable', pay: 'card' })], '2026-08');
+  eq('#123 ⚠️ 계획 없는 변동비만 있으면 경고 0(그 행이 `산출불가 22`로 뜨던 자리)',
+    [varOnly.unresolved, varOnly.noPlan, unresolvedFailures(varOnly)], [2, 2, 0]);
+  eq('#123b 확인 셀도 0이라 차이 열은 `-`로 떨어진다', varOnly.confirmedCells, 0);
+  // ⚠️ 무영향 케이스 — 계획 미입력 항목이 없으면 경고 수가 종전(`unresolved`)과 한 글자도 다르지 않다.
+  const loanOnly = expectedTotal([loanBroken], '2026-08');
+  eq('#124 ⚠️ 계획 미입력이 없으면 unresolvedFailures === unresolved(하위호환의 축)',
+    [loanOnly.noPlan, unresolvedFailures(loanOnly), loanOnly.unresolved], [0, 1, 1]);
+  eq('#124b 손상 입력에도 던지지 않는다', [unresolvedFailures(null), unresolvedFailures({})], [0, 0]);
+  // ⚠️ 집합 비교(R-7)가 이 변경에 흔들리지 않는지 — noPlan 항목이 두 달에 똑같이 있으면 비교는 성립한다.
+  {
+    const b = makeLedgerBook({
+      id: 'r7',
+      items: [ex({ id: 'ok', plan: 1000, actual: { '2026-07': 900, '2026-08': 1000 } }), varNoPlan],
+    });
+    const c = reflectedCompare(b, '2026-08', '2026-07');
+    eq('#125 ⚠️ 계획 미입력 항목은 집합에 그대로 남아 전월 대비가 종전대로 동작한다',
+      [c.comparable, c.delta, c.unresolvedExcluded], [true, 100, 1]);
+  }
 }
 
 console.log('\n── 파트② 소스 텍스트 가드(배선) ──');
@@ -1530,13 +1590,19 @@ ok('#G11c ⚠️ 롤업 셀에 계획 N 배지가 없다(부재)', !/e\.plannedC
 ok('#G11d ⚠️ 선택한 달 배지도 없다(부재) + 월 헤더가 확인 N/M을 렌더한다',
   !/cur\.plannedCount > 0/.test(SUB) && /`확인 \$\{row\.confirmedCount\}\/\$\{row\.targetCount\}`/.test(LP));
 ok('#G11e "항목 없음"을 "미입력"과 구분한다', /state === 'none'/.test(SUB));
-// ⚠️ 산출 불가(unresolved)를 0으로 계상하면 '계획 대비 차이 ₩0'을 확정 단언한다 —
+// ⚠️ 산출 실패(계획을 내려다 실패)를 0으로 계상하면 '계획 대비 차이 ₩0'을 확정 단언한다 —
 //    `loanSchedule`의 null 계약("계산 실패는 0이 아니다")이 소계 경로에서 깨진다(R-3: 게이트 유지).
-ok('#G11e-2 ⚠️ 롤업 차이 열의 unresolved 게이트가 먼저이고, 값은 확인분 차이다(D5)',
-  /yearUnresolved > 0 \? \(/.test(SUB) && /const yearVar = yearConfirmedCells === 0 \? null : yearConfirmedVar;/.test(SUB)
+// ⚠️ 2026-09 사용자 확정: 그 게이트가 세는 대상은 **산출 실패분(`yearFailed`)뿐**이다.
+//    `yearUnresolved`(= 계획 미입력 포함)로 되돌리면 계획을 세우지 않는 변동비가 매달
+//    `산출불가 22`라는 상시 가짜 오류로 표시된다(사용자 보고 — 되돌리지 말 것).
+ok('#G11e-2 ⚠️ 롤업 차이 열 게이트가 **산출 실패분**이고, 값은 확인분 차이다(D5)',
+  /yearFailed > 0 \? \(/.test(SUB) && !/yearUnresolved > 0 \? \(/.test(SUB)
+  && /yearFailed \+= unresolvedFailures\(e\); yearNoPlan \+= e\.noPlan;/.test(SUB)
+  && /const yearVar = yearConfirmedCells === 0 \? null : yearConfirmedVar;/.test(SUB)
   && /yearConfirmedVar \+= e\.confirmedVar; yearConfirmedCells \+= e\.confirmedCells;/.test(SUB));
-ok('#G11e-3 ⚠️ 산출 불가 건수를 셀에 노출한다(그 값은 총액이 아니라 하한)',
-  /e\.unresolved > 0 && \(/.test(SUB));
+ok('#G11e-3 ⚠️ 산출 **실패** 건수만 셀 배지로 노출한다(계획 미입력은 배지 없음)',
+  /const failed = unresolvedFailures\(e\);/.test(SUB) && /\{failed > 0 && \(/.test(SUB)
+  && !/\{e\.unresolved > 0 && \(/.test(SUB));
 const GSUB = sliceBlock(LP, 'const renderGroupTree', 'const renderGrandTotalRow');
 // ⚠️ 현금/카드만 하드코딩하면 pay:'auto'인 항목이 어느 행에도 없이 사라진다.
 // (거래 레이어 이후 미분류 몫이 조건에 더해져 줄바꿈이 생겼다 — 계약은 그대로 '전체를 훑는다'.)
@@ -1707,8 +1773,11 @@ ok('#G18n ⚠️ ①도 기준 차이를 고지한다(상호 참조)',
   /'수지 균형' 카드는 <b>실제 \?\? 계획<\/b> 기준/.test(CH1));
 // ⚠️ expectedTotal의 value는 산출 불가 몫을 빼고 더하므로 총액이 아니라 **하한**이다.
 //    소계 행은 '?N'으로 그 사실을 알리는데 차트만 확정 숫자로 단언하면 규약이 갈린다.
+// ⚠️ 여기서 세는 것도 **산출 실패분만**이다(매트릭스와 같은 규칙) — `e.unresolved`로 되돌리면
+//    계획을 세우지 않는 변동비 탓에 각주가 12개월 내내 "막대에서 빠져 있다"고 경고한다.
 ok('#G18o ⚠️ 산출 불가 건수를 화면에 밝힌다(하한임을 숨기지 않는다)',
-  /balUnresolved: e\.unresolved \+ ie\.unresolved,/.test(YS)
+  /balUnresolved: unresolvedFailures\(e\) \+ unresolvedFailures\(ie\),/.test(YS)
+  && !/balUnresolved: e\.unresolved/.test(YS)
   && /const balUnresolvedMonths = useMemo/.test(LP)
   && /\{balUnresolvedMonths > 0 && \(/.test(BALFOOT)
   && /산출 불가 항목/.test(BALFOOT));
@@ -2096,6 +2165,59 @@ ok('#G39o 확인 현황이 yearSeries 행의 confirmedOf에서 온다(새 루프
   /const cf = confirmedOf\(book, k, todayYm, t\);/.test(LP) && /confirmedCount: cf\.confirmed, targetCount: cf\.target, unconfirmed: cf\.unconfirmed,/.test(LP)
   && !/확인 \$\{[^}]*plannedCount/.test(LP));
 ok('#G39p 팔레트 검증기에 ① 알파 톤 검사가 있다', /LEDGER_PLANNED_ALPHA/.test(read('scripts/validate_palette.mjs')));
+
+console.log('\n── §G18 계획 미입력 ≠ 산출 불가 / 계획 열 숨기기 / 열 구분선 (2026-09) ──');
+{
+  /* ⚠️ 사용자 확정 2026-09: "변동비는 계획성 지출이 아니라 차이가 발생할 수 없다 — 오류가 아니니
+     오류 표시 하지 않는다." 그 규칙의 단일 판정 지점이 `planMissingKind`이고, 화면이 세는 값은
+     `unresolvedFailures`(= unresolved − noPlan) 하나다. 둘 중 하나만 되돌려도 `산출불가 22`가 부활한다. */
+  const PMK = sliceBlock(LG, 'export const planMissingKind', '\n};');
+  ok('#G40 ⚠️ planMissingKind가 계획 미입력(unset)과 산출 실패(failed)를 가른다',
+    /return base === null \? 'unset' : 'failed';/.test(PMK)
+    // ⚠️ 대출은 완납·만기 경과로도 null이지만 그대로 'failed'다 — R-3이 지키는 경로라 정상으로 강등 금지.
+    && /if \(item\.group === 'loan'\) return 'failed';/.test(PMK)
+    && /if \(planOf\(item, ym\) !== null\) return 'none';/.test(PMK));
+  const AE = sliceBlock(LG, 'const addExpected = (', '\n};');
+  ok('#G40b ⚠️ addExpected가 noPlan을 세되 unresolved/unresolvedIds는 건드리지 않는다(R-7)',
+    /o\.unresolved\+\+;/.test(AE) && /o\.unresolvedIds\.push\(String\(item\.id \|\| ''\)\);/.test(AE)
+    && /if \(planMissingKind\(item, ym\) === 'unset'\) o\.noPlan\+\+;/.test(AE));
+  ok('#G40c ⚠️ unresolvedFailures = unresolved − noPlan(음수 클램프)',
+    /export const unresolvedFailures = \(e: LedgerExpected \| null \| undefined\): number =>\s*\(e \? Math\.max\(0, \(e\.unresolved \|\| 0\) - \(e\.noPlan \|\| 0\)\) : 0\);/.test(LG));
+  // ⚠️ '한 화면 한 규칙' — 매트릭스와 분석 탭이 같은 함수를 쓰지 않으면 같은 달에 두 개의 '산출 불가'가 뜬다.
+  ok('#G40d ⚠️ 화면의 산출 불가 표시가 전부 unresolvedFailures 경유다',
+    (LP.match(/unresolvedFailures\(/g) || []).length >= 5
+    && !/reflected\.unresolved > 0/.test(LP) && !/\$\{reflected\.unresolved\}/.test(LP));
+}
+{
+  /* 계획 열 숨기기(사용자 요청 2026-09) — 월 열과 같은 UX. ⚠️ 복원 칩이 유일한 되돌리기 경로다. */
+  ok('#G41 ⚠️ 계획 열 숨김 상태 + 헤더 4px 띠 토글',
+    /const \[planHidden, setPlanHidden\] = useState\(false\);/.test(LP)
+    && /title="계획 열 숨기기[^"]*"\s*onClick=\{\(\) => setPlanHidden\(true\)\}/.test(LP));
+  ok('#G41b ⚠️ 복원 칩 조건에 planHidden이 있다(숨기면 되돌릴 길이 사라진다)',
+    /\{\(hiddenMonths\.length > 0 \|\| planHidden\) && \(/.test(LP)
+    && /onClick=\{\(\) => setPlanHidden\(false\)\}>계획 복원<\/button>/.test(LP));
+  // ⚠️ 4렌더러(헤더·항목·미분류·롤업) **전부**가 게이트를 지나야 한 행만 열이 남아 표가 어긋나지 않는다.
+  ok('#G41c ⚠️ 계획 셀 4곳이 모두 planHidden 게이트 안에 있다',
+    (LP.match(/\{!planHidden && \(/g) || []).length === 4
+    && (LP.match(/left: LEFT_PLAN/g) || []).length === 4);
+  ok('#G41d ⚠️ 계획을 숨기면 고정열 경계선이 항목 열로 옮겨 간다',
+    /const nameEdge = planHidden \? EDGE_FREEZE : EDGE_STICKY;/.test(LP)
+    && (LP.match(/\.\.\.nameEdge/g) || []).length >= 2 && /colSpan=\{2\} style=\{nameEdge\}/.test(LP));
+}
+{
+  /* 열 구분선(사용자 보고 2026-09 "칸의 구분이 없어 헷갈린다").
+     ⚠️ border-collapse 테이블에서 sticky 셀의 세로 테두리는 stuck 상태에서 제자리에 남는다 —
+        고정 3열은 box-shadow로 한 번 더 그어야 가로 스크롤에서 경계가 사라지지 않는다. */
+  ok('#G42 ⚠️ 세로 구분선이 cellBase에 있다',
+    /const cellBase = 'px-2 py-1 text-\[11px\] border-b border-r border-gray-800\/70';/.test(LP));
+  // ⚠️ 사용부를 잰다 — 선언만 보면 토큰을 남긴 채 셀에서 떼는 변이가 통과한다.
+  //    (스프레드와 `style={...}` 직접 지정 둘 다 세되, `nameEdge` 삼항의 참조는 제외된다.)
+  const edgeUse = (name) => (LP.match(new RegExp(`(\\.\\.\\.|style=\\{)${name}`, 'g')) || []).length;
+  ok('#G42b ⚠️ 고정열은 box-shadow로도 긋는다(sticky + border-collapse 대응)',
+    /const EDGE_STICKY = \{ boxShadow: 'inset -1px 0 0 #1f2937' \};/.test(LP)
+    && /const EDGE_FREEZE = \{ boxShadow: 'inset -2px 0 0 #475569' \};/.test(LP)
+    && edgeUse('EDGE_STICKY') >= 3 && edgeUse('EDGE_FREEZE') >= 3);
+}
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:ledger — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

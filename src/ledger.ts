@@ -768,6 +768,34 @@ export const planOf = (item: LedgerItem, ym: string): number | null => {
 };
 
 /**
+ * `planOf`가 null을 돌려준 **이유**. 두 가지를 절대 뭉뚱그리지 말 것(사용자 확정 2026-09).
+ *
+ *  - `'unset'` — 계획을 **입력한 적이 없다**. 변동비처럼 계획을 세우지 않는 지출의 **정상 상태**다.
+ *    사용자가 손댈 것이 없으므로 화면이 '산출 불가'라고 경고하면 매달 상시 점등하는 가짜 오류가 된다
+ *    (실측: 변동비 2건 × 12개월 → 차이 열에 `산출불가 22`).
+ *  - `'failed'` — 계획을 **산출하려다 실패**했다(대출 스케줄 null · 연단위 납부월 미상). 사용자가
+ *    채워야 할 값이 비어 있는 상태이므로 경고 대상이다(§13.11 R-3: `loanSchedule`의 null 계약이
+ *    "계산 실패는 0이 아니다"를 지킨다).
+ *
+ * ⚠️ 대출은 완납·만기 경과로도 null이 되지만 그대로 `'failed'`다 — R-3이 지키는 바로 그 경로라
+ *    여기서 정상으로 강등하면 그 가드가 통째로 죽는다.
+ * ⚠️ `planOf(item, ym) === null`일 때만 뜻이 있다(그 외에는 `'none'`).
+ */
+export type LedgerPlanMissingKind = 'none' | 'unset' | 'failed';
+
+export const planMissingKind = (item: LedgerItem, ym: string): LedgerPlanMissingKind => {
+  if (!item || !isValidYm(ym)) return 'none';
+  if (!isItemActive(item, ym)) return 'none';
+  if (planOf(item, ym) !== null) return 'none';
+  if (item.group === 'loan') return 'failed';
+  const ov = item.planOverride && finiteOr(item.planOverride[ym]);
+  const base = ov !== null && ov !== undefined ? ov : finiteOr(item.plan);
+  // 계획 칸이 비어 있으면 '세우지 않은 것'이고, 값이 있는데도 null이면 산출에 실패한 것이다
+  // (연단위 항목의 납부월 미상이 그 경로다).
+  return base === null ? 'unset' : 'failed';
+};
+
+/**
  * 그 달에 이 항목이 **실적 입력 대상**인가.
  *
  * ⚠️ `isItemActive`와 구분할 것. `group:'annual'`은 1년에 한 번만 나가므로 **납부월에만** 대상이다.
@@ -1705,8 +1733,18 @@ export interface LedgerExpected {
   /**
    * 실제도 계획도 못 구한 항목 수(대출 계산 실패 등).
    * ⚠️ `plannedCount`와 다른 뜻이다 — 이건 '모른다', 저건 '계획으로 채웠다'.
+   * ⚠️ 이 수를 **화면의 '산출 불가' 경고에 그대로 쓰지 말 것** — 아래 `noPlan`을 뺀
+   *    `unresolvedFailures(e)`가 그 용도다. 값 집계(`value`가 하한인가)와
+   *    `unresolvedIds` 집합 비교(R-7)는 종전대로 이 수를 쓴다.
    */
   unresolved: number;
+  /**
+   * `unresolved` 중 **계획을 입력한 적이 없어서**인 항목 수(= `planMissingKind === 'unset'`).
+   * 변동비처럼 계획을 세우지 않는 지출의 정상 상태라 **경고 대상이 아니다**(사용자 확정 2026-09).
+   * ⚠️ `unresolved`에서 빼지 말 것 — 그 값은 `unresolvedIds`와 짝이고, 집합이 달라지면
+   *    `reflectedCompare`의 전월/전년 비교 가능 판정(R-7)이 통째로 바뀐다.
+   */
+  noPlan: number;
   /**
    * 그 달 **활성 항목 전체**의 계획 합(실적 유무와 무관).
    * ⚠️ `fromPlan`과 절대 혼동하지 말 것 — `fromPlan`은 '실적이 없는 항목의 계획'이라
@@ -1736,10 +1774,23 @@ export interface LedgerExpected {
 
 const emptyExpected = (): LedgerExpected => ({
   value: 0, fromActual: 0, fromPlan: 0,
-  actualCount: 0, plannedCount: 0, unresolved: 0,
+  actualCount: 0, plannedCount: 0, unresolved: 0, noPlan: 0,
   planSum: 0, planCount: 0, activeCount: 0,
   confirmedVar: 0, confirmedCells: 0, unresolvedIds: [],
 });
+
+/**
+ * 화면이 **'산출 불가'라고 경고해야 하는** 건수 = 계획을 산출하려다 실패한 것만.
+ *
+ * ⚠️ `e.unresolved`를 그대로 화면에 쓰지 말 것 — 거기에는 '계획을 세우지 않는 항목'(변동비 등)이
+ *    섞여 있어, 사용자가 손댈 것이 없는 정상 상태가 매달 오류로 표시된다(사용자 보고 2026-09:
+ *    변동비 소계 차이 열의 `산출불가 22`). 반대로 이 값을 0으로 뭉개면 `loanSchedule` 실패가
+ *    '차이 ₩0'으로 확정 단언되는 R-3 회귀가 난다.
+ * ⚠️ **소비자 전부가 이 함수 하나를 공유할 것**(매트릭스 소계·분석 탭 요약·수지 균형 각주) —
+ *    한 화면만 규칙이 갈리면 같은 달에 대해 두 개의 '산출 불가'가 뜬다.
+ */
+export const unresolvedFailures = (e: LedgerExpected | null | undefined): number =>
+  (e ? Math.max(0, (e.unresolved || 0) - (e.noPlan || 0)) : 0);
 
 const addExpected = (
   o: LedgerExpected,
@@ -1762,6 +1813,9 @@ const addExpected = (
   } else {
     o.unresolved++;
     o.unresolvedIds.push(String(item.id || ''));
+    // ⚠️ '계획을 세우지 않는 항목'(변동비 등)과 '산출 실패'(대출 스케줄 null)를 여기서 가른다.
+    //    값 집계·집합 비교는 종전대로 `unresolved`를 쓰고, 화면 경고만 `unresolvedFailures`를 쓴다.
+    if (planMissingKind(item, ym) === 'unset') o.noPlan++;
   }
 };
 
