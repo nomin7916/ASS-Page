@@ -2,9 +2,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   edgePath, anchorPoint, roundNode, snapToGrid, sanitizeHexColor, readableTextColor, arrowHeads,
-  flowLineRender,
+  flowLineRender, buildFlowBundles, resolveNodeDrag, snapTolerance, layoutFlowLabels, flowLabelSize,
   MIN_NODE_W, MIN_NODE_H, FLOW_GRID, FLOW_MIN_SCALE, FLOW_MAX_SCALE,
-  DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, FLOW_CANVAS_BG,
+  DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, FLOW_CANVAS_BG, FLOW_LABEL_DOT_R, FLOW_LABEL_FONT,
 } from '../flowMap';
 
 /**
@@ -57,15 +57,26 @@ function FlowCanvasInner({
   formatAmount,
   connectFrom,        // 연결 시작 노드 id (null이면 비활성)
   onConnectFromChange,
+  bundleEnabled = true,   // 시트 단위 연결선 합치기(map.bundleEdges)
+  snapEnabled = true,     // 도형 정렬 스냅(세션 로컬 토글)
 }) {
   const svgRef = useRef(null);
   // 드래그/리사이즈 중 임시 상태 — 커밋 전까지 상위로 올리지 않는다
-  const [drag, setDrag] = useState(null);   // {mode:'move'|'resize', id, ox, oy, base:{x,y,w,h}}
+  // ⚠️ move 모드는 `resolved`(= resolveNodeDrag 결과)를 함께 들고 다닌다. 미리보기와 커밋이
+  //    같은 값을 읽어야 가이드선이 가리키는 자리와 실제로 저장되는 자리가 갈리지 않는다.
+  const [drag, setDrag] = useState(null);   // {mode:'move'|'resize', id, ox, oy, base:{x,y,w,h}, resolved, peers}
   const [pan, setPan] = useState(null);     // {ox, oy, base:{x,y}}
   const [hoverId, setHoverId] = useState(null);
+  const [hoverLabel, setHoverLabel] = useState(null); // 점으로 접힌 라벨의 즉시 툴팁
 
   const nodes = map?.nodes || [];
   const edges = map?.edges || [];
+
+  // 스냅 판정에 필요한 최신값 — pointermove 핸들러가 동기로 읽는다(클로저 대신 ref).
+  const snapOnRef = useRef(snapEnabled);
+  snapOnRef.current = snapEnabled;
+  const tolRef = useRef(1);
+  tolRef.current = snapTolerance(viewport.scale);
 
   // ⚠️ 기본색을 **반드시 포함**한다 — stroke가 없는(=기본색) 선의 화살촉이 사라진다.
   const arrowColors = useMemo(() => {
@@ -91,7 +102,13 @@ function FlowCanvasInner({
   // 드래그 중인 노드만 오프셋을 얹어 보여준다(나머지 노드는 원본 참조 그대로 → 재조정 최소화)
   const liveNode = useCallback((n) => {
     if (!drag || drag.id !== n.id) return n;
-    if (drag.mode === 'move') return { ...n, x: drag.base.x + drag.dx, y: drag.base.y + drag.dy };
+    if (drag.mode === 'move') {
+      // ⚠️ 미리보기는 **resolveNodeDrag가 낸 preview**다 — raw(base+d)로 되돌리면 정렬 스냅이
+      //    화면에 보이지 않아 가이드선만 뜨고 도형은 안 붙는 상태가 된다.
+      //    resolved는 startDrag가 반드시 시드한다(없으면 클릭만 해도 렌더 중 TypeError).
+      const p = drag.resolved && drag.resolved.preview;
+      return p ? { ...n, x: p.x, y: p.y } : n;
+    }
     return {
       ...n,
       w: Math.max(MIN_NODE_W, drag.base.w + drag.dx),
@@ -99,24 +116,82 @@ function FlowCanvasInner({
     };
   }, [drag]);
 
-  const nodeById = useCallback((id) => {
-    const n = nodes.find(x => x.id === id);
-    return n ? liveNode(n) : undefined;
-  }, [nodes, liveNode]);
+  // 드래그가 반영된 노드 목록. 번들·경로·라벨이 **전부 이 배열 하나**를 공유해야 드래그 중에도
+  // 선·트렁크·라벨이 도형을 따라온다(각자 nodes를 읽으면 그 중 하나가 제자리에 남는다).
+  const liveNodes = useMemo(() => (drag ? nodes.map(liveNode) : nodes), [nodes, drag, liveNode]);
+  const nodeIndex = useMemo(() => {
+    const m = new Map();
+    for (const n of liveNodes) if (n && n.id) m.set(n.id, n);
+    return m;
+  }, [liveNodes]);
+  const nodeById = useCallback((id) => nodeIndex.get(id), [nodeIndex]);
+
+  // 연결선 합치기. ⚠️ 계산은 flowMap.buildFlowBundles가 단독으로 한다 — 여기서 그룹 키를 다시
+  //    만들면 트렁크가 뻗는 변과 실제로 그려지는 앵커가 갈린다.
+  const bundles = useMemo(
+    () => buildFlowBundles(liveNodes, edges, bundleEnabled),
+    [liveNodes, edges, bundleEnabled],
+  );
+
+  // 선 경로 — 렌더와 라벨 배치가 같은 값을 읽도록 한 번만 계산한다.
+  const paths = useMemo(() => {
+    const m = new Map();
+    for (const e of edges) {
+      if (!e || !e.id) continue;
+      m.set(e.id, edgePath(nodeIndex.get(e.from), nodeIndex.get(e.to), e, bundles.byEdge[e.id]));
+    }
+    return m;
+  }, [edges, nodeIndex, bundles]);
+
+  // 라벨 배치. ⚠️ 장애물에 **도형 박스를 반드시 포함**한다 — 라벨은 도형보다 아래 레이어라
+  //    겹치면 가려지고 '메모를 썼는데 화면 어디에도 없다'가 된다.
+  const labels = useMemo(() => {
+    const items = [];
+    for (const e of edges) {
+      if (!e || !e.id || !e.label) continue;
+      const p = paths.get(e.id);
+      if (!p) continue;
+      const s = flowLabelSize(e.label);
+      items.push({ id: e.id, cx: p.labelX, cy: p.labelY, w: s.w, h: s.h });
+    }
+    const out = new Map();
+    if (items.length === 0) return out;
+    const obstacles = liveNodes.map(n => ({ x: n.x, y: n.y, w: n.w, h: n.h }));
+    for (const pl of layoutFlowLabels(items, obstacles)) out.set(pl.id, pl);
+    return out;
+  }, [edges, paths, liveNodes]);
 
   const startDrag = (e, n, mode) => {
     if (readOnly) return;
     e.stopPropagation();
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* 일부 브라우저·비신뢰 이벤트 */ }
     const p = toCanvas(e.clientX, e.clientY);
-    setDrag({ mode, id: n.id, ox: p.x, oy: p.y, dx: 0, dy: 0, base: { x: n.x, y: n.y, w: n.w, h: n.h } });
+    const base = { x: n.x, y: n.y, w: n.w, h: n.h };
+    // ⚠️ **resolved 시드는 필수다.** liveNode가 이 값을 읽으므로, 비워 두면 도형을 클릭만 해도
+    //    (pointermove 0회) 렌더 중 TypeError가 나 보드가 통째로 오류 화면으로 대체된다.
+    //    시작 시점에는 가이드를 만들지 않는다(클릭만 했는데 선이 뜨는 노이즈 방지).
+    const resolved = { preview: { x: base.x, y: base.y }, commit: { x: base.x, y: base.y }, guides: [] };
+    // 스냅 참조는 드래그 시작 시 1회만 고정한다(프레임마다 재수집 방지 + 자기 자신 제외).
+    const peers = mode === 'move' ? nodes.filter(x => x && x.id !== n.id) : null;
+    setDrag({ mode, id: n.id, ox: p.x, oy: p.y, dx: 0, dy: 0, base, resolved, peers });
     onSelect?.(n.id);
   };
 
   const onPointerMove = (e) => {
     if (drag) {
       const p = toCanvas(e.clientX, e.clientY);
-      setDrag(d => (d ? { ...d, dx: p.x - d.ox, dy: p.y - d.oy } : d));
+      // ⚠️ 수식 키는 업데이터 **밖**에서 읽는다(업데이터는 나중에 실행될 수 있다).
+      //    Alt/Cmd = 이번 드래그만 스냅 해제. keydown 리스너를 쓰지 않는 이유는 SVG에 tabIndex가
+      //    없어 포커스를 못 받고, 보드의 onKeyDownCapture 규약과도 얽히기 때문이다.
+      const bypass = !!(e.altKey || e.metaKey);
+      setDrag(d => {
+        if (!d) return d;
+        const dx = p.x - d.ox;
+        const dy = p.y - d.oy;
+        if (d.mode !== 'move') return { ...d, dx, dy };
+        const resolved = resolveNodeDrag(d.base, dx, dy, d.peers, tolRef.current, snapOnRef.current && !bypass);
+        return { ...d, dx, dy, resolved };
+      });
       return;
     }
     if (pan) {
@@ -133,7 +208,11 @@ function FlowCanvasInner({
     if (!src) return;
     let next;
     if (d.mode === 'move') {
-      next = roundNode({ ...src, x: snapToGrid(d.base.x + d.dx, FLOW_GRID), y: snapToGrid(d.base.y + d.dy, FLOW_GRID) });
+      // ⚠️ 커밋 값도 **resolveNodeDrag가 낸 commit**이다 — 여기서 snapToGrid를 다시 걸면
+      //    정렬이 걸린 축이 최대 4px 밀려(기본폭 180은 mod 8 === 4라 100% 어긋난다) 방금 화면에서
+      //    맞춘 정렬이 놓는 순간 깨진다. 정렬이 안 걸린 축의 격자 스냅은 그 함수 안에 있다.
+      const c = d.resolved && d.resolved.commit;
+      next = roundNode({ ...src, x: c ? c.x : snapToGrid(d.base.x + d.dx, FLOW_GRID), y: c ? c.y : snapToGrid(d.base.y + d.dy, FLOW_GRID) });
     } else {
       next = roundNode({
         ...src,
@@ -214,11 +293,48 @@ function FlowCanvasInner({
       <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
         <rect x={-4000} y={-4000} width={12000} height={12000} fill="url(#flowGrid)" />
 
+        {/* 합쳐진 구간(트렁크) — 그룹당 **하나만** 그린다. 선마다 각자 그려 겹치게 하면 이중선이
+            가운데를 배경색으로 덮어 지우개가 되고, 선택 후광·히트박스가 공유 구간을 덮어
+            '선 하나를 골랐는데 뭉치 전체가 선택된 것처럼' 보인다.
+            ⚠️ 화살촉은 **도형 경계 쪽 끝**에 붙는다 — 출발 뭉치는 뿌리(markerStart),
+            도착 뭉치는 도형에 닿는 끝(markerEnd). 그룹 키에 화살촉 유무가 들어 있어 뭉치 안에서
+            방향이 갈리지 않는다. */}
+        {bundles.trunks.map(t => {
+          const tColor = sanitizeHexColor(t.stroke) || DEFAULT_EDGE_STROKE;
+          const tLine = flowLineRender({ lineStyle: t.lineStyle, lineWidth: t.lineWidth });
+          const tMarker = `url(#${markerIdOf(tColor)})`;
+          return tLine.double ? (
+            <g key={t.key} pointerEvents="none">
+              <path d={t.d} fill="none" stroke={tColor} strokeWidth={tLine.width} />
+              <path
+                d={t.d}
+                fill="none"
+                stroke={FLOW_CANVAS_BG}
+                strokeWidth={tLine.innerWidth}
+                markerEnd={t.head && t.headOutward ? tMarker : undefined}
+                markerStart={t.head && !t.headOutward ? tMarker : undefined}
+              />
+            </g>
+          ) : (
+            <path
+              key={t.key}
+              d={t.d}
+              fill="none"
+              stroke={tColor}
+              strokeWidth={tLine.width}
+              strokeDasharray={tLine.dash}
+              markerEnd={t.head && t.headOutward ? tMarker : undefined}
+              markerStart={t.head && !t.headOutward ? tMarker : undefined}
+              pointerEvents="none"
+            />
+          );
+        })}
+
         {/* 연결선 — 노드보다 아래에 그려 도형이 선을 가리도록 */}
         {edges.map(e => {
-          const a = nodeById(e.from);
-          const b = nodeById(e.to);
-          const p = edgePath(a, b, e);
+          // ⚠️ 경로는 paths memo가 단독으로 만든다 — 여기서 edgePath를 다시 부르면 라벨 배치가
+          //    쓰는 좌표와 화면에 그려지는 선이 갈린다(번들 인자를 빠뜨리기도 쉽다).
+          const p = paths.get(e.id);
           if (!p) return null; // ⚠️ null 계약 — 노드가 없으면 조용히 건너뛴다(throw 금지)
           const color = sanitizeHexColor(e.stroke) || DEFAULT_EDGE_STROKE;
           const edgeSel = selectedId === `edge:${e.id}`;
@@ -272,21 +388,60 @@ function FlowCanvasInner({
                 style={{ cursor: readOnly ? 'default' : 'pointer' }}
                 onPointerDown={(ev) => { ev.stopPropagation(); onSelect?.(`edge:${e.id}`); }}
               />
-              {e.label && (
-                <g pointerEvents="none">
-                  <rect
-                    x={p.labelX - Math.min(120, e.label.length * 6 + 8)}
-                    y={p.labelY - 11}
-                    width={Math.min(240, e.label.length * 12 + 16)}
-                    height={22}
-                    rx={5}
-                    fill={FLOW_CANVAS_BG}
-                    stroke={edgeSel ? '#818cf8' : color}
-                    strokeOpacity={edgeSel ? 1 : 0.6}
-                  />
-                  <text x={p.labelX} y={p.labelY + 4} textAnchor="middle" fill="#cbd5e1" fontSize="12">{e.label}</text>
-                </g>
-              )}
+            </g>
+          );
+        })}
+
+        {/* 선 위 글자 — 선 그룹 **뒤**(=위)에, 노드 그룹 **앞**(=아래)에 둔다.
+            ⚠️ 이 순서가 계약이다: 노드보다 앞에 두면 라벨 히트박스가 도형의 onPointerDown을
+            가로채 도형 드래그·리사이즈·연결이 통째로 죽는다. 대신 라벨이 도형에 가려질 수
+            있으므로 layoutFlowLabels가 도형 박스를 장애물로 받아 자리를 피한다.
+            ⚠️ 정상 라벨은 종전대로 pointerEvents="none"이다 — 켜면 최대 수백 px짜리 상자가
+            남의 선 위에 얹혀 그 선의 클릭을 가로챈다. 포인터를 받는 것은 점(dot)뿐이고,
+            점은 작아서 배경 팬을 사실상 방해하지 않는다. */}
+        {edges.map(e => {
+          if (!e || !e.id || !e.label) return null;
+          const pl = labels.get(e.id);
+          if (!pl) return null;
+          const lColor = sanitizeHexColor(e.stroke) || DEFAULT_EDGE_STROKE;
+          const lSel = selectedId === `edge:${e.id}`;
+          if (pl.mode === 'dot') {
+            // 자리가 없어 점으로 접힌 라벨 — 호버로 전문을 보여 준다(요구 ③).
+            return (
+              <circle
+                key={`lb:${e.id}`}
+                cx={pl.x}
+                cy={pl.y}
+                r={FLOW_LABEL_DOT_R}
+                fill={FLOW_CANVAS_BG}
+                stroke={lSel ? '#818cf8' : lColor}
+                strokeWidth={2}
+                style={{ cursor: 'pointer' }}
+                onPointerEnter={() => setHoverLabel({ id: e.id, x: pl.x, y: pl.y, text: e.label })}
+                onPointerLeave={() => setHoverLabel(h => (h && h.id === e.id ? null : h))}
+                onPointerDown={(ev) => { ev.stopPropagation(); onSelect?.(`edge:${e.id}`); }}
+              >
+                {/* 네이티브 툴팁 — 아래 즉시 툴팁이 못 뜨는 경우(터치·보조기술)의 보조 경로 */}
+                <title>{e.label}</title>
+              </circle>
+            );
+          }
+          // ⚠️ 상자 폭은 flowLabelSize(= 전각/반각을 구분한 근사)로 잰다. 종전 `length * 12`는
+          //    한글/영문 혼용에서 최대 2배까지 틀려 상자가 글자를 못 감싸거나 과하게 넓었다.
+          const lSize = flowLabelSize(e.label);
+          return (
+            <g key={`lb:${e.id}`} pointerEvents="none">
+              <rect
+                x={pl.x - lSize.w / 2}
+                y={pl.y - lSize.h / 2}
+                width={lSize.w}
+                height={lSize.h}
+                rx={5}
+                fill={FLOW_CANVAS_BG}
+                stroke={lSel ? '#818cf8' : lColor}
+                strokeOpacity={lSel ? 1 : 0.6}
+              />
+              <text x={pl.x} y={pl.y + 4} textAnchor="middle" fill="#cbd5e1" fontSize={FLOW_LABEL_FONT}>{e.label}</text>
             </g>
           );
         })}
@@ -377,6 +532,52 @@ function FlowCanvasInner({
             </g>
           );
         })}
+
+        {/* 정렬 가이드 — 드래그 중에만, 스냅이 **실제로 걸린 축에만** 그린다.
+            ⚠️ 최상단(노드 위)에 둔다. 노드 아래면 정작 맞추려는 도형에 가려 안 보인다.
+            ⚠️ 두 겹(어두운 바탕 + 밝은 파선)으로 그린다 — 가운데 정렬 가이드는 정의상 도형을
+            관통하는데, 도형 채우기 팔레트(테마 60색)에는 어떤 단색과도 대비가 무너지는 색이
+            섞여 있어 한 겹으로는 배경에 따라 사라진다.
+            ⚠️ 굵기를 배율로 나눠 어느 배율에서도 같은 두께로 보이게 한다(축소에서 실선이 사라짐 방지). */}
+        {drag && drag.resolved && drag.resolved.guides.map((g, i) => {
+          const x1 = g.axis === 'x' ? g.value : g.from;
+          const x2 = g.axis === 'x' ? g.value : g.to;
+          const y1 = g.axis === 'x' ? g.from : g.value;
+          const y2 = g.axis === 'x' ? g.to : g.value;
+          const sc = viewport.scale > 0 ? viewport.scale : 1;
+          return (
+            <g key={`gd:${g.axis}:${i}`} pointerEvents="none">
+              <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={FLOW_CANVAS_BG} strokeWidth={3 / sc} strokeOpacity={0.85} />
+              <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#f472b6" strokeWidth={1 / sc} strokeDasharray={`${5 / sc} ${4 / sc}`} />
+            </g>
+          );
+        })}
+
+        {/* 점으로 접힌 라벨의 즉시 툴팁 — 최상단. 네이티브 <title>은 1초 가까이 지연되어
+            "점에 뭐가 있는지" 확인하는 동작에 쓰기 어렵다. */}
+        {hoverLabel && (() => {
+          const s = flowLabelSize(hoverLabel.text);
+          return (
+            <g pointerEvents="none">
+              <rect
+                x={hoverLabel.x - s.w / 2}
+                y={hoverLabel.y - s.h - FLOW_LABEL_DOT_R - 4}
+                width={s.w}
+                height={s.h}
+                rx={5}
+                fill={FLOW_CANVAS_BG}
+                stroke="#818cf8"
+              />
+              <text
+                x={hoverLabel.x}
+                y={hoverLabel.y - FLOW_LABEL_DOT_R - 4 - s.h / 2 + 4}
+                textAnchor="middle"
+                fill="#e2e8f0"
+                fontSize={FLOW_LABEL_FONT}
+              >{hoverLabel.text}</text>
+            </g>
+          );
+        })()}
       </g>
     </svg>
   );

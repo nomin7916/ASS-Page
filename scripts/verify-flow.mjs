@@ -50,6 +50,10 @@ const DEFAULT_NODE_FILL = '#2E75B6', DEFAULT_EDGE_STROKE = '#60a5fa';
 const FLOW_CANVAS_BG = '#0b1120';
 const FLOW_LINE_STYLES = ['solid', 'dot', 'dash', 'longDash', 'dashDot', 'dashDotDot', 'double'];
 const FLOW_LINE_WIDTHS = ['thin', 'normal', 'thick'];
+const FLOW_TRUNK_RATIO = 0.45, FLOW_TRUNK_MAX = 96, FLOW_TRUNK_MIN = 16;
+const SNAP_TOL_PX = 6, SNAP_GUIDE_MAX_REFS = 6;
+const FLOW_GRID = 8;
+const FLOW_LABEL_FONT = 12, FLOW_LABEL_H = 22, FLOW_LABEL_PAD = 8, FLOW_LABEL_DOT_R = 5;
 const LINE_WIDTH_PX = { thin: 1.2, normal: 2, thick: 3.5 };
 const LINE_DASH_UNITS = {
   dot: [1, 3],
@@ -94,6 +98,10 @@ function normalizeFlowViewport(v) {
     y: Math.round(clampNum(o.y, -VIEWPORT_XY_LIMIT, VIEWPORT_XY_LIMIT)),
     scale: Math.round(clampNum(o.scale, FLOW_MIN_SCALE, FLOW_MAX_SCALE) * 1e4) / 1e4,
   };
+}
+
+function normalizeFlowSide(v) {
+  return v === 'l' || v === 'r' || v === 't' || v === 'b' ? v : undefined;
 }
 
 function normalizeFlowArrow(v) {
@@ -196,6 +204,7 @@ function flowFingerprint(maps) {
     return JSON.stringify(maps.map(m => ({
       i: m?.id ?? '', n: m?.name ?? '',
       vp: m?.viewport ? [m.viewport.x ?? 0, m.viewport.y ?? 0, m.viewport.scale ?? 1] : null,
+      ...(m?.bundleEdges === false ? { nb: 1 } : {}),
       nd: (Array.isArray(m?.nodes) ? m.nodes : []).map(n => [
         n?.id ?? '', n?.kind ?? '', n?.x ?? 0, n?.y ?? 0, n?.w ?? 0, n?.h ?? 0,
         n?.label ?? '', n?.date ?? '', n?.amountManual ?? null, n?.memo ?? '',
@@ -268,11 +277,14 @@ function normalizeFlowMaps(raw) {
       const keepStyle = outStyle === 'solid' ? undefined : outStyle;
       const keepWidth = outWidth === 'normal' ? undefined : outWidth;
       const lineChanged = keepStyle !== e.lineStyle || keepWidth !== e.lineWidth || e.dashed !== undefined;
-      if (label !== e.label || arrow !== e.arrow || strokeChanged || lineChanged) mapChanged = true;
+      const keepFromSide = normalizeFlowSide(e.fromSide);
+      const keepToSide = normalizeFlowSide(e.toSide);
+      const sideChanged = keepFromSide !== e.fromSide || keepToSide !== e.toSide;
+      if (label !== e.label || arrow !== e.arrow || strokeChanged || lineChanged || sideChanged) mapChanged = true;
       edges.push({
         id: eid, from, to, label, arrow,
-        ...(e.fromSide ? { fromSide: e.fromSide } : {}),
-        ...(e.toSide ? { toSide: e.toSide } : {}),
+        ...(keepFromSide ? { fromSide: keepFromSide } : {}),
+        ...(keepToSide ? { toSide: keepToSide } : {}),
         ...(stroke ? { stroke } : {}),
         ...(keepStyle ? { lineStyle: keepStyle } : {}),
         ...(keepWidth ? { lineWidth: keepWidth } : {}),
@@ -286,7 +298,18 @@ function normalizeFlowMaps(raw) {
     const viewport = normalizeFlowViewport(rawVp);
     if (viewport ? !sameFlowViewport(rawVp, viewport) : rawVp !== undefined && rawVp !== null) mapChanged = true;
 
-    if (mapChanged) { changed = true; out.push({ id, name, nodes, edges, createdAt, updatedAt, ...(viewport ? { viewport } : {}) }); }
+    const rawBundle = m.bundleEdges;
+    const bundleOff = rawBundle === false;
+    if (rawBundle !== undefined && !bundleOff) mapChanged = true;
+
+    if (mapChanged) {
+      changed = true;
+      out.push({
+        id, name, nodes, edges, createdAt, updatedAt,
+        ...(viewport ? { viewport } : {}),
+        ...(bundleOff ? { bundleEdges: false } : {}),
+      });
+    }
     else out.push(m);
   }
   return changed ? out : raw;
@@ -420,22 +443,218 @@ const normalOf = (side) => {
   }
 };
 
-function edgePath(a, b, e) {
-  if (!a || !b) return null;
+function resolveEdgeSides(a, b, e) {
   const auto = autoSides(a, b);
-  const fs = e?.fromSide && e.fromSide !== 'auto' ? e.fromSide : auto.from;
-  const ts = e?.toSide && e.toSide !== 'auto' ? e.toSide : auto.to;
+  return {
+    fs: e?.fromSide && e.fromSide !== 'auto' ? e.fromSide : auto.from,
+    ts: e?.toSide && e.toSide !== 'auto' ? e.toSide : auto.to,
+  };
+}
+
+function edgePath(a, b, e, bundle) {
+  if (!a || !b) return null;
+  const { fs, ts } = resolveEdgeSides(a, b, e);
   const p0 = anchorPoint(a, fs), p3 = anchorPoint(b, ts);
   if (!isFiniteNum(p0.x) || !isFiniteNum(p0.y) || !isFiniteNum(p3.x) || !isFiniteNum(p3.y)) return null;
-  const dist = Math.hypot(p3.x - p0.x, p3.y - p0.y);
-  const pull = clampNum(dist * 0.4, 24, 160);
   const n0 = normalOf(fs), n3 = normalOf(ts);
-  const p1 = { x: p0.x + n0.x * pull, y: p0.y + n0.y * pull };
-  const p2 = { x: p3.x + n3.x * pull, y: p3.y + n3.y * pull };
-  const labelX = (p0.x + 3 * p1.x + 3 * p2.x + p3.x) / 8;
-  const labelY = (p0.y + 3 * p1.y + 3 * p2.y + p3.y) / 8;
+  const outLen = bundle && isFiniteNum(bundle.fromLen) && bundle.fromLen > 0 ? bundle.fromLen : 0;
+  const inLen = bundle && isFiniteNum(bundle.toLen) && bundle.toLen > 0 ? bundle.toLen : 0;
+  const q0 = outLen > 0 ? { x: p0.x + n0.x * outLen, y: p0.y + n0.y * outLen } : p0;
+  const q3 = inLen > 0 ? { x: p3.x + n3.x * inLen, y: p3.y + n3.y * inLen } : p3;
+  const dist = Math.hypot(q3.x - q0.x, q3.y - q0.y);
+  const pull = clampNum(dist * 0.4, 24, 160);
+  const p1 = { x: q0.x + n0.x * pull, y: q0.y + n0.y * pull };
+  const p2 = { x: q3.x + n3.x * pull, y: q3.y + n3.y * pull };
+  const labelX = (q0.x + 3 * p1.x + 3 * p2.x + q3.x) / 8;
+  const labelY = (q0.y + 3 * p1.y + 3 * p2.y + q3.y) / 8;
   const r = (v) => Math.round(v * 100) / 100;
-  return { d: `M ${r(p0.x)} ${r(p0.y)} C ${r(p1.x)} ${r(p1.y)}, ${r(p2.x)} ${r(p2.y)}, ${r(p3.x)} ${r(p3.y)}`, labelX: r(labelX), labelY: r(labelY) };
+  return { d: `M ${r(q0.x)} ${r(q0.y)} C ${r(p1.x)} ${r(p1.y)}, ${r(p2.x)} ${r(p2.y)}, ${r(q3.x)} ${r(q3.y)}`, labelX: r(labelX), labelY: r(labelY) };
+}
+
+function flowBundleEnabled(v) { return v !== false; }
+
+function buildFlowBundles(nodes, edges, enabled = true) {
+  const out = { byEdge: {}, trunks: [] };
+  if (!enabled || !Array.isArray(nodes) || !Array.isArray(edges) || edges.length < 2) return out;
+  const byId = new Map();
+  for (const n of nodes) if (n && typeof n.id === 'string' && n.id) byId.set(n.id, n);
+  const groups = new Map();
+  for (const e of edges) {
+    if (!e || typeof e.id !== 'string' || !e.id) continue;
+    const a = byId.get(asStr(e.from)), b = byId.get(asStr(e.to));
+    if (!a || !b || a === b) continue;
+    const { fs, ts } = resolveEdgeSides(a, b, e);
+    const p0 = anchorPoint(a, fs), p3 = anchorPoint(b, ts);
+    if (!isFiniteNum(p0.x) || !isFiniteNum(p0.y) || !isFiniteNum(p3.x) || !isFiniteNum(p3.y)) continue;
+    const heads = arrowHeads(e.arrow);
+    const stroke = sanitizeHexColor(e.stroke) || DEFAULT_EDGE_STROKE;
+    const lineStyle = resolveFlowLineStyle(e.lineStyle, e.dashed);
+    const lineWidth = normalizeFlowLineWidth(e.lineWidth);
+    const push = (nodeId, side, role, head, proj) => {
+      if (!(proj > 0)) return;
+      const key = JSON.stringify([nodeId, side, role, head ? 1 : 0, stroke, lineStyle, lineWidth]);
+      const g = groups.get(key);
+      if (g) { g.edgeIds.push(e.id); if (proj < g.minProj) g.minProj = proj; }
+      else groups.set(key, { key, nodeId, side, role, head, stroke, lineStyle, lineWidth, edgeIds: [e.id], minProj: proj });
+    };
+    const n0 = normalOf(fs), n3 = normalOf(ts);
+    push(asStr(e.from), fs, 'from', heads.start, (p3.x - p0.x) * n0.x + (p3.y - p0.y) * n0.y);
+    push(asStr(e.to), ts, 'to', heads.end, (p0.x - p3.x) * n3.x + (p0.y - p3.y) * n3.y);
+  }
+  const winner = new Map();
+  for (const g of groups.values()) {
+    if (g.edgeIds.length < 2) continue;
+    const len = Math.min(g.minProj * FLOW_TRUNK_RATIO, FLOW_TRUNK_MAX);
+    if (!(len >= FLOW_TRUNK_MIN)) continue;
+    const slot = JSON.stringify([g.nodeId, g.side]);
+    const cur = winner.get(slot);
+    if (!cur || g.edgeIds.length > cur.edgeIds.length || (g.edgeIds.length === cur.edgeIds.length && g.key < cur.key)) winner.set(slot, g);
+  }
+  const r = (v) => Math.round(v * 100) / 100;
+  const picked = Array.from(winner.values()).sort((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
+  for (const g of picked) {
+    const node = byId.get(g.nodeId);
+    if (!node) continue;
+    const len = r(Math.min(g.minProj * FLOW_TRUNK_RATIO, FLOW_TRUNK_MAX));
+    const p = anchorPoint(node, g.side), n = normalOf(g.side);
+    const q = { x: p.x + n.x * len, y: p.y + n.y * len };
+    const ids = g.edgeIds.slice().sort();
+    for (const id of ids) {
+      const slot = out.byEdge[id] || (out.byEdge[id] = { fromLen: 0, toLen: 0 });
+      if (g.role === 'from') slot.fromLen = len; else slot.toLen = len;
+    }
+    const d = g.role === 'from'
+      ? `M ${r(p.x)} ${r(p.y)} L ${r(q.x)} ${r(q.y)}`
+      : `M ${r(q.x)} ${r(q.y)} L ${r(p.x)} ${r(p.y)}`;
+    out.trunks.push({
+      key: g.key, d,
+      ...(g.stroke !== DEFAULT_EDGE_STROKE ? { stroke: g.stroke } : {}),
+      ...(g.lineStyle !== 'solid' ? { lineStyle: g.lineStyle } : {}),
+      ...(g.lineWidth !== 'normal' ? { lineWidth: g.lineWidth } : {}),
+      head: g.head, headOutward: g.role === 'to', edgeIds: ids,
+    });
+  }
+  return out;
+}
+
+const snapToGrid = (v, grid = FLOW_GRID) => Math.round(v / grid) * grid;
+
+function snapTolerance(scale, px = SNAP_TOL_PX) {
+  const s = isFiniteNum(scale) && scale > 0 ? scale : 1;
+  return px / s;
+}
+
+function snapAxis(lo, mid, hi, peers, tol) {
+  let bestDelta = 0, bestValue = 0, bestAbs = Infinity;
+  for (const p of peers) {
+    const pairs = [[lo, p.lo], [mid, p.mid], [hi, p.hi]];
+    for (const [cur, tgt] of pairs) {
+      if (!isFiniteNum(cur) || !isFiniteNum(tgt)) continue;
+      const d = tgt - cur, ad = Math.abs(d);
+      if (ad > tol) continue;
+      if (ad < bestAbs) { bestAbs = ad; bestDelta = d; bestValue = tgt; }
+    }
+  }
+  if (bestAbs === Infinity) return null;
+  const refs = [];
+  for (const p of peers) {
+    if (refs.length >= SNAP_GUIDE_MAX_REFS) break;
+    if (p.lo === bestValue || p.mid === bestValue || p.hi === bestValue) refs.push(p.cross);
+  }
+  return { delta: bestDelta, value: bestValue, refs };
+}
+
+function resolveNodeDrag(base, dx, dy, peers, tol, enabled = true) {
+  const rawX = base.x + dx, rawY = base.y + dy;
+  const plain = {
+    preview: { x: rawX, y: rawY },
+    commit: { x: snapToGrid(rawX, FLOW_GRID), y: snapToGrid(rawY, FLOW_GRID) },
+    guides: [],
+  };
+  if (!enabled || !Array.isArray(peers) || peers.length === 0) return plain;
+  if (!isFiniteNum(rawX) || !isFiniteNum(rawY) || !isFiniteNum(tol) || tol <= 0) return plain;
+  const xs = peers.map(p => ({ lo: p.x, mid: p.x + p.w / 2, hi: p.x + p.w, cross: { from: p.y, to: p.y + p.h } }));
+  const ys = peers.map(p => ({ lo: p.y, mid: p.y + p.h / 2, hi: p.y + p.h, cross: { from: p.x, to: p.x + p.w } }));
+  const hitX = snapAxis(rawX, rawX + base.w / 2, rawX + base.w, xs, tol);
+  const hitY = snapAxis(rawY, rawY + base.h / 2, rawY + base.h, ys, tol);
+  const x = hitX ? rawX + hitX.delta : rawX;
+  const y = hitY ? rawY + hitY.delta : rawY;
+  const guides = [];
+  if (hitX) {
+    let from = y, to = y + base.h;
+    for (const rf of hitX.refs) { if (rf.from < from) from = rf.from; if (rf.to > to) to = rf.to; }
+    guides.push({ axis: 'x', value: hitX.value, from, to });
+  }
+  if (hitY) {
+    let from = x, to = x + base.w;
+    for (const rf of hitY.refs) { if (rf.from < from) from = rf.from; if (rf.to > to) to = rf.to; }
+    guides.push({ axis: 'y', value: hitY.value, from, to });
+  }
+  return {
+    preview: { x, y },
+    commit: { x: hitX ? x : snapToGrid(rawX, FLOW_GRID), y: hitY ? y : snapToGrid(rawY, FLOW_GRID) },
+    guides,
+  };
+}
+
+function approxLabelWidth(text, fontSize = FLOW_LABEL_FONT) {
+  const s = asStr(text);
+  let units = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0) || 0;
+    const wide =
+      (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) ||
+      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) ||
+      (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff00 && c <= 0xff60) ||
+      (c >= 0xffe0 && c <= 0xffe6);
+    units += wide ? 1 : 0.55;
+  }
+  return Math.round(units * fontSize * 100) / 100;
+}
+
+function flowLabelSize(text, fontSize = FLOW_LABEL_FONT) {
+  return { w: approxLabelWidth(text, fontSize) + FLOW_LABEL_PAD * 2, h: FLOW_LABEL_H };
+}
+
+const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+function layoutFlowLabels(items, obstacles) {
+  const list = Array.isArray(items) ? items : [];
+  const walls = (Array.isArray(obstacles) ? obstacles : []).filter(
+    o => o && isFiniteNum(o.x) && isFiniteNum(o.y) && isFiniteNum(o.w) && isFiniteNum(o.h));
+  const placed = [], res = [];
+  const free = (box) => {
+    for (const o of walls) if (overlaps(box, o)) return false;
+    for (const o of placed) if (overlaps(box, o)) return false;
+    return true;
+  };
+  for (const it of list) {
+    if (!it || !isFiniteNum(it.cx) || !isFiniteNum(it.cy)) continue;
+    const w = isFiniteNum(it.w) && it.w > 0 ? it.w : FLOW_LABEL_H;
+    const h = isFiniteNum(it.h) && it.h > 0 ? it.h : FLOW_LABEL_H;
+    const step = h + 4;
+    let done = false;
+    for (const off of [0, -step, step, -step * 2, step * 2, -step * 3, step * 3]) {
+      const box = { x: it.cx - w / 2, y: it.cy - h / 2 + off, w, h };
+      if (!free(box)) continue;
+      placed.push(box);
+      res.push({ id: it.id, mode: 'label', x: it.cx, y: it.cy + off });
+      done = true;
+      break;
+    }
+    if (done) continue;
+    const dot = FLOW_LABEL_DOT_R * 2;
+    for (const off of [0, -step, step, -step * 2, step * 2, -step * 3, step * 3]) {
+      const box = { x: it.cx - dot / 2, y: it.cy - dot / 2 + off, w: dot, h: dot };
+      if (!free(box)) continue;
+      placed.push(box);
+      res.push({ id: it.id, mode: 'dot', x: it.cx, y: it.cy + off });
+      done = true;
+      break;
+    }
+    if (!done) res.push({ id: it.id, mode: 'dot', x: it.cx, y: it.cy });
+  }
+  return res;
 }
 
 function resolveFlowNodeView(node, portfolio, summary) {
@@ -571,6 +790,236 @@ console.log('\n■ edgePath — null 계약 (throw 시 앱 전체 오류 페이�
   const b = mkNode({ id: 'b', x: 0, y: 300, w: 100, h: 60 });
   const p = edgePath(a, b);
   eq('#20 아래쪽 이웃 → 세로 연결(시작 y = a 하단)', Number(p.d.split(' ')[2]), 60);
+}
+
+// ───────── 연결선 합치기(번들) ─────────
+console.log('\n■ 연결선 합치기 — 하위호환의 축');
+{
+  // ⚠️ 이 블록의 `legacyEdgePath`는 **번들 도입 이전 본문 그대로**다(커밋 0c8a58c).
+  //    "bundle을 안 넘기면 종전과 같다"를 논증이 아니라 **옛 코드와의 대조**로 못 박는다.
+  //    edgePath를 고칠 때 이 함수는 절대 따라 고치지 말 것 — 그러면 단언이 통째로 죽는다.
+  const legacyEdgePath = (a, b, e) => {
+    if (!a || !b) return null;
+    const auto = autoSides(a, b);
+    const fs = e?.fromSide && e.fromSide !== 'auto' ? e.fromSide : auto.from;
+    const ts = e?.toSide && e.toSide !== 'auto' ? e.toSide : auto.to;
+    const p0 = anchorPoint(a, fs), p3 = anchorPoint(b, ts);
+    if (!isFiniteNum(p0.x) || !isFiniteNum(p0.y) || !isFiniteNum(p3.x) || !isFiniteNum(p3.y)) return null;
+    const dist = Math.hypot(p3.x - p0.x, p3.y - p0.y);
+    const pull = clampNum(dist * 0.4, 24, 160);
+    const n0 = normalOf(fs), n3 = normalOf(ts);
+    const p1 = { x: p0.x + n0.x * pull, y: p0.y + n0.y * pull };
+    const p2 = { x: p3.x + n3.x * pull, y: p3.y + n3.y * pull };
+    const labelX = (p0.x + 3 * p1.x + 3 * p2.x + p3.x) / 8;
+    const labelY = (p0.y + 3 * p1.y + 3 * p2.y + p3.y) / 8;
+    const r = (v) => Math.round(v * 100) / 100;
+    return { d: `M ${r(p0.x)} ${r(p0.y)} C ${r(p1.x)} ${r(p1.y)}, ${r(p2.x)} ${r(p2.y)}, ${r(p3.x)} ${r(p3.y)}`, labelX: r(labelX), labelY: r(labelY) };
+  };
+  let seed = 20260910;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const mk = (i) => makeFlowNode({ id: 'n' + i, x: Math.round((rnd() - 0.5) * 2000), y: Math.round((rnd() - 0.5) * 2000), w: 60 + Math.round(rnd() * 400), h: 44 + Math.round(rnd() * 300) });
+  const SIDES = [undefined, 'auto', 'l', 'r', 't', 'b'];
+  let mismatch = 0, cases = 0;
+  for (let i = 0; i < 3000; i++) {
+    const a = mk(i), b = mk(i + 1);
+    const e = { fromSide: SIDES[Math.floor(rnd() * SIDES.length)], toSide: SIDES[Math.floor(rnd() * SIDES.length)] };
+    const want = JSON.stringify(legacyEdgePath(a, b, e));
+    // 미전달 · null · 0/0 · 음수/NaN — 네 형태가 전부 종전과 같아야 한다
+    for (const bundle of [undefined, null, { fromLen: 0, toLen: 0 }, { fromLen: -5, toLen: NaN }]) {
+      cases++;
+      if (JSON.stringify(edgePath(a, b, e, bundle)) !== want) mismatch++;
+    }
+  }
+  eq(`#103 번들 인자가 없으면 종전 구현과 문자 단위로 동일 (${cases}건 대조)`, mismatch, 0);
+  // ⚠️ 이 단언이 없으면 위 #103이 '번들 인자가 아무 일도 안 한다'로도 통과한다(죽은 단언).
+  const A = makeFlowNode({ id: 'a', x: 0, y: 0, w: 100, h: 60 });
+  const B = makeFlowNode({ id: 'b', x: 400, y: 0, w: 100, h: 60 });
+  ok('#103b 번들 인자를 주면 경로가 실제로 달라진다(죽은 인자 방지)',
+    edgePath(A, B, null).d !== edgePath(A, B, null, { fromLen: 40, toLen: 0 }).d);
+  eq('#103c 트렁크만큼 시작점이 법선 방향으로 밀린다', edgePath(A, B, null, { fromLen: 40, toLen: 0 }).d.split(' ')[1], '140');
+  eq('#103d 도착 트렁크는 끝점을 당긴다', edgePath(A, B, null, { fromLen: 0, toLen: 40 }).d.split(', ').pop(), '360 30');
+}
+
+console.log('\n■ 연결선 합치기 — 그룹핑');
+{
+  const N = (id, x, y, w = 180, h = 120) => makeFlowNode({ id, x, y, w, h });
+  const E = (id, from, to, o = {}) => ({ id, from, to, label: '', arrow: 'to', ...o });
+  const fan = [N('h', 0, 300), N('a', 600, 0), N('b', 600, 300), N('c', 600, 600)];
+  const fanE = [E('1', 'h', 'a'), E('2', 'h', 'b'), E('3', 'h', 'c')];
+
+  const r = buildFlowBundles(fan, fanE, true);
+  eq('#104 같은 변·같은 스타일 3선 → 트렁크 1개', r.trunks.length, 1);
+  eq('#104b 트렁크가 3선을 모두 포함', JSON.stringify(r.trunks[0].edgeIds), JSON.stringify(['1', '2', '3']));
+  ok('#104c 세 선 모두 같은 트렁크 길이를 받는다',
+    r.byEdge['1'].fromLen === r.byEdge['2'].fromLen && r.byEdge['2'].fromLen === r.byEdge['3'].fromLen);
+
+  // ⚠️ 스타일이 섞이면 합치지 않는다 — 트렁크는 그룹당 하나뿐이라 합치면 나머지 색이 사라진다.
+  const mixed = buildFlowBundles(fan, [E('1', 'h', 'a', { stroke: '#70AD47' }), E('2', 'h', 'b', { stroke: '#70AD47' }), E('3', 'h', 'c', { stroke: '#DC2626' })], true);
+  eq('#104d 색이 다른 선은 뭉치에서 빠진다', JSON.stringify(mixed.trunks.map(t => t.edgeIds)), JSON.stringify([['1', '2']]));
+  ok('#104e 빠진 선에는 트렁크가 없다', mixed.byEdge['3'] === undefined);
+  const styled = buildFlowBundles(fan, [E('1', 'h', 'a'), E('2', 'h', 'b'), E('3', 'h', 'c', { lineStyle: 'double' })], true);
+  eq('#104f 선 종류가 다르면 갈린다(이중선이 공유 구간을 지우는 것 방지)', JSON.stringify(styled.trunks.map(t => t.edgeIds)), JSON.stringify([['1', '2']]));
+  // ⚠️ 화살촉이 갈리면 공유 트렁크 뿌리에 모순되는 화살촉이 생긴다.
+  const arrowed = buildFlowBundles(fan, [E('1', 'h', 'a'), E('2', 'h', 'b'), E('3', 'h', 'c', { arrow: 'from' })], true);
+  eq('#104g 화살촉 방향이 갈리면 뭉치도 갈린다', JSON.stringify(arrowed.trunks.map(t => t.edgeIds)), JSON.stringify([['1', '2']]));
+
+  eq('#105 enabled=false면 아무것도 만들지 않는다', JSON.stringify(buildFlowBundles(fan, fanE, false)), JSON.stringify({ byEdge: {}, trunks: [] }));
+  eq('#105b 선이 1개뿐이면 트렁크 없음', buildFlowBundles(fan, [E('1', 'h', 'a')], true).trunks.length, 0);
+  eq('#105c 자기 자신으로 가는 선은 제외', buildFlowBundles([N('a', 0, 0)], [E('s', 'a', 'a'), E('s2', 'a', 'a')], true).trunks.length, 0);
+  // ⚠️ 입력 순서가 결과를 바꾸면 같은 데이터가 렌더마다 다른 화면을 낸다.
+  eq('#105d 입력 순서를 뒤집어도 같은 결과', JSON.stringify(buildFlowBundles(fan, fanE.slice().reverse(), true)), JSON.stringify(r));
+
+  // ⚠️ 한 (도형, 변)에 나가는 뭉치와 들어오는 뭉치가 동시에 서면 두 트렁크가 **같은 선분**이 되고
+  //    화살촉이 반대 방향으로 같은 자리에 찍힌다 → 구성원이 많은 쪽만 남는다.
+  const both = [N('h', 0, 300), N('a', 600, 0), N('b', 600, 200), N('c', 600, 400), N('d', 600, 600)];
+  const bothE = [E('o1', 'h', 'a'), E('o2', 'h', 'b'), E('o3', 'h', 'c'), E('i1', 'd', 'h'), E('i2', 'a', 'h')];
+  const rb = buildFlowBundles(both, bothE, true);
+  eq('#106 한 (도형,변)에는 트렁크가 최대 하나', rb.trunks.filter(t => t.key.startsWith(String.raw`["h","r"`)).length, 1);
+  ok('#106b 남는 쪽은 구성원이 많은 뭉치', rb.trunks.some(t => t.edgeIds.length === 3));
+}
+
+console.log('\n■ 연결선 합치기 — 트렁크 길이');
+{
+  const N = (id, x, y, w = 180, h = 120) => makeFlowNode({ id, x, y, w, h });
+  const E = (id, from, to) => ({ id, from, to, label: '', arrow: 'to' });
+  // ⚠️ 세로 오프셋을 ±100으로 둔다 — ±300이면 gap이 작을 때 |dy| > |dx|가 되어 autoSides가
+  //    위/아래 변을 골라 버리고, 이 블록이 재려던 '가로 뭉치의 트렁크 길이'를 재지 못한다.
+  const lenAt = (gap) => {
+    const r = buildFlowBundles([N('a', 0, 0), N('b', 180 + gap, -100), N('c', 180 + gap, 100)], [E('1', 'a', 'b'), E('2', 'a', 'c')], true);
+    return r.byEdge['1'] ? r.byEdge['1'].fromLen : 0;
+  };
+  eq('#107 간격 300 → min(300*0.45, 96) = 96 (상한)', lenAt(300), 96);
+  eq('#107b 간격 120 → 54', lenAt(120), 54);
+  eq('#107c 간격 2000이어도 상한 96', lenAt(2000), 96);
+  // ⚠️ 하한 미만이면 트렁크를 만들지 않는다 — 9px짜리는 '합쳐진 것도 안 합쳐진 것도 아닌' 중간 상태다.
+  eq('#107d 간격 20 → 9px는 하한(16) 미만이라 번들 아님', lenAt(20), 0);
+  eq('#107e 간격 36 → 16.2px는 하한 이상이라 번들', lenAt(36), 16.2);
+  // ⚠️ 비율이 1 미만이라 **가장 가까운 대상을 지나치는 일이 구조적으로 불가능**하다.
+  let over = 0;
+  for (let gap = 18; gap <= 3000; gap += 7) if (lenAt(gap) >= gap) over++;
+  eq('#107f 트렁크가 가장 가까운 대상을 지나치지 않는다(전 구간)', over, 0);
+}
+
+console.log('\n■ 시트 번들 토글 — 저장·정규화·지문');
+{
+  eq('#108 미설정은 켜짐', flowBundleEnabled(undefined), true);
+  eq('#108b false만 꺼짐', flowBundleEnabled(false), false);
+  eq('#108c true도 켜짐', flowBundleEnabled(true), true);
+  eq('#108d 손상값은 켜짐(fail-safe)', flowBundleEnabled('nope'), true);
+
+  const withOff = [cleanMap({ id: 'm1', bundleEdges: false })];
+  eq('#109 정규형이면 원본 참조(멱등)', normalizeFlowMaps(withOff) === withOff, true);
+  // ⚠️ 최우선 회귀 — 재구축 경로(mapChanged=true)에서 화이트리스트에 빠지면 **조용히 사라진다**.
+  //    정규형일 때는 원본 참조라 살아남으므로, 반드시 mapChanged를 강제한 픽스처로 재야 한다.
+  const forced = normalizeFlowMaps([cleanMap({ id: 'm1', name: 123, bundleEdges: false })]);
+  eq('#109b 재구축 경로에서도 토글이 보존된다', forced[0].bundleEdges, false);
+  eq('#109c 재구축이 실제로 일어났다(픽스처가 유효한가)', forced[0].name, '흐름도');
+  const on = normalizeFlowMaps([cleanMap({ id: 'm1', bundleEdges: true })]);
+  eq('#109d true는 생략형으로 정규화(생략 = 켜짐)', 'bundleEdges' in on[0], false);
+  eq('#109e 손상값도 생략형', 'bundleEdges' in normalizeFlowMaps([cleanMap({ id: 'm1', bundleEdges: 'x' })])[0], false);
+
+  // ⚠️ 지문 누락 = 토글만 바꾼 세션의 STATE 저장 통째 스킵(별도 창에서는 영구히 저장 안 됨).
+  ok('#110 토글을 끄면 지문이 달라진다',
+    flowFingerprint([cleanMap({ id: 'm1' })]) !== flowFingerprint([cleanMap({ id: 'm1', bundleEdges: false })]));
+  // ⚠️ 반대로 항상 토큰을 실으면 배포 직후 모든 시트의 지문이 달라져 아무것도 안 고쳤는데 저장이 나간다.
+  eq('#110b 켜진 시트(생략)와 true는 지문이 같다',
+    flowFingerprint([cleanMap({ id: 'm1' })]), flowFingerprint([cleanMap({ id: 'm1', bundleEdges: true })]));
+  ok('#110c 복제는 토글을 승계한다', duplicateFlowMap(withOff, 'm1')[1].bundleEdges === false);
+  // ⚠️ 내용 판정에 넣으면 '토글만 끈 빈 시트'가 내용 있음이 되어 백업 복원 경로가 영구히 막힌다.
+  eq('#110d 토글은 "내용 있음" 판정에 들어가지 않는다', flowMapsHaveContent([{ nodes: [], edges: [], bundleEdges: false }]), false);
+  eq('#110e 새 시트에 기본값을 저장하지 않는다', 'bundleEdges' in makeFlowMap('x'), false);
+}
+
+console.log('\n■ 연결 위치(fromSide/toSide) 정규화');
+{
+  eq('#111 4방위는 통과', [normalizeFlowSide('l'), normalizeFlowSide('r'), normalizeFlowSide('t'), normalizeFlowSide('b')].join(','), 'l,r,t,b');
+  eq('#111b auto는 생략형', normalizeFlowSide('auto'), undefined);
+  eq('#111c 손상값은 생략형', normalizeFlowSide('xyz'), undefined);
+  // ⚠️ 검증 없이 통과시키면 손상값이 그대로 side로 쓰여 anchorPoint의 default('아래')로 떨어진다.
+  const m = normalizeFlowMaps([cleanMap({ id: 'm1', edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', fromSide: 'zzz' }] })]);
+  eq('#111d 정규화가 손상 side를 제거', 'fromSide' in m[0].edges[0], false);
+  const keep = normalizeFlowMaps([cleanMap({ id: 'm1', edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', fromSide: 'r' }] })]);
+  eq('#111e 유효한 side는 보존', keep[0].edges[0].fromSide, 'r');
+}
+
+console.log('\n■ 도형 정렬 스냅');
+{
+  const P = (x, y, w = 260, h = 120) => makeFlowNode({ id: 'ref', x, y, w, h });
+  const base = { x: 0, y: 0, w: 180, h: 120 };
+  // ⚠️ 폭을 262로 둔다(260 아님) — right=862라 이동 후보(862-180=682)가 **격자 배수가 아니다**.
+  //    260이면 후보가 680(=85×8)이 되어 "정렬된 축에 격자를 다시 걸어도 값이 같아" #115가
+  //    죽은 단언이 된다(이 저장소가 반복해서 겪은 형태).
+  const peers = [P(600, 100, 262)];      // left=600 center=731 right=862
+  const tol = snapTolerance(1);
+  eq('#112 임계값은 화면 px을 배율로 나눈 값', [snapTolerance(1), snapTolerance(0.25), snapTolerance(2.5)].join(','), '6,24,2.4');
+  // ⚠️ tol이 Infinity가 되면 도형이 화면 밖 먼 노드로 순간이동한다.
+  eq('#112b 손상 배율은 1로 떨어뜨린다', [snapTolerance(NaN), snapTolerance(0), snapTolerance(-2), snapTolerance('x')].join(','), '6,6,6,6');
+
+  // 사용자 요구: "모서리 인근에 놓으면 가운데로 강제 정렬하면 안 된다"
+  const nearLeft = resolveNodeDrag(base, 602, 400, peers, tol, true);
+  eq('#113 왼쪽 모서리 근처면 왼쪽에 맞춘다', nearLeft.preview.x, 600);
+  const nearCenter = resolveNodeDrag(base, 644, 400, peers, tol, true);   // center 후보 = 731-90 = 641
+  eq('#113b 가운데 근처면 가운데에 맞춘다', nearCenter.preview.x, 641);
+  const nearRight = resolveNodeDrag(base, 679, 400, peers, tol, true);    // right 후보 = 862-180 = 682
+  eq('#113c 오른쪽 모서리 근처면 오른쪽에 맞춘다', nearRight.preview.x, 682);
+  // ⚠️ 이 셋이 전부 통과해야 '중심에 가산점을 주지 않는다'가 실증된다.
+  ok('#113d 세 후보가 서로 다른 자리로 간다(중심 편향 없음)',
+    nearLeft.preview.x !== nearCenter.preview.x && nearCenter.preview.x !== nearRight.preview.x);
+
+  const far = resolveNodeDrag(base, 300, 400, peers, tol, true);
+  eq('#114 임계 밖이면 정렬하지 않는다', far.preview.x, 300);
+  eq('#114b 정렬이 없는 축은 종전대로 격자 커밋', far.commit.x, 304);
+  eq('#114c 가이드도 없다', far.guides.length, 0);
+
+  // ⚠️ 최우선 회귀 — 정렬된 축에 격자를 다시 걸면 기본폭(180, mod 8 === 4)에서 100% 4px 어긋난다.
+  eq('#115 정렬된 축은 커밋에도 격자를 적용하지 않는다', nearRight.commit.x, 682);
+  ok('#115b 그 값은 격자 배수가 아니다(픽스처가 유효한가)', 682 % 8 !== 0);
+  eq('#115c 미리보기와 커밋이 같다', nearRight.preview.x, nearRight.commit.x);
+
+  // 축 독립
+  const both = resolveNodeDrag(base, 602, 102, [P(600, 100)], tol, true);
+  eq('#116 x·y를 독립으로 판정한다', [both.preview.x, both.preview.y].join(','), '600,100');
+  eq('#116b 축마다 가이드가 하나씩', both.guides.length, 2);
+  const onlyX = resolveNodeDrag(base, 602, 999, [P(600, 100)], tol, true);
+  eq('#116c 한 축만 맞아도 그 축만 맞춘다', [onlyX.preview.x, onlyX.guides.length].join(','), '600,1');
+
+  // ⚠️ 스냅을 끄면 **종전과 바이트 단위로 동일**해야 한다.
+  const off = resolveNodeDrag(base, 602, 402, peers, tol, false);
+  eq('#117 스냅 OFF는 종전 동작(미리보기 raw · 커밋 격자)', JSON.stringify(off), JSON.stringify({ preview: { x: 602, y: 402 }, commit: { x: 600, y: 400 }, guides: [] }));
+  eq('#117b 참조가 없어도 종전 동작', JSON.stringify(resolveNodeDrag(base, 602, 402, [], tol, true)), JSON.stringify(off));
+
+  // 가이드 범위 = 이동 도형 ∪ 맞춰진 참조들
+  eq('#118 가이드는 스냅된 값에 놓인다', nearLeft.guides[0].value, 600);
+  eq('#118b 가이드 축', nearLeft.guides[0].axis, 'x');
+  ok('#118c 가이드가 두 도형을 모두 덮는다', nearLeft.guides[0].from <= 100 && nearLeft.guides[0].to >= 520);
+}
+
+console.log('\n■ 선 위 라벨');
+{
+  // ⚠️ 종전 `length * 12`는 한글/영문 혼용에서 최대 2배까지 틀린다.
+  eq('#119 한글은 1em', approxLabelWidth('가나다'), 36);
+  eq('#119b 영문은 0.55em', approxLabelWidth('abcde'), 33);
+  ok('#119c 영문 12자는 종전 추정(144)보다 훨씬 좁다', approxLabelWidth('ABCDEFGHIJKL') < 100);
+  eq('#119d 빈 문자열·비문자열은 0', [approxLabelWidth(''), approxLabelWidth(null), approxLabelWidth(7)].join(','), '0,0,0');
+  eq('#119e 상자는 좌우 패딩을 더한다', flowLabelSize('가').w, 12 + FLOW_LABEL_PAD * 2);
+
+  // ⚠️ **하위호환의 축** — 충돌이 없으면 종전과 같은 자리(오프셋 0)에 놓인다.
+  const free = layoutFlowLabels([{ id: 'a', cx: 500, cy: 500, w: 80, h: 22 }, { id: 'b', cx: 900, cy: 500, w: 80, h: 22 }], []);
+  eq('#120 겹치지 않으면 제자리', JSON.stringify(free), JSON.stringify([{ id: 'a', mode: 'label', x: 500, y: 500 }, { id: 'b', mode: 'label', x: 900, y: 500 }]));
+  eq('#120b 도형이 있어도 안 겹치면 제자리', JSON.stringify(layoutFlowLabels([{ id: 'a', cx: 500, cy: 500, w: 80, h: 22 }], [{ x: 0, y: 0, w: 100, h: 100 }])), JSON.stringify([{ id: 'a', mode: 'label', x: 500, y: 500 }]));
+
+  const clash = layoutFlowLabels([{ id: 'a', cx: 500, cy: 500, w: 80, h: 22 }, { id: 'b', cx: 505, cy: 502, w: 80, h: 22 }], []);
+  eq('#121 먼저 온 라벨은 제자리', JSON.stringify(clash[0]), JSON.stringify({ id: 'a', mode: 'label', x: 500, y: 500 }));
+  ok('#121b 겹친 라벨만 비켜난다', clash[1].mode === 'label' && clash[1].y !== 502);
+
+  // ⚠️ 도형 박스를 장애물로 받지 않으면 '메모를 썼는데 화면 어디에도 없다'가 된다.
+  const onNode = layoutFlowLabels([{ id: 'a', cx: 100, cy: 100, w: 80, h: 22 }], [{ x: 0, y: 60, w: 200, h: 80 }]);
+  ok('#122 도형 위면 비켜나거나 점으로 접힌다', onNode[0].mode === 'dot' || onNode[0].y !== 100);
+  const boxed = layoutFlowLabels([{ id: 'a', cx: 100, cy: 100, w: 80, h: 22 }], [{ x: -400, y: -400, w: 1000, h: 1000 }]);
+  eq('#122b 사방이 막히면 점으로 접는다(메모가 있다는 사실은 남긴다)', boxed[0].mode, 'dot');
+  eq('#122c 점도 제자리를 지킨다', [boxed[0].x, boxed[0].y].join(','), '100,100');
+  eq('#123 손상 입력은 조용히 건너뛴다', JSON.stringify(layoutFlowLabels([{ id: 'a', cx: NaN, cy: 1, w: 1, h: 1 }, null], [])), '[]');
+  eq('#123b 빈 입력은 빈 결과', JSON.stringify(layoutFlowLabels(null, null)), '[]');
 }
 
 console.log('\n■ removeNode / pruneOrphanEdges');
@@ -1328,6 +1777,152 @@ console.log('\n■ JSX 주석 안전성 (빌드 차단 사고 재발 방지)');
   ok(`#37 JSX 주석이 조기 종료되지 않는다${bad.length ? `\n      ${bad.join('\n      ')}` : ''}`, bad.length === 0);
 }
 
+console.log('\n■ 소스 텍스트 가드 — 연결선 합치기 배선 (⚠️ 선언이 아니라 사용부를 단언한다)');
+// ⚠️ 계산은 flowMap이 단독으로 한다 — 캔버스가 그룹 키를 다시 만들면 트렁크가 뻗는 변과
+//    실제로 그려지는 앵커가 갈린다.
+ok('#G130 FlowCanvas: 번들을 flowMap 공유 함수로 계산',
+  /const bundles = useMemo\(\s*\(\) => buildFlowBundles\(liveNodes, edges, bundleEnabled\),/.test(canvasNC));
+// ⚠️ 이 한 줄이 '번들이 실제로 화면에 반영되는' 유일한 연결이다. 인자를 빠뜨리면 계산은 도는데
+//    선은 종전대로 그려져 트렁크만 허공에 뜬다.
+ok('#G130b FlowCanvas: edgePath에 번들 인자를 넘긴다',
+  /edgePath\(nodeIndex\.get\(e\.from\), nodeIndex\.get\(e\.to\), e, bundles\.byEdge\[e\.id\]\)/.test(canvasNC));
+// ⚠️ 렌더가 edgePath를 다시 부르면 라벨 배치가 쓰는 좌표와 화면의 선이 갈린다.
+ok('#G130c FlowCanvas: 선 렌더는 paths memo를 읽는다', /const p = paths\.get\(e\.id\);/.test(canvasNC));
+{
+  // ⚠️ 트렁크는 **선 그룹보다 앞**(=아래)에 그린다. 뒤에 두면 도형과 선 위에 얹힌다.
+  const iTrunk = canvasNC.indexOf('{bundles.trunks.map(t => {');
+  const iEdges = canvasNC.indexOf('{edges.map(e => {');
+  const iNodes = canvasNC.indexOf('{nodes.map(raw => {');
+  ok('#G131 FlowCanvas: 트렁크 레이어가 선 그룹보다 먼저 그려진다', iTrunk >= 0 && iEdges > iTrunk);
+  // ⚠️ 라벨 레이어는 **선 뒤 · 노드 앞**이다. 노드보다 뒤에 두면 라벨 히트박스가 도형의
+  //    onPointerDown을 가로채 도형 드래그·리사이즈·연결이 통째로 죽는다.
+  const iLabels = canvasNC.indexOf("const pl = labels.get(e.id);");
+  ok('#G131b FlowCanvas: 라벨 레이어가 선 뒤 · 노드 앞', iLabels > iEdges && iNodes > iLabels);
+  ok('#G131c FlowCanvas: 노드 렌더 앵커가 실재(위 순서 비교가 죽은 단언이 아님)', iNodes > 0);
+}
+{
+  // ⚠️ 트렁크를 선마다 각자 그려 겹치게 하면 이중선이 배경색 지우개가 되고 선택 후광·히트박스가
+  //    공유 구간을 덮는다 → 그룹당 하나만 그리고, 그 하나는 포인터를 받지 않는다.
+  // ⚠️ 파일 전역 정규식으로 재지 말 것 — 이중선 분기의 `<g pointerEvents="none">` 하나가
+  //    단일선 path의 누락을 가려 준다(실측: 그 형태가 죽은 단언이었다). 두 분기를 잘라서 각각 본다.
+  const trunk = sliceBetween(canvasNC, '{bundles.trunks.map(t => {', '{edges.map(e => {');
+  const [tDouble = '', tSingle = ''] = trunk.split(') : (');
+  ok('#G132 FlowCanvas: 이중선 트렁크가 포인터를 받지 않는다',
+    /<g key=\{t\.key\} pointerEvents="none">/.test(tDouble));
+  ok('#G132b FlowCanvas: 일반 트렁크도 포인터를 받지 않는다(개별 선의 클릭을 가로채지 않는다)',
+    /pointerEvents="none"/.test(tSingle) && tSingle.length > 0);
+  ok('#G132c FlowCanvas: 트렁크도 flowLineRender 공유(선 종류·굵기가 본선과 갈리지 않게)',
+    /flowLineRender\(\{ lineStyle: t\.lineStyle, lineWidth: t\.lineWidth \}\)/.test(trunk));
+  // ⚠️ 이중선은 가운데를 배경색으로 덮어 만든다 — 바깥(3배 굵기) path에 화살촉을 달면
+  //    markerUnits="strokeWidth"가 기본이라 화살촉만 3배로 커진다.
+  // ⚠️ '안쪽에 marker가 있나'로만 재면 **죽은 단언**이다 — 바깥 path에 markerEnd를 **추가**해도
+  //    안쪽 것이 그대로 있어 통과한다(실측). 바깥 path 안에 marker가 **없음**을 봐야 한다.
+  //    (연결선 렌더의 #76c와 같은 함정.)
+  {
+    const outerPath = sliceBetween(tDouble, '<path', '/>');
+    ok('#G132d FlowCanvas: 이중선 트렁크의 바깥 path에는 화살촉을 붙이지 않는다',
+      outerPath.includes('strokeWidth={tLine.width}') && !outerPath.includes('marker'));
+    ok('#G132d2 FlowCanvas: 화살촉은 안쪽(배경색) path에 붙는다',
+      /stroke=\{FLOW_CANVAS_BG\}[\s\S]{0,200}markerEnd=\{t\.head && t\.headOutward/.test(tDouble));
+  }
+}
+ok('#G132b FlowCanvas: 트렁크도 flowLineRender 공유(선 종류·굵기가 본선과 갈리지 않게)',
+  /flowLineRender\(\{ lineStyle: t\.lineStyle, lineWidth: t\.lineWidth \}\)/.test(canvasNC));
+// ⚠️ 화살촉은 도형 경계 쪽 끝에 붙는다 — 출발 뭉치는 markerStart, 도착 뭉치는 markerEnd.
+ok('#G132c FlowCanvas: 트렁크 화살촉이 방향에 따라 갈린다',
+  /markerEnd=\{t\.head && t\.headOutward \? tMarker : undefined\}/.test(canvasNC)
+  && /markerStart=\{t\.head && !t\.headOutward \? tMarker : undefined\}/.test(canvasNC));
+ok('#G133 FlowBoard: 시트 토글 해석을 공유 함수로(생략 = 켜짐)',
+  /const bundleOn = flowBundleEnabled\(map\?\.bundleEdges\);/.test(boardNC));
+ok('#G133b FlowBoard: 캔버스에 토글을 전달', /bundleEnabled=\{bundleOn\}/.test(boardNC));
+{
+  // ⚠️ 켤 때 `true`를 저장하면 그 시트가 매 로드 재구축 경로로 떨어지는데 지문은 같아
+  //    그 정리가 영영 저장되지 않는다(무한 churn) → 필드를 **지운다**.
+  const tb = sliceBetween(boardNC, 'const toggleBundle = useCallback(() => {', '}, [patchMap]);');
+  ok('#G134 FlowBoard: 끌 때만 값을 저장한다', /bundleEdges: false/.test(tb));
+  ok('#G134b FlowBoard: 켤 때는 필드를 지운다', /delete next\.bundleEdges;/.test(tb));
+  ok('#G134c FlowBoard: `bundleEdges: true`를 저장하지 않는다', !/bundleEdges: true/.test(tb) && tb.length > 0);
+}
+
+console.log('\n■ 소스 텍스트 가드 — 도형 정렬 스냅 배선');
+{
+  // ⚠️ **최우선 회귀** — resolved 시드가 없으면 도형을 클릭만 해도(pointermove 0회)
+  //    liveNode가 undefined를 읽어 렌더 중 TypeError → 보드가 통째로 오류 화면이 된다.
+  const sd = sliceBetween(canvasNC, 'const startDrag = (e, n, mode) => {', 'const onPointerMove');
+  ok('#G140 FlowCanvas: startDrag가 resolved를 반드시 시드한다',
+    /const resolved = \{ preview: \{ x: base\.x, y: base\.y \}, commit: \{ x: base\.x, y: base\.y \}, guides: \[\] \};/.test(sd));
+  ok('#G140b FlowCanvas: 그 값을 drag state에 싣는다', /setDrag\(\{ mode, id: n\.id, ox: p\.x, oy: p\.y, dx: 0, dy: 0, base, resolved, peers \}\);/.test(sd));
+  // 스냅 참조는 시작 시 1회 고정(프레임마다 재수집 방지 + 자기 자신 제외).
+  ok('#G140c FlowCanvas: 참조 도형에서 자기 자신을 뺀다', /nodes\.filter\(x => x && x\.id !== n\.id\)/.test(sd));
+}
+{
+  const pm = sliceBetween(canvasNC, 'const onPointerMove = (e) => {', 'const endDrag');
+  ok('#G141 FlowCanvas: 이동 중 위치를 resolveNodeDrag가 정한다',
+    /const resolved = resolveNodeDrag\(d\.base, dx, dy, d\.peers, tolRef\.current, snapOnRef\.current && !bypass\);/.test(pm));
+  // ⚠️ Alt/Cmd = 이번 드래그만 해제. keydown 리스너를 쓰면 SVG에 tabIndex가 없어 신뢰할 수 없고
+  //    보드의 onKeyDownCapture 규약과도 얽힌다.
+  ok('#G141b FlowCanvas: 수식 키 해제가 실제로 배선돼 있다', /const bypass = !!\(e\.altKey \|\| e\.metaKey\);/.test(pm));
+  ok('#G141c FlowCanvas: 수식 키를 setState 업데이터 밖에서 읽는다(업데이터는 나중에 실행될 수 있다)',
+    pm.indexOf('const bypass') < pm.indexOf('setDrag(d => {'));
+}
+{
+  // ⚠️ **최우선 회귀** — 미리보기가 raw로 돌아가면 가이드선만 뜨고 도형은 안 붙는다.
+  const ln = sliceBetween(canvasNC, 'const liveNode = useCallback((n) => {', 'const liveNodes');
+  ok('#G142 FlowCanvas: 미리보기가 resolved.preview를 읽는다', /const p = drag\.resolved && drag\.resolved\.preview;/.test(ln));
+  ok('#G142b FlowCanvas: 미리보기를 raw(base+d)로 되돌리지 않았다', !/drag\.base\.x \+ drag\.dx/.test(ln) && ln.length > 0);
+}
+{
+  // ⚠️ **최우선 회귀** — 정렬된 축에 격자를 다시 걸면 기본폭(180, mod 8 === 4)에서 100% 4px 어긋난다.
+  const ed = sliceBetween(canvasNC, 'const endDrag = () => {', 'const onBgPointerDown');
+  ok('#G143 FlowCanvas: 커밋이 resolved.commit을 읽는다', /const c = d\.resolved && d\.resolved\.commit;/.test(ed));
+  ok('#G143b FlowCanvas: 정렬 결과 위에 격자를 덧씌우지 않는다(폴백에만 남는다)',
+    /x: c \? c\.x : snapToGrid\(/.test(ed) && !/snapToGrid\(\s*c\./.test(ed));
+}
+ok('#G144 FlowCanvas: 임계값은 화면 px을 배율로 나눈다(공유 함수)', /tolRef\.current = snapTolerance\(viewport\.scale\);/.test(canvasNC));
+ok('#G144b FlowCanvas: 임계값을 인라인 손계산으로 되돌리지 않았다', !/6\s*\/\s*viewport\.scale/.test(canvasNC));
+ok('#G145 FlowCanvas: 가이드는 drag state에서 그린다(별도 state로 분리 금지 — 리렌더 2배)',
+  /drag && drag\.resolved && drag\.resolved\.guides\.map\(/.test(canvasNC));
+ok('#G145b FlowCanvas: 가이드를 두 겹으로 그린다(도형 채우기 위에서 사라지지 않게)',
+  /stroke=\{FLOW_CANVAS_BG\} strokeWidth=\{3 \/ sc\}/.test(canvasNC) && /stroke="#f472b6"/.test(canvasNC));
+ok('#G145c FlowCanvas: 가이드 굵기가 배율을 보정한다', /strokeWidth=\{1 \/ sc\}/.test(canvasNC));
+ok('#G146 FlowBoard: 스냅 토글을 캔버스에 전달', /snapEnabled=\{snapOn\}/.test(boardNC));
+// ⚠️ 스냅 토글은 세션 로컬이다 — 저장 필드로 올리면 영속화 지점이 늘고, 뷰 선호도라 그럴 값이 아니다.
+ok('#G146b FlowBoard: 스냅 토글을 저장하지 않는다', !/snapOn/.test(mod) && /const \[snapOn, setSnapOn\] = useState\(true\)/.test(boardNC));
+
+console.log('\n■ 소스 텍스트 가드 — 선 위 라벨 배선');
+ok('#G150 FlowCanvas: 라벨 배치를 flowMap 공유 함수가 한다', /layoutFlowLabels\(items, obstacles\)/.test(canvasNC));
+// ⚠️ 장애물에 도형 박스가 빠지면 '메모를 썼는데 화면 어디에도 없다'가 된다.
+ok('#G150b FlowCanvas: 도형 박스를 장애물로 넣는다',
+  /const obstacles = liveNodes\.map\(n => \(\{ x: n\.x, y: n\.y, w: n\.w, h: n\.h \}\)\);/.test(canvasNC));
+// ⚠️ 상자 폭도 공유 함수 — 손으로 재면 배치가 고른 자리와 그려지는 상자가 갈린다.
+ok('#G150c FlowCanvas: 상자 크기를 flowLabelSize로 잰다', /const lSize = flowLabelSize\(e\.label\);/.test(canvasNC));
+ok('#G150d FlowCanvas: 옛 길이 추정(length * 12)을 되살리지 않았다',
+  !/label\.length \* 12/.test(canvasNC) && !/label\.length \* 6/.test(canvasNC));
+{
+  // ⚠️ 정상 라벨에 pointerEvents를 켜면 최대 수백 px짜리 상자가 남의 선 위에 얹혀 클릭을 가로챈다.
+  //    포인터를 받는 것은 점(dot)뿐이다.
+  const lab = sliceBetween(canvasNC, 'const pl = labels.get(e.id);', '{nodes.map(raw => {');
+  ok('#G151 FlowCanvas: 정상 라벨은 포인터를 받지 않는다', /<g key=\{`lb:\$\{e\.id\}`\} pointerEvents="none">/.test(lab));
+  ok('#G151b FlowCanvas: 점은 호버로 전문을 보여 준다', /onPointerEnter=\{\(\) => setHoverLabel\(/.test(lab));
+  ok('#G151c FlowCanvas: 점을 누르면 그 선이 선택된다', /onSelect\?\.\(`edge:\$\{e\.id\}`\)/.test(lab));
+  ok('#G151d FlowCanvas: 보조 경로로 네이티브 툴팁도 단다', /<title>\{e\.label\}<\/title>/.test(lab));
+}
+ok('#G152 FlowCanvas: 즉시 툴팁을 최상단에 그린다', /\{hoverLabel && \(\(\) => \{/.test(canvasNC));
+
+console.log('\n■ 소스 텍스트 가드 — 연결 위치(fromSide/toSide) 배선');
+{
+  const sc2 = sliceBetween(inspNC, 'const SIDE_CHOICES = [', '];');
+  ok('#G160 FlowInspector: 연결 위치 선택지가 5개(자동 + 4방위)', (sc2.match(/\{ k: '/g) || []).length === 5);
+  ok('#G160b FlowInspector: 자동은 빈 값(저장하지 않는다)', /\{ k: '',\s+t: '자동'/.test(sc2));
+}
+// ⚠️ 'auto'를 저장하면 결과는 같은데 지문만 달라져 아무것도 안 고친 세션에서 저장이 나간다.
+ok('#G161 FlowInspector: 자동을 고르면 필드를 지운다',
+  /patchEdge\(\{ fromSide: k \|\| undefined \}\)/.test(inspNC) && /patchEdge\(\{ toSide: k \|\| undefined \}\)/.test(inspNC));
+ok('#G161b FlowInspector: 현재값을 공유 정규화로 읽는다(손상값이 선택된 것처럼 보이지 않게)',
+  /\(normalizeFlowSide\(edge\.fromSide\) \|\| ''\) === k/.test(inspNC)
+  && /\(normalizeFlowSide\(edge\.toSide\) \|\| ''\) === k/.test(inspNC));
+ok('#G161c FlowInspector: 선택지를 실제로 렌더한다(양 끝 모두)', (inspNC.match(/SIDE_CHOICES\.map\(/g) || []).length === 2);
+
 // ───────── 파트③ 실모듈 드리프트 가드 ─────────
 // ⚠️ 위 파트① 미러 테스트는 **미러만** 검사한다 — src/flowMap.ts 에만(또는 미러에만) 반영한
 //    변경은 전부 통과한다(실측: 시트 조작 5종의 변이가 미러 테스트를 그대로 뚫었다).
@@ -1367,8 +1962,11 @@ await (async () => {
     };
     return JSON.stringify((list || []).map(x => ({
       id: t(x.id), name: x.name, vp: x.viewport ?? null,
+      // ⚠️ 새 map 레벨 필드를 이 투영에 넣지 않으면 드리프트 가드가 그 필드에 **눈이 먼다**
+      //    (src에서 화이트리스트 push를 빼도 통과 = 죽은 단언).
+      nb: x.bundleEdges ?? null,
       nodes: (x.nodes || []).map(n => [t(n.id), n.x, n.y, n.label]),
-      edges: (x.edges || []).map(e => [t(e.id), t(e.from), t(e.to), e.label]),
+      edges: (x.edges || []).map(e => [t(e.id), t(e.from), t(e.to), e.label, e.fromSide ?? '', e.toSide ?? '']),
     })));
   };
 
@@ -1397,6 +1995,137 @@ await (async () => {
   eq('#101 nextFlowMapName 일치', real.nextFlowMapName([cleanMap({ name: '시트 1' })]), nextFlowMapName([cleanMap({ name: '시트 1' })]));
   eq('#102 normalizeFlowMaps 결과 일치(다중 시트)', norm(real.normalizeFlowMaps(three)), norm(normalizeFlowMaps(three)));
   eq('#102b flowFingerprint 일치', real.flowFingerprint(three), flowFingerprint(three));
+
+  // ── 1단계 신규 순수 함수 (⚠️ 파트①은 **미러만** 본다 — src만 고친 변경은 여기서만 잡힌다) ──
+  eq('#130 번들 상수가 실모듈과 일치',
+    [real.FLOW_TRUNK_RATIO, real.FLOW_TRUNK_MAX, real.FLOW_TRUNK_MIN].join(','),
+    [FLOW_TRUNK_RATIO, FLOW_TRUNK_MAX, FLOW_TRUNK_MIN].join(','));
+  eq('#130b 스냅·라벨 상수가 실모듈과 일치',
+    [real.SNAP_TOL_PX, real.SNAP_GUIDE_MAX_REFS, real.FLOW_LABEL_FONT, real.FLOW_LABEL_H, real.FLOW_LABEL_PAD, real.FLOW_LABEL_DOT_R].join(','),
+    [SNAP_TOL_PX, SNAP_GUIDE_MAX_REFS, FLOW_LABEL_FONT, FLOW_LABEL_H, FLOW_LABEL_PAD, FLOW_LABEL_DOT_R].join(','));
+
+  {
+    // ⚠️ 픽스처는 **재구축 경로(mapChanged=true)를 강제**해야 한다. 정규형이면 원본 참조라
+    //    화이트리스트에서 bundleEdges를 빼도 살아남아 이 가드가 죽은 단언이 된다.
+    const off = [cleanMap({ id: 'm1', name: 123, bundleEdges: false })];
+    eq('#131 normalizeFlowMaps — 번들 토글 재구축 경로 일치', norm(real.normalizeFlowMaps(off)), norm(normalizeFlowMaps(off)));
+    eq('#131b 실모듈도 재구축 경로에서 토글을 보존', real.normalizeFlowMaps(off)[0].bundleEdges, false);
+    const onRaw = [cleanMap({ id: 'm1', bundleEdges: true })];
+    eq('#131c true는 실모듈에서도 생략형', 'bundleEdges' in real.normalizeFlowMaps(onRaw)[0], false);
+    const sideRaw = [cleanMap({ id: 'm1', edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'to', fromSide: 'zzz', toSide: 'r' }] })];
+    eq('#131d 연결 위치 정규화 일치', norm(real.normalizeFlowMaps(sideRaw)), norm(normalizeFlowMaps(sideRaw)));
+    eq('#131e 실모듈도 손상 side를 제거', 'fromSide' in real.normalizeFlowMaps(sideRaw)[0].edges[0], false);
+    eq('#132 지문 일치(토글 끔)', real.flowFingerprint(off), flowFingerprint(off));
+    ok('#132b 실모듈 지문도 토글에 반응',
+      real.flowFingerprint([cleanMap({ id: 'm1' })]) !== real.flowFingerprint([cleanMap({ id: 'm1', bundleEdges: false })]));
+    eq('#132c flowBundleEnabled 일치',
+      [real.flowBundleEnabled(undefined), real.flowBundleEnabled(false), real.flowBundleEnabled(true), real.flowBundleEnabled('x')].join(','),
+      [flowBundleEnabled(undefined), flowBundleEnabled(false), flowBundleEnabled(true), flowBundleEnabled('x')].join(','));
+    eq('#132d normalizeFlowSide 일치',
+      JSON.stringify(['l', 'r', 't', 'b', 'auto', 'zz', null, 7].map(v => real.normalizeFlowSide(v) ?? '·')),
+      JSON.stringify(['l', 'r', 't', 'b', 'auto', 'zz', null, 7].map(v => normalizeFlowSide(v) ?? '·')));
+  }
+
+  {
+    // 무작위 대조 — 한 픽스처로는 분기(그룹 갈림·상한·하한·역할 충돌)를 다 밟지 못한다.
+    let s2 = 424242;
+    const rr = () => { s2 = (s2 * 1103515245 + 12345) % 2147483648; return s2 / 2147483648; };
+    const STROKES = [undefined, '#70AD47', '#DC2626'];
+    const ARROWS = ['to', 'from', 'both', 'none'];
+    const STYLES = [undefined, 'dash', 'double'];
+    let bad = 0, badDrag = 0, badLabel = 0;
+    for (let i = 0; i < 400; i++) {
+      const cnt = 2 + Math.floor(rr() * 5);
+      const nodes = [];
+      for (let k = 0; k < cnt; k++) {
+        nodes.push({
+          id: 'n' + k, kind: 'rect',
+          x: Math.round((rr() - 0.5) * 1600), y: Math.round((rr() - 0.5) * 1600),
+          w: 60 + Math.round(rr() * 300), h: 44 + Math.round(rr() * 200),
+          label: '', date: '', amountManual: null, memo: '', portfolioId: null, accountNameSnapshot: '', amountSource: 'none',
+        });
+      }
+      const edges = [];
+      for (let k = 0; k < cnt + 2; k++) {
+        const a = nodes[Math.floor(rr() * nodes.length)].id;
+        const b = nodes[Math.floor(rr() * nodes.length)].id;
+        edges.push({
+          id: 'e' + k, from: a, to: b, label: '',
+          arrow: ARROWS[Math.floor(rr() * ARROWS.length)],
+          ...(STROKES[Math.floor(rr() * STROKES.length)] ? { stroke: STROKES[Math.floor(rr() * STROKES.length)] } : {}),
+          ...(STYLES[Math.floor(rr() * STYLES.length)] ? { lineStyle: STYLES[Math.floor(rr() * STYLES.length)] } : {}),
+        });
+      }
+      if (JSON.stringify(real.buildFlowBundles(nodes, edges, true)) !== JSON.stringify(buildFlowBundles(nodes, edges, true))) bad++;
+      // edgePath는 번들 인자까지 함께 대조한다(양 끝 트렁크 조합이 전부 나온다).
+      const bd = buildFlowBundles(nodes, edges, true);
+      for (const e of edges) {
+        const a = nodes.find(n => n.id === e.from), b = nodes.find(n => n.id === e.to);
+        if (JSON.stringify(real.edgePath(a, b, e, bd.byEdge[e.id])) !== JSON.stringify(edgePath(a, b, e, bd.byEdge[e.id]))) bad++;
+      }
+      const base = { x: Math.round((rr() - 0.5) * 800), y: Math.round((rr() - 0.5) * 800), w: 60 + Math.round(rr() * 300), h: 44 + Math.round(rr() * 200) };
+      const dx = Math.round((rr() - 0.5) * 2000), dy = Math.round((rr() - 0.5) * 2000);
+      const tolR = snapTolerance([0.25, 1, 2.5][Math.floor(rr() * 3)]);
+      if (JSON.stringify(real.resolveNodeDrag(base, dx, dy, nodes, tolR, true)) !== JSON.stringify(resolveNodeDrag(base, dx, dy, nodes, tolR, true))) badDrag++;
+      const items = edges.slice(0, 4).map((e, k) => ({ id: e.id, cx: Math.round((rr() - 0.5) * 600), cy: Math.round((rr() - 0.5) * 600), w: 40 + k * 30, h: 22 }));
+      const walls = nodes.map(n => ({ x: n.x, y: n.y, w: n.w, h: n.h }));
+      if (JSON.stringify(real.layoutFlowLabels(items, walls)) !== JSON.stringify(layoutFlowLabels(items, walls))) badLabel++;
+    }
+    eq('#133 buildFlowBundles + edgePath(번들) 무작위 400세트 일치', bad, 0);
+    eq('#133b resolveNodeDrag 무작위 400세트 일치', badDrag, 0);
+    {
+      // ⚠️ 무작위 픽스처는 특정 분기를 **밟지 않을 수 있다**(실측: 아래 세 계약이 전부 무작위
+      //    400세트를 통과했다). 파트①은 미러만 보므로 src만 고친 변경은 여기서만 잡힌다 →
+      //    분기마다 **결정적 픽스처**를 따로 둔다.
+      const dn = (id, x, y, w = 180, h = 120) => ({ id, kind: 'rect', x, y, w, h, label: '', date: '', amountManual: null, memo: '', portfolioId: null, accountNameSnapshot: '', amountSource: 'none' });
+      const de = (id, from, to, o = {}) => ({ id, from, to, label: '', arrow: 'to', ...o });
+      // (1) 같은 (도형,변)에 나가는 뭉치 + 들어오는 뭉치 → 트렁크는 하나만 남아야 한다
+      const bothN = [dn('h', 0, 300), dn('a', 600, 0), dn('b', 600, 200), dn('c', 600, 400), dn('d', 600, 600)];
+      const bothE = [de('o1', 'h', 'a'), de('o2', 'h', 'b'), de('o3', 'h', 'c'), de('i1', 'd', 'h'), de('i2', 'a', 'h')];
+      eq('#134 같은 변의 나가는/들어오는 뭉치 처리 일치',
+        JSON.stringify(real.buildFlowBundles(bothN, bothE, true)), JSON.stringify(buildFlowBundles(bothN, bothE, true)));
+      eq('#134b 실모듈도 (도형,변)당 트렁크 하나', real.buildFlowBundles(bothN, bothE, true).trunks.filter(t => t.key.startsWith(String.raw`["h","r"`)).length, 1);
+      // (2) 한 구성원만 반대편(proj<=0) — 그 선만 빠지고 나머지는 뭉친다
+      const backN = [dn('h', 600, 300), dn('f1', 1200, 200), dn('f2', 1200, 400), dn('bk', 0, 300)];
+      const backE = [de('x1', 'h', 'f1'), de('x2', 'h', 'f2'), de('x3', 'h', 'bk', { fromSide: 'r', toSide: 'r' })];
+      eq('#134c 반대편으로 향하는 구성원 처리 일치',
+        JSON.stringify(real.buildFlowBundles(backN, backE, true)), JSON.stringify(buildFlowBundles(backN, backE, true)));
+      ok('#134d 그 선만 빠지고 나머지는 뭉친다',
+        JSON.stringify(buildFlowBundles(backN, backE, true).trunks.map(t => t.edgeIds)) === JSON.stringify([['x1', 'x2']]));
+      // (3) 자기 자신으로 가는 선
+      const selfN = [dn('s', 0, 0)];
+      const selfE = [de('s1', 's', 's'), de('s2', 's', 's')];
+      eq('#134e self edge 처리 일치',
+        JSON.stringify(real.buildFlowBundles(selfN, selfE, true)), JSON.stringify(buildFlowBundles(selfN, selfE, true)));
+      // (4) 스냅 OFF — 무작위 대조는 enabled=true 로만 돌아 이 분기를 밟지 않는다
+      const sBase = { x: 0, y: 0, w: 180, h: 120 };
+      const sPeers = [dn('p', 600, 100, 262)];
+      const sTol = snapTolerance(1);
+      eq('#134f 스냅 OFF 경로 일치',
+        JSON.stringify(real.resolveNodeDrag(sBase, 602, 402, sPeers, sTol, false)),
+        JSON.stringify(resolveNodeDrag(sBase, 602, 402, sPeers, sTol, false)));
+      ok('#134g 실모듈의 OFF는 종전 동작(미리보기 raw)', real.resolveNodeDrag(sBase, 602, 402, sPeers, sTol, false).preview.x === 602);
+      ok('#134h 픽스처가 유효하다(ON이면 실제로 붙는다)', real.resolveNodeDrag(sBase, 602, 402, sPeers, sTol, true).preview.x === 600);
+      // (5) 라벨이 전부 막혀 점으로 접히는 경로
+      const wall = [{ x: -400, y: -400, w: 1000, h: 1000 }];
+      const lItems = [{ id: 'a', cx: 100, cy: 100, w: 80, h: 22 }];
+      eq('#134i 점 강등 경로 일치',
+        JSON.stringify(real.layoutFlowLabels(lItems, wall)), JSON.stringify(layoutFlowLabels(lItems, wall)));
+    }
+    eq('#133c layoutFlowLabels 무작위 400세트 일치', badLabel, 0);
+    eq('#133d approxLabelWidth 일치',
+      JSON.stringify(['가나다', 'abc', '1억3천만원 환전 이체', '', 'ｱｲｳ', '漢字'].map(v => real.approxLabelWidth(v))),
+      JSON.stringify(['가나다', 'abc', '1억3천만원 환전 이체', '', 'ｱｲｳ', '漢字'].map(v => approxLabelWidth(v))));
+    eq('#133e flowLabelSize 일치', JSON.stringify(real.flowLabelSize('환전 이체')), JSON.stringify(flowLabelSize('환전 이체')));
+    eq('#133f snapTolerance 일치',
+      JSON.stringify([1, 0.25, 2.5, NaN, 0, -1].map(v => real.snapTolerance(v))),
+      JSON.stringify([1, 0.25, 2.5, NaN, 0, -1].map(v => snapTolerance(v))));
+    const sa = mkNode({ id: 'sa', x: 0, y: 0, w: 100, h: 60 });
+    const sb = mkNode({ id: 'sb', x: 400, y: 200, w: 100, h: 60 });
+    eq('#133g resolveEdgeSides 일치(그룹 키와 렌더가 공유하는 단일 판정)',
+      JSON.stringify([undefined, { fromSide: 'auto', toSide: 'b' }, { fromSide: 't' }].map(e => real.resolveEdgeSides(sa, sb, e))),
+      JSON.stringify([undefined, { fromSide: 'auto', toSide: 'b' }, { fromSide: 't' }].map(e => resolveEdgeSides(sa, sb, e))));
+  }
 })();
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:flow — ${pass} passed, ${fail} failed\n`);

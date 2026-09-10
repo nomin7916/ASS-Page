@@ -8,7 +8,7 @@ import {
   makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView,
   countDanglingNodes, MAX_FLOW_NODES, MAX_FLOW_EDGES, MAX_FLOW_MAPS, MAX_FLOW_MAP_NAME,
   DEFAULT_FLOW_VIEWPORT, normalizeFlowViewport, sameFlowViewport, fitFlowViewport,
-  addFlowMap, duplicateFlowMap, removeFlowMap, renameFlowMap, moveFlowMap,
+  addFlowMap, duplicateFlowMap, removeFlowMap, renameFlowMap, moveFlowMap, flowBundleEnabled,
 } from '../flowMap';
 import { generateId, formatCurrency } from '../utils';
 
@@ -110,6 +110,12 @@ export default function FlowBoard({
   const [viewport, setViewport] = useState(() => ({ ...DEFAULT_FLOW_VIEWPORT }));
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState('');
+  /**
+   * 도형 정렬 스냅 on/off — **세션 로컬**(저장하지 않는다).
+   * 뷰 선호도이고 클릭 한 번으로 복구되므로 chartPrefs·flowMaps 어느 쪽에도 올리지 않는다
+   * (showTaxHelp·sidebarOpen과 같은 등급). 한 번만 끄고 싶을 때는 Alt(또는 Cmd)를 누른 채 끈다.
+   */
+  const [snapOn, setSnapOn] = useState(true);
 
   // ── 시트 ────────────────────────────────────────────────────────────────────
   // ⚠️ 활성 시트는 **세션 로컬**(저장하지 않는다 — 위 헤더 주석 3번). 커밋 경로가 읽는 것은
@@ -357,6 +363,23 @@ export default function FlowBoard({
 
   const onNodesChange = useCallback((nodes) => patchMap(cur => ({ ...cur, nodes })), [patchMap]);
 
+  /**
+   * 연결선 합치기 토글 — 시트 단위 저장 필드다.
+   * ⚠️ **켤 때는 `true`를 쓰지 말고 필드를 지운다**(생략 = 켜짐). `true`를 저장하면 정규화가
+   *    그것을 생략형으로 되돌리려 매 로드 재구축 경로로 떨어지는데, 지문은 양쪽이 같아
+   *    그 정리가 영영 저장되지 않는다(무한 churn).
+   * ⚠️ 팬/줌과 달리 `viewportOnly` 커밋이 아니다 — 이건 저장 필드를 바꾸는 **내용 편집**이라
+   *    도형을 추가하는 것과 같은 등급으로 dirty를 세우는 것이 맞다.
+   */
+  const toggleBundle = useCallback(() => {
+    patchMap(cur => {
+      if (flowBundleEnabled(cur.bundleEdges)) return { ...cur, bundleEdges: false };
+      const next = { ...cur };
+      delete next.bundleEdges;
+      return next;
+    });
+  }, [patchMap]);
+
   const onAddEdge = useCallback((from, to) => {
     const cur = findMap(localRef.current, activeIdRef.current);
     if (!cur) return;
@@ -588,6 +611,9 @@ export default function FlowBoard({
 
   const nodeCount = map?.nodes?.length || 0;
   const edgeCount = map?.edges?.length || 0;
+  // ⚠️ 해석은 flowBundleEnabled 공유 함수로만 — `!!map?.bundleEdges`로 읽으면 저장하지 않은
+  //    기존 시트(생략 = 켜짐)가 전부 꺼진 상태로 표시된다.
+  const bundleOn = flowBundleEnabled(map?.bundleEdges);
 
   return (
     <div
@@ -641,6 +667,24 @@ export default function FlowBoard({
         <button onClick={resetView} title="배율 초기화" className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white transition">
           <RotateCcw size={12} /> 100%
         </button>
+        {!readOnly && (
+          <>
+            <button
+              onClick={toggleBundle}
+              title={bundleOn
+                ? '연결선 합치기 — 켜짐\n한 도형의 같은 면에서 같은 색·같은 종류로 나가거나 들어오는 선이 2개 이상이면 한 줄로 합쳐졌다가 각 도형 앞에서 갈라집니다.\n(색이나 선 종류가 다른 선은 구분을 지우지 않으려고 합치지 않습니다.)\n클릭하면 이 시트에서 끕니다.'
+                : '연결선 합치기 — 꺼짐\n클릭하면 이 시트에서 켭니다.'}
+              className={`text-[11px] px-2 py-1 rounded border transition ${bundleOn ? 'border-indigo-600 text-indigo-300 bg-indigo-900/20' : 'border-gray-700 text-gray-500 hover:text-gray-300'}`}
+            >선 합치기</button>
+            <button
+              onClick={() => setSnapOn(v => !v)}
+              title={snapOn
+                ? '도형 정렬 맞춤 — 켜짐\n도형을 옮길 때 다른 도형의 왼쪽·가운데·오른쪽(위·가운데·아래) 선에 가까우면 그 선에 맞춰집니다.\nAlt(또는 Cmd)를 누른 채 옮기면 이번만 맞추지 않습니다.\n※ 이 설정은 저장되지 않습니다.'
+                : '도형 정렬 맞춤 — 꺼짐\n클릭하면 켭니다. ※ 이 설정은 저장되지 않습니다.'}
+              className={`text-[11px] px-2 py-1 rounded border transition ${snapOn ? 'border-indigo-600 text-indigo-300 bg-indigo-900/20' : 'border-gray-700 text-gray-500 hover:text-gray-300'}`}
+            >정렬 맞춤</button>
+          </>
+        )}
         <span className="text-[10px] text-gray-500">도형 {nodeCount} · 선 {edgeCount}</span>
 
         <div className="flex-1" />
@@ -692,6 +736,8 @@ export default function FlowBoard({
             formatAmount={formatAmount}
             connectFrom={connectFrom}
             onConnectFromChange={setConnectFrom}
+            bundleEnabled={bundleOn}
+            snapEnabled={snapOn}
           />
           {nodeCount === 0 && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

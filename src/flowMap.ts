@@ -149,6 +149,17 @@ export interface FlowMap {
    *    1회 맞춤한다.
    */
   viewport?: FlowViewport;
+  /**
+   * 연결선 합치기(번들) — 한 도형의 같은 변에서 같은 스타일로 나가거나 들어오는 선이 2개 이상이면
+   * 앵커에서 짧은 공유 트렁크를 뽑고 그 끝에서 분기시킨다. **기본은 켜짐**.
+   *
+   * ⚠️ `false`일 때만 저장한다(생략 = 켜짐). 기본값을 저장하면 기존 시트가 전부 정규화에서
+   *    '변경됨'이 되어 '변경 없으면 원본 참조 반환' 계약이 깨지고, 폴링마다 재저장 + 보드 로컬
+   *    사본이 갈아엎어져 2.5초 idle 승격 전의 편집이 사라진다.
+   * ⚠️ 지문(flowFingerprint)에도 **끈 경우에만** 토큰을 싣는다 — 항상 실으면 배포 직후 모든
+   *    시트의 지문이 달라져 사용자가 아무것도 안 고쳤는데 Drive 저장이 나간다.
+   */
+  bundleEdges?: boolean;
 }
 
 export type FlowMaps = FlowMap[];
@@ -203,6 +214,38 @@ export const DEFAULT_EDGE_STROKE = '#60a5fa';
  */
 export const FLOW_CANVAS_BG = '#0b1120';
 
+/* ── 연결선 합치기(번들) 상수 ──────────────────────────────────────────────
+ * ⚠️ 트렁크 길이 = min(구성원 축 투영 거리) × RATIO, 상한 MAX.
+ *    `min`이라야 **가장 가까운 목적지를 지나치지 않는다** — 평균·최대를 쓰면 가까운 가지가
+ *    되돌아오는 갈고리(S자)가 되고, 사용자 화면이 정확히 그 배치다(바로 옆 계좌 + 훨씬 아래 계좌).
+ *    비율이 1 미만이라 오버슈트가 구조적으로 불가능하므로 **하한 클램프(Math.max)를 두지 말 것**.
+ * ⚠️ MIN 미만이면 트렁크를 만들지 않는다(= 그 끝은 번들 아님). 9px짜리 트렁크는 '합쳐진 것'도
+ *    '안 합쳐진 것'도 아닌 중간 상태로 보여, 무관한 도형 하나가 가까워지는 것만으로 뭉치가
+ *    화면에서 녹아 없어진 것처럼 읽힌다.
+ */
+export const FLOW_TRUNK_RATIO = 0.45;
+export const FLOW_TRUNK_MAX = 96;
+export const FLOW_TRUNK_MIN = 16;
+
+/* ── 도형 정렬 스냅 상수 ────────────────────────────────────────────────────
+ * ⚠️ 임계값은 **화면 px**다. 캔버스 고정값으로 두면 축소(0.25배)에서 캡처 폭이 2px가 되어
+ *    물리적으로 못 맞추고, 확대(2.5배)에서는 20px가 되어 확대의 목적인 미세 배치가 불가능해진다.
+ */
+export const SNAP_TOL_PX = 6;
+/** 가이드선을 그릴 때 참조로 삼는 도형 수 상한(밀집 시트에서 화면을 가로지르는 난반사 방지). */
+export const SNAP_GUIDE_MAX_REFS = 6;
+
+/* ── 선 위 라벨 상수 ────────────────────────────────────────────────────────
+ * ⚠️ 라벨은 **충돌이 실제로 있을 때만** 옮긴다(아래 layoutFlowLabels). 무조건 재배치하면
+ *    번들을 꺼도 선이 1개뿐인 관계의 라벨까지 움직여 '지금과 픽셀 단위로 동일'이라는
+ *    하위호환의 축이 깨진다.
+ */
+export const FLOW_LABEL_FONT = 12;
+export const FLOW_LABEL_H = 22;
+export const FLOW_LABEL_PAD = 8;
+/** 점(dot)으로 강등됐을 때의 반지름 — 캔버스 좌표. */
+export const FLOW_LABEL_DOT_R = 5;
+
 /** 굵기 이름 → px. 'normal' 2는 **종전 연결선 굵기와 같은 값**(기존 흐름도 렌더 불변). */
 const LINE_WIDTH_PX: Record<FlowLineWidth, number> = { thin: 1.2, normal: 2, thick: 3.5 };
 
@@ -254,6 +297,67 @@ export interface FlowNodeView {
   deleted: boolean;
   /** dc-irp 계좌에 예적금이 있을 때 만기일 '제안' 후보(자동 채움 아님) */
   maturityCandidates: { itemId: string; name: string; endDate: string }[];
+}
+
+/** 한 연결선의 양 끝 트렁크 길이. 0이면 그 끝은 번들이 아니다(= 종전과 동일하게 그린다). */
+export interface FlowEdgeBundle {
+  fromLen: number;
+  toLen: number;
+}
+
+/**
+ * 공유 트렁크 — 여러 선이 합쳐져 한 줄로 보이는 구간. **그룹당 하나만** 그린다.
+ *
+ * ⚠️ 트렁크를 선마다 각자 그려 겹치게 하지 말 것. 이중선(double)은 가운데를 캔버스 배경색으로
+ *    덮어 그리므로 겹친 트렁크에서 **배경색 지우개**로 작동하고(어느 쪽이 이기는지는 사용자가
+ *    선을 그린 순서가 정한다), 파선 계열도 공유 구간에서만 패턴이 사라진다. 게다가 선택 후광과
+ *    클릭 히트박스가 공유 구간을 덮어 '선 하나를 골랐는데 뭉치 전체가 선택된 것처럼' 보인다.
+ */
+export interface FlowTrunk {
+  key: string;
+  d: string;
+  /** 그룹 대표(팬 순서 0번)의 스타일 — 그룹 키에 스타일이 들어 있어 전원이 동일하다. */
+  stroke?: string;
+  lineStyle?: FlowLineStyle;
+  lineWidth?: FlowLineWidth;
+  /** 트렁크의 바깥 끝(도형 경계)에 화살촉을 그리는가 */
+  head: boolean;
+  /** 화살촉이 도형을 향하는가(도착 번들) — false면 도형에서 바깥으로 향한다(출발 번들) */
+  headOutward: boolean;
+  edgeIds: string[];
+}
+
+export interface FlowBundleResult {
+  /** edgeId → 양 끝 트렁크 길이. 없는 키는 번들 아님. */
+  byEdge: Record<string, FlowEdgeBundle>;
+  trunks: FlowTrunk[];
+}
+
+/** 정렬 스냅 가이드선 — 스냅이 실제로 걸린 축에만 생긴다. */
+export interface FlowSnapGuide {
+  axis: 'x' | 'y';
+  /** 가이드선이 놓이는 좌표(x축이면 x값) */
+  value: number;
+  /** 가이드선의 다른 축 범위 */
+  from: number;
+  to: number;
+}
+
+export interface FlowDragResolution {
+  /** 드래그 중 화면에 보여줄 위치 */
+  preview: { x: number; y: number };
+  /** pointerup에서 저장할 위치 */
+  commit: { x: number; y: number };
+  guides: FlowSnapGuide[];
+}
+
+export type FlowLabelMode = 'label' | 'dot';
+
+export interface FlowLabelPlacement {
+  id: string;
+  mode: FlowLabelMode;
+  x: number;
+  y: number;
 }
 
 /* ===========================================================================
@@ -321,6 +425,14 @@ export function normalizeFlowViewport(v: unknown): FlowViewport | null {
  *    사용자가 고른 방향이 Drive 로드·별도 창 저장 왕복마다 조용히 사라진다
  *    (화이트리스트 재구축기 버그 클래스).
  */
+/**
+ * 연결 위치(변) 정규화. **4방위만 저장하고 'auto'·손상값은 생략형**(undefined)으로 만든다.
+ * ⚠️ 'auto'를 저장하지 말 것 — 결과는 생략과 같은데 지문만 달라진다.
+ */
+export function normalizeFlowSide(v: unknown): Exclude<FlowSide, 'auto'> | undefined {
+  return v === 'l' || v === 'r' || v === 't' || v === 'b' ? v : undefined;
+}
+
 export function normalizeFlowArrow(v: unknown): FlowArrow {
   return v === 'both' || v === 'none' || v === 'from' ? v : 'to';
 }
@@ -494,6 +606,10 @@ export function flowFingerprint(maps: unknown): string {
         // ⚠️ 팬/줌 지문 — 없으면 '화면 위치만 바꾼 세션'이 portfolioUpdatedAt을 올리지 못해
         //    STATE 저장이 통째로 스킵된다(historyVerifyKey·targetAmount와 동일 버그 클래스).
         vp: m?.viewport ? [m.viewport.x ?? 0, m.viewport.y ?? 0, m.viewport.scale ?? 1] : null,
+        // ⚠️ 번들 토글은 **끈 경우에만** 키를 만든다. 항상 실으면 배포 직후 모든 시트의 지문이
+        //    달라져 사용자가 아무것도 안 고쳤는데 Drive 저장이 나간다(배포 churn). 반대로 아예
+        //    빼면 '토글만 바꾼 세션'의 저장이 통째로 스킵돼 별도 창에서는 영구히 저장되지 않는다.
+        ...(m?.bundleEdges === false ? { nb: 1 } : {}),
         nd: (Array.isArray(m?.nodes) ? m.nodes : []).map((n: any) => [
           n?.id ?? '', n?.kind ?? '', n?.x ?? 0, n?.y ?? 0, n?.w ?? 0, n?.h ?? 0,
           n?.label ?? '', n?.date ?? '', n?.amountManual ?? null, n?.memo ?? '',
@@ -590,11 +706,17 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
       const keepStyle = outStyle === 'solid' ? undefined : outStyle;
       const keepWidth = outWidth === 'normal' ? undefined : outWidth;
       const lineChanged = keepStyle !== e.lineStyle || keepWidth !== e.lineWidth || e.dashed !== undefined;
-      if (label !== e.label || arrow !== e.arrow || strokeChanged || lineChanged) mapChanged = true;
+      // ⚠️ 연결 위치는 4방위만 저장한다. 'auto'와 손상값은 **생략형**으로 정규화한다(생략 = 자동) —
+      //    검증 없이 통과시키면 손상값이 그대로 side로 쓰여 anchorPoint의 default 분기('아래')로
+      //    떨어지고, 그 선만 이유 없이 도형 아래에서 뻗어 나온다.
+      const keepFromSide = normalizeFlowSide(e.fromSide);
+      const keepToSide = normalizeFlowSide(e.toSide);
+      const sideChanged = keepFromSide !== e.fromSide || keepToSide !== e.toSide;
+      if (label !== e.label || arrow !== e.arrow || strokeChanged || lineChanged || sideChanged) mapChanged = true;
       edges.push({
         id: eid, from, to, label, arrow,
-        ...(e.fromSide ? { fromSide: e.fromSide as FlowSide } : {}),
-        ...(e.toSide ? { toSide: e.toSide as FlowSide } : {}),
+        ...(keepFromSide ? { fromSide: keepFromSide } : {}),
+        ...(keepToSide ? { toSide: keepToSide } : {}),
         ...(stroke ? { stroke } : {}),
         ...(keepStyle ? { lineStyle: keepStyle } : {}),
         ...(keepWidth ? { lineWidth: keepWidth } : {}),
@@ -613,9 +735,23 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
     // 새 객체가 되면 폴링마다 재저장 + 보드 로컬 사본이 갈아엎어진다.
     if (viewport ? !sameFlowViewport(rawVp, viewport) : rawVp !== undefined && rawVp !== null) mapChanged = true;
 
+    // ⚠️ 번들 토글은 **끈 상태(false)만** 보존한다(생략 = 켜짐). `true`나 손상값은 생략형으로
+    //    정규화하되, 그것만으로는 지문이 그대로라 저장이 트리거되지 않을 수 있다 → 호출부는
+    //    토글을 켤 때 값을 `true`로 쓰지 말고 **필드를 지운다**(FlowBoard.toggleBundle).
+    const rawBundle = (m as any).bundleEdges;
+    const bundleOff = rawBundle === false;
+    if (rawBundle !== undefined && !bundleOff) mapChanged = true;
+
     if (mapChanged) {
       changed = true;
-      out.push({ id, name, nodes, edges, createdAt, updatedAt, ...(viewport ? { viewport } : {}) });
+      // ⚠️ 이 리터럴이 화이트리스트다 — 새 map 레벨 필드를 여기에 등록하지 않으면 정규형일
+      //    때는 원본 참조라 살아남고 mapChanged가 서는 순간(이름 손상·레거시 dashed 이관·
+      //    viewport 교정 등) **조용히 사라진다**. "가끔 잊어버린다"로 보이는 최악의 형태다.
+      out.push({
+        id, name, nodes, edges, createdAt, updatedAt,
+        ...(viewport ? { viewport } : {}),
+        ...(bundleOff ? { bundleEdges: false } : {}),
+      });
     } else {
       out.push(m as FlowMap);
     }
@@ -796,38 +932,418 @@ const normalOf = (side: Exclude<FlowSide, 'auto'>): { x: number; y: number } => 
 };
 
 /**
+ * 연결선이 실제로 붙는 두 변을 확정한다.
+ * ⚠️ **`edgePath`와 `buildFlowBundles`가 반드시 이 함수를 공유해야 한다.** 각자 계산하면
+ *    그룹 키가 고른 변과 실제로 그려지는 앵커가 갈려 **트렁크가 엉뚱한 변에서 뻗어 나온다**
+ *    (화면과 계산이 갈리는 최악의 형태 — 사용자는 한참 뒤에야 알아챈다).
+ */
+export function resolveEdgeSides(
+  a: FlowNode,
+  b: FlowNode,
+  e?: Pick<FlowEdge, 'fromSide' | 'toSide'> | null,
+): { fs: Exclude<FlowSide, 'auto'>; ts: Exclude<FlowSide, 'auto'> } {
+  const auto = autoSides(a, b);
+  return {
+    fs: (e?.fromSide && e.fromSide !== 'auto' ? e.fromSide : auto.from) as Exclude<FlowSide, 'auto'>,
+    ts: (e?.toSide && e.toSide !== 'auto' ? e.toSide : auto.to) as Exclude<FlowSide, 'auto'>,
+  };
+}
+
+/**
  * 두 노드 사이 연결선 SVG path(3차 베지어) + 라벨 위치.
  * ⚠️ 노드가 없으면 **null 반환(예외 금지)** — throw하면 렌더 중 TypeError가 루트
  *    ErrorBoundary까지 올라가 앱 화면 전체가 오류 페이지로 대체된다
  *    (fxRates.convertFx·brlBond의 null 계약과 동일).
+ *
+ * ⚠️ **하위호환의 축**: `bundle`을 넘기지 않거나 양 끝 길이가 0이면 `q0 === p0`·`q3 === p3`가
+ *    되어 아래 식이 종전 본문과 **문자 그대로 같은 값**을 낸다. 이것은 '값이 같다'는 논증이
+ *    아니라 **같은 코드가 도는 것**이다 — 번들 분기를 별도 return으로 쪼개지 말 것(쪼개는 순간
+ *    두 경로가 드리프트할 수 있는 표면이 생긴다).
+ * ⚠️ 반환하는 `d`는 **분기 구간만**이다(트렁크는 공유 레이어가 따로 그린다). 그래서 선택 후광·
+ *    클릭 히트박스·per-edge 스타일이 전부 종전 구조 그대로 남는다.
  */
 export function edgePath(
   a: FlowNode | undefined | null,
   b: FlowNode | undefined | null,
   e?: Pick<FlowEdge, 'fromSide' | 'toSide'> | null,
+  bundle?: FlowEdgeBundle | null,
 ): { d: string; labelX: number; labelY: number } | null {
   if (!a || !b) return null;
-  const auto = autoSides(a, b);
-  const fs = (e?.fromSide && e.fromSide !== 'auto' ? e.fromSide : auto.from) as Exclude<FlowSide, 'auto'>;
-  const ts = (e?.toSide && e.toSide !== 'auto' ? e.toSide : auto.to) as Exclude<FlowSide, 'auto'>;
+  const { fs, ts } = resolveEdgeSides(a, b, e);
   const p0 = anchorPoint(a, fs);
   const p3 = anchorPoint(b, ts);
   if (!isFiniteNum(p0.x) || !isFiniteNum(p0.y) || !isFiniteNum(p3.x) || !isFiniteNum(p3.y)) return null;
 
-  const dist = Math.hypot(p3.x - p0.x, p3.y - p0.y);
-  const pull = clampNum(dist * 0.4, 24, 160);
   const n0 = normalOf(fs);
   const n3 = normalOf(ts);
-  const p1 = { x: p0.x + n0.x * pull, y: p0.y + n0.y * pull };
-  const p2 = { x: p3.x + n3.x * pull, y: p3.y + n3.y * pull };
+
+  // 트렁크 끝(분기점). 길이가 0이면 앵커 그 자체 → 아래 식이 종전과 동일해진다.
+  const outLen = bundle && isFiniteNum(bundle.fromLen) && bundle.fromLen > 0 ? bundle.fromLen : 0;
+  const inLen = bundle && isFiniteNum(bundle.toLen) && bundle.toLen > 0 ? bundle.toLen : 0;
+  const q0 = outLen > 0 ? { x: p0.x + n0.x * outLen, y: p0.y + n0.y * outLen } : p0;
+  const q3 = inLen > 0 ? { x: p3.x + n3.x * inLen, y: p3.y + n3.y * inLen } : p3;
+
+  // ⚠️ pull은 **분기 구간의 길이**(q0↔q3)로 잰다. p0↔p3로 재면 트렁크가 축 방향 여유를
+  //    다 써 버린 뒤에도 컨트롤 포인트가 그대로라 분기 곡선이 자기 트렁크로 되감긴다.
+  const dist = Math.hypot(q3.x - q0.x, q3.y - q0.y);
+  const pull = clampNum(dist * 0.4, 24, 160);
+  const p1 = { x: q0.x + n0.x * pull, y: q0.y + n0.y * pull };
+  const p2 = { x: q3.x + n3.x * pull, y: q3.y + n3.y * pull };
 
   // 3차 베지어의 t=0.5 지점 = (P0 + 3P1 + 3P2 + P3) / 8
-  const labelX = (p0.x + 3 * p1.x + 3 * p2.x + p3.x) / 8;
-  const labelY = (p0.y + 3 * p1.y + 3 * p2.y + p3.y) / 8;
+  const labelX = (q0.x + 3 * p1.x + 3 * p2.x + q3.x) / 8;
+  const labelY = (q0.y + 3 * p1.y + 3 * p2.y + q3.y) / 8;
 
   const r = (v: number) => Math.round(v * 100) / 100;
-  const d = `M ${r(p0.x)} ${r(p0.y)} C ${r(p1.x)} ${r(p1.y)}, ${r(p2.x)} ${r(p2.y)}, ${r(p3.x)} ${r(p3.y)}`;
+  const d = `M ${r(q0.x)} ${r(q0.y)} C ${r(p1.x)} ${r(p1.y)}, ${r(p2.x)} ${r(p2.y)}, ${r(q3.x)} ${r(q3.y)}`;
   return { d, labelX: r(labelX), labelY: r(labelY) };
+}
+
+/**
+ * 시트의 번들 설정 해석. **생략 = 켜짐**.
+ * ⚠️ truthy 판정(`!!v`)으로 되돌리지 말 것 — 저장하지 않은 기존 시트가 전부 꺼진 상태가 된다.
+ */
+export function flowBundleEnabled(v: unknown): boolean {
+  return v !== false;
+}
+
+/**
+ * 연결선 합치기 계산 — 한 도형의 **같은 변에서 같은 역할·같은 스타일**로 붙는 선을 묶어
+ * 공유 트렁크를 만든다.
+ *
+ * 그룹 키 = `노드id · 확정된 변 · 역할(from|to) · 그 끝의 화살촉 유무 · 색 · 선종류 · 굵기`
+ *
+ * ⚠️ **역할은 위상**(`edge.from`인가 `edge.to`인가)이지 화살표 방향이 아니다. `arrow`로 정하면
+ *    같은 앵커에서 출발하는 선들이 다른 그룹이 되어 같은 자리에 트렁크가 두 번 그려진다.
+ * ⚠️ **화살촉 유무 한 비트를 키에 넣는다.** 빠지면 공유 트렁크 뿌리에 모순되는 화살촉 하나가
+ *    생겨 뭉치 전체가 반대 방향 흐름으로 읽힌다. (화살촉을 렌더에서 억제하는 방식으로 우회하지
+ *    말 것 — 사용자가 고른 방향을 조용히 지우는 것은 이 저장소가 반복해서 금지해 온 패턴이다.)
+ * ⚠️ **색·선종류·굵기도 키에 넣는다.** 트렁크는 그룹당 하나만 그리므로, 스타일이 섞인 선들을
+ *    한 뭉치로 묶으면 공유 구간에서 나머지 선의 색·패턴이 사라진다. 사용자가 색으로 구분해 둔
+ *    선은 **의도적으로 구분한 것**이므로 합치지 않는 쪽이 옳다.
+ * ⚠️ **한 (도형, 변)에는 트렁크가 최대 하나다.** 나가는 뭉치와 들어오는 뭉치가 같은 변에 동시에
+ *    서면 두 트렁크가 문자 단위로 같은 선분이 되고 화살촉이 반대 방향으로 같은 자리에 찍힌다
+ *    → 구성원이 많은 쪽만 남기고 나머지는 번들을 해제한다(동점이면 키 사전순).
+ */
+export function buildFlowBundles(
+  nodes: FlowNode[] | undefined | null,
+  edges: FlowEdge[] | undefined | null,
+  enabled: boolean = true,
+): FlowBundleResult {
+  const out: FlowBundleResult = { byEdge: {}, trunks: [] };
+  if (!enabled || !Array.isArray(nodes) || !Array.isArray(edges) || edges.length < 2) return out;
+
+  const byId = new Map<string, FlowNode>();
+  for (const n of nodes) if (n && typeof n.id === 'string' && n.id) byId.set(n.id, n);
+
+  interface Group {
+    key: string;
+    nodeId: string;
+    side: Exclude<FlowSide, 'auto'>;
+    role: 'from' | 'to';
+    head: boolean;
+    stroke: string;
+    lineStyle: FlowLineStyle;
+    lineWidth: FlowLineWidth;
+    edgeIds: string[];
+    minProj: number;
+  }
+  const groups = new Map<string, Group>();
+
+  for (const e of edges) {
+    if (!e || typeof e.id !== 'string' || !e.id) continue;
+    const a = byId.get(asStr(e.from));
+    const b = byId.get(asStr(e.to));
+    // ⚠️ 자기 자신으로 가는 선은 앵커가 한 도형 안에서 마주 보게 되어 트렁크 방향이 의미를
+    //    잃는다 → 번들 대상에서 제외(종전 렌더 그대로).
+    //    ⚠️ 이 `a === b`는 **도달 불가한 방어적 중복**이다 — self edge는 autoSides가 r/l을 주고
+    //    두 앵커가 서로를 마주 보므로 아래 `proj > 0` 가드에서 어차피 전부 걸러진다(변이 테스트로
+    //    확인: 이 조건을 지워도 결과가 한 건도 달라지지 않는다). 의도를 드러내려고 남긴다.
+    if (!a || !b || a === b) continue;
+    const { fs, ts } = resolveEdgeSides(a, b, e);
+    const p0 = anchorPoint(a, fs);
+    const p3 = anchorPoint(b, ts);
+    if (!isFiniteNum(p0.x) || !isFiniteNum(p0.y) || !isFiniteNum(p3.x) || !isFiniteNum(p3.y)) continue;
+    const heads = arrowHeads(e.arrow);
+    const stroke = sanitizeHexColor(e.stroke) || DEFAULT_EDGE_STROKE;
+    const lineStyle = resolveFlowLineStyle(e.lineStyle, e.dashed);
+    const lineWidth = normalizeFlowLineWidth(e.lineWidth);
+
+    const push = (
+      nodeId: string, side: Exclude<FlowSide, 'auto'>, role: 'from' | 'to', head: boolean, proj: number,
+    ) => {
+      // ⚠️ 반대쪽 앵커가 이 변의 **뒤**에 있으면(proj <= 0) 트렁크가 목적지에서 멀어지는
+      //    방향으로 뻗는다 → 그 그룹은 성립하지 않는다.
+      if (!(proj > 0)) return;
+      const key = JSON.stringify([nodeId, side, role, head ? 1 : 0, stroke, lineStyle, lineWidth]);
+      const g = groups.get(key);
+      if (g) {
+        g.edgeIds.push(e.id);
+        if (proj < g.minProj) g.minProj = proj;
+      } else {
+        groups.set(key, { key, nodeId, side, role, head, stroke, lineStyle, lineWidth, edgeIds: [e.id], minProj: proj });
+      }
+    };
+
+    const n0 = normalOf(fs);
+    const n3 = normalOf(ts);
+    push(asStr(e.from), fs, 'from', heads.start, (p3.x - p0.x) * n0.x + (p3.y - p0.y) * n0.y);
+    push(asStr(e.to), ts, 'to', heads.end, (p0.x - p3.x) * n3.x + (p0.y - p3.y) * n3.y);
+  }
+
+  // (도형, 변)당 하나만 남긴다 — 구성원 수 우선, 동점이면 키 사전순(결정적).
+  const winner = new Map<string, Group>();
+  for (const g of groups.values()) {
+    if (g.edgeIds.length < 2) continue;
+    const len = Math.min(g.minProj * FLOW_TRUNK_RATIO, FLOW_TRUNK_MAX);
+    if (!(len >= FLOW_TRUNK_MIN)) continue;
+    const slot = JSON.stringify([g.nodeId, g.side]);
+    const cur = winner.get(slot);
+    if (!cur || g.edgeIds.length > cur.edgeIds.length || (g.edgeIds.length === cur.edgeIds.length && g.key < cur.key)) {
+      winner.set(slot, g);
+    }
+  }
+
+  const r = (v: number) => Math.round(v * 100) / 100;
+  const picked = Array.from(winner.values()).sort((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
+  for (const g of picked) {
+    const node = byId.get(g.nodeId);
+    if (!node) continue;
+    const len = r(Math.min(g.minProj * FLOW_TRUNK_RATIO, FLOW_TRUNK_MAX));
+    const p = anchorPoint(node, g.side);
+    const n = normalOf(g.side);
+    const q = { x: p.x + n.x * len, y: p.y + n.y * len };
+    const ids = g.edgeIds.slice().sort();
+    for (const id of ids) {
+      const slot = out.byEdge[id] || (out.byEdge[id] = { fromLen: 0, toLen: 0 });
+      if (g.role === 'from') slot.fromLen = len;
+      else slot.toLen = len;
+    }
+    // ⚠️ 방향: 출발 뭉치는 도형 → 바깥(p → q), 도착 뭉치는 바깥 → 도형(q → p).
+    //    화살촉은 **도형 경계 쪽 끝**에 붙으므로 출발 뭉치는 markerStart, 도착 뭉치는 markerEnd다.
+    const d = g.role === 'from'
+      ? `M ${r(p.x)} ${r(p.y)} L ${r(q.x)} ${r(q.y)}`
+      : `M ${r(q.x)} ${r(q.y)} L ${r(p.x)} ${r(p.y)}`;
+    out.trunks.push({
+      key: g.key,
+      d,
+      ...(g.stroke !== DEFAULT_EDGE_STROKE ? { stroke: g.stroke } : {}),
+      ...(g.lineStyle !== 'solid' ? { lineStyle: g.lineStyle } : {}),
+      ...(g.lineWidth !== 'normal' ? { lineWidth: g.lineWidth } : {}),
+      head: g.head,
+      headOutward: g.role === 'to',
+      edgeIds: ids,
+    });
+  }
+  return out;
+}
+
+/* ── 도형 정렬 스냅 ─────────────────────────────────────────────────────────
+ * 사용자 요구: "도형을 대충 놓아도 이전 도형과 열이 맞아야 한다. 단 모서리 인근에 놓으면
+ * 가운데로 강제 정렬하면 안 된다."
+ *
+ * ⚠️ 후보는 **가산점 없는 평면 집합**이고 x·y를 **독립**으로 판정한다. 중심에 우선권을 주지
+ *    않는 것만으로 사용자가 명시적으로 거부한 '모서리 근처인데 가운데로 끌려감'이 구조적으로
+ *    발생하지 않는다(가장 가까운 후보가 이기므로 모서리 근처면 모서리가 이긴다).
+ * ⚠️ 후보는 **같은 종류끼리만**(왼↔왼·가운데↔가운데·오른↔오른) 짝짓는다. 왼↔오른(도형을 딱
+ *    붙이기)을 넣으면 두 도형이 간격 0으로 붙어 그 사이 연결선의 길이가 0이 되고 **선 위 라벨이
+ *    도형 뒤에 통째로 묻힌다** — 요구 ③(메모가 잘 보여야 한다)과 정면으로 충돌한다.
+ *    사용자가 요구한 것은 '같은 열에 배열'이지 '붙이기'가 아니다.
+ */
+
+/** 화면 px 임계값을 캔버스 단위로 환산. ⚠️ scale이 유한 양수가 아니면 1로 떨어뜨린다 —
+ *  손상된 viewport에서 tol이 Infinity가 되면 도형이 화면 밖 먼 노드로 순간이동한다. */
+export function snapTolerance(scale: unknown, px: number = SNAP_TOL_PX): number {
+  const s = isFiniteNum(scale) && scale > 0 ? scale : 1;
+  return px / s;
+}
+
+interface SnapAxisHit { delta: number; value: number; refs: { from: number; to: number }[] }
+
+/** 한 축의 최근접 스냅. `lo/mid/hi`는 이동 도형의 세 후보, peers는 참조 도형들의 같은 세 값. */
+function snapAxis(
+  lo: number, mid: number, hi: number,
+  peers: { lo: number; mid: number; hi: number; cross: { from: number; to: number } }[],
+  tol: number,
+): SnapAxisHit | null {
+  let bestDelta = 0;
+  let bestValue = 0;
+  let bestAbs = Infinity;
+  for (const p of peers) {
+    const pairs: [number, number][] = [[lo, p.lo], [mid, p.mid], [hi, p.hi]];
+    for (const [cur, tgt] of pairs) {
+      if (!isFiniteNum(cur) || !isFiniteNum(tgt)) continue;
+      const d = tgt - cur;
+      const ad = Math.abs(d);
+      if (ad > tol) continue;
+      if (ad < bestAbs) { bestAbs = ad; bestDelta = d; bestValue = tgt; }
+    }
+  }
+  if (bestAbs === Infinity) return null;
+  // 가이드 참조 = 그 값과 실제로 일치하는 도형들(밀집 시트에서 화면을 가로지르지 않게 상한).
+  const refs: { from: number; to: number }[] = [];
+  for (const p of peers) {
+    if (refs.length >= SNAP_GUIDE_MAX_REFS) break;
+    if (p.lo === bestValue || p.mid === bestValue || p.hi === bestValue) refs.push(p.cross);
+  }
+  return { delta: bestDelta, value: bestValue, refs };
+}
+
+/**
+ * 드래그 중인 도형의 최종 위치와 가이드선.
+ *
+ * ⚠️ **미리보기와 커밋을 한 함수가 함께 낸다.** 둘을 따로 계산하면 화면에 보이는 자리와 실제로
+ *    저장되는 자리가 갈리는데, 가이드선이 생기면 그 어긋남이 눈에 보인다.
+ * ⚠️ **정렬이 걸린 축에는 격자 스냅을 다시 적용하지 않는다(축별 독립).** `DEFAULT_NODE_W = 180`이
+ *    `mod 8 === 4`라 기본폭 도형의 오른쪽 모서리는 **항상** 격자 중간에 떨어지고, 정렬 결과에
+ *    격자를 다시 걸면 100% 4px 어긋난다(폭 60~300 구간의 88%가 같은 증상).
+ * ⚠️ 정렬이 걸리지 않은 축은 **종전 그대로**(미리보기 raw · 커밋 격자)다. 두 값을 통일하면
+ *    드래그가 8px 계단이 되고 그 계단은 스냅을 꺼도 남는다.
+ */
+export function resolveNodeDrag(
+  base: { x: number; y: number; w: number; h: number },
+  dx: number,
+  dy: number,
+  peers: FlowNode[] | undefined | null,
+  tol: number,
+  enabled: boolean = true,
+): FlowDragResolution {
+  const rawX = base.x + dx;
+  const rawY = base.y + dy;
+  const plain: FlowDragResolution = {
+    preview: { x: rawX, y: rawY },
+    commit: { x: snapToGrid(rawX, FLOW_GRID), y: snapToGrid(rawY, FLOW_GRID) },
+    guides: [],
+  };
+  if (!enabled || !Array.isArray(peers) || peers.length === 0) return plain;
+  if (!isFiniteNum(rawX) || !isFiniteNum(rawY) || !isFiniteNum(tol) || tol <= 0) return plain;
+
+  const xs = peers.map(p => ({ lo: p.x, mid: p.x + p.w / 2, hi: p.x + p.w, cross: { from: p.y, to: p.y + p.h } }));
+  const ys = peers.map(p => ({ lo: p.y, mid: p.y + p.h / 2, hi: p.y + p.h, cross: { from: p.x, to: p.x + p.w } }));
+  const hitX = snapAxis(rawX, rawX + base.w / 2, rawX + base.w, xs, tol);
+  const hitY = snapAxis(rawY, rawY + base.h / 2, rawY + base.h, ys, tol);
+
+  const x = hitX ? rawX + hitX.delta : rawX;
+  const y = hitY ? rawY + hitY.delta : rawY;
+  const guides: FlowSnapGuide[] = [];
+  if (hitX) {
+    let from = y;
+    let to = y + base.h;
+    for (const r of hitX.refs) { if (r.from < from) from = r.from; if (r.to > to) to = r.to; }
+    guides.push({ axis: 'x', value: hitX.value, from, to });
+  }
+  if (hitY) {
+    let from = x;
+    let to = x + base.w;
+    for (const r of hitY.refs) { if (r.from < from) from = r.from; if (r.to > to) to = r.to; }
+    guides.push({ axis: 'y', value: hitY.value, from, to });
+  }
+  return {
+    preview: { x, y },
+    commit: {
+      x: hitX ? x : snapToGrid(rawX, FLOW_GRID),
+      y: hitY ? y : snapToGrid(rawY, FLOW_GRID),
+    },
+    guides,
+  };
+}
+
+/* ── 선 위 라벨 배치 ────────────────────────────────────────────────────────
+ * ⚠️ **충돌이 실제로 있을 때만** 옮긴다. 무조건 재배치하면 번들을 꺼도 선이 1개뿐인 관계의
+ *    라벨까지 움직여 '지금과 픽셀 단위로 동일'이라는 하위호환의 축이 깨진다.
+ */
+
+/**
+ * 라벨 폭 근사.
+ * ⚠️ 종전 `label.length * 12`는 한글/영문 혼용에서 최대 2배까지 틀린다(영문 12자 라벨의 실제
+ *    폭은 약 절반). 전각(한글·한자·가나·전각기호)만 1em으로 보고 나머지는 0.55em으로 센다.
+ * ⚠️ canvas measureText로 실측하지 않는 이유: 그 경로는 SVG의 실제 font-family를 알아야 하는데
+ *    첫 렌더에서는 ref가 아직 null이라 폰트 문자열이 비고, 그러면 측정 경로가 **무음으로 죽어**
+ *    근사가 유일한 경로가 된다. 그럴 바에는 근사 하나를 정확히 하는 편이 예측 가능하다.
+ */
+export function approxLabelWidth(text: unknown, fontSize: number = FLOW_LABEL_FONT): number {
+  const s = asStr(text);
+  let units = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0) || 0;
+    const wide =
+      (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) ||
+      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) ||
+      (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff00 && c <= 0xff60) ||
+      (c >= 0xffe0 && c <= 0xffe6);
+    units += wide ? 1 : 0.55;
+  }
+  return Math.round(units * fontSize * 100) / 100;
+}
+
+/** 라벨 상자 크기(패딩 포함). 화면과 배치 계산이 반드시 이 한 함수를 공유해야 한다. */
+export function flowLabelSize(text: unknown, fontSize: number = FLOW_LABEL_FONT): { w: number; h: number } {
+  return { w: approxLabelWidth(text, fontSize) + FLOW_LABEL_PAD * 2, h: FLOW_LABEL_H };
+}
+
+const overlaps = (
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/**
+ * 라벨 배치 — 기본 위치가 비어 있으면 그대로 두고, 막혔을 때만 위아래 후보를 시도하며,
+ * 전부 막히면 점(dot)으로 강등한다.
+ *
+ * @param items      `{ id, cx, cy, w, h }` — cx/cy는 선이 준 기본 중심(edgePath의 labelX/Y)
+ * @param obstacles  도형 박스. ⚠️ **반드시 포함해야 한다** — 라벨은 도형보다 아래 레이어라
+ *                   겹치면 가려지고, '메모를 썼는데 화면 어디에도 없다'가 된다.
+ * ⚠️ 우선순위는 **입력 배열 순서 하나뿐**이다. 선택·호버 상태를 우선순위에 넣으면 선을 클릭할
+ *    때마다 다른 라벨이 밀려 화면이 출렁이고, 같은 데이터가 렌더마다 다른 배치를 낸다.
+ * ⚠️ 점도 같은 충돌 검사를 통과한 자리에만 놓는다. 점이 장애물을 무시하면 라벨보다 더 잘 숨는다.
+ */
+export function layoutFlowLabels(
+  items: { id: string; cx: number; cy: number; w: number; h: number }[] | undefined | null,
+  obstacles: { x: number; y: number; w: number; h: number }[] | undefined | null,
+): FlowLabelPlacement[] {
+  const list = Array.isArray(items) ? items : [];
+  const walls = (Array.isArray(obstacles) ? obstacles : []).filter(
+    o => o && isFiniteNum(o.x) && isFiniteNum(o.y) && isFiniteNum(o.w) && isFiniteNum(o.h),
+  );
+  const placed: { x: number; y: number; w: number; h: number }[] = [];
+  const res: FlowLabelPlacement[] = [];
+  const free = (box: { x: number; y: number; w: number; h: number }) => {
+    for (const o of walls) if (overlaps(box, o)) return false;
+    for (const o of placed) if (overlaps(box, o)) return false;
+    return true;
+  };
+
+  for (const it of list) {
+    if (!it || !isFiniteNum(it.cx) || !isFiniteNum(it.cy)) continue;
+    const w = isFiniteNum(it.w) && it.w > 0 ? it.w : FLOW_LABEL_H;
+    const h = isFiniteNum(it.h) && it.h > 0 ? it.h : FLOW_LABEL_H;
+    const step = h + 4;
+    let done = false;
+    // ⚠️ 첫 후보는 **오프셋 0**이다 — 충돌이 없으면 종전과 정확히 같은 자리에 놓인다.
+    // ⚠️ ±3단까지 훑는다 — 기본 도형 높이가 120이라 ±2단(약 52px)으로는 선이 도형을 관통할 때
+    //    빠져나오지 못하고 전부 점으로 강등된다.
+    for (const off of [0, -step, step, -step * 2, step * 2, -step * 3, step * 3]) {
+      const box = { x: it.cx - w / 2, y: it.cy - h / 2 + off, w, h };
+      if (!free(box)) continue;
+      placed.push(box);
+      res.push({ id: it.id, mode: 'label', x: it.cx, y: it.cy + off });
+      done = true;
+      break;
+    }
+    if (done) continue;
+    const dot = FLOW_LABEL_DOT_R * 2;
+    for (const off of [0, -step, step, -step * 2, step * 2, -step * 3, step * 3]) {
+      const box = { x: it.cx - dot / 2, y: it.cy - dot / 2 + off, w: dot, h: dot };
+      if (!free(box)) continue;
+      placed.push(box);
+      res.push({ id: it.id, mode: 'dot', x: it.cx, y: it.cy + off });
+      done = true;
+      break;
+    }
+    // 어디에도 못 놓으면 기본 자리에 점만 — '메모가 있다'는 사실은 반드시 남긴다.
+    if (!done) res.push({ id: it.id, mode: 'dot', x: it.cx, y: it.cy });
+  }
+  return res;
 }
 
 /**

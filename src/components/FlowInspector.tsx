@@ -4,7 +4,7 @@ import { Trash2, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { cleanNum } from '../utils';
 import {
   sanitizeHexColor, DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, normalizeFlowArrow, arrowHeads,
-  flowLineRender, resolveFlowLineStyle, normalizeFlowLineWidth, FLOW_CANVAS_BG,
+  flowLineRender, resolveFlowLineStyle, normalizeFlowLineWidth, normalizeFlowSide, FLOW_CANVAS_BG,
 } from '../flowMap';
 
 /**
@@ -52,6 +52,19 @@ const arrowFlowText = (arrow, ends) => {
   if (!h.start && !h.end) return `방향 표시 없음 — ${a} · ${b}`;
   return h.end ? `자금 흐름: ${a} → ${b}` : `자금 흐름: ${b} → ${a}`;
 };
+
+/**
+ * 연결 위치(도형의 어느 변에 붙는가). 빈 문자열 = 자동(값을 저장하지 않는다).
+ * ⚠️ 글리프를 실제 위치에 맞춰 둔다 — '위'가 ↑가 아니라 ⌃인 이유는 화살표(방향)와 혼동되지
+ *    않게 하기 위해서다. 이 칸은 방향이 아니라 **붙는 자리**를 정한다.
+ */
+const SIDE_CHOICES = [
+  { k: '',  t: '자동', title: '두 도형의 상대 위치로 자동 결정(기본)' },
+  { k: 'l', t: '왼',   title: '도형의 왼쪽 변에 붙입니다' },
+  { k: 'r', t: '오',   title: '도형의 오른쪽 변에 붙입니다' },
+  { k: 't', t: '위',   title: '도형의 위쪽 변에 붙입니다' },
+  { k: 'b', t: '아래', title: '도형의 아래쪽 변에 붙입니다' },
+];
 
 /** 선 종류 — 값은 flowMap.FLOW_LINE_STYLES 순서와 같게 유지한다. */
 const LINE_STYLE_CHOICES = [
@@ -539,6 +552,37 @@ export default function FlowInspector({
               disabled={readOnly}
               onPick={(hex) => patchEdge({ stroke: hex || undefined })}
             />
+          </Field>
+          {/* ⚠️ 이 칸이 '여러 선을 한 줄로 합치기'의 조종간이다. 자동('두 도형의 상대 위치')만으로는
+              대각선에 가까운 배치에서 한 선만 다른 변으로 빠져 뭉치가 갈라진다(실측: 가로 520px·
+              세로 525px 차이에서 그 선만 '아래'로 판정). 같은 변으로 못 박으면 확실히 합쳐진다.
+              ⚠️ '자동'은 값을 저장하지 않는다(생략 = 자동) — 'auto'를 저장하면 결과는 같은데
+              지문만 달라져 아무것도 안 고친 세션에서 Drive 저장이 나간다. */}
+          <Field label="연결 위치" hint="같은 도형에서 나가는 선들을 같은 위치로 맞추면 한 줄로 합쳐집니다(선 합치기가 켜져 있을 때).">
+            <div className="text-[10px] text-gray-500 mb-1 truncate">시작 — {edgeEnds?.from || '시작 도형'}</div>
+            <div className="grid grid-cols-5 gap-1">
+              {SIDE_CHOICES.map(({ k, t, title }) => (
+                <button
+                  key={`f${k}`}
+                  disabled={readOnly}
+                  title={title}
+                  onClick={() => patchEdge({ fromSide: k || undefined })}
+                  className={`text-[10px] py-1 rounded border transition ${(normalizeFlowSide(edge.fromSide) || '') === k ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                >{t}</button>
+              ))}
+            </div>
+            <div className="text-[10px] text-gray-500 mt-2 mb-1 truncate">끝 — {edgeEnds?.to || '끝 도형'}</div>
+            <div className="grid grid-cols-5 gap-1">
+              {SIDE_CHOICES.map(({ k, t, title }) => (
+                <button
+                  key={`t${k}`}
+                  disabled={readOnly}
+                  title={title}
+                  onClick={() => patchEdge({ toSide: k || undefined })}
+                  className={`text-[10px] py-1 rounded border transition ${(normalizeFlowSide(edge.toSide) || '') === k ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                >{t}</button>
+              ))}
+            </div>
           </Field>
           {/* ⚠️ '한쪽' 한 칸을 시작/끝 두 칸으로 나눈 것이 이 패널의 핵심이다 — 도형을 이어 그린
               순서와 실제 돈의 방향이 반대인 경우가 흔한데, 종전에는 선을 지우고 반대로 다시 긋는
