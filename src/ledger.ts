@@ -71,8 +71,42 @@ export type LedgerLoanMethod =
   | 'amortizing'      // 원리금균등 — 매달 같은 금액
   | 'equalPrincipal'; // 원금균등 — 원금은 같고 이자가 줄어 **매달 납입액이 감소**
 
+/** 대출 조건 변경 사건. `ym`이 곧 **적용월**이다(그 달 납입액부터 새 조건). */
+export type LedgerLoanEventKind =
+  | 'prepay'  // 중도상환(일부/전액) — 그 달 잔액에서 value만큼 뺀다
+  | 'rate';   // 금리 변동 — 그 달부터 연이율이 value(%)가 된다
+
+/**
+ * ⚠️ 이 배열이 이 기능의 전부다. 대출은 **한 번 정하면 만기까지 그대로**가 아니라
+ *    중도상환·금리변동으로 조건이 바뀌고, 그때마다 잔액과 이후 납입액이 재계산되어야 한다.
+ *    (그 전에는 `paymentOverride`에 실제 납입액을 손으로 적는 것이 유일한 표현 수단이었다.)
+ */
+export interface LedgerLoanEvent {
+  id: string;
+  /**
+   * 적용월 'YYYY-MM'. **이 달의 납입액 계산 전에** 적용된다.
+   * ⚠️ 화면 기본값은 '다음 달'이다(사용자 확정 2026-09: "해당월에 입력하면 다음달에 계산되어
+   *    반영") — 다만 값 자체는 사용자가 직접 고르므로 엔진은 `ym`을 그대로 해석한다.
+   */
+  ym: string;
+  kind: LedgerLoanEventKind;
+  /** prepay = 상환액(원, 양수) / rate = 새 연이율(%) */
+  value: number;
+  /**
+   * prepay 전용 재약정 방식.
+   *  · `'payment'`(기본) = **기간 유지 · 월 납입액 감소** — 가계부 월 지출이 바로 줄어든다.
+   *  · `'term'`          = 월 납입액 유지 · 만기 단축.
+   * ⚠️ 사용자 확정(2026-09)이 `'payment'`다. 기본값을 바꾸면 저장된 이벤트의 **뜻이 바뀐다**.
+   */
+  after: 'payment' | 'term';
+  memo: string;
+}
+
 export interface LedgerLoan {
-  /** 대출 잔액 */
+  /**
+   * **`principalAsOfYm` 시점의** 잔액(= 이 대출의 출발점). 그 뒤 달의 잔액은 저장하지 않고
+   * 상환 스케줄이 굴려서 낸다(`loanBalanceAt`) — 파생값을 저장하지 않는다는 이 파일의 규약.
+   */
   principal: number;
   /**
    * ⚠️ 위 `principal`이 **어느 시점의 잔액인가**('YYYY-MM'). 이 기능의 핵심 필드다.
@@ -101,6 +135,11 @@ export interface LedgerLoan {
    * 계산은 어디까지나 제안이고 사용자 입력이 권위다.
    */
   paymentOverride: number | null;
+  /**
+   * 중도상환·금리변동 이력. 비어 있으면(`[]`) **결과가 종전과 1원도 다르지 않다** —
+   * 이것이 이 기능의 하위호환의 축이고 `#200`대 검증이 그 사실을 값으로 고정한다.
+   */
+  events: LedgerLoanEvent[];
 }
 
 export interface LedgerItem {
@@ -221,6 +260,11 @@ export const MAX_LEDGER_MEMO_LEN = 500;
  *  자르면 붙여넣은 값의 뒤가 조용히 사라진다. */
 export const MAX_LEDGER_CATEGORIES = 40;
 export const MAX_LEDGER_CATEGORY_LEN = 20;
+/**
+ * 대출 한 건의 조건 변경 이력 상한. STATE는 백업 22본으로 복제되므로 무한 증식만 막는다.
+ * ⚠️ 초과분은 **오래된 것부터** 버린다(최근 조건이 이후 납입액을 정한다).
+ */
+export const MAX_LEDGER_LOAN_EVENTS = 60;
 
 /* ===========================================================================
  * C. 팔레트 — `scripts/validate_palette.js`로 실측 검증한 값
@@ -466,8 +510,15 @@ export interface LoanScheduleResult {
   payment: number;
   principalPart: number;
   interestPart: number;
-  /** 값의 출처. 'override' = 사용자가 직접 적은 값. */
-  source: 'override' | 'computed';
+  /**
+   * 값의 출처.
+   *  · `'override'` = 사용자가 직접 적은 값
+   *  · `'paidOff'`  = **중도상환으로 잔액이 0이 된 뒤** — 납입액 0은 '모른다'가 아니라 확정이다.
+   *    ⚠️ 이 경우를 null로 되돌리지 말 것: `planMissingKind`가 대출의 null을 `'failed'`로 세므로
+   *       전액 상환한 대출이 **손댈 방법 없는 '산출 불가' 경고를 상시 점등**시킨다(2026-09에
+   *       변동비에서 고친 것과 같은 부류의 가짜 오류).
+   */
+  source: 'override' | 'computed' | 'paidOff';
   /** 기준 시점(principalAsOfYm)에서 만기까지의 총 개월수. override면 null일 수 있다. */
   termMonths: number | null;
   /** 기준 시점부터 그 달까지 경과한 회차(0-based). override면 null일 수 있다. */
@@ -476,6 +527,17 @@ export interface LoanScheduleResult {
   inGrace: boolean;
   /** 상환방법이 매달 같은 금액인가(원금균등만 false) */
   levelPayment: boolean;
+  /**
+   * 그 달 **말** 잔액. 잔액을 알 수 없으면 null(override인데 기준월이 없는 경우).
+   * ⚠️ 저장하지 않는다 — 매 조회 시 스케줄에서 굴려 낸다.
+   */
+  balance: number | null;
+  /** 그 달 **초** 잔액(중도상환 반영 후 = 이자 계산의 밑변). */
+  openingBalance: number | null;
+  /** 그 달에 적용된 연이율(%). 금리 변동 이벤트가 반영된 값이다. */
+  annualRate: number;
+  /** 그 달에 적용된 중도상환액(원). 없으면 0. */
+  prepay: number;
 }
 
 /**
@@ -496,18 +558,256 @@ export const loanTermMonths = (loan: LedgerLoan | null | undefined): number | nu
   return n !== null && n > 0 ? n : null;
 };
 
+/** 만기 정보가 없는 이자만 대출을 전개할 상한(100년). 실질 무한이지만 무한루프는 막는다. */
+const MAX_LOAN_PERIODS = 1200;
+/**
+ * 잔액 소진 판정 여유. 원 단위 계산이라 1e-6 미만은 0으로 본다 —
+ * 없으면 마지막 회차의 부동소수 잔여(1e-9 규모)가 **유령 회차**로 남는다.
+ */
+const LOAN_EPS = 1e-6;
+
+/** 상환 스케줄 한 회차. `balance`는 그 달 **말** 잔액이다. */
+export interface LoanRunRow {
+  ym: string;
+  /** 기준월(principalAsOfYm)부터의 회차(0-based) */
+  period: number;
+  /** 그 달 **초** 잔액 — 중도상환을 반영한 값이자 이자 계산의 밑변 */
+  openingBalance: number;
+  /** 그 달 적용 연이율(%) */
+  annualRate: number;
+  payment: number;
+  interestPart: number;
+  principalPart: number;
+  /** 그 달에 적용된 중도상환액 */
+  prepay: number;
+  /** 그 달 **말** 잔액 */
+  balance: number;
+  inGrace: boolean;
+  levelPayment: boolean;
+  source: 'override' | 'computed';
+}
+
+export interface LoanRunResult {
+  rows: LoanRunRow[];
+  byYm: Map<string, LoanRunRow>;
+  /** **중도상환으로** 잔액이 0이 된 달. 그 달부터 납입이 없다(만기 도달은 여기 해당하지 않는다). */
+  paidOffYm: string | null;
+  termMonths: number | null;
+  /** 기준월 이전·만기 이후·손상값이라 적용되지 않은 이벤트 수 — 화면이 알려야 한다. */
+  ignoredEvents: number;
+}
+
+/**
+ * ⚠️ **참조 캐시.** 스케줄 전개는 만기까지 회차를 하나씩 굴리므로(APT 대출이 441회차)
+ *    `loanSchedule`이 불릴 때마다 다시 돌면 O(회차 × 호출)이 된다 — `monthTotals`·
+ *    `loanNext12Total`이 한 렌더에 수십 번 부른다. 대출 객체는 편집할 때만 새로 만들어지므로
+ *    (불변 갱신) 참조가 곧 정확한 무효화 신호다. `ledgerFingerprint`의 캐시와 같은 규약.
+ */
+const loanRunsCache = new WeakMap<object, LoanRunResult | null>();
+
+/**
+ * 기준월부터 만기(또는 완납)까지의 상환 스케줄을 **순차 전개**한다.
+ *
+ * ⚠️ **하위호환의 축**: `events`가 비어 있으면 각 회차의 `payment`가 종전 폐쇄형 계산과
+ *    **비트 단위로 같다**. 근거는 두 가지다 —
+ *      ① 원리금균등·원금균등의 납입액을 **거치가 끝나는 그 회차에 1회만** 계산하고 이후
+ *         회차로 캐리한다(매달 재계산하면 부동소수 잔차로 `p0 === p6`이 깨진다 — #12).
+ *      ② 그 1회 계산의 입력(잔액·남은 회차)이 종전 식의 `(P, nEff)`와 정확히 같다
+ *         (거치 중에는 원금 상환이 0이라 잔액이 P 그대로이고, `n - k|k=grace` = `n - grace`).
+ *
+ * ⚠️ **잔액 소진으로 스케줄을 끊는 것은 이벤트가 있을 때뿐이다.** 이벤트가 없으면 '완납'이라는
+ *    개념이 종전 모델에 없었고, `paymentOverride`가 큰 짧은 대출에서 만기 전에 잔액이
+ *    소진되면 **종전에는 만기까지 내던 납입액이 사라진다**(조용한 동작 변경).
+ *
+ * ⚠️ **null 계약은 종전 그대로다** — 게이트의 순서·조건을 바꾸지 말 것. 순진한 PMT 식은
+ *    `annualRate=0`에서 0/0 = **NaN**, `n=0`에서 **Infinity**, `n<0`에서 **음수**(실측
+ *    P=1억·4%·n=−3 → −33,222,469)를 낸다. 셋 다 `typeof === 'number'`라 타입으로 걸리지
+ *    않고 Σ를 지나 월 지출 합계·예상 年 지출·DSR·저축여력을 전부 오염시킨다. 특히
+ *    `payment > 0` 검사는 **Infinity를 통과시킨다** — `Number.isFinite`만이 막는다.
+ */
+export const buildLoanRuns = (loan: LedgerLoan | null | undefined): LoanRunResult | null => {
+  if (!loan || typeof loan !== 'object') return null;
+  if (loanRunsCache.has(loan)) return loanRunsCache.get(loan) ?? null;
+  const out = buildLoanRunsInner(loan);
+  loanRunsCache.set(loan, out);
+  return out;
+};
+
+const buildLoanRunsInner = (loan: LedgerLoan): LoanRunResult | null => {
+  const baseYm = loan.principalAsOfYm;
+  if (!isValidYm(baseYm)) return null;
+
+  const override = finiteOr(loan.paymentOverride);
+  const useOverride = override !== null && override >= 0;
+  const P0 = finiteOr(loan.principal, 0) as number;
+  const rate0 = finiteOr(loan.annualRate, 0) as number;
+  const n = loanTermMonths(loan);
+  const graceRaw = finiteOr(loan.graceMonths, 0) as number;
+  const grace = Number.isFinite(graceRaw) && graceRaw > 0 ? graceRaw : 0;
+
+  // ── 게이트: 종전 loanSchedule의 계산 경로와 **같은 순서·같은 조건** ──
+  if (!useOverride) {
+    if (!(P0 > 0)) return null;                 // 잔액이 없으면 납입도 없다('0원'이 아니라 '해당 없음')
+    const i0 = rate0 / 100 / 12;
+    if (!Number.isFinite(i0) || i0 < 0) return null;
+    // 만기 정보가 없으면 이자만 아는 셈이다 — 이자만 방식만 성립한다.
+    if (n === null && loan.method !== 'interestOnly') return null;
+  }
+
+  // ── 이벤트 정리: 같은 달의 금리는 마지막 값, 중도상환은 합산 ──
+  const evByYm = new Map<string, { rate: number | null; prepay: number; after: 'payment' | 'term' }>();
+  let ignoredEvents = 0;
+  const rawEvents = Array.isArray(loan.events) ? loan.events : [];
+  for (const ev of rawEvents) {
+    // ⚠️ 기준월 이전 이벤트는 이미 `principal`에 반영된 것으로 본다(이중 차감 금지).
+    if (!ev || !isValidYm(ev.ym) || ev.ym < baseYm) { ignoredEvents++; continue; }
+    const v = finiteOr(ev.value);
+    if (v === null) { ignoredEvents++; continue; }
+    const cur = evByYm.get(ev.ym) || { rate: null as number | null, prepay: 0, after: 'payment' as 'payment' | 'term' };
+    if (ev.kind === 'rate') {
+      if (v < 0) { ignoredEvents++; continue; }
+      cur.rate = v;
+    } else if (ev.kind === 'prepay') {
+      if (!(v > 0)) { ignoredEvents++; continue; }
+      cur.prepay += v;
+      cur.after = ev.after === 'term' ? 'term' : 'payment';
+    } else { ignoredEvents++; continue; }
+    evByYm.set(ev.ym, cur);
+  }
+  /**
+   * ⚠️ 잔액 소진으로 스케줄을 끊는 것은 **중도상환이 기록된 대출에서만**이다.
+   *  · 이벤트가 없으면 '완납'이라는 개념이 종전 모델에 아예 없었다.
+   *  · 금리변동만 있는 대출은 원리금균등·원금균등이 남은 회차로 재계산되므로 만기에 정확히
+   *    0이 되어 조기 소진 자체가 일어나지 않는다.
+   *  · **`paymentOverride`는 잔액과 독립**이다(전세 케이스가 그 근거 — 어떤 상환방법으로도
+   *    재현되지 않는 실제 납입액). 여기에 `evByYm.size > 0`을 쓰면 금리변동 한 줄만 적어도
+   *    납입액이 잔액보다 큰 대출이 조기에 '완납 0원'으로 꺼진다(#204e2·#204e3).
+   */
+  let hasPrepay = false;
+  for (const v of evByYm.values()) if (v.prepay > 0) { hasPrepay = true; break; }
+  const appliedYms = new Set<string>();
+
+  const rows: LoanRunRow[] = [];
+  const byYm = new Map<string, LoanRunRow>();
+  const limit = n !== null ? n : MAX_LOAN_PERIODS;
+  let balance = P0;
+  let annualRate = rate0;
+  let levelPay: number | null = null;   // 원리금균등 고정 납입액 (조건이 바뀔 때만 재계산)
+  let epStep: number | null = null;     // 원금균등 원금 스텝 (〃)
+  let paidOffYm: string | null = null;
+
+  for (let k = 0; k < limit; k++) {
+    const ym = addMonthsYm(baseYm, k);
+    if (!isValidYm(ym)) break;
+
+    // ── 이벤트는 그 달 납입액을 계산하기 **전에** 적용된다(= 그 달부터 새 조건). ──
+    let prepay = 0;
+    const ev = evByYm.get(ym);
+    if (ev) {
+      appliedYms.add(ym);
+      if (ev.rate !== null) {
+        annualRate = ev.rate;
+        levelPay = null; epStep = null;              // 조건이 바뀌었으니 남은 회차로 재계산
+      }
+      if (ev.prepay > 0) {
+        prepay = Math.min(ev.prepay, balance);
+        balance -= prepay;
+        // 'payment'(기본) = 기간 유지 · 납입액 재계산 / 'term' = 납입액 유지 · 만기 단축
+        if (ev.after !== 'term') { levelPay = null; epStep = null; }
+      }
+    }
+
+    // 전액 상환(또는 기간 단축으로 조기 소진) — **이벤트가 있을 때만** 스케줄을 끊는다.
+    if (hasPrepay && !(balance > LOAN_EPS)) { paidOffYm = ym; break; }
+
+    const i = annualRate / 100 / 12;
+    if (!Number.isFinite(i) || i < 0) break;
+    const interestNow = balance * i;
+    if (!Number.isFinite(interestNow)) break;
+
+    const inGrace = grace > 0 && k < grace;
+    let payment: number, interestPart: number, principalPart: number;
+
+    if (useOverride) {
+      // 사용자가 적은 값이 권위다. 잔액은 그 값으로 굴리되 만기까지 납입액은 바뀌지 않는다.
+      payment = override as number;
+      interestPart = Math.min(interestNow, payment);
+      principalPart = payment - interestPart;
+    } else if (inGrace || loan.method === 'interestOnly') {
+      payment = interestNow; interestPart = interestNow; principalPart = 0;
+    } else if (loan.method === 'equalPrincipal') {
+      // 원금균등 — 원금은 매달 같고 이자는 줄어 **회차마다 납입액이 다르다**.
+      // ⚠️ '첫 회차를 대표값으로' 쓰지 말 것: 연 상환액을 구조적으로 과대 계상한다.
+      if (epStep === null) {
+        const remain = (n as number) - k;            // 그 달을 포함해 남은 회차
+        if (!(remain > 0)) break;
+        epStep = balance / remain;
+      }
+      principalPart = Math.min(epStep, balance);
+      interestPart = interestNow;
+      payment = principalPart + interestPart;
+    } else {
+      // 원리금균등 — 그 시점의 (잔액, 남은 회차)에서 **1회 계산되고 조건이 바뀔 때까지 고정**.
+      if (levelPay === null) {
+        const remain = (n as number) - k;
+        if (!(remain > 0)) break;
+        levelPay = i === 0 ? balance / remain : (balance * i) / (1 - Math.pow(1 + i, -remain));
+      }
+      payment = levelPay;
+      interestPart = interestNow;
+      principalPart = payment - interestPart;
+    }
+
+    // ⚠️ 단일 유한성 게이트 — 위 분기 중 하나라도 NaN/Infinity/음수를 내면 여기서 끊는다.
+    if (!Number.isFinite(payment) || payment < 0) break;
+    if (!Number.isFinite(principalPart)) principalPart = 0;
+    if (!Number.isFinite(interestPart)) interestPart = 0;
+    /**
+     * 마지막 회차 정산 — 원금 상환분이 잔액을 넘지 않게 자른다. **기간 단축(`after:'term'`)에서
+     * 만기가 앞당겨질 때** 마지막 회차의 과다 납입을 막는 것이 이 줄의 존재 이유다.
+     *
+     * ⚠️ 게이트 **둘 다** 필요하다:
+     *  · `useOverride` 제외 — 사용자가 적은 납입액은 잔액과 독립인 권위값이다. 빼면
+     *    `principal:1 + override:544,059`(실측 픽스처의 '사진 값 그대로' 구성)에서 납입액이
+     *    **1원으로 잘려** 월 지출 합계·예상 年 지출·DSR이 통째로 무너진다(#39·#41·#43).
+     *  · `hasPrepay` 한정 — 이벤트가 없으면 만기 회차에서 잔액과 원금 상환분이 **부동소수
+     *    오차 수준으로만** 어긋나는데, 그 1e-9을 정산하면 그 달 납입액이 달라져
+     *    "이벤트가 없으면 납입액이 만기까지 엄격히 고정"이 깨진다(#200b·#12).
+     */
+    if (!useOverride && hasPrepay && principalPart > balance) {
+      principalPart = balance;
+      payment = principalPart + interestPart;
+    }
+
+    const opening = balance;
+    const closing = Math.max(0, balance - principalPart);
+    const row: LoanRunRow = {
+      ym, period: k,
+      openingBalance: opening,
+      annualRate,
+      payment, interestPart, principalPart, prepay,
+      balance: closing,
+      inGrace,
+      levelPayment: loan.method !== 'equalPrincipal',
+      source: useOverride ? 'override' : 'computed',
+    };
+    rows.push(row);
+    byYm.set(ym, row);
+    balance = closing;
+  }
+
+  for (const key of evByYm.keys()) if (!appliedYms.has(key)) ignoredEvents++;
+
+  return { rows, byYm, paidOffYm, termMonths: n, ignoredEvents };
+};
+
 /**
  * 그 달(`ym`)의 대출 납입액.
  *
- * ⚠️ **null 계약**: 계산 불가·만기 경과·비유한 결과는 전부 `null`이다. 0을 돌려주지 말 것 —
+ * ⚠️ **null 계약**: 계산 불가·만기 경과·기준월 이전은 전부 `null`이다. 0을 돌려주지 말 것 —
  *    0은 "이번 달은 안 낸다"는 확정인데, 계산 실패는 "모른다"이고 화면 표기가 달라야 한다.
- *
- * ⚠️ **유한성 게이트가 이 함수의 존재 이유 절반이다.** 순진한 PMT 식은
- *    `annualRate=0`에서 0/0 = **NaN**, `n=0`에서 **Infinity**, `n<0`에서 **음수**(실측
- *    P=1억·4%·n=−3 → −33,222,469)를 낸다. 셋 다 `typeof === 'number'`라 타입으로는
- *    걸리지 않고 Σ를 지나 월 지출 합계·예상 年 지출·DSR·저축여력을 전부 오염시킨다.
- *    특히 `payment > 0` 같은 검사는 **Infinity를 통과시킨다** — `Number.isFinite`만이 막는다.
- *    (src/brlBond.ts가 같은 부류의 계산기에서 이미 이 패턴을 쓴다.)
+ *    **유일한 예외가 `source:'paidOff'`**(중도상환으로 잔액이 0이 된 뒤)이고, 그건 사용자가
+ *    직접 기록한 사건이라 '모름'이 아니라 확정이다.
  */
 export const loanSchedule = (
   loan: LedgerLoan | null | undefined,
@@ -515,18 +815,17 @@ export const loanSchedule = (
 ): LoanScheduleResult | null => {
   if (!loan || !isValidYm(ym)) return null;
 
-  const override = finiteOr(loan.paymentOverride);
-  const P = finiteOr(loan.principal, 0) as number;
-  const ratePct = finiteOr(loan.annualRate, 0) as number;
-  const i = ratePct / 100 / 12;
   const n = loanTermMonths(loan);
   const baseYm = loan.principalAsOfYm;
-  const kRaw = isValidYm(baseYm) ? monthsBetweenYm(baseYm, ym) : null;
 
-  // ── 사용자 직접 입력이 최우선. 기준월 이전이면 아직 시작 전이므로 계상하지 않는다. ──
-  if (override !== null && override >= 0) {
-    if (kRaw !== null && kRaw < 0) return null;
-    if (kRaw !== null && n !== null && kRaw >= n) return null;   // 만기 경과
+  // ⚠️ 기준월 없이 직접 입력만 있는 대출은 **스케줄을 전개할 수 없다**(잔액을 굴릴 출발점이
+  //    없다). 종전에는 그래도 납입액을 냈으므로 그 동작을 그대로 지킨다 — 잔액만 미상(null).
+  if (!isValidYm(baseYm)) {
+    const override = finiteOr(loan.paymentOverride);
+    if (override === null || override < 0) return null;
+    const P = finiteOr(loan.principal, 0) as number;
+    const ratePct = finiteOr(loan.annualRate, 0) as number;
+    const i = ratePct / 100 / 12;
     const interest = Number.isFinite(P * i) ? Math.min(P * i, override) : 0;
     return {
       payment: override,
@@ -534,77 +833,64 @@ export const loanSchedule = (
       principalPart: override - interest,
       source: 'override',
       termMonths: n,
-      period: kRaw,
+      period: null,
       inGrace: false,
       levelPayment: loan.method !== 'equalPrincipal',
+      balance: null,
+      openingBalance: null,
+      annualRate: ratePct,
+      prepay: 0,
     };
   }
 
-  // ── 계산 경로: 기준월이 없으면 포기한다(조용한 오적용보다 명시적 미적용). ──
-  if (kRaw === null) return null;
-  if (kRaw < 0) return null;                 // 아직 시작 전
-  if (!(P > 0)) return null;                 // 잔액이 없으면 납입도 없다(0이 아니라 '해당 없음')
-  if (!Number.isFinite(i) || i < 0) return null;
+  const runs = buildLoanRuns(loan);
+  if (!runs) return null;
 
-  const grace = finiteOr(loan.graceMonths, 0) as number;
-  const inGrace = Number.isFinite(grace) && grace > 0 && kRaw < grace;
-
-  // 만기 경과 — 상환이 끝난 대출을 지우지 않고 두는 것은 흔한 상태이고, 그때 계산식은
-  // 음수·Infinity를 낸다. 여기서 끊어야 그 값이 합계로 새지 않는다.
-  if (n === null) {
-    // 만기 정보가 없으면 이자만 아는 셈이다. 이자만 방식은 그래도 성립한다.
-    if (loan.method !== 'interestOnly') return null;
-  } else if (kRaw >= n) {
-    return null;
+  const row = runs.byYm.get(ym);
+  if (row) {
+    return {
+      payment: row.payment,
+      principalPart: row.principalPart,
+      interestPart: row.interestPart,
+      source: row.source,
+      termMonths: runs.termMonths,
+      period: row.period,
+      inGrace: row.inGrace,
+      levelPayment: row.levelPayment,
+      balance: row.balance,
+      openingBalance: row.openingBalance,
+      annualRate: row.annualRate,
+      prepay: row.prepay,
+    };
   }
 
-  const interestNow = P * i;
-  if (!Number.isFinite(interestNow)) return null;
-
-  let payment: number;
-  let principalPart: number;
-  let interestPart: number;
-
-  if (inGrace || loan.method === 'interestOnly') {
-    payment = interestNow;
-    interestPart = interestNow;
-    principalPart = 0;
-  } else if (loan.method === 'equalPrincipal') {
-    // 원금균등 — 원금은 매달 같고 이자는 줄어든다. **회차마다 납입액이 다르다.**
-    // ⚠️ '첫 회차를 대표값으로' 쓰지 말 것: 연 상환액을 구조적으로 과대 계상한다.
-    //    연 합계는 loanAnnualTotal이 회차별로 더한다.
-    const nEff = (n as number) - (grace > 0 ? grace : 0);
-    if (!(nEff > 0)) return null;
-    const k = kRaw - (grace > 0 ? grace : 0);
-    const principalStep = P / nEff;
-    const remaining = P - principalStep * k;
-    if (!(remaining > 0)) return null;
-    interestPart = remaining * i;
-    principalPart = principalStep;
-    payment = principalPart + interestPart;
-  } else {
-    // 원리금균등 — 기준 시점의 (잔액, 잔여 개월)에서 **1회 계산되고 만기까지 고정**된다.
-    // ⚠️ n을 매달 재계산하지 말 것(월 납입액이 사용자 조작 없이 상승한다).
-    const nEff = (n as number) - (grace > 0 ? grace : 0);
-    if (!(nEff > 0)) return null;
-    payment = i === 0 ? P / nEff : (P * i) / (1 - Math.pow(1 + i, -nEff));
-    interestPart = interestNow;
-    principalPart = payment - interestPart;
+  // ── 완납 이후 = 확정된 0원. 만기 범위 밖이면 종전대로 null(만기 경과). ──
+  if (runs.paidOffYm !== null && ym >= runs.paidOffYm) {
+    const k = monthsBetweenYm(baseYm, ym);
+    if (k === null || k < 0) return null;
+    if (n !== null && k >= n) return null;
+    return {
+      payment: 0, principalPart: 0, interestPart: 0,
+      source: 'paidOff',
+      termMonths: n,
+      period: k,
+      inGrace: false,
+      levelPayment: loan.method !== 'equalPrincipal',
+      balance: 0, openingBalance: 0,
+      annualRate: finiteOr(loan.annualRate, 0) as number,
+      prepay: 0,
+    };
   }
+  return null;
+};
 
-  // ⚠️ 단일 유한성 게이트 — 위 분기 중 하나라도 NaN/Infinity/음수를 내면 여기서 끊는다.
-  if (!Number.isFinite(payment) || payment < 0) return null;
-
-  return {
-    payment,
-    principalPart: Number.isFinite(principalPart) ? principalPart : 0,
-    interestPart: Number.isFinite(interestPart) ? interestPart : 0,
-    source: 'computed',
-    termMonths: n,
-    period: kRaw,
-    inGrace,
-    levelPayment: loan.method !== 'equalPrincipal',
-  };
+/**
+ * 그 달 **말** 잔액. 기준월 이전·만기 이후·계산 불가는 `null`.
+ * ⚠️ 0(완납)과 null(모름)을 뭉개지 말 것 — 화면이 '₩0'과 '-'로 다르게 표기해야 한다.
+ */
+export const loanBalanceAt = (loan: LedgerLoan | null | undefined, ym: string): number | null => {
+  const sch = loanSchedule(loan, ym);
+  return sch ? sch.balance : null;
 };
 
 /**
@@ -1193,7 +1479,16 @@ export interface LedgerKpi {
   projectedAnnual: number;
   /** 사진의 '예상 月 지출합계' */
   projectedMonthly: number;
+  /** 사용자가 적어 넣은 **기준월 잔액**의 합(= 출발점). 시간이 지나도 변하지 않는다. */
   loanPrincipal: number;
+  /**
+   * 그 달 **말** 잔액의 합 = '지금 남은 빚'. 상환이 진행되면 매달 줄고 중도상환이 반영된다.
+   * ⚠️ `loanPrincipal`과 **합치지 말 것** — 묻는 질문이 다르다. 이 값을 '월 납입 이율'의
+   *    분모로 바꾸는 것도 금지(사진 실측값 0.431%가 재현되지 않는다).
+   */
+  loanBalance: number;
+  /** 잔액을 산출하지 못한 대출 수(계산 불가·기준월 없음) — `loanBalance`가 하한인 이유 */
+  loanBalanceMissing: number;
   loanMonthly: number;
   /** 사진의 '월 납입 이율' — 월 납입액 / 대출 잔액 */
   loanMonthlyRate: number | null;
@@ -1221,6 +1516,7 @@ export const ledgerKpi = (book: LedgerBook | null | undefined, ym: string): Ledg
   const year = Number(ym.slice(0, 4));
   let recurring = 0, annualLump = 0, loanPrincipal = 0, loanMonthly = 0, income = 0, loanUnresolved = 0;
   let loanAnnual = 0, loanAnnualMissing = 0;
+  let loanBalance = 0, loanBalanceMissing = 0;
 
   for (const it of items) {
     if (!it) continue;
@@ -1247,6 +1543,12 @@ export const ledgerKpi = (book: LedgerBook | null | undefined, ym: string): Ledg
       const r = loanSchedule(it.loan, ym);
       if (r) { loanMonthly += r.payment; recurring += r.payment; }
       else loanUnresolved++;
+      // ⚠️ `loanPrincipal`(기준월 잔액 합)과 **별개 값**이다 — 합치지 말 것.
+      //    저것은 사용자가 적어 넣은 출발점이고 이것은 스케줄이 굴린 '지금 남은 빚'이라,
+      //    원리금균등에서는 매달 달라진다. 월 납입 이율의 분모는 종전대로 `loanPrincipal`이다.
+      const bal = r ? r.balance : null;
+      if (bal !== null && Number.isFinite(bal)) loanBalance += bal;
+      else loanBalanceMissing++;
       // ⚠️ 연 납입액은 `월 × 12`가 아니라 **향후 12개월 스케줄 합**이다 — 원금균등은 매달
       //    줄어들어 ×12가 과대다(화면 각주가 그렇게 못 박고 있다).
       const n12 = loanNext12Total(it.loan, ym);
@@ -1274,6 +1576,8 @@ export const ledgerKpi = (book: LedgerBook | null | undefined, ym: string): Ledg
     projectedAnnual,
     projectedMonthly,
     loanPrincipal,
+    loanBalance,
+    loanBalanceMissing,
     loanMonthly,
     loanMonthlyRate,
     loanAnnualRate: loanMonthlyRate === null ? null : loanMonthlyRate * 12,
@@ -1701,6 +2005,46 @@ const sameMoneyMap = (a: Record<string, number>, b: unknown): boolean => {
 };
 
 /**
+ * 대출 조건 변경 이력 정규화 — 손상값 제거 · ym 오름차순 · 상한.
+ * ⚠️ 정렬이 **멱등의 근거**다(두 번째 정규화가 같은 배열을 낸다).
+ * ⚠️ 상한 초과분은 **오래된 것부터** 버린다 — 최근 조건이 이후 납입액을 정한다.
+ */
+const normLoanEvents = (raw: unknown): LedgerLoanEvent[] => {
+  if (!Array.isArray(raw)) return [];
+  const out: LedgerLoanEvent[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) continue;
+    const r = e as Record<string, unknown>;
+    if (!isValidYm(r.ym)) continue;
+    const value = numOrNull(r.value);
+    if (value === null) continue;
+    out.push({
+      id: typeof r.id === 'string' && r.id ? r.id : generateId(),
+      ym: r.ym as string,
+      kind: r.kind === 'rate' ? 'rate' : 'prepay',
+      value,
+      after: r.after === 'term' ? 'term' : 'payment',
+      memo: str(r.memo, MAX_LEDGER_MEMO_LEN),
+    });
+  }
+  out.sort((a, b) => (a.ym < b.ym ? -1 : a.ym > b.ym ? 1 : 0));
+  return out.length > MAX_LEDGER_LOAN_EVENTS ? out.slice(out.length - MAX_LEDGER_LOAN_EVENTS) : out;
+};
+
+/** ⚠️ 레거시(`events` 필드 없음)는 `[]`와 같다고 본다 — 아니면 로드마다 '변경됨'이 되어 churn. */
+const sameLoanEvents = (next: LedgerLoanEvent[], raw: unknown): boolean => {
+  if (!Array.isArray(raw)) return next.length === 0;
+  if (raw.length !== next.length) return false;
+  return next.every((e, idx) => {
+    const r = raw[idx];
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return false;
+    const x = r as Record<string, unknown>;
+    return x.id === e.id && x.ym === e.ym && x.kind === e.kind
+      && x.value === e.value && x.after === e.after && (x.memo ?? '') === e.memo;
+  });
+};
+
+/**
  * 로드 정규화. `applyStateData`·`applyBackupData`·별도 창 수신 3경로가 공유한다.
  *
  * ⚠️ **멱등 계약**: 바꿀 게 없으면 **원본 참조를 그대로 반환**한다. 매번 새 배열을 만들면
@@ -1743,7 +2087,12 @@ export const normalizeLedgerBooks = (raw: unknown): LedgerBooks => {
           termMonths: numOrNull(l.termMonths),
           graceMonths: numOrNull(l.graceMonths),
           paymentOverride: numOrNull(l.paymentOverride),
+          events: normLoanEvents(l.events),
         };
+        // ⚠️ 이벤트는 배열이라 정규화가 항목을 **버릴 수 있다**(손상값·상한 초과). 그 결과가
+        //    저장되려면 여기서 `changed`를 세워야 한다 — 나머지 loan 필드는 스칼라라 종전대로
+        //    존재 여부만 비교하지만, 이 배열만은 내용을 봐야 한다.
+        if (!sameLoanEvents(loan.events, l.events)) itemsChanged = true;
       }
 
       const next: LedgerItem = {
@@ -1831,7 +2180,9 @@ export const ledgerBooksHaveContent = (books: unknown): boolean => {
       numOrNull(it.plan) !== null ||
       Object.keys(it.actual || {}).length > 0 ||
       Object.keys(it.planOverride || {}).length > 0 ||
-      (it.loan && numOrNull(it.loan.principal) !== null && it.loan.principal !== 0)
+      (it.loan && numOrNull(it.loan.principal) !== null && it.loan.principal !== 0) ||
+      // 중도상환·금리변동 이력만 남은 대출도 '내용 있음' — 사용자가 직접 친 값이라 복원이 되돌리면 안 된다.
+      (it.loan && Array.isArray(it.loan.events) && it.loan.events.length > 0)
     ))) return true;
     // 구분 프리셋만 등록해 둔 장부도 '내용 있음' — 사용자가 직접 친 값이라 복원이 되돌리면 안 된다.
     if (Array.isArray(b.categories) && b.categories.some((c: any) => typeof c === 'string' && c.trim() !== '')) return true;
@@ -1901,6 +2252,11 @@ const computeLedgerFingerprint = (books: unknown): string => {
           it.loan.principal ?? null, it.loan.principalAsOfYm ?? '', it.loan.annualRate ?? null,
           it.loan.method ?? '', it.loan.endDate ?? '', it.loan.termMonths ?? null,
           it.loan.graceMonths ?? null, it.loan.paymentOverride ?? null,
+          // ⚠️ 빠뜨리면 '중도상환·금리변동만 기록한 세션'이 portfolioUpdatedAt을 올리지 못해
+          //    Drive STATE 저장이 통째로 스킵된다(이 저장소에서 6회 재발한 버그 클래스).
+          (Array.isArray(it.loan.events) ? it.loan.events : []).map((e: any) => [
+            e?.id ?? '', e?.ym ?? '', e?.kind ?? '', e?.value ?? null, e?.after ?? '', e?.memo ?? '',
+          ]),
         ] : null,
       ]),
     })));
@@ -1941,6 +2297,21 @@ export const makeLedgerLoan = (over: Partial<LedgerLoan> = {}): LedgerLoan => ({
   termMonths: null,
   graceMonths: null,
   paymentOverride: null,
+  events: [],
+  ...over,
+});
+
+/**
+ * ⚠️ `after`의 기본값은 `'payment'`(기간 유지 · 월 납입액 감소)다 — 사용자 확정(2026-09).
+ *    바꾸면 이미 저장된 이벤트의 **뜻이 조용히 달라진다**(그 값을 저장하지 않는 레거시 행 포함).
+ */
+export const makeLedgerLoanEvent = (over: Partial<LedgerLoanEvent> = {}): LedgerLoanEvent => ({
+  id: generateId(),
+  ym: '',
+  kind: 'prepay',
+  value: 0,
+  after: 'payment',
+  memo: '',
   ...over,
 });
 

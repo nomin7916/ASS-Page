@@ -78,6 +78,8 @@ if (L) {
     makeLedgerItem, makeLedgerLoan, makeLedgerBook,
     addMonthsYm, monthsBetweenYm, makeYm, isValidYm, isSeededYm, LEDGER_YEAR_MIN, LEDGER_YEAR_MAX,
     finiteOr, roundWon,
+    // 대출 상환 스케줄(중도상환·금리변동) — §19
+    buildLoanRuns, loanBalanceAt, makeLedgerLoanEvent, MAX_LEDGER_LOAN_EVENTS,
   } = L;
 
   ok('#0 필요한 export가 전부 있다', [
@@ -916,6 +918,225 @@ if (L) {
     eq('#119d moveItemInGroup은 그룹 버킷 위임(#72와 동일)', moveItemInGroup(mix, 'f2', -1).map((x) => x.id), ['f2', 'v1', 'f1']);
     ok('#119e 입력 배열을 변형하지 않는다', mixP.map((x) => x.id).join() === 'f1,f2,v1,f3');
   }
+  /* ═══════════════════════════════════════════════════════════════════════════
+   * §19 대출 조건 변경 — 잔액이 매달 줄고, 중도상환·금리변동이 반영된다 (2026-09)
+   *
+   * 사용자 요구: "한번 대출은 계속 지속되는 것으로 지출에 반영되어 있습니다 … 대출 상세
+   * 기입란에 대출잔액을 수정, 또는 상환금액입력을 하면 대출원금이 계산되어 줄어 들어야 …
+   * 금리도 고정이 아니라 변동이 있으므로 … 그것에 맞게 다음달에 원리금균등상환, 이자 상환
+   * 금액이 계산되어 가계부 지출에 반영되어야".
+   *
+   * ⚠️ **하위호환이 최우선 계약**이다 — `events`가 비어 있으면 `payment`가 종전과 **엄격히**
+   *    같아야 한다(#200). 사진 실측 픽스처(#8~#43)가 그 사실을 값으로 이미 고정하고 있고,
+   *    여기서는 그 고정을 회차 축으로 한 번 더 못 박는다.
+   * ═══════════════════════════════════════════════════════════════════════════ */
+  console.log('\n  §19 대출 조건 변경 — 잔액 감소 · 중도상환 · 금리변동');
+
+  const EV_BASE = '2026-01';
+  const mkL2 = (o) => makeLedgerLoan({ principalAsOfYm: EV_BASE, ...o });
+  const withEv = (o, evs) => mkL2({ ...o, events: evs.map((e) => makeLedgerLoanEvent(e)) });
+  const AMO = { principal: 100000000, annualRate: 6, method: 'amortizing', termMonths: 120 };
+  const amo = mkL2(AMO);                       // 1억 · 연 6% · 원리금균등 120회 → 월 1,110,205
+  const a0 = loanSchedule(amo, EV_BASE).payment;
+
+  // ── 하위호환의 축 ────────────────────────────────────────────────────────
+  near('#200 원리금균등 월 납입액 1,110,205', a0, 1110205, 1);
+  /* ⚠️ 스케줄을 순차 전개하면서 매 회차 PMT를 **다시 계산하면** 부동소수 잔차로 여기가 깨진다.
+        거치가 끝나는 회차에 1회만 계산하고 이후로 캐리하는 것이 그 방어선이다(#12와 같은 계약). */
+  ok('#200b ⚠️ 이벤트가 없으면 납입액이 만기까지 엄격히 고정(===)',
+    [1, 6, 12, 60, 119].every((k) => loanSchedule(amo, addMonthsYm(EV_BASE, k)).payment === a0));
+  // 원금균등·이자만도 종전 식과 같은 값이어야 한다(전개 방식이 바뀌었을 뿐이다).
+  const eqp = mkL2({ principal: 120000000, annualRate: 6, method: 'equalPrincipal', termMonths: 120 });
+  near('#200c 원금균등 1회차 = 원금/n + 잔액×i', loanSchedule(eqp, EV_BASE).payment, 1000000 + 600000, 0.01);
+  near('#200d 원금균등 13회차는 이자가 줄어 있다',
+    loanSchedule(eqp, addMonthsYm(EV_BASE, 12)).payment, 1000000 + (120000000 - 12000000) * 0.005, 0.01);
+  const io = mkL2({ principal: 50000000, annualRate: 4.8, method: 'interestOnly', termMonths: 24 });
+  near('#200e 이자만은 P×i 그대로', loanSchedule(io, addMonthsYm(EV_BASE, 12)).payment, 50000000 * 0.048 / 12, 0.01);
+
+  // ── 잔액이 매달 줄어든다(사용자 요구의 본체) ─────────────────────────────
+  const bal = (k) => loanBalanceAt(amo, addMonthsYm(EV_BASE, k));
+  ok('#201 ⚠️ 원리금균등 잔액이 매달 줄어든다', bal(0) < 100000000 && bal(1) < bal(0) && bal(59) < bal(12));
+  near('#201b 만기 회차에 잔액이 0으로 떨어진다', bal(119), 0, 1);
+  const s0 = loanSchedule(amo, EV_BASE), s60 = loanSchedule(amo, addMonthsYm(EV_BASE, 60));
+  /* ⚠️ 종전 모델은 이자를 매달 `P×i`로 **고정**했다(원리금균등에서 이자가 매달 같을 수 없다).
+        납입액은 그대로이고 그 안의 이자/원금 분해만 정확해진 것이 이 변경의 본체다. */
+  ok('#201c ⚠️ 이자 몫 ↓ · 원금 몫 ↑ (납입액은 그대로)',
+    s60.interestPart < s0.interestPart && s60.principalPart > s0.principalPart && s60.payment === s0.payment);
+  ok('#201d 납입액 = 이자 + 원금 (항등식)', Math.abs(s60.payment - (s60.interestPart + s60.principalPart)) < 1e-6);
+  {
+    let sum = 0;
+    for (let k = 0; k < 120; k++) sum += loanSchedule(amo, addMonthsYm(EV_BASE, k)).principalPart;
+    near('#201e ⚠️ Σ 원금 상환분 = 최초 잔액', sum, 100000000, 1);
+  }
+  eq('#201f 이자만은 잔액이 줄지 않는다', loanBalanceAt(io, addMonthsYm(EV_BASE, 12)), 50000000);
+  near('#201g 원금균등 잔액 = P − step×k', loanBalanceAt(eqp, addMonthsYm(EV_BASE, 11)), 120000000 - 1000000 * 12, 1);
+  const gr = mkL2({ ...AMO, graceMonths: 12 });
+  eq('#201h 거치 중에는 잔액이 줄지 않는다', loanBalanceAt(gr, addMonthsYm(EV_BASE, 11)), 100000000);
+  ok('#201i 거치가 끝나면 줄기 시작한다', loanBalanceAt(gr, addMonthsYm(EV_BASE, 12)) < 100000000);
+
+  // ── 중도상환 ─────────────────────────────────────────────────────────────
+  const pre = withEv(AMO, [{ kind: 'prepay', ym: '2026-07', value: 20000000 }]);
+  eq('#202 상환 전 달은 종전과 같다', loanSchedule(pre, '2026-06').payment, a0);
+  /* ⚠️ 기본은 **기간 유지 · 납입액 감소**(사용자 확정 2026-09) — 가계부 월 지출이 바로 줄어든다.
+        기본값을 'term'으로 뒤집으면 저장된 이벤트의 뜻이 조용히 달라진다. */
+  ok('#202b ⚠️ 기간 유지 — 상환 후 납입액이 줄어든다', loanSchedule(pre, '2026-07').payment < a0);
+  ok('#202c 만기는 그대로다', loanSchedule(pre, addMonthsYm(EV_BASE, 119)) !== null
+    && loanSchedule(pre, addMonthsYm(EV_BASE, 120)) === null);
+  ok('#202d 잔액이 상환액만큼 더 줄었다',
+    Math.abs(loanSchedule(pre, '2026-07').openingBalance
+      - (loanSchedule(amo, '2026-06').balance - 20000000)) < 1);
+  eq('#202e 상환액이 결과에 실린다', loanSchedule(pre, '2026-07').prepay, 20000000);
+
+  const preT = withEv(AMO, [{ kind: 'prepay', ym: '2026-07', value: 20000000, after: 'term' }]);
+  const lastT = loanSchedule(preT, addMonthsYm(EV_BASE, 119));
+  ok('#202f ⚠️ 납입액 유지 — 만기가 앞당겨지고 그 뒤는 0원 확정',
+    loanSchedule(preT, '2026-07').payment === a0 && lastT !== null && lastT.payment === 0 && lastT.source === 'paidOff');
+
+  const full = withEv(AMO, [{ kind: 'prepay', ym: '2026-07', value: 999999999 }]);
+  const f7 = loanSchedule(full, '2026-07');
+  /* ⚠️ 전액 상환은 '모른다'가 아니라 **확정된 0원**이다. null로 되돌리면 `planMissingKind`가
+        대출의 null을 'failed'로 세어, 다 갚은 대출이 손댈 방법 없는 '산출 불가' 경고를 상시
+        점등시킨다(2026-09에 변동비에서 고친 것과 같은 부류의 가짜 오류). */
+  ok('#202g ⚠️ 전액 상환한 달부터 0원 확정', f7 !== null && f7.payment === 0 && f7.source === 'paidOff');
+  eq('#202h 상환 전 달은 그대로', loanSchedule(full, '2026-06').payment, a0);
+  eq('#202i 만기를 지나면 종전대로 null', loanSchedule(full, addMonthsYm(EV_BASE, 120)), null);
+  eq('#202j 상환액은 잔액에서 클램프된다(초과 상환 금지)', loanBalanceAt(full, '2026-06') > 0
+    && buildLoanRuns(full).paidOffYm, '2026-07');
+
+  const preBase = withEv(AMO, [{ kind: 'prepay', ym: '2025-06', value: 10000000 }]);
+  ok('#202k ⚠️ 기준월 이전 이벤트는 무시된다(principal에 이미 반영된 것으로 본다)',
+    loanSchedule(preBase, EV_BASE).payment === a0 && buildLoanRuns(preBase).ignoredEvents === 1);
+
+  // ── 금리 변동 ────────────────────────────────────────────────────────────
+  const up = withEv(AMO, [{ kind: 'rate', ym: '2026-07', value: 8 }]);
+  ok('#203 금리가 오르면 그 달부터 납입액이 는다',
+    loanSchedule(up, '2026-06').payment === a0 && loanSchedule(up, '2026-07').payment > a0);
+  ok('#203b 금리가 내리면 준다', loanSchedule(withEv(AMO, [{ kind: 'rate', ym: '2026-07', value: 3 }]), '2026-07').payment < a0);
+  eq('#203c 그 달 적용 이율이 결과에 실린다', loanSchedule(up, '2026-07').annualRate, 8);
+  ok('#203d 변경 후에도 만기는 그대로(기간 유지)', loanSchedule(up, addMonthsYm(EV_BASE, 119)) !== null);
+  const ioR = withEv({ principal: 50000000, annualRate: 4.8, method: 'interestOnly', termMonths: 24 },
+    [{ kind: 'rate', ym: '2026-07', value: 6 }]);
+  near('#203e 이자만 대출은 이자 자체가 바뀐다', loanSchedule(ioR, '2026-07').payment, 50000000 * 0.06 / 12, 0.01);
+  const both = withEv(AMO, [{ kind: 'rate', ym: '2026-07', value: 8 }, { kind: 'prepay', ym: '2026-07', value: 20000000 }]);
+  const b7 = loanSchedule(both, '2026-07');
+  /* ⚠️ 같은 달에 둘 다 있으면 **금리 먼저 → 상환 나중**이다(그 달 이자가 새 금리로 계산되고,
+        재계산은 상환 후 잔액으로 이뤄진다). 순서를 뒤집으면 그 달 납입액이 달라진다. */
+  ok('#203f 같은 달 금리변동+중도상환이 함께 반영된다',
+    b7.annualRate === 8 && b7.prepay === 20000000
+    && Math.abs(b7.openingBalance - (loanSchedule(amo, '2026-06').balance - 20000000)) < 1);
+
+  // ── null 계약이 그대로인가 ───────────────────────────────────────────────
+  eq('#204 잔여 0개월은 여전히 null',
+    loanSchedule(mkL2({ principal: 1e8, annualRate: 4, method: 'amortizing', termMonths: 0 }), EV_BASE), null);
+  eq('#204b 잔액 0은 여전히 null',
+    loanSchedule(mkL2({ principal: 0, annualRate: 4, method: 'amortizing', termMonths: 120 }), EV_BASE), null);
+  eq('#204c 기준월 없으면 여전히 null',
+    loanSchedule(makeLedgerLoan({ principal: 1e8, annualRate: 4, method: 'amortizing', termMonths: 120 }), EV_BASE), null);
+  /* ⚠️ override는 **기준월이 없어도** 종전대로 납입액을 낸다(잔액만 미상). 이 경로를 엔진에
+        떠넘기면 그 대출이 통째로 '계산 불가'가 된다. */
+  {
+    const ovNoBase = makeLedgerLoan({ principal: 1e8, annualRate: 4, method: 'amortizing', paymentOverride: 500000 });
+    const r = loanSchedule(ovNoBase, EV_BASE);
+    ok('#204d ⚠️ override는 기준월이 없어도 종전대로 값을 낸다', r !== null && r.payment === 500000 && r.balance === null);
+  }
+  /* ⚠️ 마지막 회차 정산 클램프를 override에 적용하면 `principal:1 + override:544,059`(실측
+        픽스처의 '사진 값 그대로' 구성)에서 납입액이 1원으로 잘려 #39·#41·#43이 무너진다. */
+  {
+    const tiny = mkL2({ principal: 1, annualRate: 0, method: 'interestOnly', endDate: '2063-04-07', paymentOverride: 544059 });
+    eq('#204e ⚠️ override는 잔액과 무관하게 권위다', loanSchedule(tiny, addMonthsYm(EV_BASE, 24)).payment, 544059);
+    /* ⚠️ 잔액을 근거로 스케줄을 끊는 두 장치(완납 게이트·정산 클램프)는 override를 비켜 가야
+          한다. 여기서는 **기준월 이전이라 적용조차 되지 않는** 중도상환이 그 장치를 켜지 못하는지
+          본다 — 그것이 가장 조용한 경로다. 이 케이스가 없으면 `ev.ym < baseYm` 게이트를 지워도
+          통과하는 **죽은 단언**이 된다(변이 M10으로 실측). */
+    const tinyEv = mkL2({ principal: 1, annualRate: 0, method: 'interestOnly', endDate: '2063-04-07',
+      paymentOverride: 544059, events: [makeLedgerLoanEvent({ kind: 'prepay', ym: '2025-06', value: 1 })] });
+    eq('#204e2 ⚠️ 적용되지 않는 이벤트가 override 대출을 조기 완납시키지 않는다',
+      loanSchedule(tinyEv, addMonthsYm(EV_BASE, 24)).payment, 544059);
+    /* ⚠️ 중도상환이 **실제로 적용된** 대출에서도 override 납입액은 잔액에 잘리지 않는다.
+          이 케이스가 없으면 정산 클램프의 `!useOverride` 게이트를 지워도 `hasPrepay` 쪽이
+          가려 통과한다(변이 M5로 실측 — 두 게이트가 서로를 가리는 전형적인 사각지대다). */
+    const ovPre = mkL2({ principal: 100000000, annualRate: 0, method: 'interestOnly', termMonths: 120,
+      paymentOverride: 30000000, events: [makeLedgerLoanEvent({ kind: 'prepay', ym: '2026-02', value: 1 })] });
+    eq('#204e3 ⚠️ 잔액이 모자란 회차에도 override 납입액은 그대로다',
+      loanSchedule(ovPre, addMonthsYm(EV_BASE, 3)).payment, 30000000);
+    /* ⚠️ 소진 판정을 켜는 것은 **중도상환뿐**이다 — `evByYm.size > 0`으로 넓히면 금리변동 한
+          줄만 적어도 납입액이 잔액보다 큰 override 대출이 조기에 '완납 0원'으로 꺼진다
+          (변이 M21로 실측). 금리변동만 있는 대출은 원리금균등·원금균등이 남은 회차로
+          재계산되므로 조기 소진 자체가 일어나지 않는다. */
+    const ovRate = mkL2({ principal: 1, annualRate: 0, method: 'interestOnly', endDate: '2063-04-07',
+      paymentOverride: 544059, events: [makeLedgerLoanEvent({ kind: 'rate', ym: '2026-03', value: 3 })] });
+    eq('#204e4 ⚠️ 금리변동만으로는 잔액 소진 판정이 켜지지 않는다',
+      loanSchedule(ovRate, addMonthsYm(EV_BASE, 24)).payment, 544059);
+  }
+  S('#204f 손상 이벤트에 throw하지 않는다',
+    () => loanSchedule(mkL2({ ...AMO, events: [null, { ym: 'x' }, { kind: 'prepay', ym: '2026-07', value: NaN }, 7] }), '2026-07'),
+    (v) => v !== null && v.payment === a0);
+  const noEnd = mkL2({ principal: 1e8, annualRate: 6, method: 'interestOnly' });
+  ok('#204g ⚠️ 만기 정보가 없는 이자만도 전개 상한에서 끊긴다(무한루프 금지)',
+    buildLoanRuns(noEnd).rows.length === 1200);
+
+  // ── 정규화 · 지문 · 영속화 ───────────────────────────────────────────────
+  const mkBookL = (loan) => makeLedgerBook({ id: 'bev', name: 'x', items: [makeLedgerItem({ id: 'i1', group: 'loan', name: 'L', loan })] });
+  /* ⚠️ 빠뜨리면 '중도상환·금리변동만 기록한 세션'이 portfolioUpdatedAt을 올리지 못해 Drive
+        STATE 저장이 통째로 스킵된다(이 저장소에서 6회 재발한 버그 클래스). */
+  ok('#205 ⚠️ 조건 변경만 해도 지문이 달라진다(저장 트리거)',
+    ledgerFingerprint([mkBookL(amo)]) !== ledgerFingerprint([mkBookL(pre)]));
+  ok('#205b 금리 변동도 지문을 바꾼다', ledgerFingerprint([mkBookL(pre)]) !== ledgerFingerprint([mkBookL(up)]));
+  {
+    const rawBook = { id: 'b', name: 'x', items: [{ id: 'i1', group: 'loan', name: 'L', loan: {
+      principal: 1e8, principalAsOfYm: EV_BASE, annualRate: 6, method: 'amortizing', termMonths: 120,
+      events: [
+        { id: 'e2', ym: '2027-01', kind: 'rate', value: 5, after: 'payment', memo: '' },
+        { id: 'e1', ym: '2026-07', kind: 'prepay', value: 1e7, after: 'term', memo: '' },
+        { id: 'bad', ym: 'nope', kind: 'prepay', value: 1, after: 'payment', memo: '' },
+        null,
+      ] } }] };
+    const n1 = normalizeLedgerBooks([rawBook]);
+    const evOut = n1[0].items[0].loan.events;
+    eq('#205c 손상 이벤트가 제거된다', evOut.length, 2);
+    eq('#205d ⚠️ ym 오름차순 정렬(멱등의 근거)', evOut.map((e) => e.id).join(','), 'e1,e2');
+    ok('#205e ⚠️ 정규화는 멱등 — 두 번째는 같은 참조', normalizeLedgerBooks(n1) === n1);
+    const many = Array.from({ length: MAX_LEDGER_LOAN_EVENTS + 5 }, (_, i) => ({
+      id: `e${i}`, ym: addMonthsYm('2026-01', i), kind: 'prepay', value: 1, after: 'payment', memo: '' }));
+    const capped = normalizeLedgerBooks([{ id: 'b', name: 'x', items: [{ id: 'i1', group: 'loan', name: 'L',
+      loan: { principal: 1e8, principalAsOfYm: EV_BASE, annualRate: 6, method: 'amortizing', termMonths: 200, events: many } }] }])[0].items[0].loan.events;
+    eq('#205f 상한을 넘으면 오래된 것부터 버린다', capped.length, MAX_LEDGER_LOAN_EVENTS);
+    eq('#205g ⚠️ 남는 것은 최근 이벤트다', capped[capped.length - 1].id, `e${MAX_LEDGER_LOAN_EVENTS + 4}`);
+  }
+  {
+    const legacy = normalizeLedgerBooks([mkBookL(makeLedgerLoan({
+      principal: 1e8, principalAsOfYm: EV_BASE, annualRate: 6, method: 'amortizing', termMonths: 120 }))]);
+    ok('#205h 레거시(events 없음)는 빈 배열로 정규화된다',
+      Array.isArray(legacy[0].items[0].loan.events) && legacy[0].items[0].loan.events.length === 0);
+    ok('#205i ⚠️ 그리고 멱등이다', normalizeLedgerBooks(legacy) === legacy);
+  }
+  ok('#205j ⚠️ 이벤트만 남은 대출도 백업 복원이 되돌리지 않는다',
+    ledgerBooksHaveContent([{ items: [{ name: '', plan: null, actual: {}, planOverride: {},
+      loan: { principal: 0, events: [{ id: 'e', ym: '2026-07', kind: 'prepay', value: 1 }] } }] }]));
+  ok('#205k makeLedgerLoan이 events: []를 물린다', Array.isArray(makeLedgerLoan().events) && makeLedgerLoan().events.length === 0);
+  eq('#205l ⚠️ 이벤트 기본 재약정 방식은 기간 유지', makeLedgerLoanEvent().after, 'payment');
+
+  // ── KPI ──────────────────────────────────────────────────────────────────
+  {
+    const kBook = mkBookL(amo);
+    const k12 = ledgerKpi(kBook, addMonthsYm(EV_BASE, 12));
+    /* ⚠️ 두 값은 **다른 질문**이다 — `loanPrincipal`은 사용자가 적은 출발점(시간 불변),
+          `loanBalance`는 스케줄이 굴린 '지금 남은 빚'. 합치거나 월 납입 이율의 분모를 바꾸면
+          사진 실측값(0.359%·0.431%)이 재현되지 않는다. */
+    eq('#206 loanPrincipal은 기준월 잔액 그대로(시간에 불변)', k12.loanPrincipal, 100000000);
+    ok('#206b ⚠️ loanBalance는 그 달 잔액 — 매달 줄어든다', k12.loanBalance < 100000000 && k12.loanBalance > 0);
+    eq('#206c 잔액을 못 낸 대출 수', k12.loanBalanceMissing, 0);
+    ok('#206d ⚠️ 월 납입 이율의 분모는 종전대로 loanPrincipal',
+      Math.abs(k12.loanMonthlyRate - k12.loanMonthly / k12.loanPrincipal) < 1e-12);
+    const kNo = ledgerKpi(mkBookL(makeLedgerLoan({ principal: 1e8, annualRate: 6, method: 'amortizing', termMonths: 120 })), EV_BASE);
+    eq('#206e 잔액을 못 내면 하한으로 세어 알린다', kNo.loanBalanceMissing, 1);
+  }
+  /* ⚠️ 완납 이후의 0원은 **지출 계획으로도 0**이어야 한다 — planOf가 null을 내면 그 대출이
+        '산출 불가'로 집계돼 사용자가 손댈 수 없는 경고가 상시 점등한다(#202g와 같은 근거). */
+  eq('#207 완납 이후 달의 계획 금액은 0원', planOf(makeLedgerItem({ group: 'loan', name: 'L', loan: full }), '2026-08'), 0);
+  ok('#207b 완납 이후에도 실적 입력 대상이다(0원 확정이므로)',
+    expectsActual(makeLedgerItem({ group: 'loan', name: 'L', loan: full }), '2026-08'));
+
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2297,6 +2518,34 @@ console.log('\n── §G19 거래 레이어 제거 / 변동비 그 달만 / 보
   // 복원 칩 라벨 — '1월 복원' → '1월'(사용자 요청 2026-09). 앞에 '숨긴 열' 안내가 붙는다.
   ok('#G45i 복원 칩 라벨이 간결하다', /숨긴 열<\/span>/.test(LP_RAW)
     && /\}\)\}>\{m\}월<\/button>/.test(LP_RAW) && !/\{m\}월 복원/.test(LP));
+
+  // ── 화면 배선(소스 텍스트 가드) ──────────────────────────────────────────
+  /* ⚠️ **선언이 아니라 사용부**를 단언한다 — `const balNow`와 `fmtWon(balNow…)`만 보면
+        분기 조건을 `{true ? (`로 바꿔 잔액을 통째로 '-'로 만들어도 통과한다(변이 M15로 실측). */
+  ok('#G46 ⚠️ 대출 탭에 이번 달 잔액 열이 렌더된다',
+    /이번 달 잔액<\/th>/.test(LP_RAW) && /const balNow = sch \? sch\.balance : null;/.test(LP)
+    && /\{balNow === null \? \(/.test(LP)
+    && /\{fmtWon\(balNow, hideAmounts\)\}/.test(LP));
+  ok('#G46b ⚠️ 합계 행이 loanBalance를 낸다(loanPrincipal로 되돌리지 말 것)',
+    /\{fmtWon\(kpi\.loanBalance, hideAmounts\)\}/.test(LP) && /kpi\.loanBalanceMissing > 0/.test(LP));
+  /* ⚠️ 열이 13개다 — thead·본문·합계 행·확장 패널 colSpan 넷이 어긋나면 그 행부터 표 정렬이
+        통째로 깨진다(분배금 표 '렌더 지점 23곳'과 같은 부류). */
+  ok('#G46c ⚠️ 확장 패널 colSpan이 열 수와 맞는다', /colSpan=\{13\}/.test(LP));
+  ok('#G46d ⚠️ 조건 변경 입력 3종(종류·적용월·값)이 있다',
+    /addEvent\('prepay'\)/.test(LP) && /addEvent\('rate'\)/.test(LP)
+    && /patchEvent\(ev\.id, \{ ym: e\.target\.value \}\)/.test(LP));
+  /* ⚠️ 기본 적용월은 **다음 달**(사용자 확정) — `ym`을 그대로 쓰면 "해당월에 입력하면 다음달에
+        반영"이라는 요구와 어긋나고, 그 달 납입액이 이미 지나간 뒤에 바뀐다. */
+  ok('#G46e ⚠️ 새 이벤트의 기본 적용월은 다음 달', /makeLedgerLoanEvent\(\{ kind, ym: addMonthsYm\(ym, 1\) \}\)/.test(LP));
+  ok('#G46f ⚠️ 상한을 넘으면 추가 버튼을 내리지 않고 막는다', /evs\.length >= MAX_LEDGER_LOAN_EVENTS/.test(LP));
+  /* ⚠️ 중도상환 목돈을 그 달 지출에 자동으로 더하지 않는다는 사실을 화면이 밝혀야 한다 —
+        안 그러면 "2천만원을 갚았는데 가계부에 안 잡힌다"로 읽는다. */
+  ok('#G46g ⚠️ 목돈 미계상을 화면이 고지한다', /목돈 자체<\/b>는 그 달 지출에 자동으로 더하지 않습니다/.test(LP_RAW));
+  ok('#G46h ⚠️ 펼침 상태는 세션 로컬(장부 지문에 얹지 말 것)',
+    /const \[expandedLoan, setExpandedLoan\] = useState\(''\);/.test(LP)
+    && !/view: \{[^}]*expandedLoan/.test(LP));
+  ok('#G46i ⚠️ 엑셀 값 출처가 완납을 구분한다',
+    /sch\.source === 'paidOff' \? '완납'/.test(readFileSync(new URL('../src/ledgerExcel.ts', import.meta.url), 'utf8')));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:ledger — ${pass} passed, ${fail} failed\n`);

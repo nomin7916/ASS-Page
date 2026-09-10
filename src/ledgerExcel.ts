@@ -361,7 +361,10 @@ export const loanSourceLabel = (
   ym: string,
 ): string => {
   const sch = loanSchedule(loan, ym);
-  if (sch) return sch.source === 'override' ? '직접 입력' : '계산';
+  // ⚠️ '완납'을 '계산'으로 뭉개지 말 것 — 중도상환으로 다 갚은 대출은 납입액이 **0으로 확정**
+  //    되는데, 그 0의 이유가 시트 어디에도 없으면 사용자가 데이터 오류로 읽고 멀쩡한 설정을
+  //    고친다(이 함수가 애초에 6분기인 이유와 같다).
+  if (sch) return sch.source === 'override' ? '직접 입력' : sch.source === 'paidOff' ? '완납' : '계산';
   if (!loan) return '계산 불가';
   const n = loanTermMonths(loan);
   const k = loan.principalAsOfYm ? monthsBetweenYm(loan.principalAsOfYm, ym) : null;

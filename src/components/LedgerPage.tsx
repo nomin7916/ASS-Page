@@ -22,6 +22,12 @@ import {
   loanSchedule, loanNext12Total, planOf, actualOf, varianceOf, commitActual, isItemActive, expectsActual,
   monthTotals, ledgerKpi, ledgerFingerprint,
 } from '../ledger';
+// 대출 상환 스케줄 — 중도상환·금리변동으로 잔액과 이후 납입액이 바뀐다(2026-09).
+// ⚠️ `../ledger` import를 한 덩어리로 합치지 말 것 — undefcheck의 import 정규식이 `{…}` 안을
+//    300자까지만 봐서, 합치면 거기서 들여온 이름이 전부 '미해결 후보'로 잡힌다(CLAUDE.md 규약).
+import {
+  buildLoanRuns, loanBalanceAt, makeLedgerLoanEvent, MAX_LEDGER_LOAN_EVENTS,
+} from '../ledger';
 import {
   expectedOf, expectedTotal, expectedIncomeTotal, expectedByPay, monthState, projectedByPay,
   moveItemInBucket, canMoveItemInBucket, ledgerCategories, ledgerRamp, ledgerPayColor,
@@ -393,6 +399,12 @@ export default function LedgerPage({
    */
   const [planHidden, setPlanHidden] = useState(false);
   const [armedDelete, setArmedDelete] = useState('');
+  /**
+   * 대출 탭에서 조건 변경(중도상환·금리변동) 패널을 펼친 항목 id.
+   * ⚠️ **세션 로컬** — Drive 저장 지점 0곳(뷰 선호도이고 클릭 한 번으로 복구된다).
+   *    `book.view`에 올리지 말 것: 장부 지문이 흔들려 펼치기만 해도 STATE 저장이 나간다.
+   */
+  const [expandedLoan, setExpandedLoan] = useState('');
   const [flash, setFlash] = useState('');
   const [showSnapshots, setShowSnapshots] = useState(false);
   const flashTimer = useRef(null);
@@ -1972,8 +1984,9 @@ export default function LedgerPage({
                 <thead>
                   <tr className="bg-[#151b28] text-gray-400">
                     <th className={`${cellBase} text-left`}>대출명</th>
-                    <th className={`${cellBase} text-right`}>대출금(잔액)</th>
+                    <th className={`${cellBase} text-right`} title="이 대출의 출발점 — 아래 '잔액 기준월' 시점의 잔액입니다. 매달 줄어드는 잔액은 오른쪽 '이번 달 잔액'에 나옵니다.">대출금(기준월)</th>
                     <th className={`${cellBase} text-center`}>잔액 기준월</th>
+                    <th className={`${cellBase} text-right`} title={`${year}년 ${month}월 말 잔액 — 상환이 진행된 만큼 줄어들고 중도상환·금리변동이 반영됩니다.`}>이번 달 잔액</th>
                     <th className={`${cellBase} text-right`}>약정 이자</th>
                     <th className={`${cellBase} text-center`}>상환방법</th>
                     <th className={`${cellBase} text-center`}>만기일</th>
@@ -1992,13 +2005,36 @@ export default function LedgerPage({
                     const pay = sch ? sch.payment : null;
                     const rate = pay !== null && l.principal > 0 ? pay / l.principal : null;
                     const annual = loanNext12Total(l, ym);
+                    const runs = buildLoanRuns(l);
+                    const evs = Array.isArray(l.events) ? l.events : [];
+                    const openEv = expandedLoan === it.id;
+                    const balNow = sch ? sch.balance : null;
                     const setLoan = (patch) => patchItem(book.id, it.id, (x) => ({ ...x, loan: { ...(x.loan || makeLedgerLoan()), ...patch } }));
+                    // ⚠️ 이벤트 객체는 updater **밖**에서 만든다 — StrictMode의 업데이터 이중 호출에서
+                    //    generateId가 두 번 돌아 서로 다른 id가 생기고, 그중 하나의 부수효과만 남는다.
+                    const addEvent = (kind) => {
+                      if (readOnly || evs.length >= MAX_LEDGER_LOAN_EVENTS) return;
+                      // 기본 적용월은 **다음 달**(사용자 확정 2026-09: "해당월에 입력하면 다음달에 반영").
+                      const ev = makeLedgerLoanEvent({ kind, ym: addMonthsYm(ym, 1) });
+                      setLoan({ events: [...evs, ev] });
+                      setExpandedLoan(it.id);
+                    };
+                    const patchEvent = (evId, patch) => { if (!readOnly) setLoan({ events: evs.map((e) => (e.id === evId ? { ...e, ...patch } : e)) }); };
+                    const removeEvent = (evId) => { if (!readOnly) setLoan({ events: evs.filter((e) => e.id !== evId) }); };
                     return (
-                      <tr key={it.id} className="hover:bg-gray-800/30">
+                      <React.Fragment key={it.id}>
+                      <tr className="hover:bg-gray-800/30">
                         <td className={`${cellBase}`} style={{ minWidth: 120 }}>
                           <div className="flex items-center gap-1">
+                            <button type="button" className="text-[9px] text-gray-500 hover:text-gray-300 shrink-0 w-3"
+                              title={openEv ? '조건 변경 내역 접기' : '중도상환·금리변동을 추가하거나 봅니다'}
+                              onClick={() => setExpandedLoan(openEv ? '' : it.id)}>{openEv ? '▾' : '▸'}</button>
                             <TextCell col="lname" value={it.name} placeholder="대출명" readOnly={readOnly}
                               onCommit={(raw) => patchItem(book.id, it.id, (x) => (x.name === raw ? x : { ...x, name: raw }))} />
+                            {evs.length > 0 && (
+                              <span className="text-[9px] px-1 rounded bg-sky-900/50 text-sky-300 shrink-0"
+                                title={`중도상환·금리변동 ${evs.length}건`}>{evs.length}</span>
+                            )}
                             <DeleteBtn readOnly={readOnly} armed={armedDelete === it.id}
                               onArm={() => setArmedDelete(it.id)} onConfirm={() => removeItem(it.id)} onCancel={() => setArmedDelete('')} />
                           </div>
@@ -2012,6 +2048,17 @@ export default function LedgerPage({
                             value={l.principalAsOfYm || ''} readOnly={readOnly}
                             title="⚠️ 위 잔액이 어느 시점의 값인지. 비우면 월 납입액을 계산할 수 없습니다(잔액과 기간의 기준을 묶어야 납입액이 고정됩니다)."
                             onChange={(e) => !readOnly && setLoan({ principalAsOfYm: e.target.value })} />
+                        </td>
+                        <td className={`${cellBase} text-right`} style={{ minWidth: 110 }}>
+                          {balNow === null ? (
+                            <span className="text-gray-600" title="아직 시작 전이거나 만기가 지났거나, 잔액 기준월이 없어 굴릴 수 없습니다">-</span>
+                          ) : (
+                            <span title={sch && sch.source === 'paidOff' ? '중도상환으로 모두 갚았습니다'
+                              : `${year}년 ${month}월 말 잔액 (기준월 대비 ${fmtWon(roundWon(l.principal - balNow), hideAmounts)} 감소)`}>
+                              {fmtWon(balNow, hideAmounts)}
+                              {sch && sch.source === 'paidOff' && <span className="text-[9px] text-emerald-400 ml-1">완납</span>}
+                            </span>
+                          )}
                         </td>
                         <td className={`${cellBase} text-right`} style={{ minWidth: 64 }}>
                           <div className="flex items-center justify-end gap-0.5">
@@ -2062,12 +2109,97 @@ export default function LedgerPage({
                         <td className={`${cellBase} text-right text-gray-400`}>{rate === null ? '-' : fmtPct(rate * 12, 3)}</td>
                         <td className={`${cellBase}`}></td>
                       </tr>
+                      {openEv && (
+                        <tr className="bg-[#0b1120]">
+                          <td className={`${cellBase}`} colSpan={13}>
+                            <div className="py-1 pl-4">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-[10px] text-gray-400 font-semibold">조건 변경</span>
+                                <span className="text-[9px] text-gray-600">중도상환·금리변동을 적은 달부터 잔액과 이후 납입액이 다시 계산됩니다</span>
+                                {!readOnly && evs.length < MAX_LEDGER_LOAN_EVENTS && (
+                                  <>
+                                    <button type="button" className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-300 hover:bg-gray-700"
+                                      onClick={() => addEvent('prepay')}>+ 중도상환</button>
+                                    <button type="button" className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-300 hover:bg-gray-700"
+                                      onClick={() => addEvent('rate')}>+ 금리변동</button>
+                                  </>
+                                )}
+                              </div>
+                              {evs.length === 0 ? (
+                                <div className="text-[10px] text-gray-600">아직 없습니다 — 일부/전액 상환이나 금리 변동이 있으면 위 버튼으로 적으세요.</div>
+                              ) : (
+                                <div className="flex flex-col gap-0.5">
+                                  {evs.map((ev) => {
+                                    const applied = runs ? runs.byYm.get(ev.ym) : null;
+                                    const isRate = ev.kind === 'rate';
+                                    return (
+                                      <div key={ev.id} className="flex items-center gap-1 flex-wrap text-[10px]">
+                                        <select className="bg-transparent text-[10px] outline-none border border-gray-800 rounded px-0.5" value={ev.kind} disabled={readOnly}
+                                          onChange={(e) => patchEvent(ev.id, { kind: e.target.value })}>
+                                          <option value="prepay" className="bg-[#0f1623]">중도상환</option>
+                                          <option value="rate" className="bg-[#0f1623]">금리변동</option>
+                                        </select>
+                                        <input type="month" className="bg-transparent text-[10px] outline-none focus:bg-gray-800/60 rounded border border-gray-800 px-0.5"
+                                          value={ev.ym || ''} readOnly={readOnly} title="이 달의 납입액부터 새 조건이 반영됩니다"
+                                          onChange={(e) => patchEvent(ev.id, { ym: e.target.value })} />
+                                        <input type="text" inputMode="decimal" className="bg-transparent text-[10px] text-right outline-none focus:bg-gray-800/60 rounded border border-gray-800 px-1 w-24"
+                                          defaultValue={ev.value ?? ''} key={`${ev.id}-v-${ev.value}`} readOnly={readOnly}
+                                          placeholder={isRate ? '연 %' : '상환액'}
+                                          onBlur={(e) => { const t = e.target.value.trim().replace(/,/g, ''); const v = t === '' ? 0 : Number(t); if (Number.isFinite(v)) patchEvent(ev.id, { value: v }); }}
+                                          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+                                        <span className="text-gray-500">{isRate ? '%' : '원'}</span>
+                                        {!isRate && (
+                                          <select className="bg-transparent text-[10px] outline-none border border-gray-800 rounded px-0.5" value={ev.after} disabled={readOnly}
+                                            title="상환 후 재약정 방식 — 기본은 기간을 그대로 두고 월 납입액을 줄입니다"
+                                            onChange={(e) => patchEvent(ev.id, { after: e.target.value })}>
+                                            <option value="payment" className="bg-[#0f1623]">기간 유지 · 납입액 ↓</option>
+                                            <option value="term" className="bg-[#0f1623]">납입액 유지 · 만기 ↓</option>
+                                          </select>
+                                        )}
+                                        <input type="text" className="bg-transparent text-[10px] outline-none focus:bg-gray-800/60 rounded border border-gray-800 px-1 flex-1 min-w-[80px]"
+                                          defaultValue={ev.memo || ''} key={`${ev.id}-m-${ev.memo}`} readOnly={readOnly} placeholder="메모"
+                                          onBlur={(e) => patchEvent(ev.id, { memo: e.target.value })}
+                                          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+                                        {applied ? (
+                                          <span className="text-gray-500 shrink-0">
+                                            → 그 달 납입 {fmtWon(roundWon(applied.payment), hideAmounts)} · 잔액 {fmtWon(roundWon(applied.balance), hideAmounts)}
+                                          </span>
+                                        ) : (
+                                          <span className="text-amber-500 shrink-0" title="잔액 기준월보다 앞서거나 만기를 지난 달이라 스케줄에 반영되지 않았습니다">→ 반영 안 됨</span>
+                                        )}
+                                        {!readOnly && (
+                                          <button type="button" className="text-gray-600 hover:text-red-400 shrink-0 px-1" title="이 변경 내역을 지웁니다"
+                                            onClick={() => removeEvent(ev.id)}>×</button>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {runs && runs.paidOffYm && (
+                                <div className="text-[10px] text-emerald-400 mt-1">{runs.paidOffYm.replace('-', '년 ')}월부터 완납 — 그 뒤 납입액은 ₩0으로 계상됩니다.</div>
+                              )}
+                              <div className="text-[9px] text-gray-600 mt-1">
+                                ⚠️ 중도상환한 <b>목돈 자체</b>는 그 달 지출에 자동으로 더하지 않습니다 — 잔액과 이후 납입액만 바뀝니다.
+                                실제로 나간 돈으로 잡으려면 변동비·연단위 항목을 따로 추가하세요.
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     );
                   })}
                   <tr className="bg-gray-800/50 font-semibold">
                     <td className={`${cellBase}`}>합계</td>
                     <td className={`${cellBase} text-right`}>{fmtWon(kpi.loanPrincipal, hideAmounts)}</td>
-                    <td className={`${cellBase}`} colSpan={5}></td>
+                    <td className={`${cellBase}`}></td>
+                    <td className={`${cellBase} text-right`}
+                      title={kpi.loanBalanceMissing > 0 ? `대출 ${kpi.loanBalanceMissing}건은 잔액을 산출하지 못해 빠졌습니다(하한)` : '지금 남은 빚 — 상환이 진행된 만큼 줄어듭니다'}>
+                      {fmtWon(kpi.loanBalance, hideAmounts)}
+                      {kpi.loanBalanceMissing > 0 && <span className="text-[9px] text-amber-500 ml-1">?{kpi.loanBalanceMissing}</span>}
+                    </td>
+                    <td className={`${cellBase}`} colSpan={4}></td>
                     <td className={`${cellBase} text-right`}>{fmtWon(kpi.loanMonthly, hideAmounts)}</td>
                     <td className={`${cellBase}`}></td>
                     <td className={`${cellBase} text-right`}>{fmtPct(kpi.loanMonthlyRate, 3)}</td>
@@ -2081,7 +2213,9 @@ export default function LedgerPage({
               <button className="mt-2 text-[11px] px-2 py-1 rounded bg-gray-800 text-gray-300 hover:bg-gray-700" onClick={() => addItem('loan')}>+ 대출 추가</button>
             )}
             <div className="mt-2 text-[10px] text-gray-600 leading-relaxed">
-              · <b>잔액 기준월</b>은 대출금이 <b>어느 시점의 잔액인가</b>입니다. 이게 있어야 월 납입액이 한 번 계산되고 만기까지 고정됩니다 — 없으면 계산하지 않습니다.<br />
+              · <b>대출금(기준월)</b>은 이 대출의 출발점이고, <b>잔액 기준월</b>은 그 금액이 <b>어느 시점의 잔액인가</b>입니다. 이게 있어야 월 납입액이 한 번 계산되고 잔액을 굴릴 수 있습니다 — 없으면 계산하지 않습니다.<br />
+              · <b>이번 달 잔액</b>은 그 출발점에서 매달 갚은 원금을 뺀 <b>{month}월 말 남은 빚</b>입니다. <b>원리금균등</b>은 월 납입액이 만기까지 같지만 그 안에서 이자 몫이 줄고 원금 몫이 늘어 잔액은 매달 줄어듭니다. <b>만기일시(이자만)</b>는 원금을 갚지 않으므로 잔액이 그대로입니다.<br />
+              · 대출명 왼쪽 <b>▸</b>를 누르면 <b>중도상환·금리변동</b>을 적을 수 있습니다. 적은 달부터 잔액과 이후 납입액이 다시 계산되어 가계부 지출에 반영됩니다(기본 적용월은 <b>다음 달</b>). 일부 상환은 기본적으로 <b>기간을 그대로 두고 월 납입액을 줄이며</b>, 행에서 '납입액 유지 · 만기 ↓'로 바꿀 수 있습니다.<br />
               · <b>원금균등</b>은 매달 납입액이 줄어듭니다. 표의 값은 <b>{month}월 회차</b>이고, 연 합계는 12회차를 각각 더한 값입니다(첫 달 × 12가 아닙니다).<br />
               · 계산이 실제와 다르면 <b>직접 입력</b> 칸에 실제 납입액을 적으세요 — 계산보다 우선합니다.<br />
               · 연 납입액 {fmtWon(kpi.loanAnnualPayment, hideAmounts)} {kpi.dsr !== null && <>· DSR {fmtPct(kpi.dsr, 1)} (연 수입 대비)</>}
