@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// src/ledgerExcel.ts — 가계부 엑셀(.xlsx) 내보내기 (시트 4장)
+// src/ledgerExcel.ts — 가계부 엑셀(.xlsx) 내보내기 (시트 3장)
 //
 // ⚠️ `// @ts-nocheck`를 붙이지 말 것 — 빌드가 esbuild(타입체크 없음)라 이 파일의 타입이
 //    유일한 안전망이다(portfolioExcel.ts·evalCompareExcel.ts와 같은 계약).
@@ -16,7 +16,6 @@
 //   ① 월 매트릭스 — 결제·항목·계획 + [실제·차이] × 12개월 + 연간[실제·차이] = 29열
 //   ② 대출       — 사진의 표 + 값 출처·잔여 회차
 //   ③ 연간요약    — KPI 블록 + 월별/구분별/결제수단별 표
-//   ④ 거래내역    — 날짜·종류·항목·구분·결제·누가·금액·할부·메모·출처·분할 (거래 레이어, 단계 A)
 // 범위는 **보고 있는 연도만**, 월은 **항상 12개월 전부**(화면에서 숨긴 월도 포함).
 //
 // ⚠️ 색 규약 — 화면과 **의도적으로 다르다**.
@@ -40,16 +39,10 @@ import type { LedgerBook, LedgerItem, LedgerGroup } from './ledger.ts';
 import {
   LEDGER_GROUP_ORDER, LEDGER_GROUP_LABEL, LEDGER_PAY_LABEL, LEDGER_PAY_ORDER,
   loanSchedule, loanNext12Total, loanTermMonths,
-  planOf, actualOf, isItemActive, isItemCounted, expectsActual,
+  planOf, actualOf, isItemActive, expectsActual,
   monthTotals, ledgerKpi, reflectedMonth, reflectedCompare, confirmedOf,
   makeYm, addMonthsYm, monthsBetweenYm, ymOfDate,
 } from './ledger.ts';
-// ⚠️ 실제 금액은 화면과 **같은 단일 소스**(`actualResolved`)로 읽는다 — `actualOf`(수동 값만)를
-//    그대로 쓰면 거래로 입력한 달이 시트에서 통째로 빈칸이 된다(조용한 과소 계상).
-import {
-  actualResolved, txIndexOf, installmentCharges, isLiveTx, filterTx,
-} from './ledger.ts';
-import type { LedgerTx, LedgerTxIndex } from './ledger.ts';
 
 /* ===========================================================================
  * A. 서식 · 색
@@ -149,18 +142,12 @@ const monthVarCol = (m: number) => monthActualCol(m) + 1;
 interface Ctx {
   bag: StyleBag;
   book: LedgerBook;
-  /** 거래 인덱스 — 시트 전체가 하나를 공유한다(장부당 1회 O(n)). */
-  ix: LedgerTxIndex;
   year: number;
   month: number;
   ym: string;
   /** 내보낸 날짜(KST) — 제목 아래 부제에 쓴다. */
   todayLabel: string;
-  /**
-   * 오늘이 속한 달 'YYYY-MM'.
-   * ⚠️ 집계에 **반드시 넘긴다** — 안 넘기면 `entry:'tx'` 항목의 **진행 중인 달**이 시트에서만
-   *    '미입력'으로 세어져 화면과 파일의 미입력 건수가 갈린다(같은 값이 두 곳에서 달라 보인다).
-   */
+  /** 오늘이 속한 달 'YYYY-MM'. */
   todayYm: string;
 }
 
@@ -238,13 +225,7 @@ const buildMatrixSheet = (ctx: Ctx): XlsxSheet => {
 
   for (const g of LEDGER_GROUP_ORDER) {
     const list = items.filter((it) => it && it.group === g);
-    // ⚠️ 항목이 하나도 없어도 미분류 거래가 있으면 변동비 섹션을 만든다 — 그러지 않으면
-    //    빠르게 입력한 지출이 시트에서 통째로 사라진다(화면에는 보이는데 파일엔 없다).
-    const uncAny = g === 'variable' && MONTHS.some((m) => {
-      const u = ctx.ix.uncategorizedYm.get(makeYm(year, m));
-      return !!(u && u.count > 0);
-    });
-    if (list.length === 0 && !uncAny) continue;
+    if (list.length === 0) continue;
 
     const gBg = GROUP_BG[g];
     const gS = st({ bold: true, bg: gBg, align: 'left', border: true });
@@ -268,20 +249,16 @@ const buildMatrixSheet = (ctx: Ctx): XlsxSheet => {
       row[COL_PLAN] = NUM(planOf(it, ctx.ym), wonS);
 
       let yActual = 0, yPlan = 0, yMissing = 0, yHasActual = false;
-      /** ⚠️ 화면(`LedgerPage`)과 **같은 옵션** — 넘기지 않으면 시트만 미입력 수가 달라진다. */
-      const expOpts = { ix: ctx.ix, todayYm: ctx.todayYm };
       for (const m of MONTHS) {
         const k = makeYm(year, m);
         const ac = monthActualCol(m);
         // ⚠️ '그 달에 없던 항목'과 '미입력'을 구분한다 — 회색 '-'는 전자다.
-        //    단 **거래가 있으면 적용기간 밖이라도 값을 쓴다**(`isItemCounted`) — 할부 회차가
-        //    `activeTo` 이후 달에 떨어지면 화면에는 금액이 있는데 파일만 '-'가 된다.
-        if (!isItemCounted(it, k, ctx.ix)) {
+        if (!isItemActive(it, k)) {
           row[ac] = S('-', naS);
           row[ac + 1] = S('', naS);
           continue;
         }
-        const a = actualResolved(it, k, ctx.ix).value;
+        const a = actualOf(it, k);
         const p = planOf(it, k);
         row[ac] = NUM(a, wonS);
         row[ac + 1] = (a !== null && p !== null) ? NUM(a - p, varS) : null;
@@ -289,7 +266,7 @@ const buildMatrixSheet = (ctx: Ctx): XlsxSheet => {
         if (a !== null && Number.isFinite(a)) {
           yActual += a; yHasActual = true;
           subActual[m] += a; subActual[0] += a;
-        } else if (expectsActual(it, k, expOpts)) {
+        } else if (expectsActual(it, k)) {
           // ⚠️ `isItemActive`가 아니라 `expectsActual` — annual의 비납부월은 미입력이 아니다.
           yMissing++; subMissing[m]++; subMissing[0]++;
         }
@@ -301,35 +278,6 @@ const buildMatrixSheet = (ctx: Ctx): XlsxSheet => {
 
       if (g === 'income') { incomePlan += yPlan; incomeActual += yActual; }
       else { grandPlan += yPlan; grandActual += yActual; grandMissing += yMissing; }
-    }
-
-    /**
-     * 미분류 거래 — 항목이 없어 위 순회로는 잡히지 않지만 **실제로 나간 돈**이다.
-     * ⚠️ 변동비 섹션의 마지막 행으로 넣고 그룹 소계에도 더한다 — 빼면 시트의
-     *    `Σ그룹 ≠ 총계`가 되어 어떤 검산도 통과하지 못한다(화면 규약과 동일).
-     */
-    if (g === 'variable') {
-      const uncMonths = MONTHS.map((m) => ctx.ix.uncategorizedYm.get(makeYm(year, m)) || null);
-      if (uncMonths.some((u) => u && u.count > 0)) {
-        const ur = blank(MATRIX_COLS);
-        ur[COL_PAY] = S('', payS);
-        ur[COL_NAME] = S('미분류 (항목 미지정 거래)', nameS);
-        ur[COL_PLAN] = null;
-        let uYear = 0;
-        for (const m of MONTHS) {
-          const u = uncMonths[m - 1];
-          const c = monthActualCol(m);
-          if (!u || u.count === 0) { ur[c] = null; ur[c + 1] = null; continue; }
-          ur[c] = N(u.sum, wonS);
-          ur[c + 1] = null;                 // 계획이 없으므로 '차이'도 없다(0으로 단언 금지)
-          uYear += u.sum;
-          subActual[m] += u.sum; subActual[0] += u.sum;
-        }
-        ur[COL_YEAR_ACTUAL] = N(uYear, wonS);
-        ur[COL_YEAR_VAR] = null;
-        rows.push(ur);
-        grandActual += uYear;
-      }
     }
 
     // 그룹 소계
@@ -636,24 +584,24 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
   let yPlan = 0, yReflected = 0, yActual = 0, yMissing = 0;
   for (const m of MONTHS) {
     const k = makeYm(year, m);
-    const t = monthTotals(book, k, ctx.todayYm);
+    const t = monthTotals(book, k);
     const rf = reflectedMonth(book, k);
-    const cf = confirmedOf(book, k, ctx.todayYm, t);
+    const cf = confirmedOf(book, k, t);
     const cmp = reflectedCompare(book, k, addMonthsYm(k, -1), ctx.todayYm);
     const r = blank();
     r[0] = S(`${m}월`, txtC);
     r[1] = N(t.planExpense, wonS);
     // 반영값 — 항목이 없는 달(그리고 미분류도 없는 달)은 빈 셀(0을 단언하지 않는다).
-    r[2] = rf.activeCount === 0 && rf.uncategorizedCount === 0 ? null : N(rf.value, wonS);
+    r[2] = rf.activeCount === 0 ? null : N(rf.value, wonS);
     r[3] = t.missingExpense >= t.activeExpense && t.activeExpense > 0 ? null : N(t.actualExpense, wonS);
     r[4] = t.missingExpense === 0 ? N(t.actualExpense - t.planExpense, varS) : null;
     // ⚠️ 비교 불가는 **빈 셀** — 0.00%로 단언하면 '변동 없음'과 구분되지 않는다.
     //    게이트는 comparable만이 아니라 `rate !== null`까지(zero-base가 0.00%로 새지 않게).
     r[5] = cmp.comparable && cmp.rate !== null ? N(cmp.rate, pctVarS) : null;
-    // 미확인 = 실제 미입력 + 이번 달 진행 중(거래 입력 항목·거래 0건) — 화면 월 헤더와 같은 수.
-    r[6] = cf.unconfirmed + cf.inProgress > 0 ? N(cf.unconfirmed + cf.inProgress, intS) : null;
+    // 미확인 = 실제 미입력 — 화면 월 헤더와 같은 수.
+    r[6] = cf.unconfirmed > 0 ? N(cf.unconfirmed, intS) : null;
     rows.push(r);
-    yPlan += t.planExpense; yReflected += rf.value; yActual += t.actualExpense; yMissing += cf.unconfirmed + cf.inProgress;
+    yPlan += t.planExpense; yReflected += rf.value; yActual += t.actualExpense; yMissing += cf.unconfirmed;
   }
   {
     const r = blank();
@@ -668,7 +616,7 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
   }
   {
     const r = blank();
-    r[0] = S("※ '반영' = 실제가 있으면 실제, 없으면 계획(미분류 거래 포함) — 화면의 소계·분석·달력과 같은 값. '실제'·'차이'·'미확인'은 입력된 실제만 봅니다. '전월 대비'는 반영값끼리의 비교이며 오늘 이후 달과 산출 불가 항목이 다른 달은 비워 둡니다.", subS);
+    r[0] = S("※ '반영' = 실제가 있으면 실제, 없으면 계획 — 화면의 소계·분석·달력과 같은 값. '실제'·'차이'·'미확인'은 입력된 실제만 봅니다. '전월 대비'는 반영값끼리의 비교이며 오늘 이후 달과 산출 불가 항목이 다른 달은 비워 둡니다.", subS);
     spanStyled(r, 0, NC - 1, subS);
     merges.push({ r1: rows.length, c1: 0, r2: rows.length, c2: NC - 1 });
     rows.push(r);
@@ -678,7 +626,7 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
   // ── 구분별 ──
   section(`${ym} 구분별 지출`);
   rows.push(hdr(['구분', '계획', '실제', '비중'], headS));
-  const t = monthTotals(book, ym, ctx.todayYm);
+  const t = monthTotals(book, ym);
   const expenseGroups = LEDGER_GROUP_ORDER.filter((g) => g !== 'income');
   const denom = expenseGroups.reduce((s2, g) => s2 + (t.byGroup[g] ? Math.max(0, t.byGroup[g].actual) : 0), 0);
   for (const g of expenseGroups) {
@@ -717,112 +665,6 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
 };
 
 /* ===========================================================================
- * F-2. 시트 ④ 거래내역
- *
- * ⚠️ **분할 거래는 몫마다 한 행**이다 — 금액 열의 합이 곧 그 해 지출이 되도록(엑셀에서
- *    바로 SUM/피벗을 돌린다). 한 행으로 합치면 '항목' 열이 비어 어떤 집계도 못 돌린다.
- * ⚠️ 휴지통(소프트 삭제)은 내보내지 않는다 — 지운 지출이 파일에 남으면 합계가 화면과 다르다.
- * ⚠️ 할부는 **원 거래 1행**(그날 결제한 사실)이고, 월 배분은 시트 ①이 담당한다.
- *    두 시트가 같은 금액을 두 번 세지 않도록 여기서는 회차를 만들지 않는다.
- * =========================================================================== */
-
-const TX_ORIGIN_LABEL: Record<string, string> = {
-  manual: '직접 입력', confirm: '고정지출 확인', auto: '자동 기입',
-  import: '가져오기', adjust: '잔액 대조', migrate: '수동값 이전',
-};
-const TX_KIND_LABEL: Record<string, string> = { expense: '지출', income: '수입', transfer: '이체' };
-
-const buildTxSheet = (ctx: Ctx): XlsxSheet => {
-  const { bag, book, year } = ctx;
-  const st = (x: XlsxStyle) => bag.id(x);
-  const titleS = st({ bold: true, size: 15, color: C.title, align: 'left' });
-  const subS = st({ size: 10, color: C.sub, align: 'left' });
-  const headS = st({ bold: true, size: 10, bg: C.head, color: C.headFg, align: 'center', border: true });
-  const textS = st({ align: 'left', border: true });
-  const midS = st({ align: 'center', size: 10, border: true });
-  const wonS = st({ numFmt: LFMT.won, align: 'right', border: true });
-  const totName = st({ bold: true, size: 11, align: 'left', bg: C.total, border: true });
-  const totWon = st({ bold: true, size: 11, numFmt: LFMT.won, align: 'right', bg: C.total, border: true });
-
-  const COLS = 11;
-  const rows: XlsxCell[][] = [];
-  const merges: XlsxMerge[] = [];
-  const blank = (n: number): XlsxCell[] => new Array(n).fill(null);
-
-  const r0 = blank(COLS);
-  r0[0] = S(`${book.name || '가계부'} — ${year}년 거래내역`, titleS);
-  spanStyled(r0, 0, COLS - 1, titleS);
-  merges.push({ r1: 0, c1: 0, r2: 0, c2: COLS - 1 });
-  rows.push(r0);
-
-  const r1 = blank(COLS);
-  r1[0] = S('환급·취소는 금액이 음수로 표기됩니다 · 할부는 결제일 1행(월 배분은 월 매트릭스 시트) · 이체는 지출 합계에 들어가지 않습니다', subS);
-  spanStyled(r1, 0, COLS - 1, subS);
-  merges.push({ r1: 1, c1: 0, r2: 1, c2: COLS - 1 });
-  rows.push(r1);
-
-  const head = ['날짜', '종류', '항목', '구분', '결제', '누가', '금액', '할부', '메모', '출처', '분할'];
-  rows.push(head.map((h) => S(h, headS)));
-
-  const items = Array.isArray(book.items) ? book.items : [];
-  const byId = new Map(items.map((it) => [it.id, it]));
-  const all = Array.isArray(book.transactions) ? book.transactions : [];
-  // ⚠️ 오래된 것부터(오름차순) — 파일은 읽는 순서가 시간 순이라야 대조할 수 있다.
-  const list = filterTx(all, { from: `${year}-01-01`, to: `${year}-12-31` })
-    .slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
-
-  let total = 0;
-  for (const tx of list) {
-    if (!isLiveTx(tx)) continue;
-    const sign = tx.refund ? -1 : 1;
-    const splits = Array.isArray(tx.splits) && tx.splits.length > 0 ? tx.splits : null;
-    const parts = splits
-      ? splits.map((sp, i) => ({ itemId: sp.itemId, amount: sp.amount, memo: sp.memo, mark: `${i + 1}/${splits.length}` }))
-      : [{ itemId: tx.itemId, amount: tx.amount, memo: '', mark: '' }];
-    for (const p of parts) {
-      const it = p.itemId ? byId.get(p.itemId) : null;
-      const inst = tx.installmentMonths && tx.installmentMonths >= 2 ? `${tx.installmentMonths}개월` : '';
-      const amount = p.amount * sign;
-      const row: XlsxCell[] = [
-        S(tx.date, midS),
-        S(TX_KIND_LABEL[tx.kind] || tx.kind, midS),
-        S(it ? (it.name || '(이름 없음)') : (p.itemId ? '(삭제된 항목)' : '미분류'), textS),
-        S(it ? (it.category || '') : '', textS),
-        S(LEDGER_PAY_LABEL[tx.pay] || '', midS),
-        S(tx.payer || '', midS),
-        N(amount, wonS),
-        S(inst, midS),
-        S([tx.memo, p.memo].filter(Boolean).join(' / '), textS),
-        S(TX_ORIGIN_LABEL[tx.origin] || '', midS),
-        S(p.mark, midS),
-      ];
-      rows.push(row);
-      // ⚠️ 이체는 지출이 아니다 — 합계에 넣으면 카드대금 결제가 이중 계상된다.
-      if (tx.kind === 'expense') total += amount;
-    }
-  }
-
-  if (list.length === 0) {
-    const empty = blank(COLS);
-    empty[0] = S('이 해에는 거래가 없습니다 — 가계부 화면 아래 빠른 입력 바로 추가할 수 있습니다', textS);
-    spanStyled(empty, 0, COLS - 1, textS);
-    merges.push({ r1: rows.length, c1: 0, r2: rows.length, c2: COLS - 1 });
-    rows.push(empty);
-  } else {
-    const tr = blank(COLS);
-    tr[0] = S(`${year} 지출 합계 (${list.length}건)`, totName);
-    spanStyled(tr, 0, 5, totName);
-    merges.push({ r1: rows.length, c1: 0, r2: rows.length, c2: 5 });
-    tr[6] = N(total, totWon);
-    for (let c = 7; c < COLS; c++) tr[c] = S('', totName);
-    rows.push(tr);
-  }
-
-  const cols = [12, 8, 22, 12, 8, 10, 14, 9, 30, 12, 7];
-  return { name: '거래내역', rows, cols, merges, freezeRows: 3, freezeCols: 1, styles: bag.styles };
-};
-
-/* ===========================================================================
  * G. 진입점
  * =========================================================================== */
 
@@ -847,10 +689,8 @@ export const buildLedgerSheets = (input: LedgerExcelInput): XlsxSheet[] => {
     ym: makeYm(year, month),
     todayLabel: String(input.todayKST || ''),
     todayYm: String(input.todayKST || '').slice(0, 7),
-    // ⚠️ 거래 인덱스는 시트 4장이 **하나를 공유**한다(WeakMap 캐시라 참조가 같으면 재계산 없음).
-    ix: txIndexOf(book),
   };
-  return [buildMatrixSheet(ctx), buildLoanSheet(ctx), buildSummarySheet(ctx), buildTxSheet(ctx)];
+  return [buildMatrixSheet(ctx), buildLoanSheet(ctx), buildSummarySheet(ctx)];
 };
 
 export const buildLedgerXlsx = (input: LedgerExcelInput, modDate?: Date): Uint8Array =>

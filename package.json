@@ -28,7 +28,6 @@
     "verify:chart-sel": "node scripts/verify-chart-selection.mjs",
     "verify:compare": "node scripts/verify-compare.mjs",
     "verify:ledger": "node scripts/verify-ledger.mjs",
-    "verify:ledger-tx": "node scripts/verify-ledger-tx.mjs",
     "verify:boot": "node scripts/verify-boot.mjs",
     "verify:watchlist": "node scripts/verify-watchlist.mjs",
     "verify:palette": "node scripts/validate_palette.mjs",

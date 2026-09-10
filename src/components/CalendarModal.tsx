@@ -4,7 +4,7 @@ import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, Exter
 import { BG } from '../design';
 import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, spanFromText, EMPTY_HIST_DETAIL } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
-import { ledgerEventsByDate, LEDGER_DIVERGING, LEDGER_PAY_LABEL } from '../ledger';
+import { ledgerEventsByDate, LEDGER_DIVERGING } from '../ledger';
 
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -61,16 +61,6 @@ const ledgerAbbrev = (n) => {
 };
 const ledgerChipText = (events, hide) => {
   if (!Array.isArray(events) || events.length === 0) return '가계부';
-  /**
-   * ⚠️ 우선순위 1위는 **그 날 실제로 쓴 돈**(거래 합)이다 — 달력에서 사용자가 묻는 첫 질문이
-   *    "이 날 얼마 썼나"이고, '정리 기록'의 금액은 그 달 전체라 날짜 칸의 뜻과 다르다.
-   *    (거래 레이어 도입 전에는 정리 기록뿐이라 그것이 1순위였다.)
-   */
-  const tx = events.find((e) => e && e.kind === 'tx');
-  if (tx) {
-    const amt = hide ? '***' : ledgerAbbrev(tx.txExpense);
-    return `${amt} · ${tx.txCount}건`;
-  }
   const touch = events.find((e) => e && e.kind === 'touch');
   if (touch) {
     const amt = hide ? '***' : ledgerAbbrev(touch.reflectedExpense ?? touch.actualExpense);
@@ -86,10 +76,6 @@ const ledgerChipText = (events, hide) => {
 };
 const ledgerChipTitle = (events, hide) => (Array.isArray(events) ? events : []).map((e) => {
   if (!e) return '';
-  if (e.kind === 'tx') {
-    const inc = e.txIncome ? ` · 수입 ${hide ? '***' : ledgerAbbrev(e.txIncome)}` : '';
-    return `그 날 지출 ${hide ? '***' : ledgerAbbrev(e.txExpense)} · ${e.txCount}건${inc}`;
-  }
   if (e.kind === 'touch') {
     const base = `${e.ym} 정리 — 총지출(반영) ${hide ? '***' : ledgerAbbrev(e.reflectedExpense ?? e.actualExpense)}`;
     const mom = (e.momComparable && e.momDelta !== null && e.momDelta !== undefined)
@@ -98,8 +84,7 @@ const ledgerChipTitle = (events, hide) => (Array.isArray(events) ? events : []).
         : e.momReason === 'unresolved' ? ' · 전월 대비 비교 불가(산출 불가 항목이 다릅니다)'
           : ' · 전월 대비 비교 불가(항목이 없는 달)';
     const unc = (e.unconfirmed ?? e.missing) > 0 ? ` · 미확인 ${e.unconfirmed ?? e.missing}건` : '';
-    const prog = e.inProgress > 0 ? ` · 진행 중 ${e.inProgress}건` : '';
-    return base + mom + unc + prog;
+    return base + mom + unc;
   }
   return `연단위 지출 — ${e.itemName || '항목'} ${hide ? '***' : ledgerAbbrev(e.amount)}`;
 }).filter(Boolean).join('\n');
@@ -1198,68 +1183,10 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               </div>
               {padLedger.events.map((e, i) => (
                 <div key={i} className="mb-2 pb-2 border-b border-gray-900/80 last:border-0">
-                  {e.kind === 'tx' ? (
-                    /* ⚠️ 라이브 파생이다(calendarMemos에 복사 금지) — 가계부에서 거래를 고치면
-                       이 칸도 즉시 따라온다. 여기서 거래를 편집하지는 않는다(범위 밖 — App 쪽
-                       writer 경로와 calendar:* 신규 타입이 필요하다). */
-                    <>
-                      <div className="text-[11px] text-gray-400">그 날 거래 {e.txCount}건</div>
-                      <div className="text-[15px] font-bold text-gray-100 tabular-nums">
-                        지출 {hideAmounts ? '***' : formatCurrency(e.txExpense)}
-                      </div>
-                      {e.txIncome ? (
-                        <div className="text-[11px] mt-0.5 text-gray-400">
-                          수입 {hideAmounts ? '***' : formatCurrency(e.txIncome)}
-                        </div>
-                      ) : null}
-                      {/* 그 날 거래 목록(읽기 전용) — 사양 §5.4.12. 합·건수만 보여 주면
-                          "무엇을 샀는지"를 확인할 수 없어 달력에서 가계부로 되돌아가야 했다. */}
-                      {Array.isArray(e.txs) && e.txs.length > 0 && (
-                        <table className="w-full text-[11px] tabular-nums mt-1.5">
-                          <thead>
-                            <tr className="text-gray-500 border-b border-gray-800">
-                              <th className="text-left font-normal py-1 pr-1">항목</th>
-                              <th className="text-left font-normal px-1">결제</th>
-                              <th className="text-right font-normal pl-1">금액</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {e.txs.map((t, ti) => (
-                              <tr key={ti} className="border-b border-gray-900/80">
-                                <td className="py-1 pr-1 text-gray-200">
-                                  {t.name}
-                                  {t.memo ? <div className="text-[9px] text-gray-500">{t.memo}</div> : null}
-                                  {t.installmentMonths ? (
-                                    <div className="text-[9px] text-gray-500">
-                                      할부 {t.installmentMonths}개월 · 이달 회차{' '}
-                                      {hideAmounts ? '***' : formatCurrency(t.installmentThisMonth)}
-                                    </div>
-                                  ) : null}
-                                </td>
-                                <td className="px-1 text-gray-500">{LEDGER_PAY_LABEL[t.pay] || t.pay}</td>
-                                <td className="text-right pl-1"
-                                  style={{ color: (t.kind === 'income' || t.refund) ? LEDGER_DIVERGING.under : undefined }}>
-                                  {t.refund ? '−' : ''}{hideAmounts ? '***' : formatCurrency(t.amount)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                      {/* ⚠️ 조용한 절단 금지 — 목록만 자르고 건수는 전 건을 유지하므로 그 차이를 밝힌다. */}
-                      {Array.isArray(e.txs) && e.txCount > e.txs.length && (
-                        <div className="text-[9px] text-gray-600 pt-1">외 {e.txCount - e.txs.length}건 — 가계부에서 전체를 봅니다</div>
-                      )}
-                      {Array.isArray(e.txs) && e.txs.some((t) => t.installmentMonths) && (
-                        <div className="text-[9px] text-gray-600 pt-2 leading-relaxed">
-                          달력은 <b>결제일 전액</b>, 가계부 월 표는 <b>회차</b>로 나눠 셉니다(회차 날짜는 존재하지 않습니다).
-                        </div>
-                      )}
-                    </>
-                  ) : e.kind === 'touch' ? (
+                  {e.kind === 'touch' ? (
                     <>
                       <div className="text-[11px] text-gray-400">{e.ym} 가계부 정리</div>
-                      {/* 반영값(실제 ?? 계획 + 미분류) — 가계부 소계·분석과 같은 값(§13). */}
+                      {/* 반영값(실제 ?? 계획) — 가계부 소계·분석과 같은 값(§13). */}
                       <div className="text-[15px] font-bold text-gray-100 tabular-nums">
                         총지출(반영) {hideAmounts ? '***' : formatCurrency(e.reflectedExpense ?? e.actualExpense)}
                       </div>
@@ -1280,10 +1207,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                               : '전달 또는 이달에 항목이 없습니다'}>-</span>
                         )}
                       </div>
-                      {((e.unconfirmed ?? e.missing) > 0 || e.inProgress > 0) && (
+                      {(e.unconfirmed ?? e.missing) > 0 && (
                         <div className="text-[10px] text-gray-500 mt-0.5">
-                          {(e.unconfirmed ?? e.missing) > 0 ? `미확인 ${e.unconfirmed ?? e.missing}건 — 계획으로 반영됨` : ''}
-                          {e.inProgress > 0 ? `${(e.unconfirmed ?? e.missing) > 0 ? ' · ' : ''}진행 중 ${e.inProgress}건` : ''}
+                          미확인 {e.unconfirmed ?? e.missing}건 — 계획으로 반영됨
                         </div>
                       )}
                     </>
