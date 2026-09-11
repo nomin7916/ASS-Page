@@ -122,6 +122,13 @@ export default function FlowBoard({
    * 지워져도 엉뚱한 도형에 쓰지 않는다(대상이 사라지면 아래에서 조용히 닫힌다).
    */
   const [editor, setEditor] = useState(null);
+  /**
+   * 팝업 위치 — `null` = 가운데. **세션 로컬**(저장하지 않는다).
+   * 사용자 요구: "메모를 열 때는 가운데에 뜨지만 사용자가 원하는 곳에 옮길 수 있어야 한다."
+   * ⚠️ 팝업이 **닫히면 초기화**한다(아래 effect) — 다음에 열 때 다시 가운데. 반대로 열려 있는 동안
+   *    다른 도형의 메모를 열면(팝업 key가 바뀌어 다시 마운트돼도) 옮겨 둔 자리를 지킨다.
+   */
+  const [editorPos, setEditorPos] = useState(null);
 
   // ── 시트 ────────────────────────────────────────────────────────────────────
   // ⚠️ 활성 시트는 **세션 로컬**(저장하지 않는다 — 위 헤더 주석 3번). 커밋 경로가 읽는 것은
@@ -405,6 +412,9 @@ export default function FlowBoard({
   // 계좌를 바꿔도 옛 값이 화면에 남는다). 대상이 사라지면 null → 아래 effect가 팝업을 닫는다.
   const editorNode = editor && map ? map.nodes.find(n => n.id === editor.nodeId) || null : null;
   useEffect(() => { if (editor && !editorNode) setEditor(null); }, [editor, editorNode]);
+  // 닫히는 모든 경로(X·Esc·대상 소멸·보드 닫기)를 한 곳에서 받는다 — 경로마다 초기화를 넣으면 하나만
+  // 빠져도 '다음에 열었는데 가운데가 아니다'가 된다.
+  useEffect(() => { if (!editor) setEditorPos(null); }, [editor]);
 
   const selNode = map && selectedId && !String(selectedId).startsWith('edge:')
     ? map.nodes.find(n => n.id === selectedId) : null;
@@ -588,6 +598,16 @@ export default function FlowBoard({
   const onKeyDownCapture = (e) => {
     const tag = (e.target?.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable;
+    // ⚠️ 메모·표 팝업 안에서 난 키는 **보드 단축키로 처리하지 않는다**. 이 분기가 없으면
+    //    ① 팝업의 버튼·체크박스에 포커스가 있을 때 Esc가 팝업이 아니라 선택 해제 → 보드 전체 닫기가 되고
+    //    ② Backspace/Delete가 **지금 편집 중인 도형을 삭제**하려 든다(확인창이 뜬다).
+    //    팝업 자신의 bubble onKeyDown으로는 막을 수 없다 — 아래에서 Escape의 전파를 캡처 단계에서
+    //    끊으므로 React 18에서는 그 핸들러까지 이벤트가 **도달하지 않는다**.
+    if (e.target?.closest?.('[data-flow-node-editor]')) {
+      if (e.key === 'Escape') setEditor(null);
+      if (e.key === 'Escape' || (!typing && (e.key === 'Delete' || e.key === 'Backspace'))) e.stopPropagation();
+      return;
+    }
     // ⚠️ 시트 이름 입력은 **자기 핸들러가** Enter(커밋)·Escape(취소)를 처리한다. 여기서 일반
     //    `typing` 분기로 흘려보내면 Escape가 target.blur()를 먼저 부르고, 그 blur가 커밋으로
     //    이어져 '취소'가 오히려 저장이 된다.
@@ -853,7 +873,8 @@ export default function FlowBoard({
 
       {/* 메모·표 편집 팝업 — 보드의 자식이라 보드 안에서 최상단에 뜬다(App의 ConfirmDialog는
           여전히 이 위). ⚠️ 대상 도형을 **id로 다시 찾아** 넘긴다: 그 사이 시트를 바꾸거나 도형이
-          지워졌으면 editorNode가 null이 되어 아래 effect가 조용히 닫는다. */}
+          지워졌으면 editorNode가 null이 되어 아래 effect가 조용히 닫는다.
+          백드롭 없는 이동 가능한 팝업이라 뒤의 흐름도를 보면서 쓸 수 있다(제목 줄을 끌어 옮긴다). */}
       {editorNode && (
         <FlowNodeEditor
           key={editorNode.id}
@@ -863,6 +884,8 @@ export default function FlowBoard({
           onClose={() => setEditor(null)}
           readOnly={readOnly}
           initialTab={editor?.tab || 'memo'}
+          initialPos={editorPos}
+          onPosCommit={setEditorPos}
         />
       )}
     </div>

@@ -55,6 +55,7 @@ const SNAP_TOL_PX = 6, SNAP_GUIDE_MAX_REFS = 6;
 const FLOW_GRID = 8;
 const FLOW_LABEL_FONT = 12, FLOW_LABEL_H = 22, FLOW_LABEL_PAD = 8, FLOW_LABEL_DOT_R = 5;
 const MAX_FLOW_TABLE_ROWS = 30, MAX_FLOW_TABLE_TEXT = 80;
+const FLOW_EDITOR_GRIP_PX = 120, FLOW_EDITOR_HEADER_PX = 40;
 const FLOW_TABLE_ROW_KINDS = ['item', 'subtotal', 'total', 'balance', 'rule'];
 const FLOW_TABLE_BORDERS = ['none', 'outline', 'all'];
 const LINE_WIDTH_PX = { thin: 1.2, normal: 2, thick: 3.5 };
@@ -216,7 +217,13 @@ function flowFingerprint(maps) {
         n?.portfolioId ?? null, n?.accountNameSnapshot ?? '', n?.amountSource ?? '',
         n?.fill ?? '', n?.stroke ?? '',
         n?.table
-          ? [n.table.border ?? '', (Array.isArray(n.table.rows) ? n.table.rows : []).map(r => [r?.kind ?? '', r?.label ?? '', r?.value ?? ''])]
+          ? [
+              n.table.border ?? '',
+              (Array.isArray(n.table.rows) ? n.table.rows : []).map(r => {
+                const f = flowTableRowFlags(r);
+                return f ? [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f] : [r?.kind ?? '', r?.label ?? '', r?.value ?? ''];
+              }),
+            ]
           : null,
       ]),
       eg: (Array.isArray(m?.edges) ? m.edges : []).map(e => [
@@ -515,6 +522,9 @@ function normalizeFlowTable(raw) {
       kind,
       label: kind === 'rule' ? '' : asStr(r.label).slice(0, MAX_FLOW_TABLE_TEXT),
       value: kind === 'rule' ? '' : asStr(r.value).slice(0, MAX_FLOW_TABLE_TEXT),
+      ...(kind === 'item' && r.done === true ? { done: true } : {}),
+      ...(kind !== 'rule' && r.strike === true ? { strike: true } : {}),
+      ...(kind !== 'rule' && r.italic === true ? { italic: true } : {}),
     });
   }
   if (rows.length === 0) return undefined;
@@ -530,8 +540,39 @@ function sameFlowTable(a, b) {
   if (ar.length !== br.length) return false;
   for (let i = 0; i < ar.length; i++) {
     if (ar[i].kind !== br[i].kind || ar[i].label !== br[i].label || ar[i].value !== br[i].value) return false;
+    if (ar[i].done !== br[i].done || ar[i].strike !== br[i].strike || ar[i].italic !== br[i].italic) return false;
   }
   return true;
+}
+
+function flowTableRowFlags(r) {
+  if (!r) return '';
+  return (r.done === true ? 'd' : '') + (r.strike === true ? 's' : '') + (r.italic === true ? 'i' : '');
+}
+
+function flowTableCheckStats(table) {
+  const rows = table && Array.isArray(table.rows) ? table.rows : [];
+  let done = 0, total = 0;
+  for (const r of rows) {
+    if (!r || r.kind !== 'item') continue;
+    total++;
+    if (r.done === true) done++;
+  }
+  return { done, total };
+}
+
+function clampFlowEditorPos(x, y, panelW, hostW, hostH) {
+  const num = (v, d) => (isFiniteNum(v) ? v : d);
+  const pw = Math.max(0, num(panelW, 0));
+  const hw = Math.max(0, num(hostW, 0));
+  const hh = Math.max(0, num(hostH, 0));
+  const hiX = hw - FLOW_EDITOR_GRIP_PX;
+  const loX = Math.min(FLOW_EDITOR_GRIP_PX - pw, hiX);
+  const hiY = Math.max(0, hh - FLOW_EDITOR_HEADER_PX);
+  return {
+    x: Math.round(clampNum(num(x, 0), loX, hiX)),
+    y: Math.round(clampNum(num(y, 0), 0, hiY)),
+  };
 }
 
 function computeFlowTable(table) {
@@ -548,12 +589,17 @@ function computeFlowTable(table) {
   let section = 0;
   for (const r of rows) {
     if (!r) continue;
-    if (r.kind === 'rule') { section = 0; out.push({ kind: 'rule', label: '', text: '', computed: false }); continue; }
-    if (r.kind === 'subtotal') { out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true }); continue; }
-    if (r.kind === 'balance') { out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true }); continue; }
+    if (r.kind === 'rule') { section = 0; out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false }); continue; }
+    const strike = r.strike === true;
+    const italic = r.italic === true;
+    if (r.kind === 'subtotal') { out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true, done: false, strike, italic }); continue; }
+    if (r.kind === 'balance') { out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true, done: false, strike, italic }); continue; }
     const v = parseFlowNumber(r.value);
     if (r.kind === 'item' && v !== null) section += v;
-    out.push({ kind: r.kind, label: r.label, text: v === null ? asStr(r.value) : formatFlowNumber(v), computed: false });
+    out.push({
+      kind: r.kind, label: r.label, text: v === null ? asStr(r.value) : formatFlowNumber(v), computed: false,
+      done: r.kind === 'item' && r.done === true, strike, italic,
+    });
   }
   return out;
 }
@@ -1259,6 +1305,96 @@ console.log('\n■ 도형 안 표 — 엑셀 붙여넣기');
   eq('#151e 값 없는 줄도 항목으로', JSON.stringify(flowTableFromText('메모만')), JSON.stringify([{ kind: 'item', label: '메모만', value: '' }]));
   eq('#151f 행 상한', flowTableFromText(Array.from({ length: 60 }, (_, i) => `a${i}\t1`).join('\n')).length, MAX_FLOW_TABLE_ROWS);
   eq('#151g 빈 입력', flowTableFromText('').length, 0);
+}
+
+console.log('\n■ 도형 안 표 — 실행 체크 · 취소선 · 기울임 (사용자 요청 2026-09)');
+{
+  const R = (kind, label, value = '', o = {}) => ({ kind, label, value, ...o });
+  deep('#152 세 표시를 보존한다',
+    normalizeFlowTable({ rows: [R('item', 'a', '1', { done: true, strike: true, italic: true })] })?.rows?.[0],
+    { kind: 'item', label: 'a', value: '1', done: true, strike: true, italic: true });
+  // ⚠️ false를 저장하면 기존 표가 전부 정규화에서 '변경됨'이 되어 원본 참조 보존 계약이 깨진다.
+  deep('#152b false는 필드를 만들지 않는다',
+    normalizeFlowTable({ rows: [R('item', 'a', '1', { done: false, strike: false, italic: false })] })?.rows?.[0],
+    { kind: 'item', label: 'a', value: '1' });
+  // ⚠️ 실행 체크는 항목 행 전용 — 총액·소계·잔액에 남으면 화면에 안 보이는 유령 상태가 저장된다.
+  eq('#152c 실행 체크는 항목 행에만 남는다',
+    (normalizeFlowTable({ rows: ['total', 'subtotal', 'balance', 'item'].map(k => R(k, k, '1', { done: true })) })?.rows || []).map(r => (r.done === true ? 1 : 0)).join(''),
+    '0001');
+  eq('#152d 취소선·기울임은 구분선만 뺀다',
+    (normalizeFlowTable({ rows: ['item', 'subtotal', 'total', 'balance', 'rule'].map(k => R(k, k, '1', { strike: true, italic: true })) })?.rows || []).map(r => flowTableRowFlags(r)).join(','),
+    'si,si,si,si,');
+  // ⚠️ 판정은 `=== true` — truthy 손상값을 받아들이면 사용자가 켠 적 없는 표시가 저장에 굳는다.
+  deep('#152e 손상값(문자열·숫자·객체)은 버린다',
+    normalizeFlowTable({ rows: [R('item', 'a', '', { done: 'yes', strike: 1, italic: {} })] })?.rows?.[0],
+    { kind: 'item', label: 'a', value: '' });
+  const withFlags = normalizeFlowTable({ rows: [R('item', 'a', '1', { done: true }), R('total', 't', '9', { italic: true }), R('rule', '')], border: 'all' });
+  eq('#152f 멱등(표시 포함)', JSON.stringify(normalizeFlowTable(withFlags)), JSON.stringify(withFlags));
+
+  // ⚠️ 비교에서 표시를 빼면 **체크·취소선만 바꾼 편집**이 팝업 flush에서 '변경 없음'으로 걸러져 저장되지 않는다.
+  const base = { border: 'none', rows: [R('item', 'a', '1')] };
+  ok('#153 실행 체크만 달라도 다르다', !sameFlowTable(base, { border: 'none', rows: [R('item', 'a', '1', { done: true })] }));
+  ok('#153b 취소선만 달라도 다르다', !sameFlowTable(base, { border: 'none', rows: [R('item', 'a', '1', { strike: true })] }));
+  ok('#153c 기울임만 달라도 다르다', !sameFlowTable(base, { border: 'none', rows: [R('item', 'a', '1', { italic: true })] }));
+  ok('#153d 같은 표시면 참조가 달라도 같다',
+    sameFlowTable({ border: 'none', rows: [R('item', 'a', '1', { done: true, italic: true })] }, { border: 'none', rows: [R('item', 'a', '1', { done: true, italic: true })] }));
+
+  // ⚠️ 표시는 **그리기 전용**이다 — 실행한 계획도 금액은 그대로 합산된다.
+  const plan = {
+    border: 'none',
+    rows: [R('total', '총액', '100'), R('item', '실행함', '30', { done: true, strike: true }), R('item', '아직', '20'), R('subtotal', '소계', '', { italic: true }), R('balance', '잔액')],
+  };
+  const c = computeFlowTable(plan);
+  eq('#154 실행한 항목도 소계에 그대로 들어간다', c[3]?.text, '50');
+  eq('#154b 잔액도 그대로(Σtotal − Σitem)', c[4]?.text, '50');
+  eq('#154c 계산 결과에 표시가 실린다(도형이 원본 행을 인덱스로 다시 읽지 않게)',
+    [c[1]?.done, c[1]?.strike, c[1]?.italic, c[2]?.done, c[3]?.italic].join(','), 'true,true,false,false,true');
+  eq('#154d 항목이 아닌 행의 체크는 계산 결과에서도 false', computeFlowTable({ rows: [R('total', 't', '1', { done: true })] })[0]?.done, false);
+  const bare = { border: 'none', rows: plan.rows.map(r => ({ kind: r.kind, label: r.label, value: r.value })) };
+  eq('#154e 표시 유무와 무관하게 숫자가 같다', computeFlowTable(bare).map(r => r.text).join('|'), c.map(r => r.text).join('|'));
+
+  deep('#155 실행 현황은 항목 행만 센다', flowTableCheckStats(plan), { done: 1, total: 2 });
+  deep('#155b 손상된 표시·항목 외 행의 체크는 세지 않는다',
+    flowTableCheckStats({ rows: [R('item', 'a', '', { done: 'yes' }), R('total', 't', '', { done: true })] }), { done: 0, total: 1 });
+  deep('#155c 빈 표·손상 입력은 0/0', [flowTableCheckStats(null), flowTableCheckStats({ rows: 7 })], [{ done: 0, total: 0 }, { done: 0, total: 0 }]);
+
+  const nodeOf = (rows) => ({ id: 'n1', kind: 'rect', x: 0, y: 0, w: 180, h: 120, label: '', date: '', amountManual: null, memo: '', portfolioId: null, accountNameSnapshot: '', amountSource: 'none', table: { rows, border: 'none' } });
+  const fpOf = (rows) => flowFingerprint([cleanMap({ id: 'm1', nodes: [nodeOf(rows)], edges: [] })]);
+  // ⚠️ 배포 churn 가드 — 표시가 없는 행의 지문은 이 기능 이전과 같은 3칸이어야 한다.
+  eq('#156 표시 없는 행의 지문은 종전 3칸', JSON.parse(fpOf([R('item', 'a', '1')]))[0]?.nd?.[0]?.slice(-1)?.[0]?.[1]?.[0]?.length, 3);
+  // ⚠️ 지문에서 빠지면 '체크만 한 세션'이 portfolioUpdatedAt을 못 올려 STATE 저장이 통째로 스킵된다.
+  ok('#156b 실행 체크만 바꿔도 지문이 달라진다', fpOf([R('item', 'a', '1')]) !== fpOf([R('item', 'a', '1', { done: true })]));
+  ok('#156c 취소선만 바꿔도 지문이 달라진다', fpOf([R('item', 'a', '1')]) !== fpOf([R('item', 'a', '1', { strike: true })]));
+  ok('#156d 기울임만 바꿔도 지문이 달라진다', fpOf([R('item', 'a', '1')]) !== fpOf([R('item', 'a', '1', { italic: true })]));
+  ok('#156e 취소선과 기울임은 서로 다른 지문', fpOf([R('item', 'a', '1', { strike: true })]) !== fpOf([R('item', 'a', '1', { italic: true })]));
+
+  // ⚠️ 재구축 경로(mapChanged=true)를 강제한 픽스처로 재야 한다 — 정규형이면 원본 참조라 살아남는다.
+  const forced = normalizeFlowMaps([cleanMap({ id: 'm1', name: 123, nodes: [nodeOf([R('item', 'a', '1', { done: true, strike: true })])], edges: [] })]);
+  eq('#157 재구축 경로에서도 표시가 보존된다', flowTableRowFlags(forced[0]?.nodes?.[0]?.table?.rows?.[0]), 'ds');
+  eq('#157b 재구축이 실제로 일어났다(픽스처가 유효한가)', forced[0]?.name, '흐름도');
+  const clean = [cleanMap({ id: 'm1', nodes: [nodeOf([R('item', 'a', '1', { done: true, italic: true })])], edges: [] })];
+  eq('#157c 표시만 있고 나머지가 정규형이면 원본 참조(멱등)', normalizeFlowMaps(clean) === clean, true);
+  // ⚠️ 노드 비교에서 표시를 빼면 손상값이 교정되지 않고 남는다(다른 필드가 정규형이면 원본 노드가 그대로 push).
+  const dirty = normalizeFlowMaps([cleanMap({ id: 'm1', nodes: [nodeOf([R('item', 'a', '1', { done: 'yes' }), R('rule', '', '', { strike: true })])], edges: [] })]);
+  eq('#157d 손상된 표시는 다른 필드가 정규형이어도 교정된다',
+    JSON.stringify(dirty[0]?.nodes?.[0]?.table?.rows), JSON.stringify([{ kind: 'item', label: 'a', value: '1' }, { kind: 'rule', label: '', value: '' }]));
+}
+
+console.log('\n■ 메모·표 팝업 위치 클램프 (가운데에서 열고, 제목 줄을 끌어 옮긴다)');
+{
+  deep('#158 화면 안이면 그대로(정수화)', clampFlowEditorPos(300.4, 200.6, 680, 1440, 900), { x: 300, y: 201 });
+  deep('#158b 오른쪽 끝 — 최소 GRIP px는 화면에 남는다', clampFlowEditorPos(5000, 100, 680, 1440, 900), { x: 1440 - FLOW_EDITOR_GRIP_PX, y: 100 });
+  deep('#158c 왼쪽 끝 — 최소 GRIP px는 화면에 남는다', clampFlowEditorPos(-5000, 100, 680, 1440, 900), { x: FLOW_EDITOR_GRIP_PX - 680, y: 100 });
+  // ⚠️ 제목 줄이 화면 위로 사라지면 다시 잡을 곳이 없어 닫고 다시 여는 것 말고는 되찾을 방법이 없다.
+  deep('#158d 위로는 제목 줄이 화면 밖으로 못 나간다', clampFlowEditorPos(100, -300, 680, 1440, 900), { x: 100, y: 0 });
+  deep('#158e 아래로는 제목 줄 전체가 남는다', clampFlowEditorPos(100, 5000, 680, 1440, 900), { x: 100, y: 900 - FLOW_EDITOR_HEADER_PX });
+  // ⚠️ 창이 GRIP보다 좁아도 하한이 상한을 넘으면 안 된다(뒤집히면 좌표가 튄다).
+  const tiny = clampFlowEditorPos(50, 50, 680, 80, 30);
+  ok('#158f 아주 좁은 창에서도 하한 ≤ 상한', tiny.x === 80 - FLOW_EDITOR_GRIP_PX && tiny.y === 0);
+  // ⚠️ 팝업이 GRIP 두 배보다 좁고 창도 좁으면 'GRIP − 폭'이 '창 − GRIP'보다 커진다 — 하한을 상한으로
+  //    묶지 않으면 clamp가 하한을 돌려줘 상한을 넘는다(위 #158f는 팝업이 넓어 이 분기를 밟지 않는다).
+  eq('#158h 좁은 팝업 + 좁은 창에서도 상한을 넘지 않는다', clampFlowEditorPos(0, 0, 100, 100, 100).x, 100 - FLOW_EDITOR_GRIP_PX);
+  deep('#158g 손상 입력은 0으로(팝업이 사라지지 않게)', clampFlowEditorPos(NaN, Infinity, 680, 1440, 900), { x: 0, y: 0 });
 }
 
 console.log('\n■ removeNode / pruneOrphanEdges');
@@ -2193,9 +2329,11 @@ const edNC = stripComments(editor);
     /useLayoutEffect\(\(\) => \(\) => \{ flush\(\); \}, \[flush\]\)/.test(edNC));
   ok('#G173b FlowNodeEditor: 키스트로크마다 커밋하지 않는다(onChange는 로컬 state만)',
     /onChange=\{e => setMemo\(e\.target\.value\)\}/.test(edNC) && /onBlur=\{flush\}/.test(edNC));
-  // ⚠️ 보드의 onKeyDownCapture가 Escape를 소비하면 팝업이 아니라 보드가 닫힌다.
-  ok('#G173c FlowNodeEditor: Escape를 팝업이 먼저 소비한다',
-    /if \(e\.key === 'Escape'\) \{ e\.stopPropagation\(\); onClose\?\.\(\); \}/.test(edNC));
+  // ⚠️ Escape는 **보드가** 처리한다(#G176). 보드가 캡처 단계에서 Escape 전파를 끊으므로 React 18에서는
+  //    팝업의 bubble onKeyDown까지 이벤트가 **도달하지 않는다** — 옛 가드는 그 죽은 핸들러의 존재를
+  //    단언하고 있었고, 실제로는 팝업 버튼에 포커스가 있을 때 Esc가 선택 해제 → 보드 전체 닫기가 됐다.
+  ok('#G173c FlowNodeEditor: 도달하지 않는 Escape 핸들러를 되살리지 않았다(처리는 보드가 한다)',
+    !/e\.key === 'Escape'/.test(edNC));
   ok('#G174 FlowNodeEditor: 계산은 flowMap 공유 함수가 한다(팝업이 합을 다시 구하지 않는다)',
     /const computed = computeFlowTable\(tbl\);/.test(edNC));
   ok('#G174b FlowNodeEditor: 자동 계산 행은 값 입력을 막고 계산 결과를 보여 준다',
@@ -2217,6 +2355,82 @@ const edNC = stripComments(editor);
   ok('#G175f FlowCanvas: 표 선 색이 채우기 밝기를 따른다',
     /const gridColor = darkText \? 'rgba\(0,0,0,0\.35\)' : 'rgba\(255,255,255,0\.35\)';/.test(canvasNC));
 }
+
+console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · 실행 체크 · 서식 (⚠️ 선언이 아니라 사용부를 단언한다)');
+{
+  const kd = sliceBetween(boardNC, 'const onKeyDownCapture = (e) => {', 'if (!open) return null;');
+  const edBranchAt = kd.indexOf("closest?.('[data-flow-node-editor]')");
+  // ⚠️ 이 분기가 보드 단축키보다 뒤에 있으면 팝업 버튼에 포커스가 있을 때 Backspace가 **편집 중인 도형을
+  //    삭제**하려 들고, Esc가 선택 해제 → 보드 전체 닫기가 된다.
+  ok('#G176 FlowBoard: 팝업 안의 키를 보드 단축키보다 먼저 가른다',
+    edBranchAt > 0 && edBranchAt < kd.indexOf('if (!typing) {') && edBranchAt < kd.indexOf('flowSheetRename'));
+  const edBranch = sliceBetween(kd, "closest?.('[data-flow-node-editor]')", 'flowSheetRename');
+  ok('#G176b FlowBoard: 팝업 안 Esc는 팝업을 닫는다', /if \(e\.key === 'Escape'\) setEditor\(null\);/.test(edBranch));
+  ok('#G176c FlowBoard: 팝업 분기는 보드 단축키로 흘러가지 않는다', /return;\s*\}/.test(edBranch) && !/deleteNode|closeBoard|setSelectedId/.test(edBranch));
+  ok('#G176d FlowBoard: 팝업 안 Delete/Backspace는 계산기 창으로도 새지 않는다',
+    /\(!typing && \(e\.key === 'Delete' \|\| e\.key === 'Backspace'\)\)\) e\.stopPropagation\(\);/.test(edBranch));
+  ok('#G176e FlowNodeEditor: 판별 속성을 패널 루트에 단다', /ref=\{panelRef\}\s+data-flow-node-editor=""/.test(edNC));
+}
+{
+  // ⚠️ 옮기는 이유가 뒤의 흐름도를 보면서 쓰기 위해서다 — 화면을 덮는 백드롭을 되살리면 옮길 이유가 사라진다.
+  ok('#G177 FlowNodeEditor: 화면을 덮는 백드롭이 없다', !/bg-black\/60/.test(edNC) && !/absolute inset-0/.test(edNC));
+  ok('#G177b FlowNodeEditor: 위치가 없으면 가운데에 뜬다',
+    /: \{ zIndex: 60, left: '50%', top: '50%', transform: 'translate\(-50%, -50%\)' \}/.test(edNC));
+  ok('#G177c FlowNodeEditor: 옮긴 위치를 그린다', /\? \{ zIndex: 60, left: pos\.x, top: pos\.y \}/.test(edNC));
+  const down = sliceBetween(edNC, 'const onHeaderPointerDown = (e) => {', 'const onHeaderPointerMove');
+  ok('#G177d 제목 줄 드래그: 버튼·입력에서는 시작하지 않는다',
+    /if \(e\.target\?\.closest\?\.\(NO_DRAG_SELECTOR\)\) return;/.test(down) && /const NO_DRAG_SELECTOR = 'button,input,select,textarea,a,label';/.test(edNC));
+  ok('#G177e 제목 줄 드래그: 포인터 캡처(커서가 제목 줄 밖으로 나가도 따라온다)', /setPointerCapture\(e\.pointerId\)/.test(down));
+  // ⚠️ 가운데 정렬(transform) 상태의 좌표로 출발하면 잡는 순간 팝업이 오른쪽 아래로 튄다.
+  ok('#G177f 제목 줄 드래그: 지금 보이는 자리에서 출발한다', /ox: r\.left - hr\.left, oy: r\.top - hr\.top/.test(down));
+  const move = sliceBetween(edNC, 'const onHeaderPointerMove = (e) => {', 'const endHeaderDrag');
+  ok('#G177g 이동은 공유 클램프를 거친다', /const next = clampHere\(/.test(move) && /d\.last = next;/.test(move) && /setPos\(next\);/.test(move));
+  ok('#G177h 클램프는 flowMap 공유 함수', /return clampFlowEditorPos\(/.test(edNC));
+  // ⚠️ 프레임마다 보드 state를 바꾸면 보드 전체(툴바·인스펙터·캔버스)가 포인터 이동마다 다시 그려진다.
+  ok('#G177i 끄는 동안에는 보드에 알리지 않는다', move.length > 0 && !/onPosCommit/.test(move));
+  const up = sliceBetween(edNC, 'const endHeaderDrag = (e) => {', 'const recenter');
+  // ⚠️ 렌더된 pos가 아니라 dragRef의 마지막 계산값 — pointermove의 setState는 pointerup보다 늦게 커밋될 수 있다.
+  ok('#G177j 놓을 때 마지막 계산값을 보드에 알린다', /if \(d\.last\) onPosCommit\?\.\(d\.last\);/.test(up));
+  ok('#G177k 제목 줄에 드래그 핸들러를 실제로 단다',
+    /onPointerDown=\{onHeaderPointerDown\}/.test(edNC) && /onPointerMove=\{onHeaderPointerMove\}/.test(edNC) && /onPointerUp=\{endHeaderDrag\}/.test(edNC));
+  ok('#G177l 창 크기가 바뀌면 다시 묶는다', /window\.addEventListener\('resize', reclamp\)/.test(edNC));
+  ok('#G177m 로컬 위치는 보드 값에서 시작한다(다른 도형을 열어도 옮긴 자리 유지)', /const \[pos, setPos\] = useState\(initialPos\);/.test(edNC));
+  ok('#G178 FlowBoard: 위치를 보드가 들고 팝업에 넘긴다', /initialPos=\{editorPos\}/.test(boardNC) && /onPosCommit=\{setEditorPos\}/.test(boardNC));
+  // ⚠️ 사용자 요구: "메모를 열 때는 가운데". 닫힐 때 초기화가 없으면 다음에 열었을 때 옛 자리에 뜬다.
+  ok('#G178b FlowBoard: 팝업이 닫히면 위치를 초기화한다', /useEffect\(\(\) => \{ if \(!editor\) setEditorPos\(null\); \}, \[editor\]\);/.test(boardNC));
+  ok('#G178c flowMap.ts: 팝업 위치를 저장 필드로 만들지 않았다(세션 로컬)', !/editorPos|initialPos/.test(mod));
+}
+{
+  const rowBlk = sliceBetween(edNC, ') : rows.map((r, i) => {', '{auto ? (');
+  const labelAt = rowBlk.indexOf("placeholder={isRule ? '─────' : '항목 이름'}");
+  ok('#G179 FlowNodeEditor: 실행 체크가 항목 이름 오른쪽에 있다', labelAt > 0 && rowBlk.indexOf('type="checkbox"') > labelAt);
+  ok('#G179b 실행 체크는 항목 행에서만', /const isItem = r\.kind === 'item';/.test(rowBlk) && /\{isItem \? \(\s*<input\s+type="checkbox"/.test(rowBlk));
+  // ⚠️ 체크박스에는 blur가 없어 커밋하지 않으면 닫을 때 언마운트 flush에만 기대게 된다.
+  ok('#G179c 실행 체크는 즉시 커밋', /onChange=\{e => setRow\(i, \{ done: e\.target\.checked \}, true\)\}/.test(rowBlk));
+  ok('#G179d 체크 상태는 === true로 읽는다', /checked=\{r\.done === true\}/.test(rowBlk));
+  ok('#G179e 취소선·기울임 토글이 즉시 커밋', /setRow\(i, \{ strike: !strikeOn \}, true\)/.test(rowBlk) && /setRow\(i, \{ italic: !italicOn \}, true\)/.test(rowBlk));
+  ok('#G179f 항목 이름 칸이 고른 서식을 그대로 보여 준다',
+    /\$\{strikeOn && !isRule \? 'line-through' : ''\} \$\{italicOn && !isRule \? 'italic' : ''\}/.test(rowBlk));
+  ok('#G179g 구분선에서는 서식 버튼을 잠근다', (rowBlk.match(/disabled=\{readOnly \|\| isRule\}/g) || []).length === 2);
+  ok('#G179h 팝업의 실행 현황은 공유 함수로 센다',
+    /const checks = flowTableCheckStats\(tbl\);/.test(edNC) && /실행 \{checks\.done\}\/\{checks\.total\}/.test(edNC));
+}
+{
+  const tb = sliceBetween(canvasNC, '{tableRows.map((r, i) => (', '{v.dangling && (');
+  ok('#G180 FlowCanvas: 항목 이름에 취소선·기울임을 그린다', /\$\{r\.strike \? 'line-through' : ''\} \$\{r\.italic \? 'italic' : ''\}/.test(tb));
+  // ⚠️ 체크한 적 없는 표까지 빈 칸을 그리면 기존 흐름도의 모양이 배포만으로 바뀐다.
+  ok('#G180b FlowCanvas: 체크 칸은 한 항목이라도 체크한 표에서만',
+    /const showChecks = raw\.table \? flowTableCheckStats\(raw\.table\)\.done > 0 : false;/.test(canvasNC) && /\{showChecks && r\.kind === 'item' && \(/.test(tb));
+  const lab = tb.indexOf('{r.label}');
+  const chk = tb.indexOf('{showChecks');
+  ok('#G180c FlowCanvas: 체크 칸이 항목 이름 오른쪽 · 값 왼쪽', lab > 0 && chk > lab && tb.indexOf('>{r.text}</span>') > chk);
+  // ⚠️ 원본 행을 인덱스로 다시 읽으면 손상 행을 건너뛴 computeFlowTable과 인덱스가 어긋난다.
+  ok('#G180d FlowCanvas: 체크 표시는 계산 결과의 done을 따른다', /\{r\.done && \(/.test(tb) && !/raw\.table\.rows\[/.test(canvasNC));
+  ok('#G180e FlowCanvas: 체크 칸 색은 글자색을 따른다(밝은 채우기에서도 보이게)',
+    /border: '1px solid currentColor'/.test(tb) && /stroke="currentColor"/.test(tb));
+}
+ok('#G181 FlowInspector: 실행 현황을 공유 함수로 센다(렌더 스코프)',
+  /const tableChecks = flowTableCheckStats\(node\?\.table\);/.test(inspNC) && /실행 \{tableChecks\.done\}\/\{tableChecks\.total\}/.test(inspNC));
 
 console.log('\n■ 소스 텍스트 가드 — 연결 위치(fromSide/toSide) 배선');
 {
@@ -2488,6 +2702,59 @@ await (async () => {
         eq('#135q 내용 같고 참조 다른 표를 같다고 본다',
           String(real.sameFlowTable(t1, t2)), String(sameFlowTable(t1, t2)));
         ok('#135r 실모듈도 참조가 아니라 내용으로 판정한다', real.sameFlowTable(t1, t2) === true);
+      }
+
+      // (7) 실행 체크·취소선·기울임 + 팝업 위치 클램프.
+      // ⚠️ 손상값·항목 외 행·구분선·false 명시·재구축 경로를 **결정적으로** 밟는다 — 정규형 픽스처만 두면
+      //    src에서 `kind === 'item'` 게이트나 `=== true` 판정을 지워도 통과한다(파트①은 미러만 본다).
+      {
+        const F = (kind, label, value, o) => ({ kind, label, value, ...o });
+        const flagRows = [
+          F('item', 'a', '1', { done: true, strike: true, italic: true }),
+          F('item', 'b', '2', { done: 'yes', strike: 1 }),
+          F('total', 't', '9', { done: true, italic: true }),
+          F('subtotal', 's', '', { strike: true, done: true }),
+          F('rule', 'x', '', { strike: true, italic: true, done: true }),
+          F('balance', 'z', '', { italic: true }),
+          F('item', 'c', '3', { done: false, strike: false }),
+        ];
+        eq('#136 normalizeFlowTable 표시 정규화 일치',
+          JSON.stringify(real.normalizeFlowTable({ rows: flagRows, border: 'all' })), JSON.stringify(normalizeFlowTable({ rows: flagRows, border: 'all' })));
+        eq('#136b computeFlowTable 표시 전달 일치',
+          JSON.stringify(real.computeFlowTable({ rows: flagRows })), JSON.stringify(computeFlowTable({ rows: flagRows })));
+        eq('#136c flowTableCheckStats 일치',
+          JSON.stringify(real.flowTableCheckStats({ rows: flagRows })), JSON.stringify(flowTableCheckStats({ rows: flagRows })));
+        eq('#136d flowTableRowFlags 일치',
+          JSON.stringify(flagRows.map(r => real.flowTableRowFlags(r))), JSON.stringify(flagRows.map(r => flowTableRowFlags(r))));
+        const pairs = [[{ done: true }, {}], [{ strike: true }, {}], [{ italic: true }, {}], [{ done: 'yes' }, {}], [{ done: true, italic: true }, { done: true, italic: true }]];
+        const pairTbl = (o) => ({ border: 'none', rows: [F('item', 'a', '1', o)] });
+        eq('#136e sameFlowTable 표시 비교 일치',
+          JSON.stringify(pairs.map(([p, q]) => real.sameFlowTable(pairTbl(p), pairTbl(q)))),
+          JSON.stringify(pairs.map(([p, q]) => sameFlowTable(pairTbl(p), pairTbl(q)))));
+        ok('#136f 실모듈도 표시만 다른 표를 다르다고 본다',
+          real.sameFlowTable(pairTbl({ strike: true }), pairTbl({})) === false && real.sameFlowTable(pairTbl({ done: true }), pairTbl({})) === false);
+        const forcedF = [cleanMap({ id: 'm1', name: 123, nodes: [{ ...nodeT, table: { rows: flagRows, border: 'none' } }], edges: [] })];
+        eq('#136g 표시를 든 표의 재구축 경로 일치', norm(real.normalizeFlowMaps(forcedF)), norm(normalizeFlowMaps(forcedF)));
+        const cleanF = [cleanMap({ id: 'm1', nodes: [{ ...nodeT, table: real.normalizeFlowTable({ rows: flagRows, border: 'none' }) }], edges: [] })];
+        ok('#136h 실모듈도 표시만 있는 정규형 표는 원본 참조', real.normalizeFlowMaps(cleanF) === cleanF);
+        const dirtyF = [cleanMap({ id: 'm1', nodes: [{ ...nodeT, table: { rows: [F('item', 'a', '1', { done: 'yes' })], border: 'all' } }], edges: [] })];
+        eq('#136i 실모듈도 손상된 표시를 교정한다',
+          JSON.stringify(real.normalizeFlowMaps(dirtyF)[0]?.nodes?.[0]?.table?.rows?.[0]), JSON.stringify({ kind: 'item', label: 'a', value: '1' }));
+        eq('#136j 표시 지문 일치', real.flowFingerprint(forcedF), flowFingerprint(forcedF));
+        eq('#136k 실모듈 지문: 표시 없는 행은 종전 3칸',
+          JSON.parse(real.flowFingerprint([cleanMap({ id: 'm1', nodes: [nodeT], edges: [] })]))[0]?.nd?.[0]?.slice(-1)?.[0]?.[1]?.[0]?.length, 3);
+        const fpDone = (o) => real.flowFingerprint([cleanMap({ id: 'm1', nodes: [{ ...nodeT, table: pairTbl(o) }], edges: [] })]);
+        ok('#136l 실모듈 지문도 체크·취소선·기울임에 각각 반응',
+          fpDone({}) !== fpDone({ done: true }) && fpDone({}) !== fpDone({ strike: true }) && fpDone({}) !== fpDone({ italic: true }));
+        const clampCases = [
+          [300.4, 200.6, 680, 1440, 900], [5000, 100, 680, 1440, 900], [-5000, 100, 680, 1440, 900],
+          [100, -300, 680, 1440, 900], [100, 5000, 680, 1440, 900], [50, 50, 680, 80, 30], [NaN, Infinity, 680, 1440, 900],
+          [10, 10, NaN, 'x', null], [0, 0, 100, 100, 100],
+        ];
+        eq('#136m clampFlowEditorPos 일치',
+          JSON.stringify(clampCases.map(a => real.clampFlowEditorPos(...a))), JSON.stringify(clampCases.map(a => clampFlowEditorPos(...a))));
+        eq('#136n 팝업 한계 상수 일치',
+          [real.FLOW_EDITOR_GRIP_PX, real.FLOW_EDITOR_HEADER_PX].join(','), [FLOW_EDITOR_GRIP_PX, FLOW_EDITOR_HEADER_PX].join(','));
       }
     }
     eq('#133c layoutFlowLabels 무작위 400세트 일치', badLabel, 0);

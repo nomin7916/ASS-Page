@@ -5,6 +5,7 @@ import { cleanNum } from '../utils';
 import {
   sanitizeHexColor, DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, normalizeFlowArrow, arrowHeads,
   flowLineRender, resolveFlowLineStyle, normalizeFlowLineWidth, normalizeFlowSide, FLOW_CANVAS_BG,
+  flowTableCheckStats,
 } from '../flowMap';
 
 /**
@@ -388,6 +389,8 @@ export default function FlowInspector({
   // ⚠️ 렌더 스코프 선언 — JSX가 다른 최상위 블록의 지역 변수를 참조하면 런타임 ReferenceError로
   //    화면이 통째로 오류 페이지가 되는데 @ts-nocheck + esbuild라 빌드도 undefcheck도 못 잡는다.
   const tableRowCount = Array.isArray(node?.table?.rows) ? node.table.rows.length : 0;
+  // 실행 체크 현황 — 팝업·도형 안 표와 같은 공유 함수(각자 세면 세 화면의 숫자가 갈린다).
+  const tableChecks = flowTableCheckStats(node?.table);
   const curLineStyle = resolveFlowLineStyle(edge?.lineStyle, edge?.dashed);
   const curLineWidth = normalizeFlowLineWidth(edge?.lineWidth);
   const curEdgeColor = sanitizeHexColor(edge?.stroke) || DEFAULT_EDGE_STROKE;
@@ -539,7 +542,7 @@ export default function FlowInspector({
               title="클릭하면 표를 만들거나 고칩니다"
             >
               {tableRowCount
-                ? <span>{tableRowCount}행 · 선 {BORDER_LABEL[node.table?.border] || '없음'}</span>
+                ? <span>{tableRowCount}행 · 선 {BORDER_LABEL[node.table?.border] || '없음'}{tableChecks.done > 0 ? <span className="text-emerald-300/90"> · 실행 {tableChecks.done}/{tableChecks.total}</span> : null}</span>
                 : <span className="text-gray-500">+ 표 만들기</span>}
             </button>
           </Field>

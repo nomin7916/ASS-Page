@@ -144,6 +144,18 @@ export interface FlowTableRow {
    * ⚠️ 자동 계산 행(subtotal·balance)에서는 무시된다.
    */
   value: string;
+  /**
+   * 실행 체크 — 적어 둔 계획을 실제로 실행했는가(사용자 요청 2026-09). **항목(item) 행 전용**.
+   * ⚠️ 세 표시(done·strike·italic)는 전부 **true일 때만 저장**한다(생략 = false). false를 저장하면
+   *    기존 표가 전부 정규화에서 '변경됨'이 되어 원본 참조 보존 계약이 깨지고, 지문도 배포만으로
+   *    달라진다.
+   * ⚠️ 계산(소계·잔액)에는 **영향을 주지 않는다** — 실행했든 안 했든 계획 금액은 그대로 합산된다.
+   */
+  done?: boolean;
+  /** 항목 이름 취소선. 구분선을 뺀 모든 행. */
+  strike?: boolean;
+  /** 항목 이름 기울임. 구분선을 뺀 모든 행. */
+  italic?: boolean;
 }
 
 export interface FlowTable {
@@ -286,6 +298,13 @@ export const SNAP_GUIDE_MAX_REFS = 6;
  */
 export const MAX_FLOW_TABLE_ROWS = 30;
 export const MAX_FLOW_TABLE_TEXT = 80;
+
+/* ── 메모·표 팝업 이동 한계 ─────────────────────────────────────────────────
+ * 팝업은 가운데에서 열리고 제목 줄을 끌어 옮긴다. 화면 밖으로 완전히 밀어내면 다시 잡을 곳이
+ * 없으므로 **가로로는 최소 GRIP px, 세로로는 제목 줄 전체**가 항상 보이게 묶는다.
+ */
+export const FLOW_EDITOR_GRIP_PX = 120;
+export const FLOW_EDITOR_HEADER_PX = 40;
 
 /* ── 선 위 라벨 상수 ────────────────────────────────────────────────────────
  * ⚠️ 라벨은 **충돌이 실제로 있을 때만** 옮긴다(아래 layoutFlowLabels). 무조건 재배치하면
@@ -675,7 +694,16 @@ export function flowFingerprint(maps: unknown): string {
           //    통째로 스킵된다(bundleEdges·historyVerifyKey와 동일 버그 클래스). 표가 없는 도형은
           //    `null`이라 기존 흐름도의 지문이 배포만으로 달라지지 않는다.
           n?.table
-            ? [n.table.border ?? '', (Array.isArray(n.table.rows) ? n.table.rows : []).map((r: any) => [r?.kind ?? '', r?.label ?? '', r?.value ?? ''])]
+            ? [
+                n.table.border ?? '',
+                // ⚠️ 표시(실행 체크·취소선·기울임)는 **있을 때만** 토큰을 덧붙인다 — 항상 붙이면 배포
+                //    직후 모든 표의 지문이 달라져 아무것도 안 고친 세션에서 저장이 나가고, 아예 빼면
+                //    '체크만 한 세션'이 portfolioUpdatedAt을 못 올려 STATE 저장이 통째로 스킵된다.
+                (Array.isArray(n.table.rows) ? n.table.rows : []).map((r: any) => {
+                  const f = flowTableRowFlags(r);
+                  return f ? [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f] : [r?.kind ?? '', r?.label ?? '', r?.value ?? ''];
+                }),
+              ]
             : null,
         ]),
         eg: (Array.isArray(m?.edges) ? m.edges : []).map((e: any) => [
@@ -1122,6 +1150,12 @@ export function normalizeFlowTable(raw: unknown): FlowTable | undefined {
       // 구분선은 라벨·값을 갖지 않는다(가지면 화면에 안 보이는 유령 텍스트가 남는다).
       label: kind === 'rule' ? '' : asStr(row.label).slice(0, MAX_FLOW_TABLE_TEXT),
       value: kind === 'rule' ? '' : asStr(row.value).slice(0, MAX_FLOW_TABLE_TEXT),
+      // ⚠️ 표시는 **true일 때만** 필드를 만든다(생략 = false). 판정은 `=== true` — 손상값('yes'·1)을
+      //    truthy로 받아들이면 사용자가 켠 적 없는 표시가 저장에 굳는다.
+      // ⚠️ 실행 체크는 **항목 행 전용**, 취소선·기울임은 구분선만 뺀다(구분선에는 이름이 없다).
+      ...(kind === 'item' && row.done === true ? { done: true } : {}),
+      ...(kind !== 'rule' && row.strike === true ? { strike: true } : {}),
+      ...(kind !== 'rule' && row.italic === true ? { italic: true } : {}),
     });
   }
   if (rows.length === 0) return undefined;
@@ -1140,8 +1174,65 @@ export function sameFlowTable(a: unknown, b: unknown): boolean {
   if (ar.length !== br.length) return false;
   for (let i = 0; i < ar.length; i++) {
     if (ar[i].kind !== br[i].kind || ar[i].label !== br[i].label || ar[i].value !== br[i].value) return false;
+    // ⚠️ 표시 3종도 비교 대상 — 빠뜨리면 **체크·취소선만 바꾼 편집**이 팝업 flush에서 '변경 없음'으로
+    //    걸러져 저장되지 않고, 로드 정규화에서는 손상된 표시가 교정되지 않고 남는다.
+    //    raw 비교(`!==`)라야 정규화 전 손상값('yes')과 생략을 구분한다.
+    if (ar[i].done !== br[i].done || ar[i].strike !== br[i].strike || ar[i].italic !== br[i].italic) return false;
   }
   return true;
+}
+
+/**
+ * 표 행의 표시 3종을 짧은 토큰으로. 지문 전용.
+ * ⚠️ 표시가 하나도 없으면 **빈 문자열** — 호출부가 그때 토큰 자리를 만들지 않아 기존 표의 지문이
+ *    배포만으로 달라지지 않는다.
+ */
+export function flowTableRowFlags(r: unknown): string {
+  const x = r as Partial<FlowTableRow> | null | undefined;
+  if (!x) return '';
+  return (x.done === true ? 'd' : '') + (x.strike === true ? 's' : '') + (x.italic === true ? 'i' : '');
+}
+
+/**
+ * 실행 체크 현황 — 항목(item) 행 중 몇 개를 실행했는가.
+ * 도형 안 표·팝업·인스펙터가 **이 함수 하나를 공유**한다(각자 세면 세 화면의 숫자가 갈린다).
+ * ⚠️ 도형 안 체크 칸은 `done > 0`일 때만 그린다 — 한 번도 체크하지 않은 표는 이 기능 이전과
+ *    한 픽셀도 다르지 않아야 기존 흐름도가 배포만으로 바뀌지 않는다.
+ */
+export function flowTableCheckStats(table: unknown): { done: number; total: number } {
+  const t = table as FlowTable | undefined;
+  const rows = t && Array.isArray(t.rows) ? t.rows : [];
+  let done = 0;
+  let total = 0;
+  for (const r of rows) {
+    if (!r || r.kind !== 'item') continue;
+    total++;
+    if (r.done === true) done++;
+  }
+  return { done, total };
+}
+
+/**
+ * 메모·표 팝업 위치 클램프. 좌표는 보드 기준(보드는 `fixed inset-0`이라 곧 뷰포트 좌표).
+ * 가로로는 최소 GRIP px, 세로로는 제목 줄 전체가 항상 화면 안에 남는다 — 완전히 밀어내면 다시
+ * 잡을 곳이 없어 닫고 다시 여는 것 말고는 되찾을 방법이 없다.
+ * ⚠️ 창이 GRIP보다 좁아도 하한이 상한을 넘지 않게 묶는다(뒤집히면 좌표가 튄다).
+ * ⚠️ 손상 입력(NaN·Infinity)은 0으로 — 그대로 스타일에 넣으면 팝업이 화면에서 사라진다.
+ */
+export function clampFlowEditorPos(
+  x: unknown, y: unknown, panelW: unknown, hostW: unknown, hostH: unknown,
+): { x: number; y: number } {
+  const num = (v: unknown, d: number) => (isFiniteNum(v) ? v : d);
+  const pw = Math.max(0, num(panelW, 0));
+  const hw = Math.max(0, num(hostW, 0));
+  const hh = Math.max(0, num(hostH, 0));
+  const hiX = hw - FLOW_EDITOR_GRIP_PX;
+  const loX = Math.min(FLOW_EDITOR_GRIP_PX - pw, hiX);
+  const hiY = Math.max(0, hh - FLOW_EDITOR_HEADER_PX);
+  return {
+    x: Math.round(clampNum(num(x, 0), loX, hiX)),
+    y: Math.round(clampNum(num(y, 0), 0, hiY)),
+  };
 }
 
 export interface FlowTableComputedRow {
@@ -1151,6 +1242,12 @@ export interface FlowTableComputedRow {
   text: string;
   /** 자동 계산된 행인가(회색·기울임 등 시각 구분용) */
   computed: boolean;
+  /** 실행 체크(항목 행에서만 true일 수 있다) */
+  done: boolean;
+  /** 항목 이름 취소선 */
+  strike: boolean;
+  /** 항목 이름 기울임 */
+  italic: boolean;
 }
 
 /**
@@ -1184,20 +1281,28 @@ export function computeFlowTable(table: unknown): FlowTableComputedRow[] {
     if (!r) continue;
     if (r.kind === 'rule') {
       section = 0;
-      out.push({ kind: 'rule', label: '', text: '', computed: false });
+      out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false });
       continue;
     }
+    // ⚠️ 표시는 **그리기 전용**이다 — 아래 합계 어디에도 참여하지 않는다(실행한 계획도 금액은 그대로).
+    //    도형 안 표가 원본 행을 인덱스로 다시 읽지 않도록 여기서 함께 실어 보낸다(손상 행을 건너뛰면
+    //    인덱스가 밀린다).
+    const strike = r.strike === true;
+    const italic = r.italic === true;
     if (r.kind === 'subtotal') {
-      out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true });
+      out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true, done: false, strike, italic });
       continue;
     }
     if (r.kind === 'balance') {
-      out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true });
+      out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true, done: false, strike, italic });
       continue;
     }
     const v = parseFlowNumber(r.value);
     if (r.kind === 'item' && v !== null) section += v;
-    out.push({ kind: r.kind, label: r.label, text: v === null ? asStr(r.value) : formatFlowNumber(v), computed: false });
+    out.push({
+      kind: r.kind, label: r.label, text: v === null ? asStr(r.value) : formatFlowNumber(v), computed: false,
+      done: r.kind === 'item' && r.done === true, strike, italic,
+    });
   }
   return out;
 }

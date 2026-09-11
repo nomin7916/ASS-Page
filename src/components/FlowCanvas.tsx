@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   edgePath, anchorPoint, roundNode, snapToGrid, sanitizeHexColor, readableTextColor, arrowHeads,
   flowLineRender, buildFlowBundles, resolveNodeDrag, snapTolerance, layoutFlowLabels, flowLabelSize,
-  computeFlowTable,
+  computeFlowTable, flowTableCheckStats,
   MIN_NODE_W, MIN_NODE_H, FLOW_GRID, FLOW_MIN_SCALE, FLOW_MAX_SCALE,
   DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, FLOW_CANVAS_BG, FLOW_LABEL_DOT_R, FLOW_LABEL_FONT,
 } from '../flowMap';
@@ -465,6 +465,9 @@ function FlowCanvasInner({
           //    빌드도 undefcheck도 잡지 못한다(initTradeRest 프로덕션 장애와 동일).
           const tableRows = raw.table ? computeFlowTable(raw.table) : [];
           const border = raw.table?.border || 'none';
+          // ⚠️ 체크 칸은 **한 항목이라도 체크했을 때만** 그린다(= 체크리스트로 쓰기 시작한 표). 체크한
+          //    적 없는 표까지 빈 칸을 그리면 기존 흐름도의 모양이 배포만으로 바뀐다.
+          const showChecks = raw.table ? flowTableCheckStats(raw.table).done > 0 : false;
           // 표 선은 글자색을 옅게 쓴다 — 채우기가 밝든 어둡든 같은 규칙으로 읽힌다.
           const gridColor = darkText ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.35)';
           return (
@@ -522,7 +525,20 @@ function FlowCanvasInner({
                               ...(r.kind === 'total' || r.kind === 'balance' ? { fontWeight: 700 } : {}),
                             }}
                           >
-                            <span className="flex-1 min-w-0 truncate text-left">{r.label}</span>
+                            <span className={`flex-1 min-w-0 truncate text-left ${r.strike ? 'line-through' : ''} ${r.italic ? 'italic' : ''}`}>{r.label}</span>
+                            {/* 실행 체크 — 항목 이름 오른쪽. 글자색(currentColor)을 따라 밝은 채우기에서도 보인다. */}
+                            {showChecks && r.kind === 'item' && (
+                              <span
+                                className="shrink-0 self-center inline-flex items-center justify-center"
+                                style={{ width: 10, height: 10, border: '1px solid currentColor', borderRadius: 2, opacity: r.done ? 1 : 0.55 }}
+                              >
+                                {r.done && (
+                                  <svg viewBox="0 0 10 10" width="8" height="8" aria-hidden="true">
+                                    <path d="M1.6 5.2 L4.1 7.6 L8.6 2.6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                                  </svg>
+                                )}
+                              </span>
+                            )}
                             <span
                               className={`shrink-0 tabular-nums ${r.computed ? 'italic opacity-80' : ''}`}
                               style={border === 'all' ? { borderLeft: `1px solid ${gridColor}`, paddingLeft: 4 } : undefined}

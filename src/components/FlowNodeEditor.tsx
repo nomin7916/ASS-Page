@@ -2,8 +2,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X, Plus, Trash2, ChevronUp, ChevronDown, ClipboardPaste } from 'lucide-react';
 import {
-  computeFlowTable, normalizeFlowTable, flowTableFromText, sameFlowTable,
-  FLOW_TABLE_BORDERS, MAX_FLOW_TABLE_ROWS, MAX_FLOW_TABLE_TEXT,
+  computeFlowTable, normalizeFlowTable, flowTableFromText, sameFlowTable, flowTableCheckStats,
+  clampFlowEditorPos, FLOW_TABLE_BORDERS, MAX_FLOW_TABLE_ROWS, MAX_FLOW_TABLE_TEXT,
 } from '../flowMap';
 
 /**
@@ -18,6 +18,22 @@ import {
  *    App 지문 재계산이 돌아 타이핑이 끊긴다(인스펙터와 같은 규약).
  * ⚠️ 언마운트 flush는 `useLayoutEffect`여야 한다 — passive는 Scheduler 태스크라 discrete 이벤트인
  *    blur보다 뒤처지고, 제거된 DOM에는 브라우저가 blur를 발화하지 않는다.
+ *
+ * ── 이동 가능한 비차단 팝업 (사용자 요청 2026-09) ─────────────────────────────
+ * "메모를 열 때는 가운데에 뜨지만 사용자가 표나 메모를 원하는 곳에 옮길 수 있어야 한다."
+ *  - 위치의 **정본은 보드**(`initialPos` ← 보드 state)다. 팝업이 열려 있는 동안 다른 도형의 메모를
+ *    열어도(= key가 바뀌어 이 컴포넌트가 다시 마운트돼도) 옮겨 둔 자리를 지키고, **닫으면 초기화**되어
+ *    다음에 열 때 다시 가운데에 뜬다. `null`이 곧 '가운데'다.
+ *  - ⚠️ 끄는 동안의 좌표는 **이 컴포넌트 로컬 state**에만 두고 **놓을 때 한 번만** 보드에 알린다
+ *    (`onPosCommit`). 프레임마다 보드 state를 바꾸면 보드 전체(툴바·인스펙터·캔버스)가 포인터 이동마다
+ *    다시 그려진다. 놓는 순간의 값은 렌더된 state가 아니라 **dragRef에 적어 둔 마지막 계산값**을
+ *    쓴다 — pointermove의 setState는 연속 우선순위라 discrete인 pointerup보다 늦게 커밋될 수 있다.
+ *  - 어두운 백드롭을 두지 않는다 — 옮기는 이유가 뒤의 흐름도를 보면서 쓰기 위해서라, 화면을 덮으면
+ *    옮길 이유가 사라진다. 대신 닫기는 X 버튼과 Esc로만 한다.
+ *  - ⚠️ **Esc는 보드의 onKeyDownCapture가 처리한다**(`data-flow-node-editor` 판별). 이 컴포넌트의
+ *    bubble onKeyDown은 **도달하지 않는다** — 보드가 캡처 단계에서 Escape의 전파를 끊기 때문이다
+ *    (React 18은 루트 캡처 리스너에서 네이티브 전파를 멈춘다). 옛 코드는 여기에 Escape 핸들러를
+ *    두고 '팝업이 먼저 소비한다'고 믿었지만 실제로는 보드가 선택을 풀거나 보드 전체를 닫았다.
  *
  * ⚠️ 이 팝업은 보드(z 990)의 **자식**이라 자체 스태킹 컨텍스트 안에서 뜬다. App의
  *    ConfirmDialog(z 1000)는 여전히 이 위에 뜨므로 확인창이 필요하면 그대로 쓸 수 있다.
@@ -37,8 +53,16 @@ const BORDER_LABEL = { none: '없음', outline: '바깥만', all: '전체' };
 
 const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:border-indigo-500 outline-none';
 
-export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly, initialTab = 'memo' }) {
+/** 제목 줄에서 드래그를 시작하지 않을 대상(버튼·입력은 원래 동작을 해야 한다). */
+const NO_DRAG_SELECTOR = 'button,input,select,textarea,a,label';
+
+const fmtToggleCls = (on) =>
+  `w-6 h-6 shrink-0 rounded border text-[11px] leading-none transition disabled:opacity-25 ${on ? 'border-indigo-500 text-indigo-200 bg-indigo-900/40' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`;
+
+export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly, initialTab = 'memo', initialPos = null, onPosCommit }) {
   const [tab, setTab] = useState(initialTab);
+  // null = 가운데. 끄는 동안은 여기만 바뀌고, 놓을 때 onPosCommit으로 보드에 알린다.
+  const [pos, setPos] = useState(initialPos);
   const [memo, setMemo] = useState(node?.memo ?? '');
   // 표는 **로컬 사본**으로 들고 blur·구조 변경에서 커밋한다.
   const [tbl, setTbl] = useState(() => normalizeFlowTable(node?.table) || null);
@@ -53,6 +77,9 @@ export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly
   const patchRef = useRef(onPatch); patchRef.current = onPatch;
   const idRef = useRef(node?.id); idRef.current = node?.id;
   const roRef = useRef(readOnly); roRef.current = readOnly;
+
+  const panelRef = useRef(null);
+  const dragRef = useRef(null);
 
   /** 미커밋 편집을 **이 팝업이 연 도형에게** 커밋한다(id 기준 — 대상이 바뀌어도 새지 않는다). */
   const flush = useCallback(() => {
@@ -71,14 +98,67 @@ export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly
   // 언마운트(닫기·보드 종료) 시 flush — blur가 발화하지 않는 유일한 안전망
   useLayoutEffect(() => () => { flush(); }, [flush]);
 
-  // Esc로 닫기. ⚠️ 보드의 onKeyDownCapture가 Escape를 소비하기 전에 여기서 먼저 막는다
-  //    (안 막으면 팝업이 아니라 보드가 닫히거나 선택이 풀린다).
-  const onKeyDown = (e) => {
-    if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); }
+  /** 보드 기준 좌표로 묶는다. 보드(`fixed inset-0`)가 offsetParent다. */
+  const clampHere = (x, y) => {
+    const el = panelRef.current;
+    const host = el?.offsetParent;
+    return clampFlowEditorPos(
+      x, y,
+      el?.offsetWidth,
+      host?.clientWidth ?? window.innerWidth,
+      host?.clientHeight ?? window.innerHeight,
+    );
   };
+
+  // 제목 줄 드래그 — 포인터 캡처라 커서가 제목 줄 밖으로 나가도 끝까지 따라온다(마우스·터치 공통).
+  const onHeaderPointerDown = (e) => {
+    if (e.button !== 0) return;
+    if (e.target?.closest?.(NO_DRAG_SELECTOR)) return;
+    const el = panelRef.current;
+    if (!el) return;
+    const host = el.offsetParent;
+    const hr = host?.getBoundingClientRect?.() || { left: 0, top: 0 };
+    const r = el.getBoundingClientRect();
+    // ⚠️ 가운데 정렬(transform) 상태에서도 **지금 보이는 자리**에서 출발해야 잡는 순간 튀지 않는다.
+    dragRef.current = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, ox: r.left - hr.left, oy: r.top - hr.top, last: null };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* 일부 브라우저·비신뢰 이벤트 */ }
+    e.preventDefault();
+  };
+  const onHeaderPointerMove = (e) => {
+    const d = dragRef.current;
+    if (!d || d.pid !== e.pointerId) return;
+    const next = clampHere(d.ox + e.clientX - d.sx, d.oy + e.clientY - d.sy);
+    d.last = next;
+    setPos(next);
+  };
+  const endHeaderDrag = (e) => {
+    const d = dragRef.current;
+    if (!d || d.pid !== e.pointerId) return;
+    dragRef.current = null;
+    // 실제로 움직였을 때만 알린다(제목 줄을 클릭만 한 경우 보드 state를 건드리지 않는다).
+    if (d.last) onPosCommit?.(d.last);
+  };
+  const recenter = () => {
+    setPos(null);
+    onPosCommit?.(null);
+  };
+
+  // 창 크기가 줄면 옮겨 둔 팝업이 화면 밖으로 밀려날 수 있다 → 다시 묶는다(값이 같으면 쓰지 않는다).
+  useEffect(() => {
+    if (!pos) return;
+    const reclamp = () => {
+      const c = clampHere(pos.x, pos.y);
+      if (c.x === pos.x && c.y === pos.y) return;
+      setPos(c);
+      onPosCommit?.(c);
+    };
+    window.addEventListener('resize', reclamp);
+    return () => window.removeEventListener('resize', reclamp);
+  }, [pos, onPosCommit]);
 
   const rows = tbl?.rows || [];
   const computed = computeFlowTable(tbl);
+  const checks = flowTableCheckStats(tbl);
 
   /** 구조 변경 — 즉시 커밋한다(행 추가·삭제·이동·유형 변경은 blur가 없다). */
   const applyRows = (nextRows, nextBorder) => {
@@ -131,164 +211,210 @@ export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly
   if (!node) return null;
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center" style={{ zIndex: 60 }} onKeyDown={onKeyDown}>
-      {/* 백드롭 — 클릭하면 닫힌다(언마운트 flush가 편집을 회수하므로 유실되지 않는다) */}
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+    <div
+      ref={panelRef}
+      data-flow-node-editor=""
+      className="absolute w-[680px] max-w-[94vw] h-[560px] max-h-[88vh] flex flex-col rounded-lg border border-gray-600 bg-[#0f1623] shadow-2xl shadow-black/70"
+      style={pos
+        ? { zIndex: 60, left: pos.x, top: pos.y }
+        : { zIndex: 60, left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }}
+    >
       <div
-        className="relative w-[680px] max-w-[94vw] h-[560px] max-h-[88vh] flex flex-col rounded-lg border border-gray-700 bg-[#0f1623] shadow-2xl"
-        onClick={e => e.stopPropagation()}
+        className="flex items-center gap-2 px-3 py-2 border-b border-gray-700 shrink-0 cursor-move select-none"
+        style={{ touchAction: 'none' }}
+        title="끌어서 옮기기 · 더블클릭하면 가운데로"
+        onPointerDown={onHeaderPointerDown}
+        onPointerMove={onHeaderPointerMove}
+        onPointerUp={endHeaderDrag}
+        onPointerCancel={endHeaderDrag}
+        onLostPointerCapture={endHeaderDrag}
+        onDoubleClick={(e) => { if (!e.target?.closest?.(NO_DRAG_SELECTOR)) recenter(); }}
       >
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700 shrink-0">
-          <div className="text-xs font-semibold text-gray-200 truncate max-w-[220px]" title={title}>{title || '도형'}</div>
-          <div className="flex gap-1 ml-2">
-            {[{ k: 'memo', t: '메모' }, { k: 'table', t: '표' }].map(({ k, t }) => (
-              <button
-                key={k}
-                onClick={() => setTab(k)}
-                className={`text-[11px] px-2 py-1 rounded border transition ${tab === k ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
-              >
-                {t}
-                {k === 'memo' && memo ? <span className="ml-1 text-[9px] text-gray-500">●</span> : null}
-                {k === 'table' && rows.length ? <span className="ml-1 text-[9px] text-gray-500">{rows.length}</span> : null}
-              </button>
-            ))}
-          </div>
-          <div className="flex-1" />
-          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-200" title="닫기 (Esc)"><X size={16} /></button>
+        <div className="text-xs font-semibold text-gray-200 truncate max-w-[220px]" title={title}>{title || '도형'}</div>
+        <div className="flex gap-1 ml-2">
+          {[{ k: 'memo', t: '메모' }, { k: 'table', t: '표' }].map(({ k, t }) => (
+            <button
+              key={k}
+              onClick={() => setTab(k)}
+              className={`text-[11px] px-2 py-1 rounded border transition cursor-pointer ${tab === k ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
+            >
+              {t}
+              {k === 'memo' && memo ? <span className="ml-1 text-[9px] text-gray-500">●</span> : null}
+              {k === 'table' && rows.length ? <span className="ml-1 text-[9px] text-gray-500">{rows.length}</span> : null}
+            </button>
+          ))}
         </div>
+        <div className="flex-1" />
+        <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-200 cursor-pointer" title="닫기 (Esc)"><X size={16} /></button>
+      </div>
 
-        {notice && (
-          <div className="px-3 py-1.5 text-[11px] text-amber-300 bg-amber-900/20 border-b border-amber-800/40 shrink-0">{notice}</div>
-        )}
+      {notice && (
+        <div className="px-3 py-1.5 text-[11px] text-amber-300 bg-amber-900/20 border-b border-amber-800/40 shrink-0">{notice}</div>
+      )}
 
-        {tab === 'memo' ? (
-          <div className="flex-1 min-h-0 flex flex-col p-3">
-            <textarea
-              autoFocus
-              className={`${inputCls} flex-1 min-h-0 resize-none leading-relaxed`}
-              style={{ fontSize: 13 }}
-              value={memo}
-              readOnly={readOnly}
-              placeholder={'여러 줄로 자유롭게 적습니다.\n\n금액 목록처럼 열을 맞춰야 하면 위의 [표] 탭을 쓰세요 —\n글꼴에 상관없이 정렬되고 소계·잔액이 자동으로 계산됩니다.'}
-              onChange={e => setMemo(e.target.value)}
-              onBlur={flush}
-            />
-            <div className="text-[10px] text-gray-500 mt-2">도형 안에는 메모가 먼저, 그 아래에 표가 표시됩니다.</div>
-          </div>
-        ) : (
-          <div className="flex-1 min-h-0 flex flex-col p-3">
-            <div className="flex items-center gap-2 mb-2 shrink-0">
-              <span className="text-[11px] text-gray-400">표 선</span>
-              <div className="flex gap-1">
-                {FLOW_TABLE_BORDERS.map(b => (
-                  <button
-                    key={b}
-                    disabled={readOnly || !rows.length}
-                    onClick={() => applyRows(rows, b)}
-                    className={`text-[10px] px-2 py-1 rounded border transition disabled:opacity-40 ${(tbl?.border ?? 'none') === b ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
-                  >{BORDER_LABEL[b]}</button>
-                ))}
-              </div>
-              <div className="flex-1" />
-              {!readOnly && (
+      {tab === 'memo' ? (
+        <div className="flex-1 min-h-0 flex flex-col p-3">
+          <textarea
+            autoFocus
+            className={`${inputCls} flex-1 min-h-0 resize-none leading-relaxed`}
+            style={{ fontSize: 13 }}
+            value={memo}
+            readOnly={readOnly}
+            placeholder={'여러 줄로 자유롭게 적습니다.\n\n금액 목록처럼 열을 맞춰야 하면 위의 [표] 탭을 쓰세요 —\n글꼴에 상관없이 정렬되고 소계·잔액이 자동으로 계산됩니다.'}
+            onChange={e => setMemo(e.target.value)}
+            onBlur={flush}
+          />
+          <div className="text-[10px] text-gray-500 mt-2">도형 안에는 메모가 먼저, 그 아래에 표가 표시됩니다.</div>
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 flex flex-col p-3">
+          <div className="flex items-center gap-2 mb-2 shrink-0">
+            <span className="text-[11px] text-gray-400">표 선</span>
+            <div className="flex gap-1">
+              {FLOW_TABLE_BORDERS.map(b => (
                 <button
-                  onClick={() => setPasteOpen(v => !v)}
-                  className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 transition"
-                  title="엑셀에서 복사한 내용을 붙여넣어 행을 만듭니다"
-                ><ClipboardPaste size={11} /> 붙여넣기</button>
-              )}
+                  key={b}
+                  disabled={readOnly || !rows.length}
+                  onClick={() => applyRows(rows, b)}
+                  className={`text-[10px] px-2 py-1 rounded border transition disabled:opacity-40 ${(tbl?.border ?? 'none') === b ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                >{BORDER_LABEL[b]}</button>
+              ))}
             </div>
-
-            {pasteOpen && !readOnly && (
-              <div className="mb-2 p-2 rounded border border-gray-700 bg-gray-900/60 shrink-0">
-                <textarea
-                  autoFocus
-                  className={`${inputCls} resize-none`}
-                  rows={4}
-                  value={pasteText}
-                  placeholder={'엑셀에서 두 열(항목 · 금액)을 복사해 붙여넣으세요.\n----- 같은 줄은 구분선이 됩니다.'}
-                  onChange={e => setPasteText(e.target.value)}
-                />
-                <div className="flex gap-1 mt-1">
-                  <button onClick={applyPaste} className="text-[10px] px-2 py-1 rounded border border-indigo-600 text-indigo-300 hover:bg-indigo-900/30">현재 표에 추가</button>
-                  <button onClick={() => { setPasteOpen(false); setPasteText(''); }} className="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200">취소</button>
-                </div>
-              </div>
+            <div className="flex-1" />
+            {/* 실행 현황 — 도형 안 표·인스펙터와 같은 flowTableCheckStats를 쓴다(각자 세면 숫자가 갈린다). */}
+            {checks.total > 0 && (
+              <span className="text-[10px] text-emerald-300/90" title="체크한 항목 수 / 항목 행 수">실행 {checks.done}/{checks.total}</span>
             )}
+            {!readOnly && (
+              <button
+                onClick={() => setPasteOpen(v => !v)}
+                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 transition"
+                title="엑셀에서 복사한 내용을 붙여넣어 행을 만듭니다"
+              ><ClipboardPaste size={11} /> 붙여넣기</button>
+            )}
+          </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-              {rows.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-center text-[11px] text-gray-500 leading-relaxed">
-                  아래 버튼으로 행을 추가하세요.<br />
-                  <span className="text-gray-600">소계 = 바로 위 구분선 이후 항목의 합 · 잔액 = 총액 합 − 항목 합</span>
-                </div>
-              ) : rows.map((r, i) => {
-                const auto = r.kind === 'subtotal' || r.kind === 'balance';
-                const isRule = r.kind === 'rule';
-                return (
-                  <div key={i} className="flex items-center gap-1 mb-1">
-                    <select
-                      disabled={readOnly}
-                      value={r.kind}
-                      onChange={e => setRow(i, { kind: e.target.value }, true)}
-                      className="w-[62px] shrink-0 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-[10px] text-gray-200 outline-none focus:border-indigo-500"
-                    >
-                      {ROW_KINDS.map(({ k, t, title: ti }) => <option key={k} value={k} title={ti}>{t}</option>)}
-                    </select>
+          {pasteOpen && !readOnly && (
+            <div className="mb-2 p-2 rounded border border-gray-700 bg-gray-900/60 shrink-0">
+              <textarea
+                autoFocus
+                className={`${inputCls} resize-none`}
+                rows={4}
+                value={pasteText}
+                placeholder={'엑셀에서 두 열(항목 · 금액)을 복사해 붙여넣으세요.\n----- 같은 줄은 구분선이 됩니다.'}
+                onChange={e => setPasteText(e.target.value)}
+              />
+              <div className="flex gap-1 mt-1">
+                <button onClick={applyPaste} className="text-[10px] px-2 py-1 rounded border border-indigo-600 text-indigo-300 hover:bg-indigo-900/30">현재 표에 추가</button>
+                <button onClick={() => { setPasteOpen(false); setPasteText(''); }} className="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200">취소</button>
+              </div>
+            </div>
+          )}
+
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+            {rows.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-center text-[11px] text-gray-500 leading-relaxed">
+                아래 버튼으로 행을 추가하세요.<br />
+                <span className="text-gray-600">소계 = 바로 위 구분선 이후 항목의 합 · 잔액 = 총액 합 − 항목 합</span><br />
+                <span className="text-gray-600">항목 이름 오른쪽 체크 = 실행 표시 · S = 취소선 · I = 기울임</span>
+              </div>
+            ) : rows.map((r, i) => {
+              const auto = r.kind === 'subtotal' || r.kind === 'balance';
+              const isRule = r.kind === 'rule';
+              const isItem = r.kind === 'item';
+              const strikeOn = r.strike === true;
+              const italicOn = r.italic === true;
+              return (
+                <div key={i} className="flex items-center gap-1 mb-1">
+                  <select
+                    disabled={readOnly}
+                    value={r.kind}
+                    onChange={e => setRow(i, { kind: e.target.value }, true)}
+                    className="w-[62px] shrink-0 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-[10px] text-gray-200 outline-none focus:border-indigo-500"
+                  >
+                    {ROW_KINDS.map(({ k, t, title: ti }) => <option key={k} value={k} title={ti}>{t}</option>)}
+                  </select>
+                  <input
+                    className={`${inputCls} flex-1 min-w-0 ${isRule ? 'opacity-40' : ''} ${strikeOn && !isRule ? 'line-through' : ''} ${italicOn && !isRule ? 'italic' : ''}`}
+                    value={r.label}
+                    readOnly={readOnly || isRule}
+                    maxLength={MAX_FLOW_TABLE_TEXT}
+                    placeholder={isRule ? '─────' : '항목 이름'}
+                    onChange={e => setRow(i, { label: e.target.value })}
+                    onBlur={flush}
+                  />
+                  {/* 실행 체크 — 항목 이름 **오른쪽**(사용자 요구). 항목 행 전용이라 다른 행은 같은 폭의
+                      빈 칸으로 열을 맞춘다. 표시·서식은 계산에 영향을 주지 않고 즉시 커밋한다(blur가 없다). */}
+                  {isItem ? (
                     <input
-                      className={`${inputCls} flex-1 min-w-0 ${isRule ? 'opacity-40' : ''}`}
-                      value={r.label}
+                      type="checkbox"
+                      checked={r.done === true}
+                      disabled={readOnly}
+                      onChange={e => setRow(i, { done: e.target.checked }, true)}
+                      title={r.done === true ? '실행함 — 클릭하면 해제' : '실행했으면 체크하세요'}
+                      className="w-4 h-4 shrink-0 mx-0.5 accent-emerald-500 cursor-pointer disabled:cursor-default"
+                    />
+                  ) : <span className="w-4 h-4 shrink-0 mx-0.5" />}
+                  <button
+                    type="button"
+                    disabled={readOnly || isRule}
+                    aria-pressed={strikeOn}
+                    onClick={() => setRow(i, { strike: !strikeOn }, true)}
+                    title="항목 이름 취소선"
+                    className={fmtToggleCls(strikeOn && !isRule)}
+                  ><span className="line-through">S</span></button>
+                  <button
+                    type="button"
+                    disabled={readOnly || isRule}
+                    aria-pressed={italicOn}
+                    onClick={() => setRow(i, { italic: !italicOn }, true)}
+                    title="항목 이름 기울임"
+                    className={fmtToggleCls(italicOn && !isRule)}
+                  ><span className="italic font-serif">I</span></button>
+                  {auto ? (
+                    <div
+                      className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-emerald-300/90 italic bg-gray-800/40 border border-gray-700/60 rounded truncate"
+                      title="자동 계산된 값입니다"
+                    >{computed[i]?.text || '0'}</div>
+                  ) : (
+                    <input
+                      className={`${inputCls} w-[110px] shrink-0 text-right ${isRule ? 'opacity-40' : ''}`}
+                      value={r.value}
                       readOnly={readOnly || isRule}
                       maxLength={MAX_FLOW_TABLE_TEXT}
-                      placeholder={isRule ? '─────' : '항목 이름'}
-                      onChange={e => setRow(i, { label: e.target.value })}
+                      placeholder={isRule ? '' : '금액'}
+                      onChange={e => setRow(i, { value: e.target.value })}
                       onBlur={flush}
                     />
-                    {auto ? (
-                      <div
-                        className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-emerald-300/90 italic bg-gray-800/40 border border-gray-700/60 rounded truncate"
-                        title="자동 계산된 값입니다"
-                      >{computed[i]?.text || '0'}</div>
-                    ) : (
-                      <input
-                        className={`${inputCls} w-[110px] shrink-0 text-right ${isRule ? 'opacity-40' : ''}`}
-                        value={r.value}
-                        readOnly={readOnly || isRule}
-                        maxLength={MAX_FLOW_TABLE_TEXT}
-                        placeholder={isRule ? '' : '금액'}
-                        onChange={e => setRow(i, { value: e.target.value })}
-                        onBlur={flush}
-                      />
-                    )}
-                    {!readOnly && (
-                      <>
-                        <button onClick={() => moveRow(i, -1)} disabled={i === 0} className="p-1 text-gray-500 hover:text-gray-200 disabled:opacity-25" title="위로"><ChevronUp size={12} /></button>
-                        <button onClick={() => moveRow(i, 1)} disabled={i === rows.length - 1} className="p-1 text-gray-500 hover:text-gray-200 disabled:opacity-25" title="아래로"><ChevronDown size={12} /></button>
-                        <button onClick={() => removeRow(i)} className="p-1 text-gray-500 hover:text-red-300" title="이 행 삭제"><Trash2 size={12} /></button>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {!readOnly && (
-              <div className="flex flex-wrap gap-1 pt-2 mt-1 border-t border-gray-700 shrink-0">
-                {ROW_KINDS.map(({ k, t, title: ti }) => (
-                  <button
-                    key={k}
-                    onClick={() => addRow(k)}
-                    title={ti}
-                    className="flex items-center gap-0.5 text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white hover:border-indigo-600 transition"
-                  ><Plus size={10} /> {t}</button>
-                ))}
-                <div className="flex-1" />
-                <span className="text-[10px] text-gray-500 self-center">{rows.length} / {MAX_FLOW_TABLE_ROWS}행</span>
-              </div>
-            )}
+                  )}
+                  {!readOnly && (
+                    <>
+                      <button onClick={() => moveRow(i, -1)} disabled={i === 0} className="p-1 text-gray-500 hover:text-gray-200 disabled:opacity-25" title="위로"><ChevronUp size={12} /></button>
+                      <button onClick={() => moveRow(i, 1)} disabled={i === rows.length - 1} className="p-1 text-gray-500 hover:text-gray-200 disabled:opacity-25" title="아래로"><ChevronDown size={12} /></button>
+                      <button onClick={() => removeRow(i)} className="p-1 text-gray-500 hover:text-red-300" title="이 행 삭제"><Trash2 size={12} /></button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        )}
-      </div>
+
+          {!readOnly && (
+            <div className="flex flex-wrap gap-1 pt-2 mt-1 border-t border-gray-700 shrink-0">
+              {ROW_KINDS.map(({ k, t, title: ti }) => (
+                <button
+                  key={k}
+                  onClick={() => addRow(k)}
+                  title={ti}
+                  className="flex items-center gap-0.5 text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white hover:border-indigo-600 transition"
+                ><Plus size={10} /> {t}</button>
+              ))}
+              <div className="flex-1" />
+              <span className="text-[10px] text-gray-500 self-center">{rows.length} / {MAX_FLOW_TABLE_ROWS}행</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
