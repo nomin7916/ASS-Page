@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useEffect, useRef, useState } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
-import { buildIndexStatus, cleanNum, isWeekend, savingsEval } from '../utils';
+import { buildIndexStatus, cleanNum, isWeekend, savingsEval, depositRowEval } from '../utils';
 import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount, getTodayKST, getKrSettledTodayDate } from './useMarketCalendar';
 import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays, mergeCodeHistory, applyStagedMerges, mergeStagedPatch, mergeStockMeta } from '../stockHistorySync';
 import type { StagedCodeMerge } from '../stockHistorySync';
@@ -930,10 +930,11 @@ export function useStockData({
       if (isActive) return { ...p, portfolio: updatedItems };
 
       const usdkrw = marketIndicatorsRef.current?.usdkrw || 1;
-      const fxRate = p.accountType === 'overseas' ? usdkrw : 1;
+      const isOverseasAcc = p.accountType === 'overseas';
+      const fxRate = isOverseasAcc ? usdkrw : 1;
       let totalEval = 0;
       updatedItems.forEach(item => {
-        if (item.type === 'deposit') totalEval += cleanNum(item.depositAmount) * fxRate;
+        if (item.type === 'deposit') totalEval += depositRowEval(item, fxRate, isOverseasAcc);
         else if (item.type === 'fund') {
           const qty = cleanNum(item.quantity);
           const price = cleanNum(item.currentPrice);
@@ -968,7 +969,7 @@ export function useStockData({
             targetEval = 0;
             updatedItems.forEach(item => {
               if (item.type === 'deposit') {
-                targetEval += cleanNum(item.depositAmount) * fxRate;
+                targetEval += depositRowEval(item, fxRate, isOverseasAcc);
               } else if (item.type === 'fund') {
                 const qty = cleanNum(item.quantity);
                 const price = (item.code?.startsWith('MA:') && item.prevNavPrice != null)

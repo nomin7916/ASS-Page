@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio } from '../utils';
+import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, isKrwLedgerRow } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function usePortfolioData({
@@ -23,11 +23,14 @@ export function usePortfolioData({
   rebalExtraQty = {},
 }) {
   const totals = useMemo(() => {
-    const fxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
+    const isOverseasAcc = activePortfolioAccountType === 'overseas';
+    const fxRate = isOverseasAcc ? (marketIndicators.usdkrw || 1) : 1;
     let tInv = 0, tEvl = 0, tPrf = 0, cats = {}, stks = [];
     const calc = portfolio.map(item => {
       let inv = 0, evl = 0;
-      if (item.type === 'deposit') { inv = evl = cleanNum(item.depositAmount) * fxRate; }
+      // ⚠️ 예수금 행은 inv·evl이 **같은 값**이어야 한다 — 원화 예수금을 evl에만 더하면 그 행의
+      //    수익률이 0이 아니게 되고 TOTAL의 차익이 원화 잔액만큼 통째로 부풀어 오른다.
+      if (item.type === 'deposit') { inv = evl = depositRowEval(item, fxRate, isOverseasAcc); }
       else if (item.type === 'fund') {
         inv = cleanNum(item.investAmount) * fxRate;
         const qty = cleanNum(item.quantity);
@@ -256,19 +259,27 @@ export function usePortfolioData({
 
   const displayHistSliced = useMemo(() => sortedHistoryDesc.slice(0, historyLimit), [sortedHistoryDesc, historyLimit]);
 
+  // ⚠️ 원화 행(currency:'KRW')의 누적은 달러 누적과 **따로** 쌓는다 — 한 합계에 섞으면 통화가
+  //    다른 값이 더해져 누적이 ≈1,355배 어긋난다. 화면은 행의 통화에 맞는 누적만 보여준다.
   const depositWithSum = useMemo(() => {
-    let runSum = 0;
+    let runSum = 0, runKrw = 0;
     return [...depositHistory].reverse().map((h, i) => {
-      if (!h.noPrincipal) runSum += cleanNum(h.amount);
-      return { ...h, cumulative: runSum, originalIndex: depositHistory.length - 1 - i };
+      if (!h.noPrincipal) {
+        if (isKrwLedgerRow(h)) runKrw += cleanNum(h.amount);
+        else runSum += cleanNum(h.amount);
+      }
+      return { ...h, cumulative: runSum, cumulativeKrw: runKrw, originalIndex: depositHistory.length - 1 - i };
     }).reverse();
   }, [depositHistory]);
 
   const depositWithSum2 = useMemo(() => {
-    let runSum = 0;
+    let runSum = 0, runKrw = 0;
     return [...depositHistory2].reverse().map((h, i) => {
-      if (!h.noPrincipal) runSum += cleanNum(h.amount);
-      return { ...h, cumulative: runSum, originalIndex: depositHistory2.length - 1 - i };
+      if (!h.noPrincipal) {
+        if (isKrwLedgerRow(h)) runKrw += cleanNum(h.amount);
+        else runSum += cleanNum(h.amount);
+      }
+      return { ...h, cumulative: runSum, cumulativeKrw: runKrw, originalIndex: depositHistory2.length - 1 - i };
     }).reverse();
   }, [depositHistory2]);
 

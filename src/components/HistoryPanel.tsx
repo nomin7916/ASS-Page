@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, holdReasonText, spanFromText, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, holdReasonText, spanFromText, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines, krwFlowRateOf } from '../utils';
 import HistPeriodSeg from './HistPeriodSeg';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
@@ -138,9 +138,7 @@ export default function HistoryPanel({
     const isOverseasAcc = activePortfolioAccountType === 'overseas';
     // 흐름 환산도 평가액과 같은 소스(날짜별 환율)를 쓴다 — 원장의 d.fxRate는 '행 생성 시점' 환율로
     // 박제되므로 소급 입력 시 V(날짜별 환율 재계산)와 어긋나 그날 가짜 손익이 남는다.
-    const flowRate = isOverseasAcc
-      ? (d) => (getClosestValue(indicatorHistoryMap?.usdkrw, d.date) || d.fxRate || marketIndicators.usdkrw || 1)
-      : undefined;
+    const flowRate = isOverseasAcc ? krwFlowRateOf(indicatorHistoryMap, marketIndicators.usdkrw) : undefined;
     const evalOf = (h) => {
       const ov = isOverseasAcc && overseasEvalByDate ? overseasEvalByDate.get(h.date) : null;
       return ov ? ov.krw : (displayEvalByDate?.get(h.date) ?? h.evalAmount);
@@ -207,9 +205,7 @@ export default function HistoryPanel({
     const asc = [...sortedHistoryDesc].reverse();
     const { profit, twr, count } = accumulateDailySeries(asc.map(h => h?.date), dailyMetricsByDate);
     const isOverseasAcc = activePortfolioAccountType === 'overseas';
-    const flowRate = isOverseasAcc
-      ? (d) => (getClosestValue(indicatorHistoryMap?.usdkrw, d.date) || d.fxRate || marketIndicators.usdkrw || 1)
-      : undefined;
+    const flowRate = isOverseasAcc ? krwFlowRateOf(indicatorHistoryMap, marketIndicators.usdkrw) : undefined;
     const ascRows = [...viewRows].reverse();
     const out = new Map();
     ascRows.forEach((r, i) => {

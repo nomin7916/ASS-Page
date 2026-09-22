@@ -8,7 +8,7 @@
 //    확장자 없는 상대 경로를 해석하지 못해(`ERR_MODULE_NOT_FOUND`) 그 순간 검증이
 //    통째로 죽는다. `tsconfig.app.json`에 `allowImportingTsExtensions: true`가 이미
 //    켜져 있어 TS·vite 어느 쪽도 문제되지 않는다.
-import { cleanNum, overseasInvestAmount, savingsMaturity, formatSavingsPeriod, formatSavingsDailyRate } from './utils.ts';
+import { cleanNum, overseasInvestAmount, savingsMaturity, formatSavingsPeriod, formatSavingsDailyRate, depositKrwOf } from './utils.ts';
 import { buildXlsx, downloadXlsx } from './xlsxWriter.ts';
 import type { XlsxCell, XlsxMerge, XlsxSheet, XlsxStyle } from './xlsxWriter.ts';
 
@@ -357,7 +357,13 @@ export const buildPortfolioSheet = (input: PortfolioExcelInput): XlsxSheet => {
   for (const item of depositItems) {
     const evalKrw = cleanNum(item.evalAmount);
     // 화면: 투자금액 칸은 fx를 곱하지 않은 원시 depositAmount(해외면 USD)를 보여준다.
-    const depositAmt = numOrBlank(item.depositAmount);
+    // ⚠️ 해외계좌의 **원화 예수금**(환전 전 잔액)은 그 칸에 없으므로 여기서 USD로 환산해 더한다 —
+    //    빼면 예수금 행의 투자금액이 평가금액(원화 포함)보다 작아져 TOTAL 합계가 어긋난다.
+    //    원화가 0이면 종전 식 그대로라 기존 계좌의 시트는 한 셀도 달라지지 않는다.
+    const depKrw = depositKrwOf(item, isOverseas);
+    const depositAmt = depKrw !== 0 && fx > 0
+      ? cleanNum(item.depositAmount) + depKrw / fx
+      : numOrBlank(item.depositAmount);
     const row = emit({
       bg: C.cashBg,
       investAmount: depositAmt,

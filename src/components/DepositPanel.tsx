@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef } from 'react';
 import { Plus, Download, Trash2, Calendar, Maximize2, X, Check, HelpCircle } from 'lucide-react';
-import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
+import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav, isKrwLedgerRow } from '../utils';
 import { sortArrow } from '../chartUtils';
 
 // 헤더 환율 배지(평균·현재) 표기 — 입력 환율이 소수 2자리라 반올림하면 그 값이 사라진다
@@ -27,6 +27,31 @@ export default function DepositPanel({
   evalAmount,
 }) {
   const isOverseas = activePortfolioAccountType === 'overseas';
+  // ── 해외계좌 원화 행 (currency:'KRW') ──────────────────────────────────────
+  // 증권사 해외계좌에는 환전 전 원화가 함께 들어온다. 그 입금을 달러로 환산해 적으면 환율을
+  // 기억해야 하고 소급 정정도 어려워, 통장에 찍힌 원화 금액을 **그대로** 적는 행을 둔다.
+  // ⚠️ 원화 행은 투자원금(USD)에 들어가지 않는다(2026-09 사용자 확정) — 통화가 다르고,
+  //    환전 전 원화는 아직 투자하지 않은 대기 자금이라는 규약. 다만 일간 손익의 '흐름'에는
+  //    포함돼(useIntegratedData rateOf / App usdFlowRate) 입금일에 가짜 수익이 찍히지 않는다.
+  const newLedgerRow = (krw) => ({
+    id: generateId(),
+    date: new Date().toISOString().split('T')[0],
+    amount: 0,
+    // 원화 행은 환율을 쓰지 않는다 — 값을 남기면 마커·누적이 그 값을 곱해 ≈1,355배 어긋난다.
+    fxRate: krw ? 0 : (isOverseas ? (marketIndicators.usdkrw || 1) : 1),
+    ...(krw ? { currency: 'KRW' } : {}),
+    memo: "",
+    noPrincipal: false,
+  });
+  // 원화 ↔ 달러 전환. 달러로 되돌릴 때 현재 환율을 채워 넣어야 누적·원금이 정상 동작한다.
+  const toggleRowCurrency = (h, history, setHistory) => {
+    const n = [...history];
+    const row = { ...n[h.originalIndex] };
+    if (isKrwLedgerRow(row)) { delete row.currency; row.fxRate = marketIndicators.usdkrw || 1; }
+    else { row.currency = 'KRW'; row.fxRate = 0; }
+    n[h.originalIndex] = row;
+    setHistory(n);
+  };
 
   const calcWeightedAvgFx = (hist) => {
     const entries = (hist || []).filter(h => h.fxRate > 0 && Math.abs(h.amount) > 0);
@@ -106,7 +131,7 @@ export default function DepositPanel({
 
   const amountDisplay = (h, prefix) =>
     editField === `${prefix}-${h.id}` ? editVal
-      : isOverseas ? (h.amount !== 0 ? String(h.amount) : '') : formatNumber(h.amount);
+      : (isOverseas && !isKrwLedgerRow(h)) ? (h.amount !== 0 ? String(h.amount) : '') : formatNumber(h.amount);
 
   const amountFocus = (h, prefix, e) => {
     setEditField(`${prefix}-${h.id}`);
@@ -127,6 +152,10 @@ export default function DepositPanel({
     const oldAmount = h.amount || 0;
     const n = [...history];
     n[h.originalIndex].amount = newAmount;
+
+    // ⚠️ 원화 행은 투자원금에 손대지 않는다 — principal은 USD라 원화를 더하거나 빼면
+    //    ≈1,355배 오염되고, 출금 분기의 principalDeducted 프로라타도 의미를 잃는다.
+    if (isKrwLedgerRow(h)) { setHistory(n); setEditField(null); return; }
 
     if (!h.noPrincipal && sign === -1 && setPrincipal) {
       const oldPrincipalDeducted = h.principalDeducted ?? oldAmount;
@@ -177,7 +206,8 @@ export default function DepositPanel({
                     <th className={`py-1.5 border-r border-gray-600 px-1 ${isOverseas ? 'w-[70px]' : 'w-[75px]'} text-yellow-400 font-normal text-center`}>{isOverseas ? '합계($)' : '합계'}</th>
                     <th className="py-1.5 border-r border-gray-600 text-center px-1 font-normal whitespace-nowrap">메모</th>
                     <th className="py-1.5 w-[28px] text-center font-normal">
-                      <button onClick={() => setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: isOverseas ? (marketIndicators.usdkrw || 1) : 1, memo: "", noPrincipal: false }, ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                      <button onClick={() => setDepositHistory([newLedgerRow(false), ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                      {isOverseas && <button onClick={() => setDepositHistory([newLedgerRow(true), ...depositHistory])} className="text-amber-400 hover:text-amber-200 transition-colors text-[11px] font-bold leading-none" title="원화 행 추가 (환전 전 원화 입력)">&#8361;+</button>}
                     </th>
                   </tr>
                 </thead>
@@ -203,14 +233,18 @@ export default function DepositPanel({
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" value={h.date} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].date = e.target.value; setDepositHistory(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-1.5 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd1')} onFocus={e => amountFocus(h, 'd1', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd1', depositHistory, setDepositHistory, 1)} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
+                        <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-1.5 caret-blue-400 ${cleanNum(h.amount) < 0 ? 'text-red-300' : isKrwLedgerRow(h) ? 'text-amber-300' : 'text-blue-300'}`} value={amountDisplay(h, 'd1')} onFocus={e => amountFocus(h, 'd1', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd1', depositHistory, setDepositHistory, 1)} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
                       </td>
                       {isOverseas && (
                         <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sky-500">
+                          {isKrwLedgerRow(h) ? (
+                            <button type="button" onClick={() => toggleRowCurrency(h, depositHistory, setDepositHistory)} className="w-full py-1.5 text-[10px] font-bold text-amber-300 hover:text-amber-100 hover:bg-amber-500/20 transition-colors" title="원화로 입력된 행입니다. 클릭하면 달러 행으로 전환합니다.">&#50896;&#54868;</button>
+                          ) : (
                           <input type="text" data-col="d1fxRate" className="w-full bg-transparent text-right outline-none font-bold px-1 py-1.5 text-sky-400 caret-sky-400" value={editField === `d1fx-${h.id}` ? editVal : (h.fxRate || '')} placeholder={(marketIndicators.usdkrw || 1400).toFixed(0)} onFocus={e => { setEditField(`d1fx-${h.id}`); setEditVal(h.fxRate ? String(h.fxRate) : ''); e.target.select(); }} onChange={e => setEditVal(e.target.value)} onBlur={() => { const n = [...depositHistory]; n[h.originalIndex].fxRate = cleanNum(editVal); setDepositHistory(n); setEditField(null); }} onKeyDown={e => handleTableKeyDown(e, 'd1fxRate')} />
+                          )}
                         </td>
                       )}
-                      <td className="py-1.5 px-1 border-r border-gray-600 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end leading-tight"><span className="text-yellow-400">${cleanNum(h.cumulative).toFixed(2)}</span><span className="text-[10px] text-gray-500">{formatCurrency(cleanNum(h.cumulative) * (marketIndicators.usdkrw || 1))}</span></div> : <span className="text-yellow-400">{formatCurrency(h.cumulative)}</span>}</td>
+                      <td className="py-1.5 px-1 border-r border-gray-600 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? (isKrwLedgerRow(h) ? <span className="text-amber-300">{formatCurrency(cleanNum(h.cumulativeKrw))}</span> : <div className="flex flex-col items-end leading-tight"><span className="text-yellow-400">${cleanNum(h.cumulative).toFixed(2)}</span><span className="text-[10px] text-gray-500">{formatCurrency(cleanNum(h.cumulative) * (marketIndicators.usdkrw || 1))}</span></div>) : <span className="text-yellow-400">{formatCurrency(h.cumulative)}</span>}</td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                         <div className="flex items-center">
                           <input type="text" data-col="d1memo" className="flex-1 min-w-0 bg-transparent outline-none px-1 py-1.5 text-gray-300 text-[11px] caret-blue-400 overflow-hidden" value={h.memo ?? ''} onChange={e => { const n = [...depositHistory]; n[h.originalIndex] = { ...n[h.originalIndex], memo: e.target.value }; setDepositHistory(n); }} onKeyDown={e => handleTableKeyDown(e, 'd1memo')} />
@@ -246,7 +280,8 @@ export default function DepositPanel({
                     <th className={`py-1.5 border-r border-gray-600 px-1 ${isOverseas ? 'w-[70px]' : 'w-[75px]'} text-yellow-400 font-normal text-center`}>{isOverseas ? '합계($)' : '합계'}</th>
                     <th className="py-1.5 border-r border-gray-600 text-center px-1 font-normal whitespace-nowrap">메모</th>
                     <th className="py-1.5 w-[28px] text-center font-normal">
-                      <button onClick={() => setDepositHistory2([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: isOverseas ? (marketIndicators.usdkrw || 1) : 1, memo: "", noPrincipal: false }, ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                      <button onClick={() => setDepositHistory2([newLedgerRow(false), ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                      {isOverseas && <button onClick={() => setDepositHistory2([newLedgerRow(true), ...depositHistory2])} className="text-amber-400 hover:text-amber-200 transition-colors text-[11px] font-bold leading-none" title="원화 행 추가 (환전 전 원화 입력)">&#8361;+</button>}
                     </th>
                   </tr>
                 </thead>
@@ -273,14 +308,18 @@ export default function DepositPanel({
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" value={h.date} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].date = e.target.value; setDepositHistory2(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-1.5 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd2')} onFocus={e => amountFocus(h, 'd2', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd2', depositHistory2, setDepositHistory2, -1)} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
+                        <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-1.5 caret-blue-400 ${cleanNum(h.amount) < 0 ? 'text-red-300' : isKrwLedgerRow(h) ? 'text-amber-300' : 'text-blue-300'}`} value={amountDisplay(h, 'd2')} onFocus={e => amountFocus(h, 'd2', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd2', depositHistory2, setDepositHistory2, -1)} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
                       </td>
                       {isOverseas && (
                         <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sky-500">
+                          {isKrwLedgerRow(h) ? (
+                            <button type="button" onClick={() => toggleRowCurrency(h, depositHistory2, setDepositHistory2)} className="w-full py-1.5 text-[10px] font-bold text-amber-300 hover:text-amber-100 hover:bg-amber-500/20 transition-colors" title="원화로 입력된 행입니다. 클릭하면 달러 행으로 전환합니다.">&#50896;&#54868;</button>
+                          ) : (
                           <input type="text" data-col="d2fxRate" className="w-full bg-transparent text-right outline-none font-bold px-1 py-1.5 text-sky-400 caret-sky-400" value={editField === `d2fx-${h.id}` ? editVal : (h.fxRate || '')} placeholder={(marketIndicators.usdkrw || 1400).toFixed(0)} onFocus={e => { setEditField(`d2fx-${h.id}`); setEditVal(h.fxRate ? String(h.fxRate) : ''); e.target.select(); }} onChange={e => setEditVal(e.target.value)} onBlur={() => { const n = [...depositHistory2]; n[h.originalIndex].fxRate = cleanNum(editVal); setDepositHistory2(n); setEditField(null); }} onKeyDown={e => handleTableKeyDown(e, 'd2fxRate')} />
+                          )}
                         </td>
                       )}
-                      <td className="py-1.5 px-1 border-r border-gray-600 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end leading-tight"><span className="text-yellow-400">${cleanNum(h.cumulative).toFixed(2)}</span><span className="text-[10px] text-gray-500">{formatCurrency(cleanNum(h.cumulative) * (marketIndicators.usdkrw || 1))}</span></div> : <span className="text-yellow-400">{formatCurrency(h.cumulative)}</span>}</td>
+                      <td className="py-1.5 px-1 border-r border-gray-600 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? (isKrwLedgerRow(h) ? <span className="text-amber-300">{formatCurrency(cleanNum(h.cumulativeKrw))}</span> : <div className="flex flex-col items-end leading-tight"><span className="text-yellow-400">${cleanNum(h.cumulative).toFixed(2)}</span><span className="text-[10px] text-gray-500">{formatCurrency(cleanNum(h.cumulative) * (marketIndicators.usdkrw || 1))}</span></div>) : <span className="text-yellow-400">{formatCurrency(h.cumulative)}</span>}</td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                         <div className="flex items-center">
                           <input type="text" data-col="d2memo" className="flex-1 min-w-0 bg-transparent outline-none px-1 py-1.5 text-gray-300 text-[11px] caret-blue-400 overflow-hidden" value={h.memo ?? ''} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex] = { ...n[h.originalIndex], memo: e.target.value }; setDepositHistory2(n); }} onKeyDown={e => handleTableKeyDown(e, 'd2memo')} />

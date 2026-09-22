@@ -14,7 +14,7 @@
 //    (평가액 재계산의 권위 소스)에 **절대 쓰지 않는다**.
 import {
   cleanNum, resolveHoldings, calcPortfolioEvalDetail, buildHeldNameMap,
-  overseasInvestAmount, externalFlowInRange, bookCostOf,
+  overseasInvestAmount, externalFlowInRange, bookCostOf, depositKrwOf,
 } from './utils.ts';
 
 // 흐름 판정 상수 — CLAUDE.md 일간 지표 절의 `MATERIAL_FLOW_RATIO`(1%)·`ABSORBED_RATIO`(0.5)와
@@ -464,6 +464,7 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
           quantity: tq,
           investAmount: cleanNum(prev.investAmount) + cleanNum(it?.investAmount),
           depositAmount: cleanNum(prev.depositAmount) + cleanNum(it?.depositAmount),
+          depositAmountKrw: cleanNum(prev.depositAmountKrw) + cleanNum(it?.depositAmountKrw),
           purchasePrice: tq > 0 ? wsum / tq : cleanNum(prev.purchasePrice),
           __investUsd: cleanNum(prev.__investUsd) + investUsd,
         });
@@ -550,8 +551,12 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
       //    사실만 `priceMissing`으로 알린다.
       const priceMissing = held && isPricedType(type) && cleanNum(qty) > 0 && !(cleanNum(d.eval) > 0);
       const evalAmt = held && !priceMissing ? cleanNum(d.eval) : null;
+      // 예수금 행의 원가 = 그 행의 현금 전액. 해외계좌는 환전 전 원화를 그 날짜 환율로
+      // USD 환산해 더한다(평가금 evalNative와 같은 프레임). ⚠️ 원화가 0이면 종전 식 그대로 —
+      // '미입력(blank)'과 '0원'의 구분이 유지된다.
+      const depKrw = depositKrwOf(item, isOverseas);
       const invest = !held ? null : (type === 'deposit'
-        ? numOrBlank(item?.depositAmount)
+        ? (depKrw !== 0 && fx > 0 ? num(cleanNum(item?.depositAmount) + depKrw / fx) : numOrBlank(item?.depositAmount))
         : (isOverseas && type === 'stock' ? num(item?.__investUsd) : numOrBlank(item?.investAmount)));
       const itemQty = cleanNum(item?.quantity);
       const purchase = (!held || type === 'deposit' || type === 'savings')

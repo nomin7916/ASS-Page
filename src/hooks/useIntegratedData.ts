@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, accumulateDailySeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, accumulateDailySeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt, depositRowEval, isKrwLedgerRow, krwFlowRateOf } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -66,7 +66,8 @@ export function useIntegratedData({
       const cats = {};
       items.forEach(item => {
         if (item.type === 'deposit') {
-          const v = cleanNum(item.depositAmount) * summaryFxRate;
+          // 해외계좌: USD 예수금 × 환율 + 원화 예수금(환전 전 잔액).
+          const v = depositRowEval(item, summaryFxRate, p.accountType === 'overseas');
           totalEval += v; depositAmt += v;
           cats['예수금'] = (cats['예수금'] || 0) + v;
         } else if (item.type === 'fund') {
@@ -401,9 +402,9 @@ export function useIntegratedData({
         // 해외 흐름 환산은 V와 같은 소스(날짜별 환율)를 써야 한다 — 원장의 d.fxRate는 '행 생성
         // 시점' 환율로 박제되므로(DepositPanel), 소급 입력 시 V(날짜별 환율 재계산)와 어긋나
         // 입금일에 환율차만큼 가짜 손익이 남는다. 날짜별 값이 없을 때만 d.fxRate로 폴백.
-        const rateOf = (d) => isOverseas
-          ? (getClosestValue(indicatorHistoryMap?.usdkrw, d.date) || d.fxRate || marketIndicators.usdkrw || 1)
-          : 1;
+        // ⚠️ 원화 행(currency:'KRW')은 이미 원화라 환율을 곱하지 않는다(배율 1). 통합은 원화
+        //    프레임이므로 그대로 흐름에 들어간다 — 원금(effectivePrincipal)에서만 제외된다.
+        const rateOf = isOverseas ? krwFlowRateOf(indicatorHistoryMap, marketIndicators.usdkrw) : (() => 1);
         const deps = isActive ? depositHistory : (p.depositHistory || []);
         const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
         // ⚠️ Math.abs 금지 — 음수 '정정 행'(DepositPanel이 빨간 글씨로 지원)은 유입의 반대다.
@@ -505,9 +506,11 @@ export function useIntegratedData({
           if (!startDate || startDate > date) return sum;
           const cutoff = cutoffOf(deletedAt);
           if (cutoff && date >= cutoff) return sum; // 삭제 계좌: 경계일부터 원금 미기여(평가와 동일 경계)
+          // ⚠️ 원화 행은 투자원금에 들어가지 않으므로(2026-09 사용자 확정) 역추산에서도 제외한다 —
+          //    여기서 빼지 않으면 원화 입금이 과거 원금을 소급해서 깎는다.
           const depRate = (d) => isOverseas ? (d.fxRate || 1) : 1;
-          const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
-          const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
+          const futureDeposits = deps.filter(d => d.date > date && !isKrwLedgerRow(d)).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
+          const futureWithdrawals = wds.filter(d => d.date > date && !isKrwLedgerRow(d)).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
           return sum + Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
         }, 0);
         // 현금성 계좌: 원금=평가(날짜별 잔액) → 평가와 동일 합산 → 수익 0 유지
@@ -683,18 +686,20 @@ export function useIntegratedData({
       const isActive = p.id === activePortfolioId;
       const deps = isActive ? depositHistory : (p.depositHistory || []);
       const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
+      // 원화 행(currency:'KRW')은 이미 원화라 배율 1 — 마커도 통합과 같은 원화 프레임이다.
+      const markRate = (d) => isKrwLedgerRow(d) ? 1 : (d.fxRate || 1);
       deps.forEach(d => {
         if (!d.date) return;
         if (cutoff && d.date >= cutoff) return;
         const prev = byDate.get(d.date) || { date: d.date, deposits: 0, withdrawals: 0 };
-        prev.deposits += (d.amount || 0) * (d.fxRate || 1);
+        prev.deposits += (d.amount || 0) * markRate(d);
         byDate.set(d.date, prev);
       });
       wds.forEach(d => {
         if (!d.date) return;
         if (cutoff && d.date >= cutoff) return;
         const prev = byDate.get(d.date) || { date: d.date, deposits: 0, withdrawals: 0 };
-        prev.withdrawals += (d.amount || 0) * (d.fxRate || 1);
+        prev.withdrawals += (d.amount || 0) * markRate(d);
         byDate.set(d.date, prev);
       });
     });
@@ -749,7 +754,7 @@ export function useIntegratedData({
       const isGold = p.accountType === 'gold';
       items.forEach(item => {
         if (item.type === 'deposit') {
-          const v = cleanNum(item.depositAmount) * fxRate;
+          const v = depositRowEval(item, fxRate, p.accountType === 'overseas');
           if (v <= 0) return;
           const key = '예수금';
           if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금', code: '' };

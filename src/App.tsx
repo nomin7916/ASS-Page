@@ -83,7 +83,7 @@ import {
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries, evalSeriesDates,
-  externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt,
+  externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt, isKrwLedgerRow, depositRowEval, krwFlowRateOf,
   buildBookCostSeries, bookDeltaBetween, computeDailyMetricsSeries,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
@@ -1521,12 +1521,18 @@ export default function App() {
     const asc = history.filter(h => h?.date).slice().sort((a, b) => a.date < b.date ? -1 : 1);
     if (asc.length === 0) return { twr: new Map(), cumProfit: new Map() };
     const isOv = activePortfolioAccountType === 'overseas';
+    // 해외계좌 USD 프레임의 그날 환율 — 원화 예수금·원화 원장 행을 USD로 환산하는 단일 소스.
+    // ⚠️ 평가액(overseasUsdEvalAt)과 흐름(externalFlowInRange)이 **같은 환율**을 써야 원화 입금일의
+    //    ΔV와 흐름이 정확히 상쇄된다. 다른 환율을 쓰면 그 차이만큼 가짜 손익이 남는다.
+    const usdFxAt = (d) => getClosestValue(indicatorHistoryMap?.usdkrw, d) || marketIndicators.usdkrw || 1;
+    // 원화 행만 1/환율로 환산(USD 프레임). 달러 행은 종전대로 무환산(배율 1).
+    const usdFlowRate = isOv ? ((row) => isKrwLedgerRow(row) ? (1 / usdFxAt(row.date)) : 1) : undefined;
     const rows = asc.map((h, i) => {
       const prev = asc[i - 1];
       const flow = prev
-        ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date)
+        ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, usdFlowRate)
         : { in: 0, out: 0 };
-      const ovEval = isOv ? overseasUsdEvalAt(portfolio, h.date, stockHistoryMap) : null;
+      const ovEval = isOv ? overseasUsdEvalAt(portfolio, h.date, stockHistoryMap, usdFxAt(h.date)) : null;
       const cb = isOv ? null : activeCloseEvalByDate.get(h.date);
       const ev = ovEval != null ? ovEval : (cb != null ? cb : cleanNum(h.evalAmount));
       // ⚠️ bookDelta를 빼지 말 것 — 추이표(HistoryPanel)와 같은 관측을 써야 같은 날짜에 두 화면이
@@ -1541,7 +1547,7 @@ export default function App() {
     //    이 함수의 twr은 `computeCumulativeTwrSeries`와 문자 그대로 같다(verify-period #10이 단언).
     const { profit, twr } = accumulateDailySeries(rows.map(r => r.date), computeDailyMetricsSeries(rows));
     return { twr, cumProfit: profit };
-  }, [history, activePortfolioAccountType, portfolio, stockHistoryMap, activeCloseEvalByDate, activeBookByDate, depositHistory, depositHistory2]);
+  }, [history, activePortfolioAccountType, portfolio, stockHistoryMap, activeCloseEvalByDate, activeBookByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
   const accountTwrByDate = accountDailySeries.twr;
   const accountCumProfitByDate = accountDailySeries.cumProfit;
 
@@ -1600,7 +1606,7 @@ export default function App() {
         if (isOverseasChart) {
           // 해외계좌: USD 주가 이력으로만 계산 — KRW evalAmount/fxRate 완전 미사용
           // ⚠️ accountTwrByDate와 **같은 함수**를 쓴다(overseasUsdEvalAt) — 라인과 % 소스 일치.
-          const usdRaw = overseasUsdEvalAt(portfolio, date, stockHistoryMap);
+          const usdRaw = overseasUsdEvalAt(portfolio, date, stockHistoryMap, getClosestValue(indicatorHistoryMap?.usdkrw, date) || marketIndicators.usdkrw || 1);
           const hasData = usdRaw != null;
           const usdEval = hasData ? usdRaw : 0;
           trueEvalAtDate = usdEval;
@@ -1773,7 +1779,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activeCloseEvalByDate, accountTwrByDate, accountCumProfitByDate]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, indicatorHistoryMap, activeCloseEvalByDate, accountTwrByDate, accountCumProfitByDate]);
 
   // ── 통합 대시보드 계산 ──
   const {
@@ -3524,7 +3530,7 @@ export default function App() {
   const handleDownloadCSV = () => downloadCSV(`ISA_자산추이_${today}.csv`, buildHistoryCSV(
     history, depositHistory, depositHistory2,
     activePortfolioAccountType === 'overseas'
-      ? (d) => (getClosestValue(indicatorHistoryMap?.usdkrw, d.date) || d.fxRate || marketIndicators.usdkrw || 1)
+      ? krwFlowRateOf(indicatorHistoryMap, marketIndicators.usdkrw)
       : undefined,
     activeCloseEvalByDate,
     activeBookByDate,
@@ -3822,7 +3828,7 @@ export default function App() {
         //    나면 예적금 지문이 조용히 깨진다 — @ts-nocheck+esbuild라 컴파일러가 못 잡는다).
         //    ⚠️ investAmountUsd(해외 투자금액 사용자 입력)도 필수 — 수량 0인 행에서는 미러
         //    purchasePrice를 쓰지 않으므로 이 필드만 바뀌고, 빠지면 그 편집이 조용히 유실된다.
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, investAmountUsd: item.investAmountUsd, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, investAmountUsd: item.investAmountUsd, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, depositAmountKrw: item.depositAmountKrw, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         // ⚠️ 직접입력(simple) 계좌의 평가액·원금수동 플래그 — 이 둘만 바뀌는 경로가 실재한다
         //    (principalManual이 서 있는 계좌의 평가액 편집, 현금 이관의 simple 대상). 빠지면

@@ -269,17 +269,52 @@ export const overseasInvestInput = (item) => {
 export const overseasInvestAmount = (item) =>
   overseasInvestInput(item) ?? round15(cleanNum(item?.purchasePrice) * cleanNum(item?.quantity));
 
+// ── 해외계좌의 원화 예수금 (2026-09 사용자 요청) ────────────────────────────────
+// 해외계좌는 예수금·투자금액·원금·원장이 **전부 USD 단일 프레임**인데, 증권사 계좌에는
+// 환전 전 원화가 함께 남는다. 그 원화를 담는 **별도 필드**가 item.depositAmountKrw다.
+// ⚠️ depositAmount(USD)에 합치지 말 것 — 한 필드에 두 통화가 섞이면 환율을 곱해야 할 몫과
+//    곱하면 안 되는 몫을 구분할 수 없어, 평가액이 조용히 ≈1,355배 어긋난다.
+// ⚠️ 비해외 계좌에서는 **항상 0**으로 읽는다(계좌 타입이 바뀌어도 잔존값이 이중 계상되지 않게).
+//    국내 계좌의 예수금은 그 자체가 원화라 이 필드가 생길 이유가 없다.
+export const depositKrwOf = (item, isOverseas) =>
+  isOverseas ? cleanNum(item?.depositAmountKrw) : 0;
+
+// 예수금 행의 평가액(**원화 프레임**) = USD 예수금 × 환율 + 원화 예수금.
+// ⚠️ 예수금을 더하는 모든 경로가 이 함수 하나를 공유한다(손복제 금지) — 갈리면 같은 계좌의
+//    표 TOTAL·요약 카드·통합 대시보드·추이표가 서로 다른 총자산을 표시한다.
+// ⚠️ 원화 예수금이 없으면(=기존 모든 계좌) 반환값이 종전과 한 비트도 다르지 않다(하위호환의 축).
+export const depositRowEval = (item, fxRate = 1, isOverseas = false) =>
+  cleanNum(item?.depositAmount) * (fxRate || 1) + depositKrwOf(item, isOverseas);
+
+// 같은 값의 **계좌 통화(native)** 표현 = USD 예수금 + 원화 예수금 ÷ 환율.
+// 해외계좌를 USD로 표기하는 화면(자산검증 비교표·엑셀 내보내기)이 쓴다 — `depositRowEval(…) / fx`와
+// 같은 값이지만, 환율이 0·미확보일 때 원화 몫만 안전하게 떨어뜨린다.
+export const depositRowNative = (item, fxRate = 1, isOverseas = false) => {
+  const fx = cleanNum(fxRate) || 1;
+  const krw = depositKrwOf(item, isOverseas);
+  return cleanNum(item?.depositAmount) + (krw !== 0 && fx > 0 ? krw / fx : 0);
+};
+
+// 원장(입출금 내역) 행이 원화로 입력된 행인가. 필드가 없으면 종전대로 USD 행.
+export const isKrwLedgerRow = (row) => row?.currency === 'KRW';
+
 // 입출금 내역 누적합 — 특정 날짜까지 (포함). "anchor + delta" 모델용.
 // overseas 계좌는 amount가 USD이므로 fxRate 곱하지 않고 USD 합산.
 // 비overseas 계좌도 fxRate=1이므로 동일 결과.
+// ⚠️ 원화 행(currency:'KRW')은 **투자원금에서 제외**한다(2026-09 사용자 확정) — 환전 전 원화는
+//    아직 투자하지 않은 대기 자금이라는 규약. 단위가 다르기도 해서(원화 vs USD) 그대로 더하면
+//    원금이 ≈1,355배 오염된다. 흐름(externalFlowInRange)에서는 반대로 **포함**한다(입금일에
+//    가짜 수익이 찍히지 않게) — 두 함수를 합치지 말 것.
 const cumDepositsUpTo = (date, depositHistory, depositHistory2) => {
   let cum = 0;
   for (const d of depositHistory || []) {
     if ((d.date || '') > date) continue;
+    if (isKrwLedgerRow(d)) continue;
     if (!d.noPrincipal) cum += cleanNum(d.amount);
   }
   for (const w of depositHistory2 || []) {
     if ((w.date || '') > date) continue;
+    if (isKrwLedgerRow(w)) continue;
     if (!w.noPrincipal) {
       const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
       cum -= deducted;
@@ -293,8 +328,15 @@ const cumDepositsUpTo = (date, depositHistory, depositHistory2) => {
 // ⚠️ cumDepositsUpTo(원금 산출용)와 절대 합치지 말 것 — 출금 규칙이 다르다. 원금은
 //    principalDeducted·noPrincipal을 반영하지만, 현금흐름은 실제로 계좌를 빠져나간 전액이다.
 // rateOf: 행 → 환율(해외계좌는 d.fxRate, 국내는 1). 미전달 시 1(원화 계좌).
+// ⚠️ 원화 행(currency:'KRW')은 **rateOf가 있을 때만** 집계한다(fail-safe). 그 행의 amount는
+//    원화인데 호출부의 프레임은 USD일 수도 원화일 수도 있어, rateOf 없이 더하면 어느 쪽이든
+//    단위가 조용히 어긋난다(USD 프레임에 원화를 더하면 ≈1,355배). 원화 행을 흐름에 넣으려는
+//    호출부는 반드시 rateOf에서 그 행을 자기 프레임으로 환산할 것 —
+//    원화 프레임이면 1, USD 프레임이면 1/그날환율.
 export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusive, toInclusive, rateOf) => {
-  const rate = typeof rateOf === 'function' ? rateOf : () => 1;
+  const hasRate = typeof rateOf === 'function';
+  const rate = hasRate ? rateOf : () => 1;
+  const skipKrw = (row) => isKrwLedgerRow(row) && !hasRate;
   let inFlow = 0, outFlow = 0, memoNet = 0;
   const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
   // ⚠️ Math.abs 금지 — DepositPanel은 음수 '정정 행'을 빨간 글씨로 명시 지원한다
@@ -303,13 +345,13 @@ export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusi
   //    코드베이스의 다른 모든 원장 소비자(cumDepositsUpTo·portfolioPrincipalData·
   //    intDepositEvents·depositWithSum)가 부호 있는 합을 쓰므로 여기도 부호를 보존한다.
   for (const d of depositHistory || []) {
-    if (!d || !inRange(d.date || '')) continue;
+    if (!d || !inRange(d.date || '') || skipKrw(d)) continue;
     const v = cleanNum(d.amount) * rate(d);
     if (d.noPrincipal) { memoNet += v; continue; }
     if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
   }
   for (const w of depositHistory2 || []) {
-    if (!w || !inRange(w.date || '')) continue;
+    if (!w || !inRange(w.date || '') || skipKrw(w)) continue;
     const v = cleanNum(w.amount) * rate(w);
     // ⚠️ **출금도 `noPrincipal`이면 흐름에서 제외**(2026-09 사용자 확정 — 되돌리지 말 것).
     //    '원금 비영향' 표시는 그 행을 **어떤 집계에도 넣지 않는 순수 메모**로 쓰겠다는 뜻이다.
@@ -323,6 +365,20 @@ export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusi
   // 보정하는 용도뿐이다(같은 날 실제 외부 흐름이 함께 있을 때만 의미가 있다).
   return { in: inFlow, out: outFlow, net: inFlow - outFlow, memoNet };
 };
+
+// 해외계좌 원장 행 → **원화 프레임** 환산 배율(externalFlowInRange·통합 집계의 rateOf).
+// ⚠️ 원화 행(currency:'KRW')은 이미 원화라 배율 1이다 — 여기서 걸러내지 않으면 `d.fxRate ||
+//    라이브환율` 폴백이 원화 금액에 환율을 곱해 흐름이 ≈1,355배로 부풀고, 그 값이 ΔV와
+//    상쇄되지 않아 입금일 손익이 통째로 뒤집힌다(원화 행은 fxRate를 저장하지 않으므로
+//    폴백에 그대로 걸린다).
+// ⚠️ 날짜별 환율을 1순위로 쓴다 — 원장의 d.fxRate는 '행 생성 시점' 환율로 박제되므로 소급
+//    입력 시 V(날짜별 환율 재계산)와 어긋나 그날 가짜 손익이 남는다.
+// ⚠️ 추이표(HistoryPanel)·CSV(buildHistoryCSV 호출부)·통합(useIntegratedData)이 **이 한 함수를
+//    공유**해야 같은 날짜에 세 화면의 흐름이 갈리지 않는다. 손복제 금지.
+export const krwFlowRateOf = (indicatorHistoryMap, liveFx) => (d) =>
+  isKrwLedgerRow(d)
+    ? 1
+    : (getClosestValue(indicatorHistoryMap?.usdkrw, d?.date) || cleanNum(d?.fxRate) || cleanNum(liveFx) || 1);
 
 // 일간 수익률(%) — 유입은 기초(BOD)·유출은 기말(EOD) 가중한 Modified Dietz.
 // 통합 대시보드·개별 계좌·CSV가 전부 이 한 함수를 공유해야 값이 어긋나지 않는다.
@@ -435,16 +491,25 @@ export const bookCostOf = (items, opts?) => {
 //   bookDelta가 흐름과 같은 단위가 된다. 넘기지 않으면 단위가 어긋나 보류 판정이 무의미해진다.
 // opts.costBasisOnly: 위 bookCostOf 참조 — 해외계좌는 반드시 true(잔존 원화 investAmount 오염 차단).
 // ⚠️ 두 옵션은 **항상 함께** 쓴다: rateOf만 주면 원화 investAmount에 환율이 곱해진다.
+// ⚠️ 해외계좌의 **원화 예수금**(depositKrwOf)은 환율을 곱하지 않고 마지막에 더한다 — 그 몫은
+//    이미 원화라 fx를 곱하면 두 번 환산된다. rateOf가 없으면(=USD 프레임) 더하지 않는다
+//    (단위 미상 fail-safe. 개별 해외 계좌는 CLAUDE.md 규약상 장부를 아예 공급하지 않는다).
+//    원화 예수금도 외부에서 들어온 현금이라 장부에 반영해야 '흐름이 V에 반영됐는가' 관측이
+//    성립한다 — 빼면 원화 입금일이 'unreflected-idle'로 분류돼 그 금액이 손익으로 찍힌다.
 export const buildBookCostSeries = (p, dates, opts?) => {
   const m = new Map();
   const rate = opts && typeof opts.rateOf === 'function' ? opts.rateOf : null;
   const costBasisOnly = !!(opts && opts.costBasisOnly);
+  const krwOn = !!rate && p?.accountType === 'overseas';
   for (const d of dates || []) {
     if (!d || m.has(d)) continue;
     const r = resolveHoldings(p, d);
     if (!r || r.estimated) continue;
     const fx = rate ? (cleanNum(rate(d)) || 1) : 1;
-    m.set(d, bookCostOf(r.items, { costBasisOnly }) * fx);
+    const krw = krwOn
+      ? (r.items || []).reduce((s, it) => s + (it?.type === 'deposit' ? depositKrwOf(it, true) : 0), 0)
+      : 0;
+    m.set(d, bookCostOf(r.items, { costBasisOnly }) * fx + krw);
   }
   return m;
 };
@@ -908,11 +973,20 @@ export const accumulateDailySeries = (ascDates, metricsMap) => {
 // ⚠️ App.tsx finalChartData 해외 분기와 개별 계좌 누적 TWR이 반드시 이 한 함수를 공유할 것.
 //    한쪽만 자체 계산으로 되돌리면 같은 날짜에 라인과 %가 갈린다.
 // 반환: USD 평가액 (가격/예수금 데이터가 하나도 없으면 null)
-export const overseasUsdEvalAt = (items, date, stockHistoryMap) => {
+// ⚠️ fxAt(그날 환율, 선택): 주면 **원화 예수금**을 그 환율로 USD 환산해 더한다. 미전달이면
+//    더하지 않는다 — 반환값이 종전과 한 비트도 같아야 하는 하위호환의 축이자, 환율을 모르는
+//    호출부가 원화를 USD 합계에 그대로 얹는 ≈1,355배 오염을 구조적으로 막는 fail-safe다.
+export const overseasUsdEvalAt = (items, date, stockHistoryMap, fxAt) => {
+  const fx = cleanNum(fxAt);
   let usd = 0, hasData = false;
   for (const item of items || []) {
     if (!item) continue;
-    if (item.type === 'deposit') { usd += cleanNum(item.depositAmount); hasData = true; }
+    if (item.type === 'deposit') {
+      usd += cleanNum(item.depositAmount);
+      const krw = depositKrwOf(item, true);
+      if (krw !== 0 && fx > 0) usd += krw / fx;
+      hasData = true;
+    }
     else if (item.code && stockHistoryMap?.[item.code]) {
       const p = getClosestValue(stockHistoryMap[item.code], date);
       if (p) { usd += p * item.quantity; hasData = true; }
@@ -1605,7 +1679,9 @@ export const calcPortfolioEvalDetail = (
   const detail: any[] = [];
   (items || []).forEach(item => {
     if (item.type === 'deposit') {
-      const evl = cleanNum(item.depositAmount) * fxRate;
+      // 해외계좌는 USD 예수금 × 그날 환율 + **원화 예수금**(환전 전 잔액, 환율 미적용).
+      // ⚠️ 평가액을 만드는 모든 경로(추이표·통합 대시보드·자산검증·백필)가 이 한 줄을 지난다.
+      const evl = depositRowEval(item, fxRate, isOverseas);
       totalEval += evl;
       hasAnyPrice = true;
       detail.push({ id: item.id, type: 'deposit', code: '', name: '예수금', quantity: null, price: null, source: 'deposit', eval: evl });
@@ -1758,6 +1834,9 @@ export const snapshotItemsFromPortfolio = (items: any[]): any[] =>
     quantity: cleanNum(it.quantity),
     investAmount: cleanNum(it.investAmount),
     depositAmount: cleanNum(it.depositAmount),
+    // 해외계좌 원화 예수금 — 보존하지 않으면 과거 날짜 평가액이 그 몫만큼 빠져 추이표·차트가
+    // 오늘과 갈린다(calcPortfolioEvalDetail이 스냅샷 items로 과거를 재계산하므로).
+    depositAmountKrw: cleanNum(it.depositAmountKrw),
     purchasePrice: cleanNum(it.purchasePrice),
     currentPrice: cleanNum(it.currentPrice),
     evalAmount: cleanNum(it.evalAmount),
@@ -1796,7 +1875,7 @@ export const buildHeldNameMap = (pf: any): { [code: string]: string } => {
 export const snapshotCompositionKey = (items: any[]): string =>
   JSON.stringify(
     snapshotItemsFromPortfolio(items)
-      .map(it => `${it.type}:${it.code}:${it.quantity}:${it.depositAmount}:${it.investAmount}`)
+      .map(it => `${it.type}:${it.code}:${it.quantity}:${it.depositAmount}:${it.investAmount}${it.depositAmountKrw ? `:${it.depositAmountKrw}` : ''}`)
       .sort()
   );
 
@@ -1844,8 +1923,10 @@ export const resolveHoldings = (
 export const depositAmountAt = (p: any, date: string, fxRate = 1): number | null => {
   const resolved = resolveHoldings(p, date);
   if (resolved.kind === 'live') return null;
+  // 해외계좌는 USD 예수금 × 그날 환율 + 원화 예수금(환율 미적용) — 평가액 열과 같은 프레임.
+  const isOv = p?.accountType === 'overseas';
   return (resolved.items || []).reduce(
-    (s: number, it: any) => s + (it && it.type === 'deposit' ? cleanNum(it.depositAmount) : 0), 0) * (fxRate || 1);
+    (s: number, it: any) => s + (it && it.type === 'deposit' ? depositRowEval(it, fxRate, isOv) : 0), 0);
 };
 
 export const buildIndexStatus = (data, source) => {

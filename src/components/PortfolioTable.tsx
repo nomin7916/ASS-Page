@@ -814,7 +814,32 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               <tr key={item.id} className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
                 <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
                 {depositColSpan > 0 && (
-                  <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={depositColSpan}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
+                  <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 text-[14px]" colSpan={depositColSpan}>
+                    {/* 해외계좌: 달러 예수금(투자금액 칸)과 별개로 **환전 전 원화 잔액**을 받는다.
+                        ⚠️ 새 열을 만들지 않고 이 라벨 셀 안에 넣는다 — 열 개수가 바뀌면 주식·펀드·
+                           예적금 행과 tfoot까지 전부 맞춰야 하고, 한 곳만 놓쳐도 표 정렬이 깨진다. */}
+                    {isOverseas ? (
+                      <div className="flex items-center justify-center gap-4 flex-wrap">
+                        <span className="tracking-[0.2em]">예수금 (USD CASH)</span>
+                        <span
+                          className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1"
+                          title="환전 전 원화 잔액 — 환율을 곱하지 않고 평가금액에 그대로 더합니다. 투자원금에는 반영되지 않습니다."
+                        >
+                          <span className="text-[11px] font-bold text-amber-400/90">원화</span>
+                          <input
+                            type="text"
+                            className="w-28 bg-transparent outline-none font-bold text-right text-amber-300 text-[13px] caret-amber-400 focus:bg-amber-900/30 rounded px-1"
+                            value={numericVal(item.id, 'depositAmountKrw', formatNumber(item.depositAmountKrw))}
+                            onFocus={numericFocus(item.id, 'depositAmountKrw', item.depositAmountKrw)}
+                            onChange={e => numericChange(e.target.value)}
+                            onBlur={numericBlur(item.id, 'depositAmountKrw')}
+                            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                            placeholder="0"
+                          />
+                        </span>
+                      </div>
+                    ) : '예수금 (CASH)'}
+                  </td>
                 )}
                 {!H('investAmount') && (
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={numericVal(item.id, 'depositAmount', formatNumber(item.depositAmount))} onFocus={numericFocus(item.id, 'depositAmount', item.depositAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'depositAmount')} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
