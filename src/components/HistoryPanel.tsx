@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, holdReasonText, spanFromText, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines, krwFlowRateOf } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, holdReasonText, spanFromText, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines, krwFlowRateOf, usdOfKrwFrame } from '../utils';
 import HistPeriodSeg from './HistPeriodSeg';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
@@ -91,7 +91,11 @@ export default function HistoryPanel({
       const r = calcPortfolioEvalDetail(resolved.items, 'overseas', date, stockHistoryMap, indicatorHistoryMap || {}, liveFx, mpo);
       if (!r.hasAnyPrice) return null;
       const fx = r.fxRate || liveFx;
-      return { usd: r.total / fx, krw: r.total };
+      // ⚠️ usd는 **달러 자산만**(원화 예수금 제외) — `r.total ÷ 환율`로 되돌리면 원화가 달러로
+      //    환산돼 섞여 환율이 움직일 때마다 달러 평가액·누적 수익률이 흔들린다(utils '통화 분리 원칙').
+      //    krw(총 평가액 = 달러×환율 + 원화)는 원화 프레임 그대로 — 일간 지표·흐름이 이 값을 쓴다.
+      const krwCash = cleanNum(r.krwCash);
+      return { usd: usdOfKrwFrame(r.total, krwCash, fx), krw: r.total, krwCash };
     };
   }, [activePortfolioAccountType, activePortfolio, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw]);
 
@@ -461,7 +465,12 @@ export default function HistoryPanel({
                               {isOverseasAcc
                                 ? (() => {
                                     const usd = ov ? ov.usd : h.evalAmount / (marketIndicators.usdkrw || 1);
-                                    return <div className="flex flex-col items-end leading-tight"><span>{formatUsd(usd)}</span><span className="text-[10px] text-gray-500">{formatCurrency(curKrw)}</span></div>;
+                                    // 원화 예수금이 있던 날은 달러·원화를 따로 보여 주고 원화 줄은 총액임을 밝힌다
+                                    // (달러 × 환율 ≠ 원화 줄이 되므로 설명 없이 두면 계산이 틀린 것처럼 보인다).
+                                    const kc = ov ? cleanNum(ov.krwCash) : 0;
+                                    return kc
+                                      ? <div className="flex flex-col items-end leading-tight" title={`달러 자산 ${formatUsd(usd)} + 원화 예수금 ${formatCurrency(kc)} = 총 ${formatCurrency(curKrw)}`}><span>{formatUsd(usd)}</span><span className="text-[10px] text-amber-400/90">+{formatCurrency(kc)}</span><span className="text-[10px] text-gray-500">={formatCurrency(curKrw)}</span></div>
+                                      : <div className="flex flex-col items-end leading-tight"><span>{formatUsd(usd)}</span><span className="text-[10px] text-gray-500">{formatCurrency(curKrw)}</span></div>;
                                   })()
                                 : formatCurrency(curKrw)}
                             </span>

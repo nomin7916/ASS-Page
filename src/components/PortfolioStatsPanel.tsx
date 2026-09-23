@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef } from 'react';
 import { X } from 'lucide-react';
-import { generateId, formatCurrency, formatNumber, formatPercent, cleanNum } from '../utils';
+import { generateId, formatCurrency, formatNumber, formatPercent, cleanNum, usdOfKrwFrame } from '../utils';
 
 export default function PortfolioStatsPanel({
   totals,
@@ -40,11 +40,33 @@ export default function PortfolioStatsPanel({
       <span className={`font-bold ${cls} whitespace-nowrap pl-1`}>{formatCurrency(krwVal)}</span>
     );
 
-  const principalKRW = isOv ? principal * effectiveFx : principal;
-  const profit = totals.totalEval - principalKRW;
+  // ── 해외계좌 원화 예수금 (2026-09 사용자 확정 — 되돌리지 말 것) ──
+  // totals는 원화 프레임이라 원화 예수금을 이미 포함한다. 원화 예수금은 ① 달러로 환산하지 않고
+  // (환율이 움직일 때마다 달러 평가액이 흔들린다) ② 투자원금이 아니므로 원금 대비 수익(률)에서도 뺀다
+  // (평가에만 넣으면 원화 입금액이 통째로 '수익'으로 찍힌다). 국내 계좌는 0이라 종전과 동일.
+  const krwCash = isOv ? cleanNum(totals.krwCash) : 0;
+  const evalExCash = totals.totalEval - krwCash;
+  // 투자금액·평가금액 머리줄 — 달러 줄은 달러 자산만, 원화는 원화 그대로, 총액 = 달러×환율 + 원화.
+  // 원화 예수금이 0이면 dualKRW 그대로(기존 표시와 한 글자도 다르지 않다).
+  const dualSplit = (krwVal, cls = 'text-gray-200') => {
+    if (!isOv || !krwCash) return dualKRW(krwVal, cls);
+    return (
+      <div
+        className="flex flex-col items-end leading-tight"
+        title={`달러 자산 ${fmtUS(usdOfKrwFrame(krwVal, krwCash, fx))} × ₩${Math.round(fx).toLocaleString()} = ${formatCurrency(krwVal - krwCash)}\n원화 예수금 ${formatCurrency(krwCash)} (환율 미적용)\n합계 ${formatCurrency(krwVal)}`}
+      >
+        <span className={`font-bold ${cls}`}>{fmtUS(usdOfKrwFrame(krwVal, krwCash, fx))}</span>
+        <span className="text-[10px] text-amber-400/90">+ {formatCurrency(krwCash)}</span>
+        <span className="text-[10px] text-gray-400">= {formatCurrency(krwVal)}</span>
+      </div>
+    );
+  };
 
-  // 달러 기준 계산
-  const usdEval = isOv ? totals.totalEval / fx : 0;
+  const principalKRW = isOv ? principal * effectiveFx : principal;
+  const profit = evalExCash - principalKRW;
+
+  // 달러 기준 계산 — 달러 자산만(원화 예수금 제외).
+  const usdEval = isOv ? usdOfKrwFrame(totals.totalEval, krwCash, fx) : 0;
   const usdProfit = isOv ? usdEval - principal : 0;
   const daysFromStart = portfolioStartDate
     ? (Date.now() - new Date(portfolioStartDate).getTime()) / (1000 * 60 * 60 * 24)
@@ -53,7 +75,7 @@ export default function PortfolioStatsPanel({
     isOv && principal > 0 && usdEval > 0
       ? (usdEval / principal - 1) * 100
       : 0;
-  const krwSimpleReturn = principalKRW > 0 ? (totals.totalEval / principalKRW - 1) * 100 : 0;
+  const krwSimpleReturn = principalKRW > 0 ? (evalExCash / principalKRW - 1) * 100 : 0;
   const fxGain = isOv ? (fx - effectiveFx) * principal : 0;
 
   const handleDragStart = (e) => {
@@ -86,11 +108,11 @@ export default function PortfolioStatsPanel({
       <div className={`${headerP} bg-black shrink-0 border-b border-gray-700 text-gray-400 text-xs`}>
         <div className="flex justify-between items-start">
           <span className="shrink-0">투자금액</span>
-          {dualKRW(totals.totalInvest)}
+          {dualSplit(totals.totalInvest)}
         </div>
         <div className="flex justify-between items-start">
           <span className="shrink-0">평가금액</span>
-          {dualKRW(totals.totalEval, 'text-yellow-400 text-[13px]')}
+          {dualSplit(totals.totalEval, 'text-yellow-400 text-[13px]')}
         </div>
         <div className="flex justify-between">
           <span className="shrink-0">수익률</span>
@@ -292,9 +314,12 @@ export default function PortfolioStatsPanel({
               {/* 계산 */}
               <div className="space-y-0.5 pl-1">
                 <div className="text-gray-500 text-[10px] font-bold mb-1">계산</div>
-                <div className="text-gray-400">평가 KRW  =  {formatCurrency(totals.totalEval)}</div>
+                <div className="text-gray-400">평가 KRW  =  {formatCurrency(evalExCash)}</div>
+                {krwCash !== 0 && (
+                  <div className="text-amber-400/80 text-[10px] pl-2">원화 예수금 {formatCurrency(krwCash)} 제외 — 투자원금이 아닌 환전 전 대기 자금</div>
+                )}
                 <div className="text-gray-400">원금 KRW  =  {formatCurrency(principalKRW)}</div>
-                <div className="text-gray-400 pt-0.5">= ( {formatCurrency(totals.totalEval)}  ÷  {formatCurrency(principalKRW)} )  −  1</div>
+                <div className="text-gray-400 pt-0.5">= ( {formatCurrency(evalExCash)}  ÷  {formatCurrency(principalKRW)} )  −  1</div>
                 <div className={`font-bold text-[13px] pt-0.5 ${krwSimpleReturn >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                   =  {formatPercent(krwSimpleReturn)}
                 </div>
@@ -306,7 +331,7 @@ export default function PortfolioStatsPanel({
                 <div className="text-gray-400">= ( 평가$  ×  현재환율 )  −  ( 원금$  ×  매입환율 )</div>
                 <div className="text-gray-400 pl-2">= ( {fmtUS(usdEval)}  ×  ₩{Math.round(fx).toLocaleString()} )</div>
                 <div className="text-gray-400 pl-4">−  ( {fmtUS(principal)}  ×  ₩{Math.round(effectiveFx).toLocaleString()} )</div>
-                <div className="text-gray-400">= {formatCurrency(totals.totalEval)}  −  {formatCurrency(principalKRW)}</div>
+                <div className="text-gray-400">= {formatCurrency(evalExCash)}  −  {formatCurrency(principalKRW)}</div>
                 <div className={`font-bold pt-0.5 ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                   =  {formatCurrency(profit)}
                 </div>

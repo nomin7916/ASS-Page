@@ -17,6 +17,10 @@
 //       · 평가금액 = USD 자산 × 환율 + 원화 예수금
 //       · 투자원금에는 **넣지 않는다**(환전 전 원화는 아직 투자하지 않은 대기 자금)
 //       · 일간 손익에서는 **입출금으로 처리**한다(입금일에 가짜 수익이 찍히지 않게)
+//       · **통화 분리**(2026-09 후속 확정): 원화는 달러로 환산하지 않는다 — 달러 평가액은 달러 자산만,
+//         원화는 원화 그대로, 총 평가액(원화) = 달러 × 환율 + 원화. 원금 대비 수익(률)에서도 뺀다.
+//         USD 프레임(차트 TWR·추이표 달러 줄·자산검증 달러 표기·비교 엑셀 USD 열)에 원화가 새면
+//         환율이 움직일 때마다 환전하지 않은 현금이 달러 수익률을 흔든다(#46~#60).
 //     ⚠️ 하위호환의 축: 원화 값이 0이면 모든 반환값이 종전과 한 비트도 다르지 않아야 한다.
 //     미러는 함수 본문 회귀만 잡는다. 배선(쓰기 경로 스코프·0 나눗셈 가드·지문 등록·미러 계약)은
 //     미러로 표현할 수 없어 소스를 직접 읽어 단언한다(verify-twr #30d · verify-transfer #17~ 선례).
@@ -264,7 +268,7 @@ try {
 
 if (U) {
   const {
-    depositKrwOf, depositRowEval, depositRowNative, isKrwLedgerRow, krwFlowRateOf,
+    depositKrwOf, depositRowEval, depositKrwTotalOf, usdOfKrwFrame, isKrwLedgerRow, krwFlowRateOf,
     calcPortfolioEvalDetail, overseasUsdEvalAt, externalFlowInRange,
     computeDailyMetricsSeries, snapshotItemsFromPortfolio, snapshotCompositionKey,
     buildBookCostSeries,
@@ -290,24 +294,37 @@ if (U) {
 
   // ── 평가금액 = USD × 환율 + 원화 ──
   near('#29 depositRowEval = USD × 환율 + 원화', depositRowEval(depNew, FX, true), USD * FX + KRW, 1e-4);
-  near('#29b depositRowNative = USD + 원화 ÷ 환율', depositRowNative(depNew, FX, true), USD + KRW / FX, 1e-9);
+  // ⚠️ 통화 분리: 원화 프레임 값에서 달러를 되돌리면 **달러 자산만** 남아야 한다(원화를 ÷환율로 섞지 않는다).
+  near('#29b usdOfKrwFrame: 원화 프레임에서 원화를 빼고 달러 자산만 되돌린다',
+    usdOfKrwFrame(depositRowEval(depNew, FX, true), KRW, FX), USD, 1e-9);
+  near('#29c usdOfKrwFrame: 원화 0이면 값 ÷ 환율과 같다(하위호환)',
+    usdOfKrwFrame(USD * FX, 0, FX), USD, 1e-9);
+  eq('#29d depositKrwTotalOf: 예수금 행의 원화만 합산',
+    depositKrwTotalOf([depNew, depOld, { type: 'stock', depositAmountKrw: 999 }], true), KRW);
+  eq('#29e depositKrwTotalOf: 비해외는 0', depositKrwTotalOf([depNew], false), 0);
   const rOld = calcPortfolioEvalDetail([depOld], 'overseas', '2026-09-22', {}, imap, FX);
   const rNew = calcPortfolioEvalDetail([depNew], 'overseas', '2026-09-22', {}, imap, FX);
   eq('#30 종전 평가금액 (실측 화면 값)', Math.round(rOld.total), 123089673);
   eq('#30b 원화 포함 평가금액', Math.round(rNew.total), 128089673);
   near('#30c 증가분 = 원화 예수금 전액 (환율이 곱해지지 않는다)', rNew.total - rOld.total, KRW, 1e-4);
+  eq('#30d calcPortfolioEvalDetail.krwCash = 원화 예수금 (원화 프레임 합계에 포함된 몫)', rNew.krwCash, KRW);
+  eq('#30e 원화가 없으면 krwCash = 0', rOld.krwCash, 0);
+  eq('#30f 예수금 detail 행이 원화 몫(krw)을 싣는다', rNew.items[0].krw, KRW);
   // ⚠️ 국내 계좌에 잔존 원화 필드가 있어도 평가액이 변하면 안 된다(isOverseas 게이트).
   eq('#31 국내 계좌는 원화 필드가 있어도 무영향',
     calcPortfolioEvalDetail([{ type: 'deposit', depositAmount: 1000000, depositAmountKrw: 777 }],
       'portfolio', '2026-09-22', {}, {}, 1).total, 1000000);
 
-  // ── USD 프레임(차트 TWR)과 원화 프레임이 같은 자산을 본다 ──
-  near('#32 overseasUsdEvalAt: 환율 미전달이면 USD만 (하위호환 fail-safe)',
+  // ── USD 프레임(차트 TWR)은 달러 자산만 — 원화 예수금은 환산해 넣지 않는다 ──
+  near('#32 overseasUsdEvalAt: 원화 예수금이 있어도 달러 자산만',
     overseasUsdEvalAt([depNew], '2026-09-22', {}), USD, 1e-9);
-  near('#32b overseasUsdEvalAt: 환율 전달 시 USD + 원화 ÷ 환율',
-    overseasUsdEvalAt([depNew], '2026-09-22', {}, FX), USD + KRW / FX, 1e-9);
-  near('#32c 두 프레임이 같은 총자산을 가리킨다 (차트 ↔ 추이표 일치)',
-    overseasUsdEvalAt([depNew], '2026-09-22', {}, FX) * FX, rNew.total, 1e-4);
+  // ⚠️ 옛 4번째 인자(fxAt)가 되살아나면 여기서 USD + 원화 ÷ 환율이 나온다.
+  near('#32b overseasUsdEvalAt: 환율을 넘겨도 원화를 더하지 않는다 (옛 fxAt 인자 폐기)',
+    overseasUsdEvalAt([depNew], '2026-09-22', {}, FX), USD, 1e-9);
+  near('#32c 두 프레임이 같은 달러 자산을 가리킨다 (차트 달러 = 추이표 달러 줄)',
+    overseasUsdEvalAt([depNew], '2026-09-22', {}), usdOfKrwFrame(rNew.total, rNew.krwCash, rNew.fxRate), 1e-9);
+  near('#32d 원화 프레임 = 달러 자산 × 환율 + 원화 예수금',
+    overseasUsdEvalAt([depNew], '2026-09-22', {}) * FX + KRW, rNew.total, 1e-4);
 
   // ── 원장: 원금 제외 · 흐름 포함 ──
   const krwRow = { id: 'L1', date: '2026-09-22', amount: KRW, currency: 'KRW', fxRate: 0 };
@@ -318,9 +335,23 @@ if (U) {
   eq('#33b krwFlowRateOf: 달러 행 배율 = 그날 환율', rateKrw(usdRow), FX);
   near('#34 원화 프레임 흐름 = 원화 금액 그대로',
     externalFlowInRange([krwRow], [], '2026-09-21', '2026-09-22', rateKrw).in, KRW, 1e-9);
-  near('#34b USD 프레임 흐름 = 원화 ÷ 환율',
-    externalFlowInRange([krwRow], [], '2026-09-21', '2026-09-22',
-      (d) => isKrwLedgerRow(d) ? 1 / FX : 1).in, KRW / FX, 1e-9);
+  // USD 프레임(차트 TWR)은 rateOf 없이 부른다 → 원화 행이 빠진다(아래 #35) — 평가액도 원화를
+  // 빼므로(#32) 짝이 맞는다. 환율이 움직여도 원화 몫이 달러 일간 손익에 새지 않는다.
+  const FX2 = 1400;
+  const usdDay = (fx) => overseasUsdEvalAt([depNew], '2026-09-22', {});
+  const usdPair = computeDailyMetricsSeries([
+    { date: '2026-09-21', evalAmount: usdDay(FX), flowIn: 0, flowOut: 0 },
+    { date: '2026-09-22', evalAmount: usdDay(FX2), flowIn: 0, flowOut: 0 },
+  ]).get('2026-09-22');
+  near('#34b 환율만 움직인 날 달러 일간 손익 = 0 (원화 예수금이 달러 수익률을 흔들지 않는다)',
+    usdPair.dodAbsChange, 0, 1e-9);
+  // ⚠️ 대조: 원화를 환율로 환산해 넣던 옛 방식이면 환전하지 않은 현금에 가짜 손익이 생긴다.
+  near('#34c [대조] 옛 방식(원화 ÷ 환율 합산)이면 환율만으로 가짜 손익이 난다',
+    computeDailyMetricsSeries([
+      { date: '2026-09-21', evalAmount: USD + KRW / FX, flowIn: 0, flowOut: 0 },
+      { date: '2026-09-22', evalAmount: USD + KRW / FX2, flowIn: 0, flowOut: 0 },
+    ]).get('2026-09-22').dodAbsChange, KRW / FX2 - KRW / FX, 1e-9);
+  ok('#34d [대조] 그 가짜 손익은 0이 아니다(위 대조가 죽은 단언이 아니다)', Math.abs(KRW / FX2 - KRW / FX) > 1);
   // ⚠️ rateOf 미전달 호출부(PortfolioChart 배지·evalCompare)는 프레임을 모른다 → 원화 행 제외.
   eq('#35 rateOf 없으면 원화 행을 흐름에서 제외 (단위 오염 fail-safe)',
     externalFlowInRange([krwRow], [], '2026-09-21', '2026-09-22').in, 0);
@@ -394,9 +425,23 @@ if (U) {
     /numericVal\(item\.id, 'depositAmountKrw'/.test(pt)
     && /numericBlur\(item\.id, 'depositAmountKrw'\)/.test(pt));
   // ⚠️ 새 <td>를 만들면 주식·펀드·예적금 행과 tfoot까지 전부 맞춰야 하고, 한 곳만 놓치면 정렬이 깨진다.
-  ok('#43b 원화 칸은 기존 라벨 셀(colSpan) 안에 있다 (열 개수 불변)',
-    /colSpan=\{depositColSpan\}/.test(pt)
-    && pt.indexOf('depositAmountKrw') > pt.indexOf('colSpan={depositColSpan}'));
+  // ⚠️ 통화 분리(2026-09 후속): 원화 입력칸은 라벨 셀이 아니라 **별도 원화 예수금 행**의 투자금액
+  //    칸에 있다. 그 행은 달러 예수금 행과 열 구성이 **완전히 같아야** 한다 — 칸 하나만 빠져도 그
+  //    행부터 표 정렬이 깨진다 → 행 구간을 잘라 각 열 게이트가 정확히 한 번씩 있는지 센다.
+  const krwRowSlice = (() => {
+    const i = pt.indexOf("{isOverseas && (\n                <tr className=\"bg-gray-800/80 font-bold border-b border-gray-600\">".replace(/\n/g, pt.includes('\r\n') ? '\r\n' : '\n'));
+    return i < 0 ? '' : pt.slice(i, pt.indexOf('</React.Fragment>', i));
+  })();
+  const cnt = (t, re) => (t.match(re) || []).length;
+  ok('#43b 원화 예수금 행이 있고 입력칸이 그 행 안에 있다',
+    krwRowSlice.includes('예수금 (KRW CASH)') && krwRowSlice.includes("numericBlur(item.id, 'depositAmountKrw')"));
+  ok('#43c 원화 예수금 행 = 달러 예수금 행과 같은 열 구성 (라벨 colSpan 1 · 금액 6칸 · 액션 1칸)',
+    cnt(krwRowSlice, /colSpan=\{depositColSpan\}/g) === 1
+    && ['investAmount', 'investRatio', 'evalAmount', 'evalRatio', 'returnRate', 'profit']
+      .every(k => cnt(krwRowSlice, new RegExp(`!H\\('${k}'\\)`, 'g')) === 1)
+    && cnt(krwRowSlice, /<td className="text-center py-2\.5 bg-gray-800\/50"/g) === 1);
+  ok('#43d 원화 예수금 행의 평가금액은 원화 그대로 (달러 환산 금지)',
+    krwRowSlice.includes('{formatCurrency(krw)}') && !/formatUSD\(/.test(krwRowSlice));
   // ⚠️ 개수로 센다 — 존재만 보면 입금·출금 중 **한쪽만** 지운 변이를 놓친다(실증된 죽은 단언).
   eq('#44 입출금 내역 양쪽에 원화 행 추가 버튼이 있다 (해외 전용)',
     (dp.match(/newLedgerRow\(true\)/g) || []).length, 2);
@@ -413,6 +458,117 @@ if (U) {
   const uses = (t) => (t.match(/krwFlowRateOf\(indicatorHistoryMap, marketIndicators\.usdkrw\)/g) || []).length;
   eq('#45 추이표의 흐름 환산 2곳이 모두 공유 함수를 쓴다 (손복제 금지)', uses(hp), 2);
   ok('#45b CSV·통합도 같은 공유 함수를 쓴다', uses(app) >= 1 && uses(uid) >= 1);
+
+  // ── 통화 분리 배선 (2026-09 후속 확정) ─────────────────────────────────────
+  // 원화 예수금은 달러 계산에 환산해 넣지 않는다. 달러 표기 화면은 전부 usdOfKrwFrame(값, 원화, 환율)
+  // 로 원화를 빼고 되돌려야 한다 — `합계 ÷ 환율`로 되돌리는 순간 원화가 달러로 섞인다.
+  const utils = read('src/utils.ts');
+  const stats = read('src/components/PortfolioStatsPanel.tsx');
+  const vem = read('src/components/VerifyEvalModal.tsx');
+  const ec = read('src/evalCompare.ts');
+  const px = read('src/portfolioExcel.ts');
+  const usdFn = (() => {
+    const i = utils.indexOf('export const overseasUsdEvalAt');
+    return i < 0 ? '' : utils.slice(i, utils.indexOf('\n};', i));
+  })();
+  ok('#46 overseasUsdEvalAt은 3인자이고 원화 예수금을 읽지 않는다 (옛 fxAt 폐기)',
+    /export const overseasUsdEvalAt = \(items, date, stockHistoryMap\) =>/.test(utils)
+    && usdFn !== '' && !/depositKrwOf|depositAmountKrw|fxAt/.test(usdFn));
+  ok('#46b 옛 depositRowNative(USD + 원화 ÷ 환율)가 되살아나지 않았다',
+    !/export const depositRowNative/.test(utils));
+  // 차트 TWR(accountDailySeries)·차트 라인(finalChartData)이 원화를 섞지 않고, 흐름도 원화 행을 뺀다.
+  eq('#47 App의 USD 프레임 평가 2곳이 모두 3인자 호출', (app.match(/overseasUsdEvalAt\(portfolio, (h\.)?date, stockHistoryMap\)/g) || []).length, 2);
+  ok('#47b App의 USD 프레임 흐름이 rateOf 없이 호출된다 (원화 원장 행 제외)',
+    /externalFlowInRange\(depositHistory, depositHistory2, prev\.date, h\.date\)/.test(app));
+  // 표: 달러 예수금 행은 원화를 뺀 값, TOTAL 투자금액·평가금액은 분리 표기.
+  ok('#48 표의 달러 예수금 행이 원화를 뺀 값을 달러로 표시한다',
+    /fmtDual\(item\.evalAmount - krw\)/.test(pt));
+  eq('#48b 표 TOTAL 투자금액·평가금액 2칸이 모두 분리 표기(fmtSplitTotal)',
+    (pt.match(/isOverseas \? fmtSplitTotal\(totals\.total(Invest|Eval)\)/g) || []).length, 2);
+  ok('#48c 분리 표기의 달러 줄은 usdOfKrwFrame (합계 ÷ 환율 금지)',
+    /const usd = usdOfKrwFrame\(krwFrame, krwCash, usdkrw\);/.test(pt));
+  ok('#48d 원화가 없으면 종전 fmtDual 그대로 (기존 계좌 표 불변)',
+    /if \(!krwCash\) return fmtDual\(krwFrame\);/.test(pt));
+  ok('#49 합계에 원화 예수금 합계(krwCash)가 실린다',
+    /const krwCash = depositKrwTotalOf\(portfolio, isOverseasAcc\);/.test(upd)
+    && /return \{ calcPortfolio: calc, [^}]*krwCash \}/.test(upd));
+  ok('#49b CAGR은 원화 예수금을 뺀 평가액으로 (원금 밖 현금은 수익이 아니다)',
+    /const evalExCash = totals\.totalEval - \(totals\.krwCash \|\| 0\);/.test(upd)
+    && /\(evalExCash \/ principalKRW - 1\) \* 100/.test(upd));
+  ok('#50 요약 카드: 달러 평가액은 원화를 뺀 달러 자산만',
+    /const usdEval = isOv \? usdOfKrwFrame\(totals\.totalEval, krwCash, fx\) : 0;/.test(stats));
+  ok('#50b 요약 카드: 원화 기준 수익·수익률에서도 원화 예수금을 뺀다',
+    /const profit = evalExCash - principalKRW;/.test(stats)
+    && /const krwSimpleReturn = principalKRW > 0 \? \(evalExCash \/ principalKRW - 1\) \* 100 : 0;/.test(stats));
+  eq('#50c 요약 카드 투자금액·평가금액 머리줄이 모두 분리 표기', (stats.match(/\{dualSplit\(totals\.total(Invest|Eval)/g) || []).length, 2);
+  ok('#51 추이표 달러 줄 = 원화 뺀 달러 자산 (누적 수익률도 이 값을 쓴다)',
+    /return \{ usd: usdOfKrwFrame\(r\.total, krwCash, fx\), krw: r\.total, krwCash \};/.test(hp));
+  ok('#52 자산검증: 달러 표기가 원화를 뺀다 (합계 ÷ 환율 잔존 없음)',
+    /const recomputedUsd = usdOfKrwFrame\(recomputed, recomputedKrwCash, histFxRate\);/.test(vem)
+    && !/recomputed \/ histFxRate/.test(vem) && !/r\.evalAmt \/ histFxRate/.test(vem));
+  ok('#53 비교 모델: USD 총액·예수금 행 USD가 원화를 빼고, 원화를 USD 투자금액에 환산해 넣지 않는다',
+    /evalNative: \(toNative\(sc\.total - sc\.krwCash, fx\) as number\) \|\| 0,/.test(ec)
+    && /evalNative: toNative\(evalAmt == null \? null : evalAmt - krwPart, fx\),/.test(ec)
+    && !/depKrw \/ fx/.test(ec));
+  ok('#54 포트폴리오 엑셀: TOTAL USD 열은 usdOfKrwFrame, 원화는 별도 행',
+    (px.match(/usdOfKrwFrame\(total(Invest|Eval), krwCashAll, fx\)/g) || []).length === 2
+    && px.includes("'예수금 (KRW CASH · 환전 전 원화)'") && !/depKrw \/ fx/.test(px));
+}
+
+// ── 파트③ 통화 분리 — 엑셀·비교 모델 값 검증 (직접 import) ────────────────────
+// 배선 가드(#53·#54)는 식의 모양만 본다. 실제 시트 셀·모델 값이 '달러 열에 원화가 새지 않는다'를
+// 만족하는지 여기서 숫자로 못 박는다.
+{
+  let PE = null, EC = null;
+  try {
+    PE = await import(pathToFileURL(join(ROOT, 'src/portfolioExcel.ts')).href);
+    EC = await import(pathToFileURL(join(ROOT, 'src/evalCompare.ts')).href);
+  } catch (e) {
+    console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 엑셀·비교 값 검증을 건너뜁니다 (${e.code || e.message}).`);
+  }
+  if (PE && EC) {
+    const FXE = 1000;
+    const stockRow = { id: 's1', type: 'stock', code: 'QQQ', name: 'QQQ', category: '주식', quantity: 10, purchasePrice: 100, currentPrice: 200,
+      investAmount: 1000 * FXE, evalAmount: 2000 * FXE, profit: 1000 * FXE, investRatio: 0, evalRatio: 0, returnRate: 100 };
+    const depRow = (krw) => ({ id: 'd1', type: 'deposit', depositAmount: 500, depositAmountKrw: krw,
+      investAmount: 500 * FXE + krw, evalAmount: 500 * FXE + krw, profit: 0, investRatio: 0, evalRatio: 0, returnRate: 0 });
+    const sheetOf = (krw) => PE.buildPortfolioSheet({
+      accountName: '5826_환전 전용', dateKST: '2026-09-24', hiddenColumns: [], isOverseas: true, usdkrw: FXE,
+      portfolio: [stockRow, depRow(krw)],
+      totals: { totalInvest: 1500 * FXE + krw, totalEval: 2500 * FXE + krw, totalProfit: 1000 * FXE },
+    });
+    const head = (sh) => sh.rows[2].map(c => (c && c.v) || '');
+    const v = (sh, r, label) => { const i = head(sh).indexOf(label); const c = i < 0 ? undefined : sh.rows[r][i]; return c ? c.v : undefined; };
+    const shK = sheetOf(300000), sh0 = sheetOf(0);
+    const lastK = shK.rows.length - 1, last0 = sh0.rows.length - 1;
+    eq('#55 엑셀: 원화가 있으면 원화 예수금 행이 하나 더 생긴다', shK.rows.length - sh0.rows.length, 1);
+    eq('#55b 엑셀: 원화 행 라벨', shK.rows[5][0]?.v, '예수금 (KRW CASH · 환전 전 원화)');
+    eq('#55c 엑셀: 원화 행의 (₩) = 원화 그대로', v(shK, 5, '평가금액(₩)'), 300000);
+    eq('#55d 엑셀: 원화 행의 USD 열 = "-" (달러로 환산하지 않는다)', v(shK, 5, '평가금액(USD)'), '-');
+    eq('#55e 엑셀: 달러 예수금 행 USD = 달러 예수금만', v(shK, 4, '평가금액(USD)'), 500);
+    eq('#55f 엑셀: TOTAL USD = 달러 자산만 (원화 제외)', v(shK, lastK, '평가금액(USD)'), 2500);
+    eq('#55g 엑셀: TOTAL (₩) = 달러 × 환율 + 원화', v(shK, lastK, '평가금액(₩)'), 2500 * FXE + 300000);
+    eq('#55h 엑셀: 원화가 없으면 TOTAL USD = 종전(합계 ÷ 환율)', v(sh0, last0, '평가금액(USD)'), 2500);
+
+    // 비교 모델: 원화 잔액이 그대로인데 두 날짜 환율만 다르면 USD 증감·거래 효과는 0이어야 한다.
+    const items = [{ id: 'd1', type: 'deposit', depositAmount: 1000, depositAmountKrw: 5000000 }];
+    const pf = { accountType: 'overseas', portfolio: items, holdingSnapshots: [
+      { date: '2026-09-01', kind: 'baseline', items },
+      { date: '2026-09-22', kind: 'auto', items },
+    ] };
+    const m = EC.buildEvalCompare({
+      portfolio: pf, accountType: 'overseas', basisDate: '2026-09-22', compareDate: '2026-09-01',
+      stockHistoryMap: {}, indicatorHistoryMap: { usdkrw: { '2026-09-01': 1300, '2026-09-22': 1400 } },
+      fxRate: 1400, depositHistory: [], depositHistory2: [],
+    });
+    eq('#56 비교: USD 총액 = 달러 예수금만 (원화 제외)', m.totals.basis.evalNative, 1000);
+    eq('#56b 비교: 원화 그대로 + 환율만 변동 → USD 증감 0', m.diffEval, 0);
+    eq('#56c 비교: 원화 그대로 + 환율만 변동 → 거래 효과 0', m.tradeEffect, 0);
+    eq('#56d 비교: 원화 총액(₩)에는 원화 예수금이 원화 그대로 들어간다', m.totals.basis.evalAmount, 1000 * 1400 + 5000000);
+    eq('#56e 비교: krwCash를 싣는다(엑셀 각주 소스)', m.totals.compare.krwCash, 5000000);
+    const depRowM = m.rows.find(r => r.type === 'deposit');
+    eq('#56f 비교: 예수금 행 USD 투자금액 = 달러 예수금만', depRowM?.basis?.investAmount, 1000);
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:overseas — ${pass} passed, ${fail} failed\n`);

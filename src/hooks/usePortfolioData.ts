@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, isKrwLedgerRow } from '../utils';
+import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, depositKrwTotalOf, isKrwLedgerRow } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function usePortfolioData({
@@ -54,7 +54,11 @@ export function usePortfolioData({
       evalRatio: tEvl > 0 ? (item.evalAmount / tEvl) * 100 : 0,
       returnRate: item.investAmount > 0 ? (item.profit / item.investAmount) * 100 : 0
     }));
-    return { calcPortfolio: calc, totalInvest: tInv, totalEval: tEvl, totalProfit: tPrf, cats, stks };
+    // 원화 예수금 합계(해외계좌만, 그 외 0). totalInvest·totalEval은 **원화 프레임**이라 이 몫을 이미
+    // 포함한다 — 달러로 표기하는 화면은 반드시 usdOfKrwFrame(값, krwCash, 환율)로 원화를 빼고
+    // 되돌릴 것(`÷ 환율`만 하면 원화가 달러로 환산돼 섞인다 — utils '통화 분리 원칙').
+    const krwCash = depositKrwTotalOf(portfolio, isOverseasAcc);
+    return { calcPortfolio: calc, totalInvest: tInv, totalEval: tEvl, totalProfit: tPrf, cats, stks, krwCash };
   }, [portfolio, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const cagr = useMemo(() => {
@@ -64,12 +68,15 @@ export function usePortfolioData({
     const principalKRW = activePortfolioAccountType === 'overseas'
       ? principal * effectiveFx
       : principal;
-    if (!portfolioStartDate || principalKRW <= 0 || totals.totalEval <= 0) return 0;
+    // ⚠️ 원화 예수금은 투자원금이 아니므로 평가액에서도 뺀다 — 빼지 않으면 원화 입금액이 통째로
+    //    '수익'이 되어 CAGR이 부풀어 오른다(국내 계좌는 krwCash가 항상 0이라 종전과 동일).
+    const evalExCash = totals.totalEval - (totals.krwCash || 0);
+    if (!portfolioStartDate || principalKRW <= 0 || evalExCash <= 0) return 0;
     const days = (new Date() - new Date(portfolioStartDate)) / (1000 * 60 * 60 * 24);
     if (days <= 0) return 0;
-    if (days < 365) return (totals.totalEval / principalKRW - 1) * 100;
-    return (Math.pow(totals.totalEval / principalKRW, 1 / (days / 365.25)) - 1) * 100;
-  }, [portfolioStartDate, principal, avgExchangeRate, totals.totalEval, activePortfolioAccountType, marketIndicators.usdkrw]);
+    if (days < 365) return (evalExCash / principalKRW - 1) * 100;
+    return (Math.pow(evalExCash / principalKRW, 1 / (days / 365.25)) - 1) * 100;
+  }, [portfolioStartDate, principal, avgExchangeRate, totals.totalEval, totals.krwCash, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const sortedHistoryDesc = useMemo(() => [...history].sort((a, b) => new Date(b.date) - new Date(a.date)), [history]);
 

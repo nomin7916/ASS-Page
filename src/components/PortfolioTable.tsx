@@ -6,7 +6,8 @@ import { MARK_ROW_BG, MARK_STICKY_BG, MARK_STRIP_BG } from '../constants';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber, formatFundPrice,
   formatChangeRate, formatSavingsDailyRate, formatSavingsPeriod, savingsMaturity, savingsDepositEval,
-  handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, overseasInvestAmount
+  handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, overseasInvestAmount,
+  depositKrwOf, usdOfKrwFrame
 } from '../utils';
 // 엑셀 내보내기 — 외부 npm 의존성 0(직접 조립한 .xlsx). 순수 모듈이라 화면 상태와 무관하다.
 import { downloadPortfolioXlsx, portfolioExcelFileName } from '../portfolioExcel';
@@ -246,6 +247,28 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
       <span className="text-[11px] text-gray-500">{formatCurrency(krwAmount)}</span>
     </div>
   );
+
+  // ── 해외계좌 원화 예수금 = 달러와 **분리** 표시 (2026-09 사용자 확정 — 되돌리지 말 것) ──
+  // ⚠️ 원화를 달러로 환산해 달러 줄에 섞지 말 것 — 환율이 움직일 때마다 원화 몫이 달러 평가액을
+  //    흔든다. 달러 줄은 달러 자산만, 원화는 원화 그대로, 총액만 `달러 × 환율 + 원화`로 합친다.
+  //    합계(totals)는 원화 프레임이라 원화를 이미 포함하므로 usdOfKrwFrame으로 원화를 빼고 되돌린다.
+  // ⚠️ 원화 예수금이 0이면 fmtDual 그대로라 기존 계좌의 표는 한 글자도 달라지지 않는다.
+  const krwCash = isOverseas ? cleanNum(totals.krwCash) : 0;
+  const fmtSplitTotal = (krwFrame: number) => {
+    if (!krwCash) return fmtDual(krwFrame);
+    const usd = usdOfKrwFrame(krwFrame, krwCash, usdkrw);
+    return (
+      <div
+        className="flex flex-col items-end gap-0.5"
+        title={`달러 자산 ${formatUSD(usd)} × ₩${Math.round(usdkrw).toLocaleString()} = ${formatCurrency(krwFrame - krwCash)}\n원화 예수금 ${formatCurrency(krwCash)} (환율 미적용)\n합계 ${formatCurrency(krwFrame)}`}
+      >
+        <span>{formatUSD(usd)}</span>
+        <span className="text-[11px] text-amber-400/90">+ {formatCurrency(krwCash)}</span>
+        <span className="text-[11px] text-gray-300">= {formatCurrency(krwFrame)}</span>
+      </div>
+    );
+  };
+  const ratioOf = (v: number, tot: number) => (tot > 0 ? v / tot * 100 : 0);
 
   const stockItems = portfolio.filter(p => p.type === 'stock');
   const depositItems = portfolio.filter(p => p.type === 'deposit');
@@ -810,48 +833,28 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                 </tr>
               );
             })}
-            {depositItems.map((item, di) => (
-              <tr key={item.id} className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
+            {depositItems.map((item, di) => {
+              // 이 예수금 항목의 원화 몫(해외계좌만, 그 외 0). calc 행의 investAmount·evalAmount는
+              // 원화 프레임이라 원화를 포함하므로, 달러 행은 그 몫을 빼고 그린다(원화는 아래 별도 행).
+              const krw = depositKrwOf(item, isOverseas);
+              return (
+              <React.Fragment key={item.id}>
+              <tr className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
                 <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
                 {depositColSpan > 0 && (
-                  <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 text-[14px]" colSpan={depositColSpan}>
-                    {/* 해외계좌: 달러 예수금(투자금액 칸)과 별개로 **환전 전 원화 잔액**을 받는다.
-                        ⚠️ 새 열을 만들지 않고 이 라벨 셀 안에 넣는다 — 열 개수가 바뀌면 주식·펀드·
-                           예적금 행과 tfoot까지 전부 맞춰야 하고, 한 곳만 놓쳐도 표 정렬이 깨진다. */}
-                    {isOverseas ? (
-                      <div className="flex items-center justify-center gap-4 flex-wrap">
-                        <span className="tracking-[0.2em]">예수금 (USD CASH)</span>
-                        <span
-                          className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1"
-                          title="환전 전 원화 잔액 — 환율을 곱하지 않고 평가금액에 그대로 더합니다. 투자원금에는 반영되지 않습니다."
-                        >
-                          <span className="text-[11px] font-bold text-amber-400/90">원화</span>
-                          <input
-                            type="text"
-                            className="w-28 bg-transparent outline-none font-bold text-right text-amber-300 text-[13px] caret-amber-400 focus:bg-amber-900/30 rounded px-1"
-                            value={numericVal(item.id, 'depositAmountKrw', formatNumber(item.depositAmountKrw))}
-                            onFocus={numericFocus(item.id, 'depositAmountKrw', item.depositAmountKrw)}
-                            onChange={e => numericChange(e.target.value)}
-                            onBlur={numericBlur(item.id, 'depositAmountKrw')}
-                            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
-                            placeholder="0"
-                          />
-                        </span>
-                      </div>
-                    ) : '예수금 (CASH)'}
-                  </td>
+                  <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={depositColSpan}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
                 )}
                 {!H('investAmount') && (
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={numericVal(item.id, 'depositAmount', formatNumber(item.depositAmount))} onFocus={numericFocus(item.id, 'depositAmount', item.depositAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'depositAmount')} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
                 )}
                 {!H('investRatio') && (
-                  <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(item.investRatio)}</td>
+                  <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(krw ? ratioOf(item.investAmount - krw, totals.totalInvest) : item.investRatio)}</td>
                 )}
                 {!H('evalAmount') && (
-                  <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
+                  <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{isOverseas ? fmtDual(item.evalAmount - krw) : formatCurrency(item.evalAmount)}</td>
                 )}
                 {!H('evalRatio') && (
-                  <td className="py-3 px-3 border-r border-gray-600 text-yellow-500 bg-yellow-900/20 text-right">{formatPercent(item.evalRatio)}</td>
+                  <td className="py-3 px-3 border-r border-gray-600 text-yellow-500 bg-yellow-900/20 text-right">{formatPercent(krw ? ratioOf(item.evalAmount - krw, totals.totalEval) : item.evalRatio)}</td>
                 )}
                 {!H('returnRate') && (
                   <td className="py-3 px-3 border-r border-gray-600 text-center text-gray-500">-</td>
@@ -878,7 +881,60 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   <td className="text-center py-2.5 bg-gray-800/50">🔒</td>
                 )}
               </tr>
-            ))}
+              {/* ── 원화 예수금 행 (해외계좌 전용) — 달러 예수금과 **따로** 표시한다 ──
+                  환전 전 원화는 환율을 곱하지 않고 원화 그대로 총 평가액에 더하며, 달러 금액에는
+                  환산해 넣지 않는다(환율이 움직여도 이 행의 값은 변하지 않는다). 투자원금에도 미반영.
+                  ⚠️ 열 구성은 위 달러 예수금 행과 **완전히 같다**(라벨 colSpan + 금액 6칸 + 액션 1칸) —
+                     칸 하나만 빠져도 그 행부터 표 정렬이 깨진다. 입력칸은 달러 예수금과 같은 자리(투자금액). */}
+              {isOverseas && (
+                <tr className="bg-gray-800/80 font-bold border-b border-gray-600">
+                  <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
+                  {depositColSpan > 0 && (
+                    <td
+                      className="py-3 px-3 border-r border-gray-600 text-center text-amber-400 text-[14px]"
+                      colSpan={depositColSpan}
+                      title="환전 전 원화 잔액 — 환율을 곱하지 않고 원화 그대로 총 평가액에 더합니다. 달러 금액에는 환산해 넣지 않으며, 투자원금에도 반영되지 않습니다."
+                    >
+                      <span className="tracking-[0.2em]">예수금 (KRW CASH)</span>
+                      <span className="ml-2 text-[11px] font-normal text-amber-400/60">환전 전 원화 · 원금 미반영</span>
+                    </td>
+                  )}
+                  {!H('investAmount') && (
+                    <td className={`p-0 border-r border-gray-600 bg-amber-900/10 ${CELL_FOCUS}`}>
+                      <input
+                        type="text"
+                        className="w-full h-full bg-transparent outline-none font-bold text-right text-amber-300 px-3 py-3 focus:bg-amber-900/30 transition-colors text-[14px] caret-amber-400"
+                        value={numericVal(item.id, 'depositAmountKrw', formatNumber(item.depositAmountKrw))}
+                        onFocus={numericFocus(item.id, 'depositAmountKrw', item.depositAmountKrw)}
+                        onChange={e => numericChange(e.target.value)}
+                        onBlur={numericBlur(item.id, 'depositAmountKrw')}
+                        onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                        placeholder="0"
+                        title="원화(₩) 금액을 입력하세요"
+                      />
+                    </td>
+                  )}
+                  {!H('investRatio') && (
+                    <td className="py-3 px-3 border-r border-gray-600 text-amber-300/80 bg-blue-900/20 text-right">{formatPercent(ratioOf(krw, totals.totalInvest))}</td>
+                  )}
+                  {!H('evalAmount') && (
+                    <td className="py-3 px-3 border-r border-gray-600 text-amber-200 font-bold text-right bg-yellow-900/20 text-[14px]">{formatCurrency(krw)}</td>
+                  )}
+                  {!H('evalRatio') && (
+                    <td className="py-3 px-3 border-r border-gray-600 text-amber-400/80 bg-yellow-900/20 text-right">{formatPercent(ratioOf(krw, totals.totalEval))}</td>
+                  )}
+                  {!H('returnRate') && (
+                    <td className="py-3 px-3 border-r border-gray-600 text-center text-gray-500">-</td>
+                  )}
+                  {!H('profit') && (
+                    <td className="py-3 px-3 border-r border-gray-600 text-right text-gray-500">₩0</td>
+                  )}
+                  <td className="text-center py-2.5 bg-gray-800/50" title="원화 예수금 행은 삭제할 수 없습니다(비우려면 0을 입력하세요)">🔒</td>
+                </tr>
+              )}
+              </React.Fragment>
+              );
+            })}
             {isRetirement && fundItems.map((item) => {
               const fStatus = stockFetchStatus?.[item.code];
               const isRefreshing = fStatus === 'loading';
@@ -1234,13 +1290,13 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                 <td colSpan={depositColSpan} className="py-3 text-center border-r border-gray-600 uppercase tracking-widest text-gray-500">Total Calculation</td>
               )}
               {!H('investAmount') && (
-                <td className="py-3 px-2 text-blue-200 bg-blue-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalInvest) : formatCurrency(totals.totalInvest)}</td>
+                <td className="py-3 px-2 text-blue-200 bg-blue-900/10 border-r border-gray-600">{isOverseas ? fmtSplitTotal(totals.totalInvest) : formatCurrency(totals.totalInvest)}</td>
               )}
               {!H('investRatio') && (
                 <td className="py-3 text-center text-gray-400 bg-blue-900/10 border-r border-gray-600">100%</td>
               )}
               {!H('evalAmount') && (
-                <td className="py-3 px-2 text-white bg-yellow-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalEval) : formatCurrency(totals.totalEval)}</td>
+                <td className="py-3 px-2 text-white bg-yellow-900/10 border-r border-gray-600">{isOverseas ? fmtSplitTotal(totals.totalEval) : formatCurrency(totals.totalEval)}</td>
               )}
               {!H('evalRatio') && (
                 <td className="py-3 text-center text-yellow-500 bg-yellow-900/10 border-r border-gray-600">100%</td>

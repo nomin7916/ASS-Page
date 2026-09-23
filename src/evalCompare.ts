@@ -14,7 +14,7 @@
 //    (평가액 재계산의 권위 소스)에 **절대 쓰지 않는다**.
 import {
   cleanNum, resolveHoldings, calcPortfolioEvalDetail, buildHeldNameMap,
-  overseasInvestAmount, externalFlowInRange, bookCostOf, depositKrwOf,
+  overseasInvestAmount, externalFlowInRange, bookCostOf,
 } from './utils.ts';
 
 // 흐름 판정 상수 — CLAUDE.md 일간 지표 절의 `MATERIAL_FLOW_RATIO`(1%)·`ABSORBED_RATIO`(0.5)와
@@ -259,6 +259,8 @@ export interface EvalCompareTotals {
   dividendPartial: boolean;
   /** 보유 중인데 그 날짜 종가를 못 구해 평가액에서 빠진 종목이 있는가(총액 과소) */
   priceMissing: boolean;
+  /** 해외계좌 원화 예수금(환율 미적용). evalAmount(원화)에는 포함, evalNative(USD)에는 **미포함** */
+  krwCash: number;
 }
 
 export interface EvalCompareResult {
@@ -342,6 +344,8 @@ const isPricedType = (type: string): boolean => type === 'stock' || type === 'fu
 interface SideCalc {
   detail: Map<string, any>;
   total: number;
+  /** 해외계좌 원화 예수금 — total(원화 프레임)에 포함된 몫. USD 프레임으로 되돌릴 때 뺀다 */
+  krwCash: number;
   fxRate: number;
   estimated: boolean;
   allExact: boolean;
@@ -404,13 +408,14 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
           ...prev,
           quantity: (prev.quantity == null && d.quantity == null) ? null : cleanNum(prev.quantity) + cleanNum(d.quantity),
           eval: cleanNum(prev.eval) + cleanNum(d.eval),
+          krw: cleanNum(prev.krw) + cleanNum(d.krw),
           price: prev.price != null ? prev.price : d.price,
           source: prev.source === 'none' ? d.source : prev.source,
         });
       } else detail.set(k, d);
     });
     return {
-      detail, total: cleanNum(r.total), fxRate: cleanNum(r.fxRate) || 1,
+      detail, total: cleanNum(r.total), krwCash: cleanNum(r.krwCash), fxRate: cleanNum(r.fxRate) || 1,
       estimated, allExact: !!r.allExact,
     };
   };
@@ -551,12 +556,13 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
       //    사실만 `priceMissing`으로 알린다.
       const priceMissing = held && isPricedType(type) && cleanNum(qty) > 0 && !(cleanNum(d.eval) > 0);
       const evalAmt = held && !priceMissing ? cleanNum(d.eval) : null;
-      // 예수금 행의 원가 = 그 행의 현금 전액. 해외계좌는 환전 전 원화를 그 날짜 환율로
-      // USD 환산해 더한다(평가금 evalNative와 같은 프레임). ⚠️ 원화가 0이면 종전 식 그대로 —
-      // '미입력(blank)'과 '0원'의 구분이 유지된다.
-      const depKrw = depositKrwOf(item, isOverseas);
+      // ⚠️ 해외계좌 **원화 예수금**은 USD 프레임(evalNative·투자금액)에 환산해 넣지 않는다
+      //    (2026-09 사용자 확정 — utils '통화 분리 원칙'). 환율로 환산해 섞으면 원화 잔액이 그대로여도
+      //    두 날짜의 환율 차이만큼 USD 증감·거래 효과에 가짜 손익이 생긴다. 원화는 원화 열(evalAmount)
+      //    에만 남는다. 짝으로 순흐름(externalFlowInRange, rateOf 없음)도 원화 원장 행을 뺀다.
+      const krwPart = held ? cleanNum(d.krw) : 0;
       const invest = !held ? null : (type === 'deposit'
-        ? (depKrw !== 0 && fx > 0 ? num(cleanNum(item?.depositAmount) + depKrw / fx) : numOrBlank(item?.depositAmount))
+        ? numOrBlank(item?.depositAmount)
         : (isOverseas && type === 'stock' ? num(item?.__investUsd) : numOrBlank(item?.investAmount)));
       const itemQty = cleanNum(item?.quantity);
       const purchase = (!held || type === 'deposit' || type === 'savings')
@@ -575,7 +581,7 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
         price,
         source,
         evalAmount: evalAmt,
-        evalNative: toNative(evalAmt, fx),
+        evalNative: toNative(evalAmt == null ? null : evalAmt - krwPart, fx),
         investAmount: invest,
         purchasePrice: purchase,
         ratio: evalAmt != null && sc.total > 0 ? evalAmt / sc.total : null,
@@ -606,7 +612,9 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
 
   const mkTotals = (sc: SideCalc, a: typeof acc.basis, fx: number): EvalCompareTotals => ({
     evalAmount: sc.total,
-    evalNative: (toNative(sc.total, fx) as number) || 0,
+    // USD 총액 = 달러 자산만(원화 예수금 제외 — 위 행 규약과 같다). 국내 계좌는 krwCash가 0.
+    evalNative: (toNative(sc.total - sc.krwCash, fx) as number) || 0,
+    krwCash: sc.krwCash,
     investAmount: a.invest,
     dividend: a.div,
     dividendPartial: a.divPartial,

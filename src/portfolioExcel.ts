@@ -8,7 +8,7 @@
 //    확장자 없는 상대 경로를 해석하지 못해(`ERR_MODULE_NOT_FOUND`) 그 순간 검증이
 //    통째로 죽는다. `tsconfig.app.json`에 `allowImportingTsExtensions: true`가 이미
 //    켜져 있어 TS·vite 어느 쪽도 문제되지 않는다.
-import { cleanNum, overseasInvestAmount, savingsMaturity, formatSavingsPeriod, formatSavingsDailyRate, depositKrwOf } from './utils.ts';
+import { cleanNum, overseasInvestAmount, savingsMaturity, formatSavingsPeriod, formatSavingsDailyRate, depositKrwOf, depositKrwTotalOf, usdOfKrwFrame } from './utils.ts';
 import { buildXlsx, downloadXlsx } from './xlsxWriter.ts';
 import type { XlsxCell, XlsxMerge, XlsxSheet, XlsxStyle } from './xlsxWriter.ts';
 
@@ -279,10 +279,10 @@ export const buildPortfolioSheet = (input: PortfolioExcelInput): XlsxSheet => {
     quantity?: number | string | null;
     investAmount?: number | string | null; investAmountKrw?: number | null;
     investRatio?: number | null;
-    evalAmount?: number | null; evalAmountKrw?: number | null;
+    evalAmount?: number | string | null; evalAmountKrw?: number | null;
     evalRatio?: number | null;
     returnRate?: number | string | null;
-    profit?: number | null; profitKrw?: number | null;
+    profit?: number | string | null; profitKrw?: number | null;
     note?: string;
     nameBold?: boolean;
   }) => {
@@ -354,35 +354,56 @@ export const buildPortfolioSheet = (input: PortfolioExcelInput): XlsxSheet => {
   }
 
   // ── 5) 예수금(CASH) 행 ────────────────────────────────────────────────────
+  // ⚠️ 해외계좌의 **원화 예수금**(환전 전 잔액)은 USD 열에 환산해 넣지 않는다(2026-09 사용자 확정 —
+  //    utils '통화 분리 원칙'). 화면처럼 **별도 행**('예수금 (KRW CASH)')으로 두고 (₩) 열에만 원화
+  //    그대로 싣는다. calc 행의 evalAmount·investAmount(원화 프레임)는 원화를 포함하므로 달러 행은
+  //    그 몫을 빼고 그린다. 원화가 0이면 행을 만들지 않아 기존 계좌의 시트는 한 셀도 달라지지 않는다
+  //    (화면은 입력 칸이 필요해 항상 그리지만, 시트에 ₩0 행을 넣어도 정보가 늘지 않는다).
+  const totInvestAll = cleanNum(totals?.totalInvest);
+  const totEvalAll = cleanNum(totals?.totalEval);
+  const shareOf = (v: number, tot: number) => (tot > 0 ? Number((v / tot).toPrecision(12)) : 0);
+  const cashLabelRow = (row: XlsxCell[], label: string) => {
+    // 라벨은 화면과 같이 구분~보유수량 구간을 가로지른다(보이는 열이 없으면 생략).
+    if (spanCount <= 0) return;
+    const r = rows.length - 1;
+    const cashLabel = bag.id({ bold: true, align: 'center', bg: C.cashBg, border: true });
+    row[0] = S(label, cashLabel);
+    spanStyled(row, 0, spanCount - 1, cashLabel);
+    if (spanCount > 1) merges.push({ r1: r, c1: 0, r2: r, c2: spanCount - 1 });
+  };
   for (const item of depositItems) {
-    const evalKrw = cleanNum(item.evalAmount);
-    // 화면: 투자금액 칸은 fx를 곱하지 않은 원시 depositAmount(해외면 USD)를 보여준다.
-    // ⚠️ 해외계좌의 **원화 예수금**(환전 전 잔액)은 그 칸에 없으므로 여기서 USD로 환산해 더한다 —
-    //    빼면 예수금 행의 투자금액이 평가금액(원화 포함)보다 작아져 TOTAL 합계가 어긋난다.
-    //    원화가 0이면 종전 식 그대로라 기존 계좌의 시트는 한 셀도 달라지지 않는다.
     const depKrw = depositKrwOf(item, isOverseas);
-    const depositAmt = depKrw !== 0 && fx > 0
-      ? cleanNum(item.depositAmount) + depKrw / fx
-      : numOrBlank(item.depositAmount);
+    const evalKrw = cleanNum(item.evalAmount) - depKrw;
+    // 화면: 투자금액 칸은 fx를 곱하지 않은 원시 depositAmount(해외면 USD)를 보여준다.
+    const depositAmt = numOrBlank(item.depositAmount);
     const row = emit({
       bg: C.cashBg,
       investAmount: depositAmt,
       investAmountKrw: (isOverseas && depositAmt !== null) ? depositAmt * fx : null,
-      investRatio: pct(item.investRatio),
+      investRatio: depKrw ? shareOf(cleanNum(item.investAmount) - depKrw, totInvestAll) : pct(item.investRatio),
       evalAmount: isOverseas ? evalKrw / fx : evalKrw,
       evalAmountKrw: isOverseas ? evalKrw : null,
-      evalRatio: pct(item.evalRatio),
+      evalRatio: depKrw ? shareOf(evalKrw, totEvalAll) : pct(item.evalRatio),
       returnRate: DASH,
       profit: 0,
       profitKrw: isOverseas ? 0 : null,
     });
-    // 라벨은 화면과 같이 구분~보유수량 구간을 가로지른다(보이는 열이 없으면 생략).
-    if (spanCount > 0) {
-      const r = rows.length - 1;
-      const cashLabel = bag.id({ bold: true, align: 'center', bg: C.cashBg, border: true });
-      row[0] = S(isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)', cashLabel);
-      spanStyled(row, 0, spanCount - 1, cashLabel);
-      if (spanCount > 1) merges.push({ r1: r, c1: 0, r2: r, c2: spanCount - 1 });
+    cashLabelRow(row, isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)');
+    if (isOverseas && depKrw !== 0) {
+      // USD 열은 '-'(해당 없음) — 원화를 달러로 환산해 적지 않는다.
+      const krwRow = emit({
+        bg: C.cashBg,
+        investAmount: DASH,
+        investAmountKrw: depKrw,
+        investRatio: shareOf(depKrw, totInvestAll),
+        evalAmount: DASH,
+        evalAmountKrw: depKrw,
+        evalRatio: shareOf(depKrw, totEvalAll),
+        returnRate: DASH,
+        profit: DASH,
+        profitKrw: 0,
+      });
+      cashLabelRow(krwRow, '예수금 (KRW CASH · 환전 전 원화)');
     }
   }
 
@@ -471,10 +492,13 @@ export const buildPortfolioSheet = (input: PortfolioExcelInput): XlsxSheet => {
   const putT = (key: string, cell: XlsxCell) => { const i = at(key); if (i !== undefined) totRow[i] = cell; };
 
   const moneySignedPos = isOverseas ? FMT.usdSignedPos : FMT.krwSignedPos;
-  putT('investAmount', N(isOverseas ? totalInvest / fx : totalInvest, totNum(money)));
+  // 해외: USD 열 = 달러 자산만(원화 예수금 제외), (₩) 열 = 총액(달러 × 환율 + 원화 예수금).
+  // 원화 예수금이 0이면 usdOfKrwFrame(v, 0, fx) = v ÷ fx 라 종전 값과 같다.
+  const krwCashAll = depositKrwTotalOf(depositItems, isOverseas);
+  putT('investAmount', N(isOverseas ? usdOfKrwFrame(totalInvest, krwCashAll, fx) : totalInvest, totNum(money)));
   putT('investAmount__krw', N(totalInvest, totNum(FMT.krw)));
   putT('investRatio', N(1, totPct(FMT.pctInt)));
-  putT('evalAmount', N(isOverseas ? totalEval / fx : totalEval, totNum(money)));
+  putT('evalAmount', N(isOverseas ? usdOfKrwFrame(totalEval, krwCashAll, fx) : totalEval, totNum(money)));
   putT('evalAmount__krw', N(totalEval, totNum(FMT.krw)));
   putT('evalRatio', N(1, totPct(FMT.pctInt)));
   putT('returnRate', N(totalRate, totPct(FMT.pctSignedPos)));

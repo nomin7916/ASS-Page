@@ -286,14 +286,25 @@ export const depositKrwOf = (item, isOverseas) =>
 export const depositRowEval = (item, fxRate = 1, isOverseas = false) =>
   cleanNum(item?.depositAmount) * (fxRate || 1) + depositKrwOf(item, isOverseas);
 
-// 같은 값의 **계좌 통화(native)** 표현 = USD 예수금 + 원화 예수금 ÷ 환율.
-// 해외계좌를 USD로 표기하는 화면(자산검증 비교표·엑셀 내보내기)이 쓴다 — `depositRowEval(…) / fx`와
-// 같은 값이지만, 환율이 0·미확보일 때 원화 몫만 안전하게 떨어뜨린다.
-export const depositRowNative = (item, fxRate = 1, isOverseas = false) => {
-  const fx = cleanNum(fxRate) || 1;
-  const krw = depositKrwOf(item, isOverseas);
-  return cleanNum(item?.depositAmount) + (krw !== 0 && fx > 0 ? krw / fx : 0);
-};
+// ── 통화 분리 원칙 (2026-09 사용자 확정 — 되돌리지 말 것) ──────────────────────
+// 원화 예수금은 **달러 계산에 환산해 넣지 않는다.** 원화는 환율과 무관하게 금액이 고정인데,
+// 달러로 환산해 더하면 환율이 움직일 때마다 달러 평가액·달러 수익률이 원화 몫만큼 흔들린다
+// (환전하지 않은 현금에 가짜 환차손익이 생긴다). 그래서
+//   달러 평가액      = 달러 자산만 (주식 + 달러 예수금)
+//   원화 예수금      = 원화 그대로
+//   총 평가액(원화)  = 달러 자산 × 환율 + 원화 예수금
+// ⚠️ 원화 프레임 합계(depositRowEval·calcPortfolioEvalDetail.total·totals.totalEval)에서 달러를
+//    되돌릴 때는 반드시 usdOfKrwFrame을 쓴다 — `합계 ÷ 환율`로 되돌리면 원화 몫이 달러로 환산돼
+//    섞인다(옛 depositRowNative·overseasUsdEvalAt(fxAt)이 그 형태라 삭제했다).
+// ⚠️ 원화 예수금은 투자원금이 아니므로 **원금 대비 수익(률)에서도 뺀다** — 평가에만 넣고 원금에
+//    없으면 원화 입금액이 통째로 '수익'으로 찍힌다.
+export const depositKrwTotalOf = (items, isOverseas) =>
+  (items || []).reduce((s, it) => s + (it?.type === 'deposit' ? depositKrwOf(it, isOverseas) : 0), 0);
+
+// 원화 프레임 값 → **달러 자산만의** 달러 금액 = (값 − 원화 예수금) ÷ 환율.
+// 원화 예수금이 0이면 `값 ÷ 환율`과 같다(하위호환의 축).
+export const usdOfKrwFrame = (krwFrameValue, krwCash, fxRate) =>
+  (cleanNum(krwFrameValue) - cleanNum(krwCash)) / (cleanNum(fxRate) || 1);
 
 // 원장(입출금 내역) 행이 원화로 입력된 행인가. 필드가 없으면 종전대로 USD 행.
 export const isKrwLedgerRow = (row) => row?.currency === 'KRW';
@@ -506,9 +517,7 @@ export const buildBookCostSeries = (p, dates, opts?) => {
     const r = resolveHoldings(p, d);
     if (!r || r.estimated) continue;
     const fx = rate ? (cleanNum(rate(d)) || 1) : 1;
-    const krw = krwOn
-      ? (r.items || []).reduce((s, it) => s + (it?.type === 'deposit' ? depositKrwOf(it, true) : 0), 0)
-      : 0;
+    const krw = krwOn ? depositKrwTotalOf(r.items, true) : 0;
     m.set(d, bookCostOf(r.items, { costBasisOnly }) * fx + krw);
   }
   return m;
@@ -973,18 +982,16 @@ export const accumulateDailySeries = (ascDates, metricsMap) => {
 // ⚠️ App.tsx finalChartData 해외 분기와 개별 계좌 누적 TWR이 반드시 이 한 함수를 공유할 것.
 //    한쪽만 자체 계산으로 되돌리면 같은 날짜에 라인과 %가 갈린다.
 // 반환: USD 평가액 (가격/예수금 데이터가 하나도 없으면 null)
-// ⚠️ fxAt(그날 환율, 선택): 주면 **원화 예수금**을 그 환율로 USD 환산해 더한다. 미전달이면
-//    더하지 않는다 — 반환값이 종전과 한 비트도 같아야 하는 하위호환의 축이자, 환율을 모르는
-//    호출부가 원화를 USD 합계에 그대로 얹는 ≈1,355배 오염을 구조적으로 막는 fail-safe다.
-export const overseasUsdEvalAt = (items, date, stockHistoryMap, fxAt) => {
-  const fx = cleanNum(fxAt);
+// ⚠️ **원화 예수금은 더하지 않는다**(2026-09 사용자 확정 — 위 '통화 분리 원칙'). 이 USD 프레임에
+//    원화를 환율로 환산해 넣으면 환전하지 않은 현금이 환율 변동만으로 달러 수익률을 흔든다.
+//    짝으로 USD 프레임의 흐름(externalFlowInRange를 rateOf 없이 호출)도 원화 원장 행을 뺀다.
+//    옛 4번째 인자(fxAt)를 되살리지 말 것.
+export const overseasUsdEvalAt = (items, date, stockHistoryMap) => {
   let usd = 0, hasData = false;
   for (const item of items || []) {
     if (!item) continue;
     if (item.type === 'deposit') {
       usd += cleanNum(item.depositAmount);
-      const krw = depositKrwOf(item, true);
-      if (krw !== 0 && fx > 0) usd += krw / fx;
       hasData = true;
     }
     else if (item.code && stockHistoryMap?.[item.code]) {
@@ -1668,13 +1675,14 @@ export const calcPortfolioEvalDetail = (
   indicatorHistoryMap: Record<string, any>,
   currentFxRate = 1,
   manualPriceOverrides?: Record<string, Record<string, number>> | null
-): { total: number; fxRate: number; items: any[]; hasAnyPrice: boolean; allExact: boolean } => {
+): { total: number; fxRate: number; items: any[]; hasAnyPrice: boolean; allExact: boolean; krwCash: number } => {
   const isGold = accountType === 'gold';
   const isOverseas = accountType === 'overseas';
   const fxRate = isOverseas
     ? (getClosestValue(indicatorHistoryMap?.usdkrw, date) || currentFxRate || 1)
     : 1;
   let totalEval = 0;
+  let krwCash = 0;
   let hasAnyPrice = false;
   const detail: any[] = [];
   (items || []).forEach(item => {
@@ -1682,9 +1690,13 @@ export const calcPortfolioEvalDetail = (
       // 해외계좌는 USD 예수금 × 그날 환율 + **원화 예수금**(환전 전 잔액, 환율 미적용).
       // ⚠️ 평가액을 만드는 모든 경로(추이표·통합 대시보드·자산검증·백필)가 이 한 줄을 지난다.
       const evl = depositRowEval(item, fxRate, isOverseas);
+      // 원화 몫을 따로 싣는다(`krw`·`krwCash`) — 달러 표기 화면이 합계에서 원화를 빼고
+      // 달러 자산만 되돌리는 데 쓴다(usdOfKrwFrame). 원화 프레임 합계(total)는 종전 그대로.
+      const krw = depositKrwOf(item, isOverseas);
+      krwCash += krw;
       totalEval += evl;
       hasAnyPrice = true;
-      detail.push({ id: item.id, type: 'deposit', code: '', name: '예수금', quantity: null, price: null, source: 'deposit', eval: evl });
+      detail.push({ id: item.id, type: 'deposit', code: '', name: '예수금', quantity: null, price: null, source: 'deposit', eval: evl, krw });
       return;
     }
     if (item.type === 'fund') {
@@ -1723,7 +1735,7 @@ export const calcPortfolioEvalDetail = (
     const src = isGold ? (indicatorHistoryMap?.goldKr || {}) : (it.code ? (stockHistoryMap?.[it.code] || {}) : {});
     return src[date] != null;
   });
-  return { total: hasAnyPrice ? totalEval : 0, fxRate, items: detail, hasAnyPrice, allExact: hasAnyPrice && allExact };
+  return { total: hasAnyPrice ? totalEval : 0, fxRate, items: detail, hasAnyPrice, allExact: hasAnyPrice && allExact, krwCash: hasAnyPrice ? krwCash : 0 };
 };
 
 // calcPortfolioEvalDetail 결과(detail items)에서 **예수금 몫만** 합산.

@@ -12,6 +12,7 @@ import {
   snapshotItemsFromPortfolio,
   computeEffectivePrincipal,
   evalSeriesDates,
+  usdOfKrwFrame,
 } from '../utils';
 import { buildEvalCompare } from '../evalCompare';
 import { downloadEvalCompareXlsx, dateLabel } from '../evalCompareExcel';
@@ -321,6 +322,9 @@ export default function VerifyEvalModal({
       price: pd.price ?? null,
       source: pd.source || 'none',
       evalAmt: rd ? rd.eval : 0,
+      // 해외계좌 원화 예수금(예수금 행에만 있다). 평가금(eval)은 원화 프레임이라 이 몫을 포함한다 —
+      // 달러로 표기할 때는 빼고 되돌린다(utils '통화 분리 원칙').
+      krwCash: rd ? cleanNum(rd.krw) : 0,
     };
   }), [resolved, accountType, date, stockHistoryMap, indicatorHistoryMap, fx, mpo, isGold]);
 
@@ -332,6 +336,10 @@ export default function VerifyEvalModal({
   );
   const recomputed = recomputedResult.total;
   const histFxRate = isOverseas ? (recomputedResult.fxRate || fx) : 1;
+  // 해외계좌 원화 예수금(그 날짜 구성). recomputed는 원화 프레임(달러×환율 + 원화)이라 이 몫을 포함한다 —
+  // 달러 표기·달러 평가손익은 이 몫을 빼고 되돌린다(환율로 환산해 섞지 않는다, 투자원금도 아니다).
+  const recomputedKrwCash = isOverseas ? cleanNum(recomputedResult.krwCash) : 0;
+  const recomputedUsd = usdOfKrwFrame(recomputed, recomputedKrwCash, histFxRate);
 
   const stored = cleanNum(record.evalAmount);
   const diffRatio = stored > 0 ? Math.abs(recomputed - stored) / stored : (recomputed > 0 ? 1 : 0);
@@ -646,8 +654,11 @@ export default function VerifyEvalModal({
                       </td>
                       <td className={`py-1.5 ${cellPad} text-gray-200 font-bold whitespace-nowrap`}>
                         {isOverseas && histFxRate > 1
-                          ? `$${(r.evalAmt / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                          ? `$${usdOfKrwFrame(r.evalAmt, r.krwCash, histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
                           : formatCurrency(r.evalAmt)}
+                        {isOverseas && r.krwCash !== 0 && (
+                          <span className="block text-[10px] font-normal text-amber-400/90" title="원화 예수금 — 환율을 곱하지 않고 원화 그대로 총 평가액에 더합니다">+{formatCurrency(r.krwCash)}</span>
+                        )}
                       </td>
                       <td className="py-1.5 px-1 text-center">
                         {!r.isDeposit && !r.isSavings && (
@@ -936,13 +947,13 @@ export default function VerifyEvalModal({
                 <span>재계산 합계 ({isOverseas ? '수량 × 종가' : '수량 × 종가'})</span>
                 <span className="text-gray-200 font-bold">
                   {isOverseas && histFxRate > 1
-                    ? `$${(recomputed / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                    ? `$${recomputedUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
                     : formatCurrency(recomputed)}
                 </span>
               </div>
               {isOverseas && histFxRate > 1 && recomputed > 0 && (
                 <div className="text-gray-400 flex justify-between">
-                  <span>재계산 합계 (수량 × 종가 × 환율, ₩)</span>
+                  <span>{recomputedKrwCash !== 0 ? `재계산 합계 (수량 × 종가 × 환율 + 원화 예수금 ${formatCurrency(recomputedKrwCash)}, ₩)` : '재계산 합계 (수량 × 종가 × 환율, ₩)'}</span>
                   <span className="text-gray-500">{formatCurrency(recomputed)}</span>
                 </div>
               )}
@@ -1110,14 +1121,14 @@ export default function VerifyEvalModal({
                     <span>{isOverseas ? '평가자산 (재계산)' : '저장 평가자산'}</span>
                     <span className="text-gray-200 font-bold">
                       {isOverseas && histFxRate > 1
-                        ? `$${(recomputed / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                        ? `$${recomputedUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
                         : formatCurrency(stored)}
                     </span>
                   </div>
                 )}
                 {principalOnDate > 0 && (isOverseas ? recomputed > 0 : stored > 0) && (() => {
                   const gain = isOverseas && histFxRate > 1
-                    ? recomputed / histFxRate - principalOnDate
+                    ? recomputedUsd - principalOnDate
                     : stored - principalOnDate;
                   return (
                     <div className="flex justify-between">

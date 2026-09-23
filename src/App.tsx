@@ -83,7 +83,7 @@ import {
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries, evalSeriesDates,
-  externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt, isKrwLedgerRow, depositRowEval, krwFlowRateOf,
+  externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt, depositRowEval, krwFlowRateOf,
   buildBookCostSeries, bookDeltaBetween, computeDailyMetricsSeries,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
@@ -1521,18 +1521,17 @@ export default function App() {
     const asc = history.filter(h => h?.date).slice().sort((a, b) => a.date < b.date ? -1 : 1);
     if (asc.length === 0) return { twr: new Map(), cumProfit: new Map() };
     const isOv = activePortfolioAccountType === 'overseas';
-    // 해외계좌 USD 프레임의 그날 환율 — 원화 예수금·원화 원장 행을 USD로 환산하는 단일 소스.
-    // ⚠️ 평가액(overseasUsdEvalAt)과 흐름(externalFlowInRange)이 **같은 환율**을 써야 원화 입금일의
-    //    ΔV와 흐름이 정확히 상쇄된다. 다른 환율을 쓰면 그 차이만큼 가짜 손익이 남는다.
-    const usdFxAt = (d) => getClosestValue(indicatorHistoryMap?.usdkrw, d) || marketIndicators.usdkrw || 1;
-    // 원화 행만 1/환율로 환산(USD 프레임). 달러 행은 종전대로 무환산(배율 1).
-    const usdFlowRate = isOv ? ((row) => isKrwLedgerRow(row) ? (1 / usdFxAt(row.date)) : 1) : undefined;
+    // ⚠️ 해외계좌 USD 프레임은 **원화 예수금을 통째로 뺀다**(2026-09 사용자 확정 — utils '통화 분리
+    //    원칙'). 평가액(overseasUsdEvalAt)이 원화를 더하지 않으므로 흐름도 원화 원장 행을 빼야 짝이
+    //    맞는다 — externalFlowInRange를 rateOf 없이 부르면 원화 행이 빠지고 달러 행은 무환산(배율 1).
+    //    원화를 1/환율로 환산해 넣던 옛 방식은 환전하지 않은 현금이 환율 변동만으로 달러 수익률을
+    //    흔들어서 폐기했다.
     const rows = asc.map((h, i) => {
       const prev = asc[i - 1];
       const flow = prev
-        ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, usdFlowRate)
+        ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date)
         : { in: 0, out: 0 };
-      const ovEval = isOv ? overseasUsdEvalAt(portfolio, h.date, stockHistoryMap, usdFxAt(h.date)) : null;
+      const ovEval = isOv ? overseasUsdEvalAt(portfolio, h.date, stockHistoryMap) : null;
       const cb = isOv ? null : activeCloseEvalByDate.get(h.date);
       const ev = ovEval != null ? ovEval : (cb != null ? cb : cleanNum(h.evalAmount));
       // ⚠️ bookDelta를 빼지 말 것 — 추이표(HistoryPanel)와 같은 관측을 써야 같은 날짜에 두 화면이
@@ -1606,7 +1605,7 @@ export default function App() {
         if (isOverseasChart) {
           // 해외계좌: USD 주가 이력으로만 계산 — KRW evalAmount/fxRate 완전 미사용
           // ⚠️ accountTwrByDate와 **같은 함수**를 쓴다(overseasUsdEvalAt) — 라인과 % 소스 일치.
-          const usdRaw = overseasUsdEvalAt(portfolio, date, stockHistoryMap, getClosestValue(indicatorHistoryMap?.usdkrw, date) || marketIndicators.usdkrw || 1);
+          const usdRaw = overseasUsdEvalAt(portfolio, date, stockHistoryMap);
           const hasData = usdRaw != null;
           const usdEval = hasData ? usdRaw : 0;
           trueEvalAtDate = usdEval;

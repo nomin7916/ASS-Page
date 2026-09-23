@@ -451,6 +451,12 @@ export const buildEvalCompareSheet = (input: EvalCompareExcelInput): XlsxSheet =
   if (isOverseas) {
     notes.push(`· 해외계좌: 금액은 USD 기준이고 (₩) 열은 그 날짜 환율로 환산한 값입니다(기준일 ₩${Math.round(fxB).toLocaleString('en-US')} / 비교일 ₩${Math.round(fxC).toLocaleString('en-US')}).`);
     notes.push('· ③(증감)에는 원화 열을 두지 않습니다 — 종목과 수량이 같아도 두 날짜의 환율이 달라 원화 차이가 생기면 실제로는 없는 손익을 단언하게 되기 때문입니다.');
+    // 원화 예수금은 USD 열에 환산해 넣지 않는다(utils '통화 분리 원칙') — 예수금 행의 USD와 (₩)가
+    // `USD × 환율`로 맞지 않는 이유를 밝혀 둔다(말이 없으면 계산이 틀린 것처럼 보인다).
+    const kB = Number(model.totals.basis.krwCash) || 0, kC = Number(model.totals.compare.krwCash) || 0;
+    if (kB !== 0 || kC !== 0) {
+      notes.push(`· 원화 예수금(환전 전 원화)은 USD 금액에 환산해 넣지 않고 (₩) 열에만 원화 그대로 더했습니다(기준일 ₩${Math.round(kB).toLocaleString('en-US')} / 비교일 ₩${Math.round(kC).toLocaleString('en-US')}). 그래서 예수금 행과 TOTAL의 (₩)는 USD × 환율보다 그만큼 큽니다. 증감·거래 효과는 USD 기준이라 원화 예수금의 영향을 받지 않습니다.`);
+    }
   }
   notes.forEach(n => bannerRow(n, noteStyle));
 
