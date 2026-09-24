@@ -891,12 +891,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
                   {depositColSpan > 0 && (
                     <td
-                      className="py-3 px-3 border-r border-gray-600 text-center text-amber-400 text-[14px]"
+                      className="py-3 px-3 border-r border-gray-600 text-center text-amber-400 text-[14px] cursor-help"
                       colSpan={depositColSpan}
-                      title="환전 전 원화 잔액 — 환율을 곱하지 않고 원화 그대로 총 평가액에 더합니다. 달러 금액에는 환산해 넣지 않으며, 투자원금에도 반영되지 않습니다."
+                      title={'환전 전 원화 잔액\n· 평가금액: 환율을 곱하지 않고 원화 그대로 총 평가액에 더합니다\n· 달러 금액·달러 수익률에는 넣지 않습니다(환율이 움직여도 이 값은 변하지 않습니다)\n· 투자원금에는 반영되지 않습니다\n· 입출금 내역의 ₩+ 버튼으로 원화 입금·출금을 기록합니다'}
                     >
                       <span className="tracking-[0.2em]">예수금 (KRW CASH)</span>
-                      <span className="ml-2 text-[11px] font-normal text-amber-400/60">환전 전 원화 · 원금 미반영</span>
                     </td>
                   )}
                   {!H('investAmount') && (
