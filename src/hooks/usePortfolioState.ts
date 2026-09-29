@@ -48,8 +48,9 @@ export function usePortfolioState({
     () => Array.from({ length: 7 }, () => ({ initial: '', url: '' }))
   );
   const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
-  const [depositSortConfig, setDepositSortConfig] = useState({ key: null, direction: 1 });
-  const [depositSortConfig2, setDepositSortConfig2] = useState({ key: null, direction: 1 });
+  // 입출금 표 기본 = 일자 최신순(▼) — 맨 윗줄 합계가 총합계다(utils.ledgerRowsWithRunningSum).
+  const [depositSortConfig, setDepositSortConfig] = useState({ key: 'date', direction: -1 });
+  const [depositSortConfig2, setDepositSortConfig2] = useState({ key: 'date', direction: -1 });
 
   // ── 활성 포트폴리오 (파생) ──
   const activePortfolio = useMemo(

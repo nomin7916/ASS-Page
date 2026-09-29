@@ -3,6 +3,7 @@ import React, { useState, useRef } from 'react';
 import { Plus, Download, Trash2, Calendar, Maximize2, X, Check, HelpCircle } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav, isKrwLedgerRow } from '../utils';
 import { sortArrow } from '../chartUtils';
+import { getTodayKST } from '../hooks/useMarketCalendar';
 
 // 헤더 환율 배지(평균·현재) 표기 — 입력 환율이 소수 2자리라 반올림하면 그 값이 사라진다
 const formatFxRate = (n) => cleanNum(n).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -35,7 +36,8 @@ export default function DepositPanel({
   //    포함돼(useIntegratedData rateOf / App usdFlowRate) 입금일에 가짜 수익이 찍히지 않는다.
   const newLedgerRow = (krw) => ({
     id: generateId(),
-    date: new Date().toISOString().split('T')[0],
+    // KST 기준 오늘 — UTC(toISOString)면 한국 00:00~09:00에 어제 날짜가 되어 날짜순 표에서 새 행이 맨 위가 아니다.
+    date: getTodayKST(),
     amount: 0,
     // 원화 행은 환율을 쓰지 않는다 — 값을 남기면 마커·누적이 그 값을 곱해 ≈1,355배 어긋난다.
     fxRate: krw ? 0 : (isOverseas ? (marketIndicators.usdkrw || 1) : 1),
@@ -364,6 +366,8 @@ export default function DepositPanel({
                 { icon: '📅', color: 'text-gray-400', title: '날짜 변경', lines: [
                   '날짜 셀의 달력(📅) 아이콘을 클릭합니다.',
                   '달력에서 원하는 날짜를 선택하세요.',
+                  '날짜를 바꾸면 그 날짜 순서 자리로 이동합니다.',
+                  '과거 입금을 나중에 적어도 날짜 순서대로 들어갑니다.',
                 ] },
                 { icon: '◐', color: 'text-sky-300', title: '원금 비영향(미반영) 설정', lines: [
                   '분배금 이체 등 "기록만 남기고 싶은" 내역에 사용합니다.',
@@ -379,7 +383,13 @@ export default function DepositPanel({
                   '[↗] 아이콘 → 전체화면 메모장으로 입력.',
                   '전체 메모장: Ctrl+Enter 저장 / Esc 취소.',
                 ] },
+                { icon: 'Σ', color: 'text-yellow-400', title: '합계', lines: [
+                  '날짜가 오래된 것부터 차례로 더한 누적 금액입니다.',
+                  '입력한 순서와 무관하게 날짜 순서로 계산됩니다.',
+                  '가장 최근 날짜 행의 합계가 총합계입니다.',
+                ] },
                 { icon: '↕', color: 'text-gray-400', title: '정렬', lines: [
+                  '기본은 일자 최신순(▼) — 최근 내역이 맨 위입니다.',
                   '헤더의 일자·금액 텍스트를 클릭합니다.',
                   '▲ 오름차순 ↔ ▼ 내림차순으로 전환됩니다.',
                 ] },

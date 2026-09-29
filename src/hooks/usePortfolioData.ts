@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, depositKrwTotalOf, isKrwLedgerRow } from '../utils';
+import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, depositKrwTotalOf, ledgerRowsWithRunningSum, sortLedgerRows } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function usePortfolioData({
@@ -266,47 +266,14 @@ export function usePortfolioData({
 
   const displayHistSliced = useMemo(() => sortedHistoryDesc.slice(0, historyLimit), [sortedHistoryDesc, historyLimit]);
 
-  // ⚠️ 원화 행(currency:'KRW')의 누적은 달러 누적과 **따로** 쌓는다 — 한 합계에 섞으면 통화가
-  //    다른 값이 더해져 누적이 ≈1,355배 어긋난다. 화면은 행의 통화에 맞는 누적만 보여준다.
-  const depositWithSum = useMemo(() => {
-    let runSum = 0, runKrw = 0;
-    return [...depositHistory].reverse().map((h, i) => {
-      if (!h.noPrincipal) {
-        if (isKrwLedgerRow(h)) runKrw += cleanNum(h.amount);
-        else runSum += cleanNum(h.amount);
-      }
-      return { ...h, cumulative: runSum, cumulativeKrw: runKrw, originalIndex: depositHistory.length - 1 - i };
-    }).reverse();
-  }, [depositHistory]);
+  // ⚠️ 합계는 **날짜 순서**로 쌓는다(입력 순서 아님) — 과거 입금을 나중에 적어도 총합계는 항상
+  //    최신 날짜 행에 찍힌다. 원화 행(currency:'KRW')은 달러 누적과 **따로** 쌓는다(섞으면 ≈1,355배).
+  //    규칙은 utils.ledgerRowsWithRunningSum 한 곳 — 여기서 다시 계산하지 말 것.
+  const depositWithSum = useMemo(() => ledgerRowsWithRunningSum(depositHistory), [depositHistory]);
+  const depositWithSum2 = useMemo(() => ledgerRowsWithRunningSum(depositHistory2), [depositHistory2]);
 
-  const depositWithSum2 = useMemo(() => {
-    let runSum = 0, runKrw = 0;
-    return [...depositHistory2].reverse().map((h, i) => {
-      if (!h.noPrincipal) {
-        if (isKrwLedgerRow(h)) runKrw += cleanNum(h.amount);
-        else runSum += cleanNum(h.amount);
-      }
-      return { ...h, cumulative: runSum, cumulativeKrw: runKrw, originalIndex: depositHistory2.length - 1 - i };
-    }).reverse();
-  }, [depositHistory2]);
-
-  const depositWithSumSorted = useMemo(() => {
-    if (!depositSortConfig.key) return depositWithSum;
-    return [...depositWithSum].sort((a, b) => {
-      if (depositSortConfig.key === 'date') { const da = a.date ? new Date(a.date).getTime() : 0; const db = b.date ? new Date(b.date).getTime() : 0; return (da - db) * depositSortConfig.direction; }
-      if (depositSortConfig.key === 'amount') { return (cleanNum(a.amount) - cleanNum(b.amount)) * depositSortConfig.direction; }
-      return 0;
-    });
-  }, [depositWithSum, depositSortConfig]);
-
-  const depositWithSum2Sorted = useMemo(() => {
-    if (!depositSortConfig2.key) return depositWithSum2;
-    return [...depositWithSum2].sort((a, b) => {
-      if (depositSortConfig2.key === 'date') { const da = a.date ? new Date(a.date).getTime() : 0; const db = b.date ? new Date(b.date).getTime() : 0; return (da - db) * depositSortConfig2.direction; }
-      if (depositSortConfig2.key === 'amount') { return (cleanNum(a.amount) - cleanNum(b.amount)) * depositSortConfig2.direction; }
-      return 0;
-    });
-  }, [depositWithSum2, depositSortConfig2]);
+  const depositWithSumSorted = useMemo(() => sortLedgerRows(depositWithSum, depositSortConfig), [depositWithSum, depositSortConfig]);
+  const depositWithSum2Sorted = useMemo(() => sortLedgerRows(depositWithSum2, depositSortConfig2), [depositWithSum2, depositSortConfig2]);
 
   return {
     totals,

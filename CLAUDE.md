@@ -387,6 +387,30 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   전부 '존재만 보는' 가드가 **첫 일치에 가려진** 경우였다(지문은 정확 형식 비교로, 원화 버튼과
   추이표 flowRate는 **개수**로 센다). 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
 
+### 입출금 내역 표 = 날짜순 누적 합계 · 최신 날짜 우선 (⚠️ 회귀 주의 — 입력 순서 누적으로 되돌리지 말 것)
+
+`DepositPanel`의 입금·출금 표 '합계' 열은 **날짜 오름차순**으로 쌓은 누적이고(같은 날짜는 먼저 입력한
+행부터), 기본 표시는 그 정확한 역순(**최신 날짜가 맨 위 · 맨 윗줄 합계 = 총합계**)이다.
+발단(사용자 보고 2026-09): 9/29를 먼저 적고 과거 8/26을 나중에 적으면 8/26이 위에 뜨고, 일자로
+정렬해도 **총합계가 나중에 적은 8/26 행에** 찍혔다 — 합계를 저장 배열(= 입력 순서, 새 행을 앞에 붙임)
+순서로 쌓았기 때문이다.
+
+- **단일 소스 = `utils.ledgerRowsWithRunningSum` + `sortLedgerRows`** — `usePortfolioData`의
+  `depositWithSum(2)`·`depositWithSum(2)Sorted`가 이 둘만 부른다(입금·출금이 같은 함수라 규칙이 갈리지 않는다).
+  CSV(`buildDepositCSV(depositWithSum)`)도 자동으로 같은 합계를 쓴다.
+- **⚠️ 저장 배열 순서는 건드리지 않는다**(표시 전용 파생). 편집은 전부 `originalIndex`로 저장 배열을 가리킨다 —
+  표시 순서 인덱스로 쓰면 다른 행이 고쳐진다.
+- 누적 규칙은 종전 그대로: 미반영(`noPrincipal`) 행은 더하지 않고, 원화 행(`currency:'KRW'`)은 달러와 **따로** 쌓는다.
+  날짜가 빈 행은 가장 오래된 것(맨 아래)이다. 날짜 비교는 ISO 문자열 비교(`cumDepositsUpTo`와 같은 규약).
+- **일자 정렬은 비교 정렬이 아니라 '기본 순서 / 정확한 역순'** — 같은 날짜 여러 건이 ▲▼에서 정확히 뒤집혀야
+  합계 열이 단조롭게 읽힌다. 기본 정렬 설정은 `{ key:'date', direction:-1 }`(▼ 표시) — 앱 탭(`usePortfolioState`)과
+  카드 별도 창(`CardWindow`) **두 곳**.
+- 새 행 날짜는 `getTodayKST()` — UTC(`toISOString`)면 한국 00:00~09:00에 어제가 되어 날짜순 표에서 새 행이 맨 위가 아니다.
+- 영속화 지점 **0곳**(전부 매 렌더 파생값 + 세션 로컬 정렬 설정).
+- 검증: `npm run verify:deposit-ledger` (직접 import `#1~#12` + 배선 가드 `#G1~#G7`). **변이 12종 + 음성 대조 1종으로
+  검출을 실증**했다(같은 날 순서 뒤집기 · 날짜 비교 제거 · 미반영 포함 · 원화 섞기 · ▲ 역순 제거 · 표시 역순 제거 ·
+  출금만 옛 코드 · 앱/창 기본 정렬 복귀 · 새 행 UTC · import 누락 · 금액 정렬 방향 무시).
+
 ### 예적금(savings) 항목 — 퇴직연금(dc-irp) 전용 (⚠️ 펀드/예수금과 혼동 금지)
 
 원금보장형 예적금(예: "kb손해보험 이율보증형 3년")을 위한 **별도 항목 타입 `type:'savings'`**.
@@ -7561,7 +7585,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
   ⚠️ **"변경 영역에 해당하는 것만" 고르지 말 것** — 고르는 판단 자체가 틀려서 2026-09-05 프로덕션
   장애가 났다. 전체가 **14.5초**라 선별할 이유가 없다. 개별 실행이 필요할 때의 목록:
   `npm run verify:*`(imports·calendar·tax·dividend·history·notice·twr·fx·brl·rebal-restore·rebal-extra·transfer·
-  overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel·excel·compare·ledger·palette·**boot**)
+  overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel·excel·compare·ledger·palette·**boot**·deposit-ledger)
   + `scripts/importcheck.mjs`(누락 import) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의
   지역 변수를 참조)** + `npm run build`.

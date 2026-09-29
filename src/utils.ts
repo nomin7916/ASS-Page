@@ -309,6 +309,46 @@ export const usdOfKrwFrame = (krwFrameValue, krwCash, fxRate) =>
 // 원장(입출금 내역) 행이 원화로 입력된 행인가. 필드가 없으면 종전대로 USD 행.
 export const isKrwLedgerRow = (row) => row?.currency === 'KRW';
 
+// ── 입출금 내역 표 = 날짜순 누적 합계 · 최신 날짜 우선 표시 (2026-09 사용자 보고) ──
+// 저장 배열은 **입력 순서**(새 행을 앞에 붙인다)라, 오늘 입금을 먼저 적고 과거 입금을 나중에 적으면
+// 배열이 [과거, 오늘] 순이 된다. 옛 코드는 그 배열 순서대로 합계를 쌓아서 **나중에 적은 과거 날짜
+// 행에 총합계가 찍혔고**, 기본 표시도 과거 날짜가 위로 왔다.
+// → 합계는 **날짜 오름차순**으로 쌓고(같은 날짜는 먼저 입력한 행부터), 표시는 그 정확한 역순이다
+//   (최신 날짜가 맨 위 · 맨 윗줄 합계 = 총합계).
+// ⚠️ 저장 배열 순서는 건드리지 않는다(표시 전용 파생) — 편집은 `originalIndex`로 저장 배열을 가리킨다.
+// ⚠️ 날짜가 빈 행은 가장 오래된 것으로 본다(맨 아래). 날짜 비교는 ISO 문자열 비교(cumDepositsUpTo와 같은 규약).
+// ⚠️ 누적 규칙은 종전 그대로 — noPrincipal(미반영) 행은 더하지 않고, 원화 행은 달러와 **따로** 쌓는다.
+export const ledgerRowsWithRunningSum = (rows) => {
+  const list = Array.isArray(rows) ? rows : [];
+  // 저장 인덱스가 클수록 먼저 입력한 행 → 같은 날짜에서는 인덱스가 큰 행부터 누적한다.
+  const order = list.map((_, i) => i).sort((a, b) => {
+    const da = String(list[a]?.date || ''), db = String(list[b]?.date || '');
+    if (da !== db) return da < db ? -1 : 1;
+    return b - a;
+  });
+  let runSum = 0, runKrw = 0;
+  const asc = order.map(i => {
+    const h = list[i];
+    if (!h?.noPrincipal) {
+      if (isKrwLedgerRow(h)) runKrw += cleanNum(h?.amount);
+      else runSum += cleanNum(h?.amount);
+    }
+    return { ...h, cumulative: runSum, cumulativeKrw: runKrw, originalIndex: i };
+  });
+  return asc.reverse();
+};
+
+// 입출금 표의 정렬 머리글(일자·금액). 입력은 ledgerRowsWithRunningSum 결과(최신 날짜 우선).
+// 일자 정렬은 비교 정렬이 아니라 **기본 순서 / 그 정확한 역순**으로 낸다 — 같은 날짜 여러 건이
+// 오름·내림에서 정확히 뒤집혀야 합계 열이 위아래로 단조롭게 읽힌다. 설정이 없으면 기본 순서.
+export const sortLedgerRows = (rowsDesc, config) => {
+  const list = Array.isArray(rowsDesc) ? rowsDesc : [];
+  const dir = config?.direction === 1 ? 1 : -1;
+  if (config?.key === 'amount') return [...list].sort((a, b) => (cleanNum(a.amount) - cleanNum(b.amount)) * dir);
+  if (config?.key === 'date' && dir === 1) return [...list].reverse();
+  return list;
+};
+
 // 입출금 내역 누적합 — 특정 날짜까지 (포함). "anchor + delta" 모델용.
 // overseas 계좌는 amount가 USD이므로 fxRate 곱하지 않고 USD 합산.
 // 비overseas 계좌도 fxRate=1이므로 동일 결과.

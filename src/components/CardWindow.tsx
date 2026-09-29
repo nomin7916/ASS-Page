@@ -93,8 +93,9 @@ export default function CardWindow() {
   const [hoveredCurCatSlice, setHoveredCurCatSlice] = useState(null);
   // PIN 인증은 창 세션 단위(앱 탭과 별개) — 검증 자체는 앱 탭에 위임한다.
   const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
-  const [depositSortConfig, setDepositSortConfig] = useState({ key: null, direction: 1 });
-  const [depositSortConfig2, setDepositSortConfig2] = useState({ key: null, direction: 1 });
+  // 앱 탭과 같은 기본값 — 일자 최신순(▼).
+  const [depositSortConfig, setDepositSortConfig] = useState({ key: 'date', direction: -1 });
+  const [depositSortConfig2, setDepositSortConfig2] = useState({ key: 'date', direction: -1 });
 
   // 창 자체 알림/확인창 (INV-5)
   const [toasts, setToasts] = useState([]);
