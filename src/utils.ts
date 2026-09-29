@@ -2563,6 +2563,80 @@ export const buildHistDetailRows = (opts) => {
   };
 };
 
+// ── 리밸런싱 '추가' 수량 · '추가 가능' 연동 영속화 (앱 탭 전용, chartPrefs) ───────────────
+// 두 맵 모두 계좌별이다: 수량 { [portfolioId]: { [itemId]: 정수 } } / 연동 { [portfolioId]: { [itemId]: true } }.
+// ⚠️ 과거엔 둘 다 세션 메모리에만 있어(수량 = App state, 연동 = 패널 로컬 state) 앱을 닫았다 열면
+//    관리자가 조정해 둔 '추가'가 통째로 사라졌다(사용자 보고 2026-09).
+// ⚠️ 손상된 Drive 값은 버린다 — 문자열 '3'을 통과시키면 `(수량 + action + extra) × 가격`이
+//    **문자열 결합**이 되어 예상평가금·매수/매도 합계·추가가능 풀이 전부 오염된다(RebalancingPanel 주석).
+//    0은 '추가 없음'과 같으므로 저장하지 않는다.
+const _plainObj = (v: any) => !!v && typeof v === 'object' && !Array.isArray(v);
+export const normalizeRebalExtraQtyMap = (raw: any): Record<string, Record<string, number>> => {
+  if (!_plainObj(raw)) return {};
+  const out: Record<string, Record<string, number>> = {};
+  for (const pid of Object.keys(raw)) {
+    const inner = raw[pid];
+    if (!_plainObj(inner)) continue;
+    const row: Record<string, number> = {};
+    for (const id of Object.keys(inner)) {
+      const v = inner[id];
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+      const n = Math.trunc(v);
+      if (n !== 0) row[id] = n;
+    }
+    if (Object.keys(row).length) out[pid] = row;
+  }
+  return out;
+};
+export const normalizeRebalLinkMap = (raw: any): Record<string, Record<string, true>> => {
+  if (!_plainObj(raw)) return {};
+  const out: Record<string, Record<string, true>> = {};
+  for (const pid of Object.keys(raw)) {
+    const inner = raw[pid];
+    if (!_plainObj(inner)) continue;
+    const row: Record<string, true> = {};
+    for (const id of Object.keys(inner)) if (inner[id] === true) row[id] = true;
+    if (Object.keys(row).length) out[pid] = row;
+  }
+  return out;
+};
+// 계좌별 맵의 한 슬라이스 갱신 — App의 setRebalExtraQty/setRebalMaxAddLink가 쓰는 리듀서.
+// ⚠️ 함수형 updater를 그대로 지원하고, updater가 **같은 참조(prev)**를 돌려주면 맵도 **같은 참조**로
+//    반환한다 — RebalancingPanel의 연동 유지 effect는 deps에 rebalExtraQty를 두고 '변화 없으면 prev'로
+//    수렴하므로, 여기서 새 객체를 만들면 effect가 매 렌더 재실행되는 루프가 된다.
+// ⚠️ pid가 없으면(통합 대시보드 등) 아무것도 쓰지 않는다 — 'null' 키로 새 슬라이스가 생기면 안 된다.
+export const updateRebalAcctMap = (map: any, pid: any, upd: any, empty: any = {}) => {
+  const m = _plainObj(map) ? map : {};
+  if (!pid) return map;
+  const cur = _plainObj(m[pid]) ? m[pid] : empty;
+  const next = typeof upd === 'function' ? upd(cur) : upd;
+  return next === cur ? map : { ...m, [pid]: next };
+};
+// 저장 트리거용 지문 — **사용자 의도만** 담는다: 연동되지 않은 행의 수량 + 연동된 행 id.
+// ⚠️ 연동된 행의 수량은 절대 넣지 말 것 — 그 값은 유지 effect가 시세·잔액이 바뀔 때마다 다시
+//    채우므로(RebalancingPanel), 넣으면 **시세 갱신마다 Drive 저장이 폭주**한다(portfolioStructureKey에
+//    시세성 값 금지 규약). 연동 행은 로드 후 그 effect가 현재 잔액으로 다시 계산하므로 잃는 것이 없다.
+// ⚠️ 절대 던지지 않는다 — 이 지문은 저장 effect의 첫 블록(portfolioStructureKey)에서 계산되므로
+//    던지면 그 세션의 Drive 저장이 통째로 멈춘다(flowFingerprint·backtestFingerprint와 같은 규약).
+export const rebalExtraIntentKey = (qtyMap: any, linkMap: any): string => {
+  try {
+    const q = _plainObj(qtyMap) ? qtyMap : {};
+    const l = _plainObj(linkMap) ? linkMap : {};
+    const pids = Array.from(new Set([...Object.keys(q), ...Object.keys(l)])).sort();
+    const parts: string[] = [];
+    for (const pid of pids) {
+      const links = _plainObj(l[pid]) ? l[pid] : {};
+      const qty = _plainObj(q[pid]) ? q[pid] : {};
+      const manual = Object.keys(qty).filter(id => links[id] !== true && qty[id]).sort().map(id => `${id}:${qty[id]}`).join(',');
+      const linked = Object.keys(links).filter(id => links[id] === true).sort().join(',');
+      if (manual || linked) parts.push(`${pid}[${manual}|${linked}]`);
+    }
+    return parts.join(';');
+  } catch {
+    return '';
+  }
+};
+
 // ── 리밸런싱 목표비중 → 메모 달력 스냅샷 (App 탭 · 카드 별도 창 공유) ───────────────────────
 // ⚠️ 순수 함수로 뽑아 둔 이유: 카드 별도 창은 **비활성 계좌**의 리밸런싱 표를 띄우는데, App의
 //    옛 구현은 activePortfolio·rebalanceData·settings·rebalExtraQty·정렬을 전부 활성 계좌에서

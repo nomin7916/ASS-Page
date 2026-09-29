@@ -431,8 +431,9 @@ export default function CardWindow() {
         : '앱 창에서 데이터를 불러오는 중입니다…'} />;
       const isOverseas = accountType === 'overseas';
       const lPrice = cleanNum(row.currentPrice);
-      // ⚠️ rebalExtraQty('추가' 수량)는 앱 탭에서도 창에서도 **세션 스크래치**라 창에서는 항상 0이다
-      //    (이 창에는 그 입력 UI가 없다). 앱 탭에서 넣은 '추가'는 반영되지 않는다 — 알려진 한계.
+      // ⚠️ rebalExtraQty('추가' 수량)는 앱 탭에서는 Drive에 저장되지만(chartPrefs.rebalExtraQtyMap)
+      //    창은 그 값을 받지 않는 **창 로컬 스크래치**라 여기서는 항상 0이다(이 창에는 그 입력 UI가 없다).
+      //    앱 탭에서 넣은 '추가'는 반영되지 않는다 — 알려진 한계.
       const lAction = row.action + (rebalExtraQty[row.id] || 0);
       const lSignOk = ladderSide === 'sell' ? lAction < 0 : lAction > 0;
       const lSideLabel = ladderSide === 'sell' ? '매도' : '매수';

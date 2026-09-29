@@ -2845,6 +2845,51 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   붙여넣은 `−5`에서 부호만 사라져 **매도가 매수로 뒤집힌다**. 연동(`maxAddLink`) 토글 시에는 초안을
   폐기해야 연동으로 채운 값이 낡은 초안에 가려지지 않는다.
 
+### 리밸런싱 '추가' 수량 · '추가 가능' 연동 = 계좌별 Drive 영속 (⚠️ 회귀 주의 — 세션 스크래치로 되돌리지 말 것)
+
+리밸런싱 표의 **'추가'**(수동 매매 수량)와 **'추가 가능' 칸 클릭으로 켜는 연동**은 앱을 닫았다 열어도
+유지된다(사용자 보고 2026-09 — "목표비중·목표금액은 저장되는데 추가 수량은 안 된다. 관리자가 사용자
+비중을 조정할 때 추가 수량도 함께 조정한다"). 과거엔 수량이 App state(계좌 전환용 ref 보존뿐), 연동이
+`RebalancingPanel` 로컬 state라 **저장 경로가 아예 없었다**.
+
+- **저장 = `chartPrefs.rebalExtraQtyMap` `{ [pid]: { [itemId]: 정수 } }` + `chartPrefs.rebalMaxAddLinkMap`
+  `{ [pid]: { [itemId]: true } }`**. App이 두 맵을 state로 소유하고(`rebalanceSortConfigMap`과 같은 구조),
+  소비자(`usePortfolioData`·`RebalancingPanel`·달력 스냅샷 `buildRebalTargetEntry`)는 종전과 같은
+  '활성 계좌 한 장'(`rebalExtraQty` / `rebalMaxAddLink`)을 받는다. 계좌 전환 저장·복원 ref
+  (`accountRebalExtraQtyRef`)는 **삭제**됐다 — 되살리면 두 메커니즘이 전환 때 서로를 덮는다.
+- **⚠️ 저장 트리거는 '의도 지문' `rebalExtraIntentKey` 하나**(`portfolioStructureKey` + 저장 effect deps):
+  연동되지 **않은** 행의 수량 + 연동된 행 id만 담는다. **연동 행의 수량은 절대 넣지 말 것** — 유지 effect가
+  시세·잔액이 바뀔 때마다 다시 채우므로 넣는 순간 **시세 갱신마다 Drive 저장이 폭주**한다. 원시 맵을
+  구조 지문이나 deps에 넣는 것도 같은 결과다. 연동 행의 수량은 로드 후 그 effect가 현재 잔액으로 다시 계산한다.
+  ⚠️ `chartPrefsUpdatedAt`이 아니라 **구조 지문**에 두는 이유: VERSION 파일이 올라가야 관리자
+  impersonation 편집을 사용자의 열린 앱이 폴링으로 받아 간다(chartPrefs만 올리면 `saveVersionFile`이
+  호출되지 않는다). 지문 함수는 **절대 던지지 않는다**(저장 effect 첫 블록에서 계산된다).
+- **⚠️ setter는 `utils.updateRebalAcctMap` 공유 리듀서** — 함수형 updater를 지원하고, updater가 같은
+  참조(prev)를 돌려주면 **맵도 같은 참조**를 반환한다. 패널의 연동 유지 effect가 `rebalExtraQty`를
+  deps에 두고 '변화 없으면 prev'로 수렴하므로, 새 객체를 만들면 매 렌더 재실행 루프가 된다.
+  빈 슬라이스는 모듈 상수 `EMPTY_REBAL_ROW`(고정 참조)로 폴백한다(렌더마다 `{}` 금지 — 같은 이유).
+  계좌 id가 없으면(통합 대시보드) 아무것도 쓰지 않는다.
+- **⚠️ 로드 정규화 필수**(`normalizeRebalExtraQtyMap` / `normalizeRebalLinkMap`): 수량은 유한한 number만
+  (0 방향 버림, 0은 버림), 연동은 `=== true`만. 문자열 `'3'`을 통과시키면 `(수량 + action + extra) × 가격`이
+  **문자열 결합**이 되어 리밸런싱 표 전체가 오염된다. 부팅(`applyStateData`, 뷰 비보존)은 필드가 없어도
+  **비운다**(같은 탭에서 다른 계정 STATE를 적용하면 이전 사용자의 맵이 그 사용자 STATE로 저장된다 —
+  다중 계정 오염 방지). 폴링 재적용(preserveView)과 백업 복원은 필드가 있을 때만 적용한다.
+- **⚠️ 패널은 `maxAddLink`/`setMaxAddLink` prop을 우선 쓰고, 미전달이면 로컬 state로 폴백**한다
+  (`const maxAddLink = maxAddLinkProp || localMaxAddLink`). 앱 탭에서 로컬 전용으로 되돌리면 섹션을 접거나
+  앱을 다시 열 때마다 연동이 풀린다.
+- **영속화 지점**: `chartPrefs` 2필드(payload 리터럴) · 구조 지문 · 저장 effect deps · `applyStateData` ·
+  `applyBackupData`. 수동 저장 4핸들러는 `saveStateRef` 스프레드라 무수정.
+- **범위 밖(의도)**: 카드 별도 창(`card=rebalancing`·`card=ladder`)은 이 맵을 받지 않는다 — 창의 '추가'·연동은
+  종전대로 **창 로컬 스크래치**다(창에서 고쳐도 저장되지 않는다). '추가'만 바꾼 편집은 관리자 공지·메모 달력
+  목표비중 dirty를 세우지 않는다(트리거는 종전대로 목표비중·목표금액). 삭제된 종목·계좌의 맵 키는 정리하지
+  않는다(값이 변하지 않아 무해). **매매를 실행한 뒤 '추가'를 비우는 것은 사용자 몫**이다 — 옛 동작처럼 앱을
+  다시 열면 저절로 사라지지 않는다.
+- 검증: `npm run verify:rebal-extra` (직접 import `#1~#22` + 배선 가드 `#G1~#G12`). **변이 19종 + 음성 대조
+  1종으로 검출을 실증**했다(구조 지문 제거 · 구조 지문/deps에 원시 맵 · payload 누락 · deps 제거 · 정규화 제거 ·
+  부팅 비우기 제거 · 백업 복원 누락 · 빈 슬라이스 새 객체 · setter 손복제 · prop 미전달 · 패널 로컬 복귀 ·
+  토글 로컬 setter · 연동 행 수량 지문 포함 · 리듀서 새 객체 · 문자열 통과 · pid 가드 제거 · 0 저장 ·
+  truthy 연동 통과).
+
 ### 메모 달력 = 5종 기록 허브 (칩 버튼) (⚠️ 회귀 주의 — 파생 3종을 calendarMemos에 복사 금지)
 
 날짜 칸에 **버튼식 칩** 4종(+사용자 메모 줄)을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).
@@ -3684,7 +3729,7 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   방식으로 우회 금지 — 사용자가 고른 방향을 조용히 지우는 것은 이 저장소가 반복해 금지해 온 패턴이다).
   ⚠️ **색·선종류·굵기**를 빼면 위 ①이 재발한다. 사용자가 색으로 구분해 둔 선은 **의도적으로 구분한 것**
   이므로 합치지 않는 쪽이 옳다(툴바 툴팁이 그 사실을 밝힌다).
-- **⚠️ 그룹 키 구분자는 `JSON.stringify([...])`다. ` `(NUL)로 되돌리지 말 것** — 소스에 실제 NUL
+- **⚠️ 그룹 키 구분자는 `JSON.stringify([...])`다. `\0`(NUL)로 되돌리지 말 것** — 소스에 실제 NUL
   바이트가 박혀 **git이 그 파일을 바이너리로 취급**하고 `grep`·`git log -S`가 통째로 막힌다(실측으로
   15바이트가 유입됐다가 걷어냈다. 메모리에 같은 사고 기록이 있다).
 - **⚠️ 한 (도형, 변)에는 트렁크가 최대 하나**(구성원이 많은 쪽, 동점이면 키 사전순). 나가는 뭉치와
@@ -4287,7 +4332,8 @@ App의 `handleSingleStockRefresh`). 목표 금액이 현재가에서 파생되�
     통째로 잃는다. 그래서 `openLadderWindow`가 boolean을 반환한다.
   - `variant='page'`는 fixed·드래그·닫기 버튼만 끄고 나머지는 인앱과 **같은 컴포넌트**다. popup 폭
     440은 종전 그대로(패널의 열림 위치 클램프 456과 짝 — `#97`).
-  - **알려진 한계(의도)**: `rebalExtraQty`('추가' 수량)는 앱 탭에서도 창에서도 **세션 스크래치**라
+  - **알려진 한계(의도)**: `rebalExtraQty`('추가' 수량)는 앱 탭에서는 Drive에 저장되지만
+    (`chartPrefs.rebalExtraQtyMap` — '리밸런싱 추가 수량' 절) 창은 그 값을 받지 않는 **창 로컬 스크래치**라
     계산기 창에서는 항상 0이다(그 창에 입력 UI가 없다). 앱 탭에서 넣은 '추가'는 반영되지 않는다.
 - **범위 밖(의도)**: 메모 달력 칩·패드(사용자가 미노출을 택함) · 계산기 이력의 '표에 다시 적용'(사다리는
   주문 계획이지 목표가 아니다) · 이력 CSV/엑셀 · 계산기 창에서의 '추가' 수량 입력.
@@ -6321,7 +6367,8 @@ chartPrefs 5지점을 새로 만들지 않는다 — ⚠️ 로드마다 비우�
 - 앱 탭을 닫으면 창은 읽기 전용(구조적 — writer가 하나뿐이므로 우회 불가).
 - 같은 계좌를 앱 탭과 창에서 동시에 편집하면 **필드 단위** last-write-wins(달력·흐름도 창과 같은 절충).
 - `settings`는 같은 accountType 전 계좌 공유라 창의 설정 변경도 형제 계좌에 전파된다(기존 앱 동작 그대로).
-- 창의 정렬·'추가' 수량은 **창 로컬**(둘 다 세션 스크래치). `rebalanceSortConfig`는 앱에서만 영속된다.
+- 창의 정렬·'추가' 수량·'추가 가능' 연동은 **창 로컬**(세션 스크래치 — 창에서 고쳐도 저장되지 않는다).
+  앱 탭에서는 셋 다 영속된다(`rebalanceSortConfigMap` · `rebalExtraQtyMap` · `rebalMaxAddLinkMap`).
 
 검증: `npm run verify:card-window` — 순수 함수는 `src/cardWindow.ts`를 **직접 import**해 테스트하고
 (미러 금지 — src/미러 한쪽만 고친 변경이 둘 다 통과하는 구멍을 만든다), 배선은 소스 텍스트 가드다.
@@ -7513,7 +7560,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 - **게이트**(통과 못 하면 커밋 금지): **`npm run gate` 한 줄로 전부 돌린다**(위 「커밋 전 체크리스트」).
   ⚠️ **"변경 영역에 해당하는 것만" 고르지 말 것** — 고르는 판단 자체가 틀려서 2026-09-05 프로덕션
   장애가 났다. 전체가 **14.5초**라 선별할 이유가 없다. 개별 실행이 필요할 때의 목록:
-  `npm run verify:*`(imports·calendar·tax·dividend·history·notice·twr·fx·brl·rebal-restore·transfer·
+  `npm run verify:*`(imports·calendar·tax·dividend·history·notice·twr·fx·brl·rebal-restore·rebal-extra·transfer·
   overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel·excel·compare·ledger·palette·**boot**)
   + `scripts/importcheck.mjs`(누락 import) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의

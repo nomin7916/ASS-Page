@@ -93,6 +93,7 @@ import {
   buildRebalTargetEntryFrom, sameRebalTargetEntry, upsertRebalTargetMemo,
   buildLadderTrade, upsertLadderTradeMemo, listLadderLogs, deleteLadderTrade,
   normalizeHistPeriod,
+  normalizeRebalExtraQtyMap, normalizeRebalLinkMap, rebalExtraIntentKey, updateRebalAcctMap,
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -198,6 +199,9 @@ const markedRowsKey = (raw) => {
   const m = raw;
   return Object.keys(m).sort().map(k => `${k}:${m[k]}`).join(',');
 };
+// 리밸런싱 '추가' 맵의 빈 슬라이스 — **참조가 고정**이어야 한다. 렌더마다 `{}`를 새로 만들면
+// usePortfolioData의 rebalanceData memo와 RebalancingPanel의 연동 유지 effect가 매 렌더 재실행된다.
+const EMPTY_REBAL_ROW: Record<string, any> = Object.freeze({});
 
 const normalizeCalendarMemos = (raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
@@ -466,8 +470,12 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
   const [rebalanceSortConfigMap, setRebalanceSortConfigMap] = useState<Record<string, { key: string | null, direction: number }>>({});
-  const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
-  useEffect(() => { rebalExtraQtyRef.current = rebalExtraQty; }, [rebalExtraQty]);
+  // 리밸런싱 '추가' 수량 · '추가 가능' 연동 — **계좌별 맵**, chartPrefs로 Drive 영속.
+  // ⚠️ 과거엔 수량이 App state(계좌 전환용 ref 보존뿐), 연동이 RebalancingPanel 로컬 state라
+  //    앱을 닫았다 열면 둘 다 사라졌다 — 관리자가 사용자 계좌에 조정해 둔 '추가'가 유실(2026-09).
+  //    rebalanceSortConfigMap과 같은 구조라 계좌 전환에 별도 저장·복원 코드가 필요 없다.
+  const [rebalExtraQtyMap, setRebalExtraQtyMap] = useState<Record<string, Record<string, number>>>({});
+  const [rebalMaxAddLinkMap, setRebalMaxAddLinkMap] = useState<Record<string, Record<string, true>>>({});
 
   const { notify, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead, confirmState, confirm, resolveConfirm } = useToast();
   const { isMarketOpen, holidays: marketHolidays, loaded: calendarLoaded } = useMarketCalendar();
@@ -508,8 +516,6 @@ export default function App() {
   // 계좌별 차트 상태 독립 관리
   const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false, showTotalEval: true, showReturnRate: true, histPeriod: 'day' });
   const accountChartStatesRef = useRef<Record<string, any>>({});
-  const accountRebalExtraQtyRef = useRef<Record<string, Record<string, number>>>({}); // 계좌별 리밸런싱 '추가' 입력값 보존
-  const rebalExtraQtyRef = useRef<Record<string, number>>({}); // 최신 rebalExtraQty 스냅샷 (탭 전환 저장용)
   const intDashCompStocksRef = useRef<any[]>(defaultCompStocks);
   // ── 리밸런싱 목표비중 → 메모 달력 자동 기록 ──
   // calendarMemos state의 최신 미러(같은 tick 연속 커밋 합성 + 저장 핸들러의 동기 조회용)
@@ -799,6 +805,26 @@ export default function App() {
   // ── 리밸런싱 정렬 (계좌별 독립) ──
   const rebalanceSortConfig = rebalanceSortConfigMap[activePortfolioId] ?? { key: null, direction: 1 };
 
+  // ── 리밸런싱 '추가' 수량 · '추가 가능' 연동 (계좌별 독립, Drive 영속) ──
+  // 소비자(usePortfolioData·RebalancingPanel·달력 스냅샷)는 종전과 같은 '활성 계좌 한 장' 모양을 받는다.
+  const rebalExtraQty = rebalExtraQtyMap[activePortfolioId] || EMPTY_REBAL_ROW;
+  const rebalMaxAddLink = rebalMaxAddLinkMap[activePortfolioId] || EMPTY_REBAL_ROW;
+  // ⚠️ 함수형 updater를 그대로 지원해야 한다 — 패널의 연동 유지 effect가 `prev => …`로 부르고,
+  //    바뀐 게 없으면 **같은 참조(prev)**를 돌려준다. 그때 맵도 그대로 반환해야 리렌더 루프가 없다.
+  const setRebalExtraQty = useCallback((upd) => {
+    if (!activePortfolioId) return;
+    setRebalExtraQtyMap(m => updateRebalAcctMap(m, activePortfolioId, upd, EMPTY_REBAL_ROW));
+  }, [activePortfolioId]);
+  const setRebalMaxAddLink = useCallback((upd) => {
+    if (!activePortfolioId) return;
+    setRebalMaxAddLinkMap(m => updateRebalAcctMap(m, activePortfolioId, upd, EMPTY_REBAL_ROW));
+  }, [activePortfolioId]);
+  // 저장 트리거 지문 — 사용자 의도(수동 수량 + 연동 여부)만. 연동 행의 자동 갱신 수량은 빠진다.
+  const rebalExtraKey = useMemo(
+    () => rebalExtraIntentKey(rebalExtraQtyMap, rebalMaxAddLinkMap),
+    [rebalExtraQtyMap, rebalMaxAddLinkMap],
+  );
+
   // ── 섹션 접기/펼치기 (계좌별 독립) ──
   const _SEC_DEFAULT = { summary: false, stats: false, dividend: false, chart: false, rebalancing: false, donut: false };
   const sectionCollapsed = { ..._SEC_DEFAULT, ...(sectionCollapsedMap[activePortfolioId] || {}) };
@@ -945,6 +971,17 @@ export default function App() {
         if (!preserveView || showIntegratedDashboard) setCompStocks(restoredComps);
       }
     }
+    // 리밸런싱 '추가' 수량·'추가 가능' 연동 복원(계좌별 맵). ⚠️ 정규화 필수 — 문자열 '3'이 들어오면
+    //    `(수량 + action + extra) × 가격`이 문자열 결합이 되어 리밸런싱 표 전체가 오염된다.
+    // ⚠️ 부팅(뷰 비보존)에서는 필드가 없어도 **비운다** — 같은 탭에서 다른 계정 STATE를 적용하면
+    //    이전 사용자의 맵이 메모리에 남아 이 사용자의 STATE로 저장된다(다중 계정 오염 방지).
+    //    폴링 재적용(preserveView)은 필드가 있을 때만 — 옛 클라이언트가 쓴 STATE가 방금 친 값을 지우지 않게.
+    {
+      const _rq = stateData.chartPrefs?.rebalExtraQtyMap;
+      const _rl = stateData.chartPrefs?.rebalMaxAddLinkMap;
+      if (!preserveView || _rq !== undefined) setRebalExtraQtyMap(normalizeRebalExtraQtyMap(_rq));
+      if (!preserveView || _rl !== undefined) setRebalMaxAddLinkMap(normalizeRebalLinkMap(_rl));
+    }
     const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
     const resolvedIndicatorHistoryMap = marketData?.indicatorHistoryMap || stateData.indicatorHistoryMap || {};
     const resolvedMarketIndicators = marketData?.marketIndicators || stateData.marketIndicators;
@@ -1070,6 +1107,10 @@ export default function App() {
       if (stateData.chartPrefs.fxSlotCount !== undefined) setFxSlotCount(normalizeFxSlotCount(stateData.chartPrefs.fxSlotCount));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
       if (stateData.chartPrefs.rebalanceSortConfigMap) setRebalanceSortConfigMap(stateData.chartPrefs.rebalanceSortConfigMap);
+      // 리밸런싱 '추가' 수량·연동 — 백업 시점 값으로 되돌린다(목표비중과 같은 등급 — sticky 아님).
+      // 필드가 없는 옛 백업이면 현재 값을 유지한다(다른 chartPrefs 필드와 같은 규약).
+      if (stateData.chartPrefs.rebalExtraQtyMap !== undefined) setRebalExtraQtyMap(normalizeRebalExtraQtyMap(stateData.chartPrefs.rebalExtraQtyMap));
+      if (stateData.chartPrefs.rebalMaxAddLinkMap !== undefined) setRebalMaxAddLinkMap(normalizeRebalLinkMap(stateData.chartPrefs.rebalMaxAddLinkMap));
     }
   };
   applyBackupDataRef.current = applyBackupData;
@@ -1140,9 +1181,7 @@ export default function App() {
   useEffect(() => {
     const prevId = prevActivePortfolioIdRef.current;
     if (prevId !== null && prevId !== activePortfolioId) {
-      // 리밸런싱 '추가' 입력값을 계좌별로 보존 — 이전 계좌 저장 후 새 계좌 복원
-      accountRebalExtraQtyRef.current[prevId] = { ...rebalExtraQtyRef.current };
-      setRebalExtraQty(accountRebalExtraQtyRef.current[activePortfolioId] || {});
+      // (리밸런싱 '추가' 수량·연동은 계좌별 맵(rebalExtraQtyMap)이라 여기서 옮길 것이 없다.)
       // 이전 계좌 상태 저장 — 직전 뷰가 통합 대시보드였다면 currentChartStateRef.compStocks 는
       // 대시보드 비교종목이므로, 떠나는 개별 계좌(prevId)의 저장된 비교종목을 대시보드 값으로
       // 덮어쓰지 않도록 보존(메인 저장 가드와 동일 취지). 대시보드가 아니었으면 그대로 저장.
@@ -3928,6 +3967,12 @@ export default function App() {
       // 바인더 인덱스/섹션 펼침 상태 — 사용자 토글 시에만 변경(시세 갱신 무관)
       // → 변경 시 portfolioUpdatedAt 상승시켜 Drive STATE 저장 트리거 (앱 재시작 시 상태 유지)
       intSec, sectionCollapsedMap,
+      // ⚠️ 리밸런싱 '추가' 수량·연동 — **의도 지문**(rebalExtraIntentKey)만 넣는다. 원시 맵을 넣으면
+      //    연동 행이 시세마다 다시 채워져 Drive 저장이 폭주한다. 빠지면 '추가'만 고친 세션이
+      //    portfolioUpdatedAt을 못 올려 STATE 저장이 스킵된다(historyVerifyKey·targetAmount와 동일 클래스).
+      //    여기(구조 지문)에 두는 이유: 관리자 impersonation 편집이 VERSION을 올려야 사용자의 열린
+      //    앱이 폴링으로 받아 간다(chartPrefs만 올리면 saveVersionFile이 호출되지 않는다).
+      rebalExtraKey,
     ]);
     if (portfolioStructureKey !== prevPortfolioStructureRef.current) {
       const wasInitial = prevPortfolioStructureRef.current === '';
@@ -3947,7 +3992,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, rebalExtraQtyMap, rebalMaxAddLinkMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -3962,7 +4007,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, rebalExtraKey, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -4955,6 +5000,8 @@ export default function App() {
             handleRebalanceSort={handleRebalanceSort}
             rebalExtraQty={rebalExtraQty}
             setRebalExtraQty={setRebalExtraQty}
+            maxAddLink={rebalMaxAddLink}
+            setMaxAddLink={setRebalMaxAddLink}
             rebalCatDonutData={rebalCatDonutData}
             curCatDonutData={curCatDonutData}
             marketIndicators={marketIndicators}

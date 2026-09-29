@@ -84,6 +84,10 @@ export default function RebalancingPanel({
   handleRebalanceSort,
   rebalExtraQty,
   setRebalExtraQty,
+  // '추가 가능' → '추가' 연동 행 집합. 앱 탭은 App이 계좌별 맵으로 소유하고 Drive에 저장한다.
+  // 미전달(카드 별도 창)이면 아래 로컬 state로 폴백 — 창의 '추가'는 종전대로 창 로컬 스크래치다.
+  maxAddLink: maxAddLinkProp = null,
+  setMaxAddLink: setMaxAddLinkProp = null,
   rebalCatDonutData,
   curCatDonutData,
   marketIndicators,
@@ -190,7 +194,12 @@ export default function RebalancingPanel({
   const [hoveredProjDSSlice, setHoveredProjDSSlice] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [showCostFormula, setShowCostFormula] = useState(false);
-  const [maxAddLink, setMaxAddLink] = useState({}); // 추가가능→추가 연동된 행 id 집합
+  // 추가가능→추가 연동된 행 id 집합.
+  // ⚠️ 앱 탭에서는 패널 로컬 state로 되돌리지 말 것 — 섹션을 접거나 앱을 다시 열 때마다 연동이
+  //    풀려 '추가 가능' 클릭으로 채운 값이 사라진다(사용자 보고 2026-09). App이 계좌별로 소유·저장한다.
+  const [localMaxAddLink, setLocalMaxAddLink] = useState({});
+  const maxAddLink = maxAddLinkProp || localMaxAddLink;
+  const setMaxAddLink = setMaxAddLinkProp || setLocalMaxAddLink;
   const [helpPos, setHelpPos] = useState({ x: 0, y: 0 });
   const helpDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const datePickerRef = useRef(null);

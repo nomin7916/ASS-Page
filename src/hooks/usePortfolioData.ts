@@ -154,7 +154,7 @@ export function usePortfolioData({
       //    (두 모드 모두 대수적 항등). 적립식에 레벨 식(overallExp×비중)만 쓰면 힌트를 옮겨 적는 순간
       //    수량이 전혀 달라져 사용자가 '금액을 넣으면 값이 튄다'고 느낀다.
       // ⚠️ `price > 0` 가드는 반드시 바깥에 유지 — 기준가 미로드 펀드에서 Infinity/NaN이 cost·expEval·
-      //    rebalBalance·maxAdd를 거쳐 rebalExtraQty(계좌 전환에도 보존됨)까지 오염된다.
+      //    rebalBalance·maxAdd를 거쳐 rebalExtraQty(계좌별로 Drive에 저장됨)까지 오염된다.
       // ⚠️ 타입까지 본다 — String(x).trim() !== '' 만으로는 손상된 Drive 값(true/객체/'abc')이
       //    전부 '입력됨'으로 통과하고 cleanNum이 그걸 0으로 만들어 **조용히 전량 매도**가 된다.
       const rawTargetAmount = item.targetAmount;
