@@ -251,8 +251,14 @@ Drive I/O `driveStorage.updateDriveFileIfExists`·`driveFileExists` / 오케스�
   계정이 **완전히 삭제되면 Drive 파일도 사라져** 옮길 원본이 없다(사본을 먼저 확보할 것) · 옛 사용자가
   관리자 접근을 꺼 뒀으면 원본 폴더를 찾지 못한다(`adminAccessAllowed`) · 백업 파일(`portfolio_backup_*`)은
   옮기지 않는다(옮기면 `cleanupOldBackups` 상한에 밀려 **휴지통 없이 영구 삭제**된다).
-- 검증: `npm run verify:migrate` (직접 import `#1~#9` + 배선 가드 `#G1~#G8`). ⚠️ 가드는 **선언이 아니라
-  사용부**를 단언한다. `#G1`은 주석을 걷어낸 뒤 잰다(모듈 상단 주석이 금지 이유로 'enum' 단어를 적는다).
+- 검증: `npm run verify:migrate` (직접 import `#1~#9` + 배선 가드 `#G1~#G8`, 87건). ⚠️ 가드는 **선언이
+  아니라 사용부**를 단언한다. `#G1`은 주석을 걷어낸 뒤 잰다(모듈 상단 주석이 금지 이유로 'enum' 단어를 적는다).
+  **변이 19종 + 음성 대조 1종으로 검출을 실증**했다(파일 없으면 생성으로 되돌림 · 루트 가드 제거 ·
+  drive.file 스코프 강등 · 관리자 신원 검증 삭제 · 백업 삭제 · 대상 폴더에 `saveDriveFile` 복귀 · 재계산
+  미리보기 게이트 삭제 · `prepareMigratedState` 우회 · prop 배선 삭제 · 적용 게이트 축소 · 버튼이 게이트
+  무시 · 새로고침 삭제 · STATE 순서 뒤집기 · `targetHasData` 축소 · 시세 계층 잔존 · required를 skip으로 ·
+  대상 STATE 부재 차단 삭제 · 입력 제자리 변형 · 미리보기에 쓰기 추가). 가드를 손볼 때 같은 변이가 여전히
+  잡히는지 다시 확인할 것.
 
 ### 관리자 포털 '전일대비' = 보유종목 등락률로 직전 거래일 역산 (⚠️ 회귀 주의 — 저장 history 비교 금지)
 
