@@ -479,6 +479,54 @@ export async function loadDriveFile(
   return await res.json();
 }
 
+// 폴더 안에 그 이름의 파일이 있는가(메타 조회만). 관리자 '계정 이전' 미리보기가 '갱신 가능/건너뜀'을 가르는 데 쓴다.
+export async function driveFileExists(token: string, folderId: string, fileName: string): Promise<boolean> {
+  return !!(await findFileId(token, folderId, fileName));
+}
+
+// 기존 파일의 **내용만** 갱신한다 — 없으면 false를 돌려주고 절대 만들지 않는다.
+// ⚠️ 관리자 '계정 이전' 전용 라이터. saveDriveFile과 달리 생성 분기가 **구조적으로 없다**:
+//    관리자 토큰으로 사용자 폴더에 새 파일을 만들면 그 파일은 관리자 소유가 되고, 사용자 앱(drive.file
+//    스코프)은 자기가 만들지 않은 파일을 읽지 못할 수 있다(학습자료를 서버 프록시로 중계하는 이유).
+//    그런 STATE가 대상 폴더에 생기면 그 계정은 로드·저장이 통째로 막힌다 → 생성 자체를 막는다.
+//    기존 파일 PATCH는 소유자(사용자)를 바꾸지 않는다(impersonation 저장이 쓰는 경로와 동일).
+export async function updateDriveFileIfExists(
+  token: string,
+  folderId: string,
+  fileName: string,
+  data: unknown
+): Promise<boolean> {
+  _assertNotRootFolder(folderId, fileName);
+  const fileId = await findFileId(token, folderId, fileName);
+  if (!fileId) return false;
+  const boundary = 'drive_boundary_xyz';
+  const body = [
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    JSON.stringify({ name: fileName, mimeType: 'application/json' }),
+    `--${boundary}`,
+    'Content-Type: application/json',
+    '',
+    JSON.stringify(data),
+    `--${boundary}--`,
+  ].join('\r\n');
+  const res = await fetch(`${UPLOAD_API}/files/${fileId}?uploadType=multipart`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    body,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    // ⚠️ 메시지에 res.status 숫자 포함 — 호출부가 '401'로 토큰 재발급을 분기한다(saveDriveFile과 동일 규약).
+    throw new Error(`[Drive] 파일 덮어쓰기(${fileName}) 실패 ${res.status}: ${(err as any)?.error?.message || res.statusText}`);
+  }
+  return true;
+}
+
 // 폴링 전용: portfolio_version.json에서 portfolioUpdatedAt만 읽기 (파일이 ~50바이트로 매우 가볍다)
 export async function loadVersionTimestamp(
   token: string,

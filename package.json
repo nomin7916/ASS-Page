@@ -32,6 +32,7 @@
     "verify:watchlist": "node scripts/verify-watchlist.mjs",
     "verify:rebal-extra": "node scripts/verify-rebal-extra.mjs",
     "verify:deposit-ledger": "node scripts/verify-deposit-ledger.mjs",
+    "verify:migrate": "node scripts/verify-migrate.mjs",
     "verify:palette": "node scripts/validate_palette.mjs",
     "verify:imports": "node scripts/importcheck.mjs",
     "gate": "node scripts/gate.mjs"

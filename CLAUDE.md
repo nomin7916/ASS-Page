@@ -199,6 +199,61 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   있으므로. 새로고침 시 `?adminPortal=1` 유지로 포털에 재진입(reload-loop 아님, 의도된 동작 —
   impersonation의 reload 가드와 달리 포털 탭은 reload가 곧 재진입이라 별도 가드 불필요).
 
+### 관리자 '계정 이전' = 옛 계정 Drive 데이터를 새 계정 폴더로 — 기존 파일 갱신만 (⚠️ 회귀 주의 — 새 파일 생성 금지)
+
+관리자 페이지의 **'계정 이전' 카드**(승인 사용자 목록 아래). 원본·대상 계정을 고르고 **미리보기 → 확인 → 적용**.
+발단(사용자 2026-10): Google 계정에 문제가 생겨 새 계정을 만든 사용자가 계좌·종목·기록을 전부 다시 입력해야
+했다. 데이터는 전부 사용자 Drive `Index_Data_<email>` 폴더의 JSON이고 **이메일이 데이터 안에 박혀 있지 않다**
+(계좌는 `generateId` id로만 참조) → 파일 내용을 새 폴더로 옮기면 그대로 산다.
+순수 로직 `src/accountMigration.ts`(⚠️ import 0건·enum 금지 — `verify:migrate`가 직접 import) /
+Drive I/O `driveStorage.updateDriveFileIfExists`·`driveFileExists` / 오케스트레이션 `App.tsx`
+`handleMigrationPreview`·`handleMigrationApply` / UI `AdminPage`.
+
+- **⚠️ 1급 계약 — 대상 폴더에 **새 파일을 만들지 않는다**. 이미 있는 파일의 내용만 PATCH한다.**
+  관리자 토큰으로 사용자 폴더에 만든 파일은 **관리자 소유**가 되고, 사용자 앱(`drive.file` 스코프)은 자기가
+  만들지 않은 파일을 읽지 못할 수 있다(학습자료를 `/api/study-material` 프록시로 중계하는 이유가 바로 이것).
+  그런 STATE가 대상 폴더에 생기면 그 계정은 `findFileId`(metadata.readonly)로는 보이는데 다운로드가 403이라
+  **로드·저장이 통째로 막힌다**. 그래서 라이터는 `saveDriveFile`이 아니라 **생성 분기가 구조적으로 없는**
+  `updateDriveFileIfExists`다(`#G2c`가 POST·parents·생성 엔드포인트 부재를 단언). 기존 파일 PATCH는 소유자를
+  바꾸지 않는다(impersonation 저장이 쓰는 경로와 동일).
+- **전제 조건(= 대상에 사용자 소유 STATE가 있어야 한다)**: 대상 계정이 시트에 승인되고 → 1회 로그인(폴더 생성 +
+  관리자 writer 권한 자동 부여) → **계좌를 하나 만든다**. 신규 사용자는 계좌 0개면 자동 저장이 조기 반환해
+  STATE·MARKET·VERSION 파일이 **생기지 않는다**. 그 더미 계좌는 적용 시 통째로 교체된다. 미리보기 차단 사유가
+  어느 단계가 빠졌는지 그대로 말한다(`migrationBlockers`).
+- **파일 계획 `MIGRATION_FILES`**(⚠️ STATE가 첫 항목 — 적용 루프가 STATE 실패 시 나머지를 중단한다):
+  STATE(필수 — 양쪽에 없으면 `blocked`) · MARKET · STOCK · DIVIDEND_TAX · NOTIFICATION_LOG(**양쪽에 있을 때만**
+  `update`, 아니면 `skip-*`). 종가 캐시(STOCK)가 빠져도 앱이 첫 접속에서 전량 재조회하므로 손실이 아니다
+  (`manualPriceOverrides`·`history`는 STATE 안). **PIN·백업·SESSION·VERSION 생성은 범위 밖** — 대상은 자기
+  PIN을 쓰고, version 파일은 **있을 때만** `{portfolioUpdatedAt: now}`로 갱신한다(없으면 다음 접속에서 STATE를
+  직접 읽는다).
+- **대상 STATE = `prepareMigratedState(srcState, now)`**: 입력 불변·시세 계층(`stockHistoryMap` 등)·`manualSavedAt`
+  제거·`portfolioUpdatedAt`/`chartPrefsUpdatedAt`/`updatedAt`을 **now로 새로** 찍는다(대상 앱의 저장 가드와
+  폴링 재적용이 이 값으로 '변경됨'을 판정) · `startDate` 정규화는 `handleImportStateFile`과 같은 식.
+- **⚠️ 적용 순서(`#G5d`가 indexOf로 단언)**: ① 그 자리에서 미리보기를 **다시 계산**해 ok일 때만(화면의
+  미리보기는 낡았을 수 있다) ② 덮어쓰기 직전 대상 STATE를 **관리자 폴더**(`Index_Data_Admin/migration_backup_
+  <email>_<ts>.json`)에 `saveDriveFile`로 백업 — 관리자 소유라 소유권 문제가 없고, **undo가 없는 이 기능의 유일한
+  복구 지점** ③ 파일 갱신 ④ version ⑤ 시트 기능 플래그 9종 중 **차이 나는 것만** `setUserFeature`.
+  `saveDriveFile` 호출은 적용 블록에 **그 백업 1곳뿐**(`#G5c`), 원본 폴더에는 아무것도 쓰지 않는다(`#G5f`).
+- **⚠️ 토큰은 로그인 토큰(`driveTokenRef`, drive.file)이 아니라 전체 drive 스코프의 별도 GIS 토큰**
+  (`AdminPortal`·`AdminViewBootstrap`과 같은 경로) — `findUserIndexFolder`의 소유자 기준 검색과 타 사용자 파일
+  읽기·갱신이 그 스코프를 요구한다. 토큰 소유자가 관리자인지 `fetchUserEmail === ADMIN_EMAIL`로 검증(hint는
+  힌트일 뿐). 메모리 ref에만 둔다. 401이면 한 번만 재발급(`withMigrationToken`).
+- **⚠️ 적용 게이트 3종(`AdminPage` `migApplyAllowed`, `#G7b`) — 하나도 빼지 말 것**: 미리보기 `ok` + 확인
+  체크박스 + 대상에 데이터가 있으면(`targetHasData` — 더미 계좌 1개·기록 1건은 데이터로 치지 않는다)
+  **대상 이메일을 직접 입력**. 관리자 본인은 원본·대상 어느 쪽도 될 수 없다(`nonAdminUsers`).
+- **경고(차단 아님)**: 대상 사용자가 5분 내 접속 중이면 **앱을 닫게 한 뒤 진행** — 열린 앱이 자기 편집을
+  저장하면 이전 결과를 덮는다(그 저장은 `portfolioUpdatedAt > lastSaved` 게이트라 편집이 있을 때만).
+  적용 뒤 열린 앱은 version 폴링으로 `preserveView` 재적용된다.
+- **영속화 지점 0곳** — 미리보기·결과·선택은 전부 세션 로컬이고, 대상에 쓰는 것은 기존 파일 내용뿐이다.
+  `portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps·Apps Script **전 지점 무수정**
+  (기능 플래그 복사는 기존 `setUserFeature` 재사용).
+- **알려진 한계(의도)**: 사용자 `name`은 Apps Script에 쓰기 액션이 없어 시트에서 직접 고친다 · 옛 Google
+  계정이 **완전히 삭제되면 Drive 파일도 사라져** 옮길 원본이 없다(사본을 먼저 확보할 것) · 옛 사용자가
+  관리자 접근을 꺼 뒀으면 원본 폴더를 찾지 못한다(`adminAccessAllowed`) · 백업 파일(`portfolio_backup_*`)은
+  옮기지 않는다(옮기면 `cleanupOldBackups` 상한에 밀려 **휴지통 없이 영구 삭제**된다).
+- 검증: `npm run verify:migrate` (직접 import `#1~#9` + 배선 가드 `#G1~#G8`). ⚠️ 가드는 **선언이 아니라
+  사용부**를 단언한다. `#G1`은 주석을 걷어낸 뒤 잰다(모듈 상단 주석이 금지 이유로 'enum' 단어를 적는다).
+
 ### 관리자 포털 '전일대비' = 보유종목 등락률로 직전 거래일 역산 (⚠️ 회귀 주의 — 저장 history 비교 금지)
 
 관리자 포털(`AdminPortal.tsx`)의 **전일대비·일수익(`dailyReturnRate`/`dodAbsChange`)**은 사용자

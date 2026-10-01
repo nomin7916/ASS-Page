@@ -78,6 +78,29 @@ interface Props {
   onSetNoticeFlags?: (flags: { notebook: boolean }) => Promise<SettingsSaveResult | void>;
   onUploadStudyMaterial?: (file: File) => Promise<string>; // HTML 업로드 → fileId (학습자료 전용)
   onDeleteStudyMaterialFile?: (fileId: string) => Promise<void>; // Drive 원본 정리
+  // 계정 이전 — 둘 다 App이 전체 drive 스코프 토큰으로 수행한다(이 컴포넌트는 UI만). 반환 모양은 accountMigration.ts.
+  onMigrationPreview?: (src: ApprovedUser, dst: ApprovedUser) => Promise<any>;
+  onMigrationApply?: (src: ApprovedUser, dst: ApprovedUser) => Promise<any>;
+}
+
+// 계정 이전 미리보기의 STATE 요약 한 칸 (원본·대상 공용)
+function MigSummary({ title, s, tone }: { title: string; s: any; tone: 'src' | 'dst' }) {
+  if (!s) return null;
+  const fmtTs = (ts: number) => (ts > 0 ? new Date(ts).toLocaleString('ko-KR', { hour12: false }) : '없음');
+  const hist = s.historyRecords > 0 ? `${s.historyRecords}건 (${s.historyFrom} ~ ${s.historyTo})` : '없음';
+  return (
+    <div className={`rounded-lg border p-2.5 ${tone === 'src' ? 'border-sky-800/60 bg-sky-950/30' : 'border-amber-800/60 bg-amber-950/20'}`}>
+      <div className={`text-[11px] font-semibold mb-1 ${tone === 'src' ? 'text-sky-300' : 'text-amber-300'}`}>{title}</div>
+      <dl className="text-[10px] text-gray-300 space-y-0.5">
+        <div><dt className="inline text-gray-500">계좌 </dt><dd className="inline">{s.accounts}개 (라이브 {s.liveAccounts})</dd></div>
+        <div><dt className="inline text-gray-500">종목·펀드·예적금 </dt><dd className="inline">{s.items}건</dd></div>
+        <div><dt className="inline text-gray-500">평가 기록 </dt><dd className="inline">{hist}</dd></div>
+        <div><dt className="inline text-gray-500">입출금 원장 </dt><dd className="inline">{s.deposits}행</dd></div>
+        <div><dt className="inline text-gray-500">메모달력 </dt><dd className="inline">{s.calendarMemoDays}일 · 관심종목 {s.watchlistGroups} · 흐름도 {s.flowMaps} · 백테스트 {s.backtestScenarios} · 가계부 {s.ledgerBooks}</dd></div>
+        <div><dt className="inline text-gray-500">마지막 저장 </dt><dd className="inline">{fmtTs(s.portfolioUpdatedAt)}</dd></div>
+      </dl>
+    </div>
+  );
 }
 
 // Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
@@ -102,10 +125,19 @@ function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks, reportUrl = '', onSetReportUrl, noticeFlags = { notebook: true }, onSetNoticeFlags, onUploadStudyMaterial, onDeleteStudyMaterialFile }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks, reportUrl = '', onSetReportUrl, noticeFlags = { notebook: true }, onSetNoticeFlags, onUploadStudyMaterial, onDeleteStudyMaterialFile, onMigrationPreview, onMigrationApply }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
+
+  // 계정 이전 상태 — 전부 세션 로컬(Drive 저장 지점 0곳). 미리보기·결과는 App 핸들러의 반환값 그대로.
+  const [migSrc, setMigSrc] = useState('');
+  const [migDst, setMigDst] = useState('');
+  const [migPreview, setMigPreview] = useState<any>(null);
+  const [migBusy, setMigBusy] = useState<'' | 'preview' | 'apply'>('');
+  const [migConfirm, setMigConfirm] = useState(false);
+  const [migTyped, setMigTyped] = useState('');
+  const [migResult, setMigResult] = useState<any>(null);
 
   // 공지 보내기 상태
   const [notifTarget, setNotifTarget] = useState('__all__');
@@ -640,6 +672,33 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     triggerSessionRefresh(u);
   };
 
+  // ── 계정 이전 (CLAUDE.md '관리자 계정 이전' 절) ──
+  // 관리자 본인은 원본·대상 어느 쪽도 될 수 없다(관리자 데이터는 파일 가져오기로 다룬다).
+  const nonAdminUsers = users.filter(u => u.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase());
+  const migSrcUser = nonAdminUsers.find(u => u.email === migSrc) || null;
+  const migDstUser = nonAdminUsers.find(u => u.email === migDst) || null;
+  const resetMigration = () => { setMigPreview(null); setMigConfirm(false); setMigTyped(''); setMigResult(null); };
+  const handleMigrationPreview = async () => {
+    if (!onMigrationPreview || !migSrcUser || !migDstUser) return;
+    setMigBusy('preview'); setMigResult(null); setMigConfirm(false); setMigTyped('');
+    try { setMigPreview(await onMigrationPreview(migSrcUser, migDstUser)); }
+    catch (e: any) { setMigPreview({ ok: false, blockers: [`조회 실패: ${String(e?.message || e)}`], warnings: [], files: [], features: [], source: null, target: null }); }
+    setMigBusy('');
+  };
+  // ⚠️ 적용 게이트 3종 — 미리보기 ok + 확인 체크 + (대상에 데이터가 있으면) 대상 이메일 직접 입력.
+  //    어느 하나도 빼지 말 것: 이 기능은 undo가 없고 대상 STATE를 통째로 교체한다.
+  const migApplyAllowed = !!migPreview?.ok && migConfirm && !migBusy
+    && (!migPreview?.target?.hasData || migTyped.trim().toLowerCase() === String(migPreview?.target?.email || '').toLowerCase());
+  const handleMigrationApply = async () => {
+    if (!onMigrationApply || !migApplyAllowed || !migSrcUser || !migDstUser) return;
+    setMigBusy('apply');
+    try { setMigResult(await onMigrationApply(migSrcUser, migDstUser)); }
+    catch (e: any) { setMigResult({ ok: false, steps: [], error: String(e?.message || e) }); }
+    setMigBusy('');
+    setMigPreview(null); setMigConfirm(false); setMigTyped('');
+    handleRefresh(); // 시트 기능 플래그가 바뀌었을 수 있다
+  };
+
   const handleSendNotification = async () => {
     if (!notifMessage.trim()) return;
     setSending(true);
@@ -930,6 +989,135 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
             </button>
           </div>
         </div>
+
+        {/* 계정 이전 — 옛 계정 Drive 데이터를 새 계정 폴더로 (CLAUDE.md '관리자 계정 이전' 절) */}
+        {onMigrationPreview && onMigrationApply && (
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-2xl mt-6">
+            <h2 className="text-white font-semibold mb-1">계정 이전</h2>
+            <p className="text-gray-500 text-xs leading-relaxed mb-4">
+              옛 계정의 Drive 데이터(계좌·종목·기록·입출금·메모달력·관심종목·흐름도·백테스트·가계부·차트 설정)를
+              새 계정 폴더로 복사하고 시트의 기능 ON/OFF를 맞춥니다. 원본은 읽기만 하고, 대상에는 이미 있는 파일만 덮어씁니다.
+              되돌리기는 없으니 미리보기를 확인한 뒤 적용하세요. 전제: 대상 계정이 시트에 승인돼 있고, 그 계정으로
+              로그인해 계좌를 하나 만들어 둔 상태(그래야 덮어쓸 STATE 파일이 사용자 소유로 생깁니다).
+            </p>
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <label className="text-[11px] text-gray-400">
+                원본(옛 계정)
+                <select
+                  value={migSrc}
+                  onChange={e => { setMigSrc(e.target.value); resetMigration(); }}
+                  disabled={!!migBusy}
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-sky-500 disabled:opacity-50"
+                >
+                  <option value="">선택</option>
+                  {nonAdminUsers.map(u => <option key={u.email} value={u.email}>{u.name ? `${u.name} · ` : ''}{u.email}</option>)}
+                </select>
+              </label>
+              <label className="text-[11px] text-gray-400">
+                대상(새 계정)
+                <select
+                  value={migDst}
+                  onChange={e => { setMigDst(e.target.value); resetMigration(); }}
+                  disabled={!!migBusy}
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500 disabled:opacity-50"
+                >
+                  <option value="">선택</option>
+                  {nonAdminUsers.filter(u => u.email !== migSrc).map(u => <option key={u.email} value={u.email}>{u.name ? `${u.name} · ` : ''}{u.email}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleMigrationPreview}
+                disabled={!migSrcUser || !migDstUser || !!migBusy}
+                className="bg-sky-800 hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed text-sky-100 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
+              >
+                {migBusy === 'preview' ? '조회 중...' : '미리보기'}
+              </button>
+              {(migPreview || migResult) && !migBusy && (
+                <button onClick={resetMigration} className="text-gray-500 hover:text-gray-300 text-xs transition-colors">초기화</button>
+              )}
+            </div>
+            {migPreview && (
+              <div className="mt-4 space-y-3">
+                {migPreview.blockers?.length > 0 && (
+                  <ul className="space-y-1">
+                    {migPreview.blockers.map((b, i) => <li key={i} className="text-red-400 text-[11px] leading-relaxed">✗ {b}</li>)}
+                  </ul>
+                )}
+                {migPreview.warnings?.length > 0 && (
+                  <ul className="space-y-1">
+                    {migPreview.warnings.map((w, i) => <li key={i} className="text-amber-400 text-[11px] leading-relaxed">⚠ {w}</li>)}
+                  </ul>
+                )}
+                {(migPreview.source?.summary || migPreview.target?.summary) && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <MigSummary title={`원본 · ${migPreview.source?.email || migSrc}`} s={migPreview.source?.summary} tone="src" />
+                    <MigSummary title={`대상 · ${migPreview.target?.email || migDst}`} s={migPreview.target?.summary} tone="dst" />
+                  </div>
+                )}
+                {migPreview.files?.length > 0 && (
+                  <ul className="text-[10px] space-y-0.5">
+                    {migPreview.files.map(f => {
+                      const cls = f.action === 'update' ? 'text-green-300' : f.action === 'blocked' ? 'text-red-400' : 'text-gray-500';
+                      const txt = f.action === 'update' ? '덮어씀'
+                        : f.action === 'blocked' ? '대상에 없음 — 이전 불가'
+                        : f.action === 'skip-target-missing' ? '대상에 없음 — 건너뜀'
+                        : '원본에 없음 — 건너뜀';
+                      return <li key={f.key} className={cls}>· {f.label} <span className="text-gray-600">{f.name}</span> — {txt}</li>;
+                    })}
+                  </ul>
+                )}
+                <div className="text-[10px] text-gray-400">
+                  기능 플래그: {migPreview.features?.length
+                    ? migPreview.features.map(d => `${d.feature} → ${d.value ? 'ON' : 'OFF'}`).join(' · ')
+                    : '변경 없음(원본과 동일)'}
+                </div>
+                {migPreview.ok && (
+                  <div className="border-t border-gray-800 pt-3 space-y-2">
+                    <label className="flex items-start gap-2 text-[11px] text-gray-300 cursor-pointer">
+                      <input type="checkbox" checked={migConfirm} onChange={e => setMigConfirm(e.target.checked)} className="mt-0.5" />
+                      <span>대상 계정 <span className="text-amber-300">{migPreview.target?.email}</span>의 현재 데이터가 원본 내용으로 전부 교체되는 것을 확인했습니다.</span>
+                    </label>
+                    {migPreview.target?.hasData && (
+                      <label className="block text-[11px] text-gray-400">
+                        대상에 이미 데이터가 있습니다. 확인을 위해 대상 이메일을 그대로 입력하세요.
+                        <input
+                          value={migTyped}
+                          onChange={e => setMigTyped(e.target.value)}
+                          placeholder={migPreview.target?.email}
+                          className="mt-1 w-full bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500"
+                        />
+                      </label>
+                    )}
+                    <button
+                      onClick={handleMigrationApply}
+                      disabled={!migApplyAllowed}
+                      className="w-full bg-amber-700 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2 rounded-xl transition-colors"
+                    >
+                      {migBusy === 'apply' ? '이전 중... 창을 닫지 마세요' : '이전 실행'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {migResult && (
+              <div className="mt-4 space-y-1">
+                <p className={`text-[11px] font-semibold ${migResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+                  {migResult.ok ? '✓ 이전 완료 — 대상 계정으로 로그인해 화면을 확인하세요.' : `✗ 이전 실패${migResult.error ? ` — ${migResult.error}` : ''}`}
+                </p>
+                {(migResult.steps || []).map((st, i) => (
+                  <div key={i} className={`text-[10px] ${st.status === 'ok' ? 'text-green-300' : st.status === 'fail' ? 'text-red-400' : 'text-gray-500'}`}>
+                    {st.status === 'ok' ? '✓' : st.status === 'fail' ? '✗' : '–'} {st.label}{st.detail ? ` — ${st.detail}` : ''}
+                  </div>
+                ))}
+                {migResult.backupName && (
+                  <p className="text-[10px] text-gray-500">덮어쓰기 직전 대상 STATE 백업: Index_Data_Admin/{migResult.backupName}</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 공지 보내기 */}
         <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">

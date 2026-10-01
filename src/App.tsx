@@ -11,11 +11,12 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
-import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, uploadHtmlStudyMaterial, deleteDriveFileById } from './driveStorage';
+import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, uploadHtmlStudyMaterial, deleteDriveFileById, driveFileExists, updateDriveFileIfExists, getOrCreateAdminFolder } from './driveStorage';
+import { MIGRATION_FILES, buildMigrationPreview, migrationErrorPreview, prepareMigratedState, migrationBackupName } from './accountMigration';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
-import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures } from './components/LoginGate';
+import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures, fetchUserEmail } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
 import AdminPortal from './components/AdminPortal';
 import AdminNotificationModal, { AdminNotification } from './components/AdminNotificationModal';
@@ -417,6 +418,158 @@ export default function App() {
         const isApiError = msg.includes('TOKEN_EXPIRED') || msg.includes('PERMISSION_DENIED') || msg.includes('DRIVE_ERROR');
         setUserDriveStatus(prev => ({ ...prev, [email]: isApiError ? 'error' : 'not_found' }));
       }
+    }
+  };
+
+  // ── 관리자 '계정 이전' (CLAUDE.md '관리자 계정 이전' 절) ──
+  // ⚠️ 로그인 토큰(driveTokenRef — drive.file 스코프)이 아니라 **전체 drive 스코프**의 별도 토큰을 쓴다.
+  //    findUserIndexFolder의 '소유자 기준 검색'과 타 사용자 파일 읽기·갱신이 그 스코프를 요구한다
+  //    (AdminPortal·AdminViewBootstrap과 같은 경로). 토큰은 메모리 ref에만 둔다(URL·storage 금지).
+  const migTokenClientRef = useRef(null);
+  const migTokenRef = useRef('');
+  const migPendingResolveRef = useRef(null);
+  const requestMigrationToken = (prompt: string): Promise<string | null> => new Promise((resolve) => {
+    const oauth = (window as any).google?.accounts?.oauth2;
+    if (!oauth) { resolve(null); return; }
+    if (!migTokenClientRef.current) {
+      migTokenClientRef.current = oauth.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/drive',
+        hint: ADMIN_EMAIL,
+        callback: (resp: any) => {
+          const r = migPendingResolveRef.current; migPendingResolveRef.current = null;
+          if (r) r(resp?.error ? null : (resp?.access_token || null));
+        },
+        error_callback: () => {
+          const r = migPendingResolveRef.current; migPendingResolveRef.current = null;
+          if (r) r(null);
+        },
+      });
+    }
+    migPendingResolveRef.current = resolve;
+    migTokenClientRef.current.requestAccessToken({ prompt });
+  });
+  // ⚠️ 토큰 소유자가 관리자인지 OAuth 신원으로 검증한다 — hint는 힌트일 뿐 다른 계정을 고를 수 있다
+  //    (AdminViewBootstrap과 동일). 실패는 던진다(호출부가 화면에 사유를 띄운다).
+  const ensureMigrationToken = async (): Promise<string> => {
+    if (migTokenRef.current) return migTokenRef.current;
+    let t = await requestMigrationToken('');
+    if (!t) t = await requestMigrationToken('select_account');
+    if (!t) throw new Error('관리자 Drive 인증에 실패했습니다. 팝업 차단을 확인하고 다시 시도하세요.');
+    const who = await fetchUserEmail(t);
+    if ((who || '').toLowerCase() !== ADMIN_EMAIL.toLowerCase()) throw new Error('관리자 계정이 아닌 Google 계정으로 인증됐습니다. 관리자 계정을 선택하세요.');
+    migTokenRef.current = t;
+    return t;
+  };
+  // 401이면 토큰을 버리고 한 번만 다시 받는다(폴더 검색은 'TOKEN_EXPIRED', 파일 I/O는 '401'을 던진다).
+  const withMigrationToken = async (fn) => {
+    try {
+      return await fn(await ensureMigrationToken());
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      if (!migTokenRef.current || !(msg.includes('TOKEN_EXPIRED') || msg.includes('401'))) throw e;
+      migTokenRef.current = '';
+      return await fn(await ensureMigrationToken());
+    }
+  };
+  const migrationFileFlags = async (token, folderId) => {
+    const flags = {};
+    for (const f of MIGRATION_FILES) flags[f.key] = folderId ? await driveFileExists(token, folderId, f.name) : false;
+    return flags;
+  };
+  // 미리보기 — 읽기만 한다. 실패도 던지지 않고 '막힘 사유'로 돌려준다(AdminPage는 토스트가 없다).
+  const handleMigrationPreview = async (srcUser, dstUser) => {
+    const srcEmail = String(srcUser?.email || '').trim();
+    const dstEmail = String(dstUser?.email || '').trim();
+    try {
+      return await withMigrationToken(async (token) => {
+        const srcFolder = srcEmail ? await findUserIndexFolder(token, srcEmail) : null;
+        const dstFolder = dstEmail ? await findUserIndexFolder(token, dstEmail) : null;
+        const srcState = srcFolder ? await loadDriveFile(token, srcFolder, DRIVE_FILES.STATE) : null;
+        const dstState = dstFolder ? await loadDriveFile(token, dstFolder, DRIVE_FILES.STATE) : null;
+        const [srcHas, dstHas] = await Promise.all([migrationFileFlags(token, srcFolder), migrationFileFlags(token, dstFolder)]);
+        let dstLastSeen = 0;
+        if (dstFolder) {
+          try { const s = await loadDriveFile(token, dstFolder, DRIVE_FILES.SESSION) as any; dstLastSeen = Number(s?.lastSeen) || 0; } catch {}
+        }
+        return buildMigrationPreview({
+          srcEmail, dstEmail, adminEmail: ADMIN_EMAIL,
+          srcFolderFound: !!srcFolder, dstFolderFound: !!dstFolder,
+          srcState, dstHasState: !!dstHas.STATE, dstState, srcHas, dstHas,
+          srcUser, dstUser, dstLastSeen, now: Date.now(),
+        });
+      });
+    } catch (e: any) {
+      return migrationErrorPreview(srcEmail, dstEmail, `조회 실패: ${String(e?.message || e)}`);
+    }
+  };
+  // 적용 — 화면의 미리보기는 낡았을 수 있으므로 **그 자리에서 다시 계산한 미리보기**가 ok일 때만 돈다.
+  // ⚠️ 대상 폴더에는 updateDriveFileIfExists만 쓴다(새 파일 생성 금지 — driveStorage 주석).
+  //    saveDriveFile은 **관리자 폴더의 백업**에만 쓴다. STATE가 첫 항목이고 실패하면 나머지를 중단한다.
+  // ⚠️ 원본 폴더에는 아무것도 쓰지 않는다.
+  const handleMigrationApply = async (srcUser, dstUser) => {
+    const steps = [];
+    const push = (label, status, detail?) => { steps.push(detail ? { label, status, detail } : { label, status }); };
+    try {
+      await ensureMigrationToken();
+      const preview = await handleMigrationPreview(srcUser, dstUser);
+      if (!preview.ok) return { ok: false, steps, error: preview.blockers.join(' / ') };
+      const token = migTokenRef.current;
+      if (!token) return { ok: false, steps, error: '관리자 Drive 인증이 풀렸습니다. 다시 시도하세요.' };
+      const srcEmail = preview.source.email;
+      const dstEmail = preview.target.email;
+      const srcFolder = await findUserIndexFolder(token, srcEmail);
+      const dstFolder = await findUserIndexFolder(token, dstEmail);
+      if (!srcFolder || !dstFolder) return { ok: false, steps, error: 'Drive 폴더를 다시 찾지 못했습니다.' };
+      const now = Date.now();
+      const srcState = await loadDriveFile(token, srcFolder, DRIVE_FILES.STATE) as any;
+      if (!srcState?.portfolios?.length) return { ok: false, steps, error: '원본 STATE를 읽지 못했습니다.' };
+      // 1) 덮어쓰기 직전 대상 STATE 백업 → 관리자 폴더(관리자 소유라 소유권 문제가 없다). undo가 없는 이 기능의 유일한 복구 지점.
+      const dstState = await loadDriveFile(token, dstFolder, DRIVE_FILES.STATE);
+      const adminFolder = await getOrCreateAdminFolder(token);
+      const backupName = migrationBackupName(dstEmail, now);
+      await saveDriveFile(token, adminFolder, backupName, { kind: 'migration_backup', from: srcEmail, to: dstEmail, at: now, state: dstState });
+      push(`대상 STATE 백업 (Index_Data_Admin/${backupName})`, 'ok');
+      // 2) 파일 갱신 — MIGRATION_FILES 순서(STATE 첫 항목)
+      for (const f of preview.files) {
+        const label = `${f.label} (${f.name})`;
+        if (f.action !== 'update') { push(label, 'skip', f.action === 'skip-target-missing' ? '대상에 파일 없음' : '원본에 파일 없음'); continue; }
+        try {
+          const data = f.key === 'STATE' ? prepareMigratedState(srcState, now) : await loadDriveFile(token, srcFolder, f.name);
+          if (data == null) { push(label, 'skip', '원본 파일이 비어 있음'); continue; }
+          const updated = await updateDriveFileIfExists(token, dstFolder, f.name, data);
+          if (!updated) {
+            push(label, f.key === 'STATE' ? 'fail' : 'skip', '대상 파일이 사라짐');
+            if (f.key === 'STATE') return { ok: false, steps, backupName, error: '대상 STATE 파일이 사라져 중단했습니다.' };
+            continue;
+          }
+          push(label, 'ok');
+        } catch (e: any) {
+          push(label, 'fail', String(e?.message || e));
+          if (f.key === 'STATE') return { ok: false, steps, backupName, error: 'STATE 갱신에 실패해 나머지를 중단했습니다.' };
+        }
+      }
+      // 3) version 파일 — 있을 때만 갱신(대상 앱의 폴링이 이 값으로 재적용한다). 없으면 다음 접속에서 STATE를 직접 읽는다.
+      try {
+        const v = await updateDriveFileIfExists(token, dstFolder, DRIVE_FILES.VERSION, { portfolioUpdatedAt: now });
+        push('version 파일 갱신', v ? 'ok' : 'skip', v ? undefined : '대상에 version 파일 없음');
+      } catch (e: any) { push('version 파일 갱신', 'fail', String(e?.message || e)); }
+      // 4) 시트 기능 플래그 복사(차이 나는 것만) — AdminPage handleToggleFeature와 같은 Apps Script 경로
+      for (const d of preview.features) {
+        const label = `기능 ${d.feature} → ${d.value ? 'ON' : 'OFF'}`;
+        try {
+          const res = await fetch(APPS_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: 'setUserFeature', email: dstEmail, feature: d.feature, value: d.value }),
+          });
+          const data = await res.json().catch(() => ({}));
+          push(label, data?.success ? 'ok' : 'fail', data?.success ? undefined : (data?.error || '시트 기록 실패'));
+        } catch { push(label, 'fail', '네트워크 오류'); }
+      }
+      return { ok: !steps.some(s => s.status === 'fail'), steps, backupName };
+    } catch (e: any) {
+      return { ok: false, steps, error: String(e?.message || e) };
     }
   };
 
@@ -4420,7 +4573,7 @@ export default function App() {
     return <>{cardWinFeeds}<AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportUrl={reportUrl} onSetReportUrl={handleSetReportUrl} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} /></>;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} onMigrationPreview={handleMigrationPreview} onMigrationApply={handleMigrationApply} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportUrl={reportUrl} onSetReportUrl={handleSetReportUrl} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} /></>;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨
