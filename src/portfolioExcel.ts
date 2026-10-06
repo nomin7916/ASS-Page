@@ -335,7 +335,8 @@ export const buildPortfolioSheet = (input: PortfolioExcelInput): XlsxSheet => {
       code: item.code || '',
       changeRate: pct(item.changeRate),
       // 화면: 해외는 formatUSD(0도 '$0.00'), 국내는 formatNumber(미입력이면 빈 칸).
-      currentPrice: isOverseas ? cleanNum(item.currentPrice) : numOrBlank(item.currentPrice),
+      // 수동 현금 행(구분 현금·코드 없음·수량 1)은 시세가 없어 화면처럼 '-'로 둔다.
+      currentPrice: item.isManualCash ? DASH : (isOverseas ? cleanNum(item.currentPrice) : numOrBlank(item.currentPrice)),
       // 화면: 해외는 저장된 구매단가(USD), 국내는 투자금액 ÷ 보유수량(반올림). 0이면 '-'.
       purchasePrice: isOverseas
         ? (cleanNum(item.purchasePrice) > 0 ? cleanNum(item.purchasePrice) : DASH)

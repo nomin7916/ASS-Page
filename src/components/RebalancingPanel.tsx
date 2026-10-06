@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Maximize2, CalendarClock } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources } from '../utils';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isManualCashRow, manualCashEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { ladderWinId } from '../cardWindow';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
@@ -1142,7 +1142,7 @@ export default function RebalancingPanel({
                                   const curRatioOf = (p) => {
                                     const qty = cleanNum(p.quantity);
                                     const price = cleanNum(p.currentPrice);
-                                    const curEval = p.type === 'savings' ? savingsEval(p) : (p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty);
+                                    const curEval = p.type === 'savings' ? savingsEval(p) : isManualCashRow(p, activePortfolioAccountType) ? manualCashEval(p) : (p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty);
                                     return totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
                                   };
                                   const rows = mirrorRows(['stock', 'fund', 'savings']);
@@ -1394,7 +1394,8 @@ export default function RebalancingPanel({
                   const renderRow = (item, catTd) => {
                     rowNum += 1;
                     const num = rowNum;
-                    const isSavings = item.type === 'savings';
+                    // 수동 현금 행(구분 현금·코드 없음·수량 1)도 예적금처럼 매매 대상이 아닌 고정 참고 행이다.
+                    const isSavings = item.type === 'savings' || !!item.isManualCash;
                     const cat = item.category || '기타';
                     const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
                     const itemColor = itemColorMap[`${cat}::${item.id}`] || catColor;
@@ -1600,7 +1601,7 @@ export default function RebalancingPanel({
                           const hintText = isOverseas ? (hintAmt ? hintAmt.toFixed(2) : '0') : formatNumber(Math.round(hintAmt));
                           if (isSavings) {
                             return (
-                              <td className="py-3 px-3 text-center text-gray-600 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav} title="예적금은 시세·수량이 없어 매매 대상이 아닙니다 — 평가금이 그대로 이월됩니다">{hintText}</td>
+                              <td className="py-3 px-3 text-center text-gray-600 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav} title={item.isManualCash ? '현금 행은 시세가 없어 매매 대상이 아닙니다 — 투자금액이 그대로 평가금으로 이월됩니다' : '예적금은 시세·수량이 없어 매매 대상이 아닙니다 — 평가금이 그대로 이월됩니다'}>{hintText}</td>
                             );
                           }
                           // ⚠️ onFocus 초안에 계산값(String(effAmt))을 넣지 말 것 — 표시값은 formatNumber라

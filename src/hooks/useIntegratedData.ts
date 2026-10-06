@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, accumulateDailySeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt, depositRowEval, isKrwLedgerRow, krwFlowRateOf } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, accumulateDailySeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt, depositRowEval, isKrwLedgerRow, krwFlowRateOf, isManualCashRow, manualCashEval, MANUAL_CASH_CATEGORY } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -81,7 +81,8 @@ export function useIntegratedData({
           totalEval += evl;
           cats['예적금'] = (cats['예적금'] || 0) + evl;
         } else {
-          const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * summaryFxRate;
+          // 수동 현금 행(구분 현금·코드 없음·수량 1)은 투자금액이 곧 평가액 — utils.isManualCashRow 공유.
+          const evl = isManualCashRow(item, p.accountType) ? manualCashEval(item) : cleanNum(item.currentPrice) * cleanNum(item.quantity) * summaryFxRate;
           totalEval += evl;
           const cat = item.category || '미지정';
           cats[cat] = (cats[cat] || 0) + evl;
@@ -780,10 +781,11 @@ export function useIntegratedData({
           holdingsMap[key].cost += cost;
         } else {
           const qty = cleanNum(item.quantity);
-          const evl = cleanNum(item.currentPrice) * qty * fxRate;
+          const isCash = isManualCashRow(item, p.accountType);
+          const evl = isCash ? manualCashEval(item) : cleanNum(item.currentPrice) * qty * fxRate;
           if (evl <= 0) return;
           const cost = (isGold || p.accountType === 'overseas') ? cleanNum(item.purchasePrice) * qty * fxRate : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * qty);
-          const key = isGold ? 'KRX 금현물' : (item.name || item.code || '기타');
+          const key = isGold ? 'KRX 금현물' : (item.name || item.code || (isCash ? MANUAL_CASH_CATEGORY : '기타'));
           const category = isGold ? '금' : (item.category || '미지정');
           if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category, code: isGold ? '' : (item.code || '') };
           holdingsMap[key].value += evl;

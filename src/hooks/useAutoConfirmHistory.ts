@@ -83,7 +83,8 @@ export const useAutoConfirmHistory = ({
         // deposit/savings는 산출값이라 항상 허용. (none/approximate/펀드 currentPrice·evalAmount 폴백/
         // 소급 history는 보류 → 잘못된 값을 영구 고정하는 것 방지.)
         const allExact = detail.items.every((it) => {
-          if (it.source === 'deposit' || it.source === 'savings' || it.source === 'manual') return true;
+          // 'cash' = 수동 현금 행(투자금액이 곧 평가액 — 시세와 무관한 산출값이라 항상 정확).
+          if (it.source === 'deposit' || it.source === 'savings' || it.source === 'manual' || it.source === 'cash') return true;
           if (it.source !== 'history') return false;
           const src = accountType === 'gold'
             ? (indicatorHistoryMap?.goldKr || {})

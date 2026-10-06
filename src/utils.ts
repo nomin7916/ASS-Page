@@ -286,6 +286,33 @@ export const depositKrwOf = (item, isOverseas) =>
 export const depositRowEval = (item, fxRate = 1, isOverseas = false) =>
   cleanNum(item?.depositAmount) * (fxRate || 1) + depositKrwOf(item, isOverseas);
 
+// ── 수동 현금 행 (2026-10 사용자 요청 — 아주 이례적인 경우 전용) ──────────────────────
+// 시세가 없는 현금성 자산을 종목 표에 한 줄로 적어 두는 용도. **네 조건을 전부** 만족하는 주식 행만
+// '투자금액 = 평가금액'으로 평가한다(하나라도 빠지면 종전대로 수량 × 현재가):
+//   ① 구분(category) = '현금'  ② 종목코드 없음  ③ 보유수량 정확히 1  ④ 투자금액 > 0
+// ⚠️ 조건을 느슨하게 하지 말 것 — 코드를 아직 안 넣은 일반 종목 행이 조용히 투자금액으로 평가되면
+//    그 행의 평가액·수익률이 거짓이 된다. 사용자가 '여러 조건이 다 맞을 때만'을 명시했다.
+// ⚠️ 해외·금현물 계좌는 대상이 아니다: 해외 행의 `investAmount`는 원화 잔존값일 수 있는 미사용 필드라
+//    (저장 필드는 investAmountUsd) 그대로 쓰면 ≈1,390배 오염되고, 금현물 행은 코드가 원래 없다.
+// ⚠️ 평가액을 만드는 **모든 경로가 이 두 함수를 공유**한다(usePortfolioData·useIntegratedData·
+//    useStockData·calcPortfolioEvalDetail·App 펀드 자동기록) — 손복제하면 표 TOTAL·통합 대시보드·
+//    추이표가 서로 다른 총자산을 표시한다.
+export const MANUAL_CASH_CATEGORY = '현금';
+// 계좌 타입과 무관한 '모양' 판정 — 스냅샷 구성 지문(snapshotCompositionKey)이 쓴다.
+export const isManualCashShape = (item) => {
+  if (!item) return false;
+  const type = item.type || 'stock';
+  if (type !== 'stock') return false;
+  if (String(item.category ?? '').trim() !== MANUAL_CASH_CATEGORY) return false;
+  if (String(item.code ?? '').trim() !== '') return false;
+  if (cleanNum(item.quantity) !== 1) return false;
+  return cleanNum(item.investAmount) > 0;
+};
+export const isManualCashRow = (item, accountType?) =>
+  accountType !== 'overseas' && accountType !== 'gold' && isManualCashShape(item);
+// 수동 현금 행의 평가액(원화) = 투자금액. 대상 계좌가 원화 계좌뿐이라 환율을 곱하지 않는다.
+export const manualCashEval = (item) => cleanNum(item?.investAmount);
+
 // ── 통화 분리 원칙 (2026-09 사용자 확정 — 되돌리지 말 것) ──────────────────────
 // 원화 예수금은 **달러 계산에 환산해 넣지 않는다.** 원화는 환율과 무관하게 금액이 고정인데,
 // 달러로 환산해 더하면 환율이 움직일 때마다 달러 평가액·달러 수익률이 원화 몫만큼 흔들린다
@@ -1761,6 +1788,16 @@ export const calcPortfolioEvalDetail = (
     }
     const qty = cleanNum(item.quantity);
     if (!qty || qty <= 0) return;
+    if (isManualCashRow(item, accountType)) {
+      // 수동 현금 행: 시세 없이 투자금액이 곧 평가액(보유수량 1이라 단가 = 평가액).
+      // source 'cash'는 allExact에서 정확값으로 친다 — 종가가 없다고 '데이터 없음'으로 두면
+      // 그 행이 든 모든 날짜가 직전 값 이월로 굳어 추이표가 멈춘다.
+      const evl = manualCashEval(item);
+      totalEval += evl;
+      hasAnyPrice = true;
+      detail.push({ id: item.id, type: 'stock', code: '', name: item.name || MANUAL_CASH_CATEGORY, quantity: qty, price: evl, source: 'cash', eval: evl });
+      return;
+    }
     const { price, source } = resolvePriceForItem(item, date, stockHistoryMap, indicatorHistoryMap, isGold, manualPriceOverrides);
     const evl = price > 0 ? qty * price * fxRate : 0;
     if (evl > 0) { totalEval += evl; hasAnyPrice = true; }
@@ -1770,7 +1807,7 @@ export const calcPortfolioEvalDetail = (
   // source가 'history'여도 stockHistoryMap[code][date]/goldKr[date] 키가 없으면 getClosestValue 소급
   // 근사(carry-back)이므로 exact 아님 → 종가 확정 기반 표시/기록의 게이트로 사용(useAutoConfirmHistory와 동일 판정).
   const allExact = detail.every(it => {
-    if (it.source === 'deposit' || it.source === 'savings' || it.source === 'manual') return true;
+    if (it.source === 'deposit' || it.source === 'savings' || it.source === 'manual' || it.source === 'cash') return true;
     if (it.source !== 'history') return false;
     const src = isGold ? (indicatorHistoryMap?.goldKr || {}) : (it.code ? (stockHistoryMap?.[it.code] || {}) : {});
     return src[date] != null;
@@ -1883,6 +1920,8 @@ export const snapshotItemsFromPortfolio = (items: any[]): any[] =>
     code: it.code || '',
     name: it.name || '',
     type: it.type || 'stock',
+    // 구분 — 수동 현금 행 판정(isManualCashShape)이 과거 날짜에도 성립하려면 스냅샷에 남아야 한다.
+    category: it.category || '',
     quantity: cleanNum(it.quantity),
     investAmount: cleanNum(it.investAmount),
     depositAmount: cleanNum(it.depositAmount),
@@ -1924,10 +1963,13 @@ export const buildHeldNameMap = (pf: any): { [code: string]: string } => {
 };
 
 // 구성 변경 감지용 지문 (가격 제외 — 수량·예수금·종목 구성만)
+// ⚠️ 수동 현금 행 토큰(`:cash`)은 **그 모양일 때만** 붙인다 — 구분은 평가에 영향을 주는 유일한 경우가
+//    현금 행뿐이라, 구분을 '현금'으로 바꾸거나 되돌린 날 새 스냅샷이 남아야 그날부터 평가가 바뀐다.
+//    항상 구분을 담으면 기존 계좌 지문이 배포만으로 달라져 스냅샷이 한 번 더 쌓인다(원화 예수금 토큰과 같은 규약).
 export const snapshotCompositionKey = (items: any[]): string =>
   JSON.stringify(
     snapshotItemsFromPortfolio(items)
-      .map(it => `${it.type}:${it.code}:${it.quantity}:${it.depositAmount}:${it.investAmount}${it.depositAmountKrw ? `:${it.depositAmountKrw}` : ''}`)
+      .map(it => `${it.type}:${it.code}:${it.quantity}:${it.depositAmount}:${it.investAmount}${it.depositAmountKrw ? `:${it.depositAmountKrw}` : ''}${isManualCashShape(it) ? ':cash' : ''}`)
       .sort()
   );
 
@@ -1959,11 +2001,26 @@ export const resolveHoldings = (
   const baselineDate = p?.baselineDate || '';
   if (baselineDate && date < baselineDate) {
     const baseline = sorted.find((s: any) => s.kind === 'baseline') || sorted[0];
-    return { items: baseline?.items || [], kind: 'baseline', estimated: !p?.preBaselineVerified };
+    return { items: withLegacyCashCategory(baseline?.items || [], p), kind: 'baseline', estimated: !p?.preBaselineVerified };
   }
   const eligible = sorted.filter((s: any) => s.date <= date);
   const chosen = eligible.length ? eligible[eligible.length - 1] : sorted[0];
-  return { items: chosen?.items || [], kind: chosen?.kind || 'baseline', estimated: false };
+  return { items: withLegacyCashCategory(chosen?.items || [], p), kind: chosen?.kind || 'baseline', estimated: false };
+};
+
+// 구분(category)을 보존하기 **전에** 찍힌 스냅샷의 수동 현금 행 복원(읽기 전용 — 저장값은 건드리지 않는다).
+// 그 스냅샷 항목에는 category 키 자체가 없어 isManualCashShape가 성립하지 않고, 그러면 그 행이 든
+// 과거 날짜가 전부 '종가 없음'으로 이월에 갇힌다. 조건: ① category 키가 **없고** ② 나머지 세 조건
+// (코드 없음·수량 1·투자금액 > 0)을 만족하며 ③ 지금 계좌에 수동 현금 행이 실제로 있을 때만.
+// ⚠️ ③을 빼지 말 것 — 코드를 아직 안 넣은 일반 종목 행이 과거에 잠깐 있었던 계좌에서 그 날짜를
+//    현금으로 오인한다. 바뀐 게 없으면 원본 배열을 그대로 돌려준다(참조 보존).
+const withLegacyCashCategory = (items: any[], p: any): any[] => {
+  if (!Array.isArray(items) || items.length === 0) return items;
+  const isLegacyCandidate = (it: any) => !!it && !('category' in it)
+    && isManualCashShape({ ...it, category: MANUAL_CASH_CATEGORY });
+  if (!items.some(isLegacyCandidate)) return items;
+  if (!(p?.portfolio || []).some((it: any) => isManualCashShape(it))) return items;
+  return items.map((it: any) => (isLegacyCandidate(it) ? { ...it, category: MANUAL_CASH_CATEGORY } : it));
 };
 
 // 그 날짜 보유 스냅샷의 예수금 합(자산검증 모달이 화면에 보여주는 값과 **같은 소스**).

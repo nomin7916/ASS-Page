@@ -215,7 +215,7 @@ export interface EvalCompareSide {
   quantity: number | null;
   /** 그 날짜의 종가/기준가. 보유하지 않아도 프로브(수량 1)로 채운다. */
   price: number | null;
-  /** 'history'|'manual'|'approximate'|'none'|'deposit'|'savings'|'currentPrice'|'evalAmount' */
+  /** 'history'|'manual'|'approximate'|'none'|'deposit'|'savings'|'cash'|'currentPrice'|'evalAmount' */
   source: string;
   /**
    * 평가금(원화). 해외계좌는 **그 날짜 환율로 원화 환산된 값**(calcPortfolioEvalDetail 규약).

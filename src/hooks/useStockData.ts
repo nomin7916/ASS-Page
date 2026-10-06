@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useEffect, useRef, useState } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
-import { buildIndexStatus, cleanNum, isWeekend, savingsEval, depositRowEval } from '../utils';
+import { buildIndexStatus, cleanNum, isWeekend, savingsEval, depositRowEval, isManualCashRow, manualCashEval } from '../utils';
 import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount, getTodayKST, getKrSettledTodayDate } from './useMarketCalendar';
 import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays, mergeCodeHistory, applyStagedMerges, mergeStagedPatch, mergeStockMeta } from '../stockHistorySync';
 import type { StagedCodeMerge } from '../stockHistorySync';
@@ -941,6 +941,8 @@ export function useStockData({
           totalEval += qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
         } else if (item.type === 'savings') {
           totalEval += savingsEval(item) * fxRate;
+        } else if (isManualCashRow(item, p.accountType)) {
+          totalEval += manualCashEval(item); // 수동 현금 행 — 투자금액이 곧 평가액
         } else {
           totalEval += cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
         }
@@ -978,6 +980,8 @@ export function useStockData({
                 targetEval += qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
               } else if (item.type === 'savings') {
                 targetEval += savingsEval(item) * fxRate;
+              } else if (isManualCashRow(item, p.accountType)) {
+                targetEval += manualCashEval(item);
               } else {
                 targetEval += cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
               }

@@ -95,6 +95,7 @@ import {
   buildLadderTrade, upsertLadderTradeMemo, listLadderLogs, deleteLadderTrade,
   normalizeHistPeriod,
   normalizeRebalExtraQtyMap, normalizeRebalLinkMap, rebalExtraIntentKey, updateRebalAcctMap,
+  isManualCashRow, manualCashEval,
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -2145,11 +2146,12 @@ export default function App() {
       let tInv = 0, tEvl = 0;
       prev.forEach(item => {
         if (item.type === 'deposit') { tInv += cleanNum(item.depositAmount); tEvl += cleanNum(item.depositAmount); }
-        else { tInv += cleanNum(item.purchasePrice) * cleanNum(item.quantity); tEvl += cleanNum(item.currentPrice) * cleanNum(item.quantity); }
+        else { tInv += cleanNum(item.purchasePrice) * cleanNum(item.quantity); tEvl += (isManualCashRow(item, activePortfolioAccountType) ? manualCashEval(item) : cleanNum(item.currentPrice) * cleanNum(item.quantity)); }
       });
       stocks.sort((a, b) => {
         const getVal = (item, k) => {
-          const cP = cleanNum(item.currentPrice), pP = cleanNum(item.purchasePrice), qty = cleanNum(item.quantity);
+          // 수동 현금 행은 수량 1 · 단가 = 투자금액이라 현재가 자리에 투자금액을 둔다(평가금액 정렬이 화면과 같게).
+          const cP = isManualCashRow(item, activePortfolioAccountType) ? manualCashEval(item) : cleanNum(item.currentPrice), pP = cleanNum(item.purchasePrice), qty = cleanNum(item.quantity);
           if (k === 'investAmount') return pP * qty;
           if (k === 'evalAmount') return cP * qty;
           if (k === 'profit') return (cP - pP) * qty;
@@ -4296,6 +4298,8 @@ export default function App() {
         targetEval += qty > 0 && price > 0 ? qty * price : cleanNum(item.evalAmount);
       } else if (item.type === 'savings') {
         targetEval += savingsEval(item);
+      } else if (isManualCashRow(item, activePortfolioAccountType)) {
+        targetEval += manualCashEval(item); // 수동 현금 행 — 투자금액이 곧 평가액
       } else {
         targetEval += cleanNum(item.currentPrice) * cleanNum(item.quantity);
       }

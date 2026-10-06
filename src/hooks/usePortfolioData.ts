@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, depositKrwTotalOf, ledgerRowsWithRunningSum, sortLedgerRows } from '../utils';
+import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, depositKrwTotalOf, ledgerRowsWithRunningSum, sortLedgerRows, isManualCashRow, manualCashEval, MANUAL_CASH_CATEGORY } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function usePortfolioData({
@@ -41,13 +41,18 @@ export function usePortfolioData({
         inv = savingsInvest(item) * fxRate;
         evl = savingsEval(item) * fxRate;
       }
+      else if (isManualCashRow(item, activePortfolioAccountType)) {
+        // 수동 현금 행(구분 현금·코드 없음·수량 1·투자금액 > 0): 투자금액이 곧 평가금액(수익 0).
+        inv = evl = manualCashEval(item);
+      }
       else { const _qty = cleanNum(item.quantity); inv = (activePortfolioAccountType === 'overseas' || activePortfolioAccountType === 'gold') ? cleanNum(item.purchasePrice) * _qty * fxRate : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * _qty); evl = cleanNum(item.currentPrice) * _qty * fxRate; }
       const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;
       const c = item.type === 'deposit' ? '예수금' : (item.category || '미지정');
       if (!cats[c]) cats[c] = { invest: 0, eval: 0, profit: 0 };
       cats[c].invest += inv; cats[c].eval += evl; cats[c].profit += prf;
-      if (item.type === 'stock') stks.push({ name: item.name, eval: evl });
-      return { ...item, investAmount: inv, evalAmount: evl, profit: prf };
+      const isCash = isManualCashRow(item, activePortfolioAccountType);
+      if (item.type === 'stock') stks.push({ name: item.name || (isCash ? MANUAL_CASH_CATEGORY : item.name), eval: evl });
+      return { ...item, investAmount: inv, evalAmount: evl, profit: prf, ...(isCash ? { isManualCash: true } : {}) };
     }).map(item => ({
       ...item,
       investRatio: tInv > 0 ? (item.investAmount / tInv) * 100 : 0,
@@ -126,6 +131,18 @@ export function usePortfolioData({
         // 닿을 수 없는 금액이 Σ목표금액에 섞여 합계가 과대 표시된다.
         // 예적금은 목표금액 셀 자체가 읽기 전용이고 도달값이 항상 현재 평가금이라 (₩) 미러 대상이 아니다.
         return { ...item, curEval, action: 0, cost: 0, expEval, expRatio, effectiveTargetRatio, returnRate, isSavings: true, hasTargetAmount: false, isAmtLiveMirror: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
+      }
+      // 수동 현금 행: 시세가 없어 매매 대상이 아니다 — 예적금처럼 평가금(=투자금액)을 그대로 이월하는
+      // 고정 참고 행. 목표비중은 편집·합계(100%)에 그대로 포함된다.
+      // ⚠️ 가격이 0이라 일반 분기로 흘리면 예상평가금이 (수량+매매)×0 = 0이 되어 그 현금이 리밸런싱
+      //    결과에서 통째로 사라진다.
+      if (isManualCashRow(item, activePortfolioAccountType)) {
+        const curEval = manualCashEval(item);
+        const isLiveMirror = mirrorState === 'on' && !item[overrideField];
+        const liveRatio = totals.totalEval > 0 ? (curEval / totals.totalEval * 100) : 0;
+        const effectiveTargetRatio = isLiveMirror ? liveRatio : readTargetRatio(item, targetSlots).value;
+        const expRatio = overallExp > 0 ? (curEval / overallExp * 100) : 0;
+        return { ...item, curEval, action: 0, cost: 0, expEval: curEval, expRatio, effectiveTargetRatio, returnRate: 0, isManualCash: true, hasTargetAmount: false, isAmtLiveMirror: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
       }
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);

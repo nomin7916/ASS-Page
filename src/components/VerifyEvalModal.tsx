@@ -50,6 +50,7 @@ const SOURCE_BADGE = {
   approximate: { label: '🟡 근사값', cls: 'text-amber-400' },
   deposit: { label: '예수금', cls: 'text-sky-300' },
   savings: { label: '🏦 예적금', cls: 'text-emerald-300' },
+  cash: { label: '💵 현금', cls: 'text-gray-300' },
   currentPrice: { label: '⚪ 폴백', cls: 'text-gray-500' },
   evalAmount: { label: '⚪ 폴백', cls: 'text-gray-500' },
 };
@@ -306,6 +307,8 @@ export default function VerifyEvalModal({
       isDeposit: item.type === 'deposit',
       isFund: item.type === 'fund',
       isSavings: item.type === 'savings',
+      // 수동 현금 행(구분 현금·코드 없음·수량 1) — 단가가 투자금액에서 나오므로 종가 수동입력 대상이 아니다.
+      isCash: pd.source === 'cash',
       name: item.type === 'deposit' ? '예수금' : (() => {
         const code = item.code || '';
         const codeStripped = code.replace(/^MA:/i, '');
@@ -616,7 +619,7 @@ export default function VerifyEvalModal({
                         )}
                       </td>
                       <td className={`py-1.5 ${cellPad} text-gray-300`}>
-                        {r.isDeposit || r.isSavings ? '—' : editPriceIdx === idx ? (
+                        {r.isDeposit || r.isSavings ? '—' : r.isCash ? <span title="현금 행 — 투자금액이 그대로 평가금액입니다">{fmtPrice(r.price)}</span> : editPriceIdx === idx ? (
                           <input
                             autoFocus
                             className="w-[84px] bg-gray-900 border border-blue-500 rounded px-1 py-0.5 text-right text-gray-100 outline-none"

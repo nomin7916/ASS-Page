@@ -745,7 +745,10 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     <td className={`p-0 border-r border-gray-600 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                       <div className={`w-full h-full py-3 px-3 text-right text-gray-300 font-bold cursor-pointer hover:bg-teal-900/30 transition-colors flex items-center justify-end gap-1 ${isRefreshing ? 'animate-pulse' : ''}`} onClick={() => item.code && onSingleRefresh(item.id, item.code)} title={item.code ? (isOverseas ? `클릭하여 현재가 새로고침 (≈${formatNumber(Math.round(cleanNum(item.currentPrice) * usdkrw))}원)` : "클릭하여 현재가 새로고침") : "종목코드를 먼저 입력하세요"}>
                         {isRefreshing && <RefreshCw size={11} className="text-teal-400 animate-spin shrink-0" />}
-                        <span>{isOverseas ? formatUSD(item.currentPrice) : formatNumber(item.currentPrice)}</span>
+                        {/* 수동 현금 행(구분 현금·코드 없음·수량 1)은 시세가 없다 — 0을 찍으면 평가금액과 모순돼 보인다. */}
+                        {item.isManualCash
+                          ? <span className="text-gray-500 font-normal" title="현금 행 — 구분 '현금' · 종목코드 없음 · 보유수량 1 · 투자금액 입력. 투자금액을 그대로 평가금액으로 반영합니다.">-</span>
+                          : <span>{isOverseas ? formatUSD(item.currentPrice) : formatNumber(item.currentPrice)}</span>}
                       </div>
                     </td>
                   )}
@@ -795,7 +798,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   )}
                   {/* 평가금액 */}
                   {!H('evalAmount') && (
-                    <td className={`${td} text-white font-bold text-right bg-[rgba(113,63,18,0.2)] ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
+                    <td className={`${td} text-white font-bold text-right bg-[rgba(113,63,18,0.2)] ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav} title={item.isManualCash ? '현금 행 — 투자금액을 그대로 평가금액으로 반영합니다(구분 현금 · 종목코드 없음 · 보유수량 1)' : undefined}>{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
                   )}
                   {/* 비중(평가) */}
                   {!H('evalRatio') && (
