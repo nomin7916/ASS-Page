@@ -1450,7 +1450,7 @@ export default function RebalancingPanel({
                     grouped[cat].forEach((item, j) => { itemColorMap[`${cat}::${item.id}`] = shades[j]; });
                   });
                   let rowNum = 0;
-                  const renderRow = (item, catTd) => {
+                  const renderRow = (item, catTd, stripInCat = false) => {
                     rowNum += 1;
                     const num = rowNum;
                     // 수동 현금 행(구분 현금·코드 없음·수량 1)도 예적금처럼 매매 대상이 아닌 고정 참고 행이다.
@@ -1471,22 +1471,27 @@ export default function RebalancingPanel({
                     const rowMarkClass = hl ? '' : 'hover:bg-gray-800';
                     const stickyCellClass = hl ? '' : 'bg-[#0f172a] group-hover:bg-gray-800';
                     const hlSticky = hl ? { backgroundColor: blendWithDarkBg(hl.hex, 0.14, '#0f172a') } : {};
+                    // 띠 = 행의 맨 왼쪽 칸. 정렬 모드면 구분 칸(행마다 있음), 묶음 모드면 구분 칸이 rowSpan이라
+                    // 그 다음의 첫 번째 고정 칸(등락률 → 수익률 → 종목명 중 보이는 것)에 둔다.
+                    const stripHost = stripInCat ? null : (!H('changeRate') ? 'changeRate' : !H('returnRate') ? 'returnRate' : !H('name') ? 'name' : null);
                     return (
                       <tr key={item.id} data-rb-row={item.id} className={`group border-b border-gray-700 ${rowMarkClass} transition-colors`} style={hl ? { backgroundColor: `${hl.hex}24` } : undefined}>
                         {catTd}
                         {!H('changeRate') && (
                           <td className={`py-3 px-2 text-center ${stickyCellClass} transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: changeRateLeft, zIndex: 5, ...hlSticky }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                            {stripHost === 'changeRate' && hlStrip(item.id, hl)}
                             <span className={`text-xs font-bold ${(item.changeRate || 0) > 0 ? 'text-red-400' : (item.changeRate || 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.changeRate != null ? formatChangeRate(item.changeRate) : '-'}</span>
                           </td>
                         )}
                         {!H('returnRate') && (
                           <td className={`py-3 px-2 text-center ${stickyCellClass} transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: returnRateLeft, zIndex: 5, ...hlSticky }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                            {stripHost === 'returnRate' && hlStrip(item.id, hl)}
                             <span className={`text-xs font-bold ${(item.returnRate || 0) > 0 ? 'text-red-400' : (item.returnRate || 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.returnRate != null ? formatChangeRate(item.returnRate) : '-'}</span>
                           </td>
                         )}
                         {!H('name') && (
                           <td className={`py-3 px-4 text-center font-bold ${stickyCellClass} transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: nameLeft, zIndex: 5, color: itemColor, ...hlSticky }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                            {hlStrip(item.id, hl)}
+                            {stripHost === 'name' && hlStrip(item.id, hl)}
                             {(() => { const url = getItemUrl(item); return url ? <a href={url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 hover:underline" style={{ color: itemColor }}>{num}. {item.name}</a> : <div className="line-clamp-2">{num}. {item.name}</div>; })()}
                           </td>
                         )}
@@ -1869,10 +1874,11 @@ export default function RebalancingPanel({
                           className={`py-3 px-3 text-center font-bold border-r border-gray-700 align-middle ${bgClass} sticky left-0 z-[5] transition-colors`}
                           style={mhl ? { backgroundColor: blendWithDarkBg(mhl.hex, 0.14, '#0f172a') } : undefined}
                         >
+                          {hlStrip(item.id, mhl)}
                           <div style={{ color: catColor }} className="text-xs">{cat}</div>
                         </td>
                       );
-                      return renderRow(item, catTd);
+                      return renderRow(item, catTd, !H('category'));
                     });
                   }
                   return catOrder.flatMap(cat => {

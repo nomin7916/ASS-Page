@@ -7018,8 +7018,8 @@ markAsRead() / clearNotificationLog()
   정본은 `watchlistGroups.ts`의 `rowHighlightOf` · `nextRowHighlight` · `toggleRowHighlight`(맵 `{itemId: key}` 전용).
   저장 필드는 기존 `markedPortfolioRows`/`markedRebalRows` 그대로라 **영속화 신규 지점 0곳**(지문 `markedRowsKey` 그대로).
   ⚠️ 옛 값('yellow'|'slate'|'rose'|'brown')은 **읽을 때만** 가까운 팔레트 색으로 보여 준다(저장값을 조용히 바꾸지 않는다).
-  띠: 포트폴리오 표 = 맨 왼쪽 10px 칸, 리밸런싱 표 = **종목명 칸 왼쪽 끝**(구분 칸은 묶음 모드에서 rowSpan이라 행별 띠를
-  둘 수 없다 — 정렬 모드의 구분 칸 클릭 토글은 제거). 칠한 행은 행 전체를 옅게(`hex+24`), 가로 스크롤 고정 칸은
+  띠: 포트폴리오 표 = 맨 왼쪽 10px 칸, 리밸런싱 표 = **행의 맨 왼쪽 칸**(정렬 모드 = 구분 칸, 묶음 모드 = 구분 칸이
+  rowSpan이라 그 다음 첫 고정 칸 — 등락률→수익률→종목명 중 보이는 것, `renderRow`의 `stripHost`). 칠한 행은 행 전체를 옅게(`hex+24`), 가로 스크롤 고정 칸은
   `blendWithDarkBg`로 불투명하게 칠한다(투명하면 스크롤된 칸이 비친다). 표 위 **위치 요약 칩**(표 순서 `N/M`)과 '모두 해제'.
   엑셀 `MARK_XLSX_BG`는 팔레트에서 계산한다(옛 키 포함).
 - **소프트 상한**: 수동 그룹 30 / 그룹당 종목 100 / 최근조회 20. localStorage·sessionStorage 미사용
