@@ -192,3 +192,91 @@ export function watchSizeAfterResize(dir: any, rect: any, prev: any): { w: numbe
     h: /[ns]/.test(d) ? r.h : (p ? p.h : null),
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// 종목 하이라이트(사용자 요청 2026-10) — 행 왼쪽 끝을 눌러 종목에 색을 칠해 두면, 기간·정렬을 바꿔도
+// 그 종목이 리스트 어디에 있는지 한눈에 찾는다. 여러 종목을 칠할 수 있고 **칠할 때마다 다른 색**이다.
+// 저장은 종목 항목의 `highlight`(아래 팔레트의 key) — `watchlistGroups` **안**이라 기존 지문
+// (`JSON.stringify(watchlistGroups)`)·백업 sticky·별도 창 브릿지를 그대로 탄다(영속화 신규 지점 0곳).
+// ⚠️ 빨강·파랑 계열은 쓰지 않는다 — 옆 칸 등락율이 상승=빨강/하락=파랑이라 하이라이트 색이 등락으로 읽힌다.
+
+/** 하이라이트 팔레트 — 칠하는 순서 그대로. key가 저장값이다(순서를 바꿔도 이미 칠한 색은 그대로). */
+export const WATCH_HIGHLIGHT_COLORS = Object.freeze([
+  Object.freeze({ key: 'amber', hex: '#fbbf24', label: '노랑' }),
+  Object.freeze({ key: 'pink', hex: '#f472b6', label: '분홍' }),
+  Object.freeze({ key: 'lime', hex: '#a3e635', label: '연두' }),
+  Object.freeze({ key: 'cyan', hex: '#22d3ee', label: '하늘' }),
+  Object.freeze({ key: 'violet', hex: '#a78bfa', label: '보라' }),
+  Object.freeze({ key: 'orange', hex: '#fb923c', label: '주황' }),
+  Object.freeze({ key: 'emerald', hex: '#34d399', label: '초록' }),
+  Object.freeze({ key: 'white', hex: '#e2e8f0', label: '흰색' }),
+]);
+
+/** 저장값 → 팔레트 항목. 팔레트에 없는 값(손상·옛 값)은 null = 하이라이트 아님. */
+export function watchHighlightOf(key: any): { key: string; hex: string; label: string } | null {
+  if (typeof key !== 'string') return null;
+  return WATCH_HIGHLIGHT_COLORS.find((c) => c.key === key) || null;
+}
+
+/**
+ * 다음에 칠할 색 — 그 그룹에서 **아직 안 쓴 색**을 팔레트 순서로. 전부 쓰고 있으면 가장 적게 쓴 색.
+ * ⚠️ '마지막 색의 다음'으로 고르지 말 것 — 중간 종목의 하이라이트를 지운 뒤 새로 칠하면 이미 쓰는 색과
+ *    겹친다(사용자 요구는 "선택할 때마다 다른 색으로 구분").
+ */
+export function nextWatchHighlight(stocks: any): string {
+  const count: Record<string, number> = {};
+  for (const c of WATCH_HIGHLIGHT_COLORS) count[c.key] = 0;
+  if (Array.isArray(stocks)) {
+    for (const s of stocks) {
+      const c = watchHighlightOf(s?.highlight);
+      if (c) count[c.key] += 1;
+    }
+  }
+  let best = WATCH_HIGHLIGHT_COLORS[0].key;
+  for (const c of WATCH_HIGHLIGHT_COLORS) if (count[c.key] < count[best]) best = c.key;
+  return best;
+}
+
+/**
+ * 그룹 `groupId`의 종목 `stockId` 하이라이트를 켜고 끈 새 배열.
+ * - 켜져 있으면 끈다(필드 삭제 — `highlight: null`을 남기지 않는다).
+ * - 꺼져 있으면(손상값 포함) 그 그룹의 다음 색을 칠한다.
+ * ⚠️ 대상이 없으면 **같은 참조** — 새 배열을 만들면 지문이 같아도 setState가 돌아 헛된 Drive 저장이 나간다.
+ */
+export function toggleWatchHighlight(groups: any, groupId: any, stockId: any): any {
+  if (!Array.isArray(groups)) return groups;
+  const gi = groups.findIndex((g: any) => g?.id === groupId);
+  if (gi < 0) return groups;
+  const g = groups[gi];
+  const stocks = Array.isArray(g?.stocks) ? g.stocks : [];
+  const si = stocks.findIndex((s: any) => s?.id === stockId);
+  if (si < 0) return groups;
+  const cur = stocks[si];
+  const { highlight: _old, ...rest } = cur;
+  const nextStock = watchHighlightOf(cur.highlight) ? rest : { ...rest, highlight: nextWatchHighlight(stocks) };
+  const nextStocks = stocks.slice();
+  nextStocks[si] = nextStock;
+  const out = groups.slice();
+  out[gi] = { ...g, stocks: nextStocks };
+  return out;
+}
+
+/** 그룹의 하이라이트를 모두 지운 새 배열. 지울 것이 없으면 **같은 참조**. */
+export function clearWatchHighlights(groups: any, groupId: any): any {
+  if (!Array.isArray(groups)) return groups;
+  const gi = groups.findIndex((g: any) => g?.id === groupId);
+  if (gi < 0) return groups;
+  const g = groups[gi];
+  const stocks = Array.isArray(g?.stocks) ? g.stocks : [];
+  if (!stocks.some((s: any) => s && Object.prototype.hasOwnProperty.call(s, 'highlight'))) return groups;
+  const out = groups.slice();
+  out[gi] = {
+    ...g,
+    stocks: stocks.map((s: any) => {
+      if (!s || !Object.prototype.hasOwnProperty.call(s, 'highlight')) return s;
+      const { highlight: _h, ...rest } = s;
+      return rest;
+    }),
+  };
+  return out;
+}

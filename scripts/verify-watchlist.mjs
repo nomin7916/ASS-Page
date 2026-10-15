@@ -10,7 +10,8 @@
 //     #17~#20 손상 입력 방어(throw 금지 — 렌더 중 예외는 루트 ErrorBoundary까지 올라간다)
 //     #21~#32 normalizeWatchView / sameWatchView — 보기 상태(기간·직접 선택 날짜·정렬) 저장값 정규화
 //     #33~#50 normalizeWatchSize / sameWatchSize / resizeWatchRect / watchSizeAfterResize — 팝업 크기 조절
-//   파트② 소스 텍스트 가드 (#G1~#G62)
+//     #51~#69 종목 하이라이트 — 팔레트 · 다음 색(칠할 때마다 다른 색) · 켜고 끄기 · 모두 해제
+//   파트② 소스 텍스트 가드 (#G1~#G73)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다.
@@ -170,6 +171,77 @@ if (W) {
   eq('#48 아래만 끌면 높이만 저장(폭은 이전 값)', js(AFTER('s', { w: 777, h: 640 }, { w: 900, h: null })), js({ w: 900, h: 640 }));
   eq('#49 모서리는 두 축 모두', js(AFTER('sw', { w: 700, h: 600 }, null)), js({ w: 700, h: 600 }));
   eq('#50 가로만 끌어도 이미 고정한 높이는 보존', js(AFTER('w', { w: 820, h: 300 }, { w: 900, h: 480 })), js({ w: 820, h: 480 }));
+
+  // ── 종목 하이라이트(행 왼쪽 끝 클릭 — 칠할 때마다 다른 색) ──
+  const { WATCH_HIGHLIGHT_COLORS: PAL, watchHighlightOf: HOF, nextWatchHighlight: NEXT,
+    toggleWatchHighlight: TOG, clearWatchHighlights: CLR } = W;
+  const keys = (PAL || []).map((c) => c.key);
+  ok('#51 팔레트 8색 · key/hex 중복 없음', keys.length === 8 && new Set(keys).size === 8
+    && new Set((PAL || []).map((c) => c.hex)).size === 8);
+  // ⚠️ 옆 칸 등락율이 상승=빨강 / 하락=파랑이라 그 계열을 쓰면 하이라이트가 등락으로 읽힌다.
+  const hueOf = (hex) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (d < 0.15) return null;   // 무채색에 가까움(흰색 칸) — 색상각이 의미 없다
+    const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  };
+  ok('#52 빨강·파랑 계열 없음(등락율 색과 혼동 금지)', (PAL || []).every((c) => {
+    const h = hueOf(c.hex);
+    return h == null || !(h < 15 || h >= 345 || (h >= 200 && h <= 245));
+  }));
+  ok('#53 watchHighlightOf — 팔레트 key만 인정(손상·옛 값은 null)',
+    HOF('amber')?.hex === PAL[0].hex && [null, undefined, 'red', 3, {}, ''].every((v) => HOF(v) === null));
+  eq('#54 아무도 안 칠했으면 첫 색', NEXT([]), keys[0]);
+  eq('#55 이미 쓴 색은 건너뛴다', NEXT([{ highlight: keys[0] }, { highlight: keys[2] }]), keys[1]);
+  eq('#56 손상값은 쓴 색으로 세지 않는다', NEXT([{ highlight: 'red' }, { highlight: null }]), keys[0]);
+  eq('#57 다 쓰면 가장 적게 쓴 색(팔레트 순서)', NEXT([...keys.map((k) => ({ highlight: k })), { highlight: keys[0] }]), keys[1]);
+  S('#57b 배열이 아니어도 던지지 않고 첫 색', () => NEXT(null), (v) => v === keys[0]);
+
+  const mk = () => [
+    { id: 'g1', name: 'G1', stocks: [{ id: 's1', code: 'A' }, { id: 's2', code: 'B' }, { id: 's3', code: 'C' }, { id: 's4', code: 'D' }] },
+    { id: 'g2', name: 'G2', stocks: [{ id: 't1', code: 'A', highlight: keys[0] }] },
+  ];
+  const hlOf = (gs, gid, sid) => gs.find((g) => g.id === gid).stocks.find((s) => s.id === sid).highlight;
+  {
+    const g0 = mk();
+    const a = S('(toggle)', () => TOG(g0, 'g1', 's1'));
+    eq('#58 켜면 그 그룹의 다음 색', a && hlOf(a, 'g1', 's1'), keys[0]);
+    ok('#59 다른 그룹·다른 종목은 같은 참조(불변 갱신)', a && a[1] === g0[1] && a[0].stocks[1] === g0[0].stocks[1] && a !== g0);
+    // ⚠️ 그룹마다 따로 센다 — 다른 그룹(g2)이 amber를 써도 g1의 첫 색은 amber다.
+    const b = TOG(TOG(a, 'g1', 's2'), 'g1', 's3');
+    eq('#60 칠할 때마다 다른 색', ['s1', 's2', 's3'].map((id) => hlOf(b, 'g1', id)).join(','), keys.slice(0, 3).join(','));
+    const c = TOG(b, 'g1', 's2');
+    ok('#61 다시 누르면 해제 — 필드 자체를 지운다(null을 남기지 않는다)',
+      !Object.prototype.hasOwnProperty.call(c[0].stocks[1], 'highlight') && !JSON.stringify(c[0].stocks[1]).includes('highlight'));
+    // 가운데 색을 지운 뒤 새로 칠하면 비어 있는 그 색 — '마지막 색의 다음'이면 이미 쓰는 색과 겹친다.
+    const d = TOG(c, 'g1', 's4');
+    eq('#62 지운 자리의 색을 다시 쓴다(현재 칠한 색과 겹치지 않음)', hlOf(d, 'g1', 's4'), keys[1]);
+    ok('#63 칠한 색이 서로 다르다', new Set(['s1', 's3', 's4'].map((id) => hlOf(d, 'g1', id))).size === 3);
+  }
+  {
+    const g0 = mk();
+    ok('#64 없는 그룹·없는 종목·배열 아님 → 같은 참조',
+      TOG(g0, 'zz', 's1') === g0 && TOG(g0, 'g1', 'zz') === g0 && TOG(null, 'g1', 's1') === null);
+    const bad = [{ id: 'g1', stocks: [{ id: 's1', highlight: 'red' }] }];
+    eq('#65 손상값이 있던 종목을 누르면 정상 색으로 칠한다', TOG(bad, 'g1', 's1')[0].stocks[0].highlight, keys[0]);
+    const frozen = JSON.parse(JSON.stringify(g0));
+    const deepFreeze = (o) => { Object.values(o).forEach((v) => v && typeof v === 'object' && deepFreeze(v)); return Object.freeze(o); };
+    S('#66 입력을 제자리에서 바꾸지 않는다(얼린 입력에도 던지지 않음)', () => TOG(deepFreeze(frozen), 'g2', 't1'),
+      (v) => Array.isArray(v) && frozen[1].stocks[0].highlight === keys[0]);
+    S('#66b stocks가 없는 그룹도 던지지 않는다', () => TOG([{ id: 'g1' }], 'g1', 's1'), (v) => Array.isArray(v));
+  }
+  {
+    const g0 = mk();
+    const lit = TOG(TOG(g0, 'g1', 's1'), 'g1', 's2');
+    const cl = S('(clear)', () => CLR(lit, 'g1'));
+    ok('#67 모두 해제 — 그 그룹의 highlight 필드를 전부 지운다',
+      cl && cl[0].stocks.every((s) => !Object.prototype.hasOwnProperty.call(s, 'highlight')));
+    ok('#68 다른 그룹은 건드리지 않는다(같은 참조)', cl && cl[1] === lit[1]);
+    ok('#69 지울 것이 없으면 같은 참조(헛된 저장 방지)', CLR(g0, 'g1') === g0 && CLR(g0, 'zz') === g0 && CLR(null, 'g1') === null);
+    const withNull = [{ id: 'g1', stocks: [{ id: 's1', highlight: null }] }];
+    ok('#69b 손상값(null)도 지울 대상', CLR(withNull, 'g1') !== withNull);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -378,6 +450,47 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   ok('#G62 표시 폭은 최소 폭 이상(사이드바 펼침 반영)',
     /const minW = sidebarOpen \? SIDEBAR_W \+ LIST_MIN_W : /.test(P)
     && /Math\.max\(minW, curSize\?\.w \?\? PANEL_W\)/.test(P));
+}
+
+// ── 종목 하이라이트(행 왼쪽 끝 클릭) ──
+// ⚠️ 저장값은 종목 항목의 `highlight` — watchlistGroups 안이라 영속화 신규 지점이 0곳이다.
+//    그 전제(지문·sticky·브릿지가 배열을 통째로 나른다)가 깨지면 칠한 색이 조용히 사라진다.
+{
+  const P = stripComments(POPUP);
+  ok('#G63 팝업이 순수 모듈의 하이라이트 함수를 쓴다(손복제 금지)',
+    /watchHighlightOf, nextWatchHighlight, toggleWatchHighlight, clearWatchHighlights \} from '\.\.\/watchlistGroups'/.test(POPUP));
+  // 팝업 안에 팔레트를 다시 만들면 '칠할 때마다 다른 색' 규칙과 화면 색이 갈린다(amber는 드롭 표시와 같은 색이라 제외).
+  ok('#G64 팝업에 팔레트 손복제 없음',
+    (W?.WATCH_HIGHLIGHT_COLORS || [{ hex: '#__' }]).slice(1).every((c) => !POPUP.toLowerCase().includes(c.hex.toLowerCase())));
+  ok('#G65 켜고 끄기는 updateGroups 단일 통로 + 순수 함수',
+    /updateGroups\(\(prev\) => toggleWatchHighlight\(prev, gid, stockId\)\)/.test(P));
+  ok('#G66 모두 해제도 같은 통로',
+    /updateGroups\(\(prev\) => clearWatchHighlights\(prev, gid\)\)/.test(P));
+  // ⚠️ 읽기 전용(관리자 열람·창 연결 끊김)에서는 누를 수 없고, 이미 칠한 색은 보인다.
+  const strip = (() => { const i = P.indexOf('{readOnly ? ('); const j = P.indexOf('data-watch-row', i); return i < 0 || j < 0 ? '' : P.slice(i, j); })();
+  ok('#G67 읽기 전용이면 띠는 표시만(클릭 없음), 아니면 toggleHighlight(s.id)',
+    /\{readOnly \? \(\s*hl && <span className="absolute left-0 top-0 bottom-0 w-2\.5" style=\{\{ backgroundColor: hl\.hex \}\} \/>/.test(strip)
+    && /onClick=\{\(\) => toggleHighlight\(s\.id\)\}/.test(strip));
+  ok('#G68 칠한 행은 행 전체를 그 색으로(정렬을 바꿔도 눈이 따라간다)',
+    /const hl = watchHighlightOf\(s\.highlight\);/.test(P)
+    && /data-watch-id=\{s\.id\}/.test(P)
+    && /style=\{hl \? \{ backgroundColor: `\$\{hl\.hex\}24` \} : undefined\}/.test(P));
+  // ⚠️ 띠는 행 왼쪽 여백(pl-3) 안에 둔다 — 헤더도 같은 여백이어야 열이 맞는다.
+  ok('#G69 헤더·행 왼쪽 여백이 같다(pl-3)',
+    /flex items-center gap-2 pl-3 pr-1 py-1 border-b border-gray-700\/60/.test(P)
+    && /flex items-center gap-2 pl-3 pr-1 py-1\.5 border-b border-gray-800\/50/.test(P)
+    && !/flex items-center gap-2 px-1 py-1/.test(P));
+  // 칩 순서 = 리스트 안 순서여야 '어디에 있는지'가 된다 — 저장 순서(activeStocks)로 만들면 정렬과 어긋난다.
+  ok('#G70 위치 요약은 화면 순서(sortedStocks)에서 만든다',
+    /const highlighted = sortedStocks\s*\n\s*\.map\(\(s, i\) => \(\{ s, i, c: watchHighlightOf\(s\.highlight\) \}\)\)/.test(P)
+    && /onClick=\{\(\) => scrollToStock\(s\.id\)\}/.test(P)
+    && /querySelectorAll\('\[data-watch-id\]'\)/.test(P));
+  ok('#G71 다음 색 = 활성 그룹 기준', /const nextHl = watchHighlightOf\(nextWatchHighlight\(activeStocks\)\);/.test(P));
+  // 최근조회는 다시 본 종목을 새 항목으로 맨 앞에 붙인다 — 칠한 색을 옮기지 않으면 등락율 한 번에 사라진다.
+  ok('#G72 recordRecent 가 하이라이트를 함께 옮긴다',
+    /\.\.\.\(watchHighlightOf\(old\?\.highlight\) \? \{ highlight: old\.highlight \} : \{\}\)/.test(P));
+  ok('#G73 하이라이트는 watchlistGroups 지문에 실려 저장된다(영속화 신규 지점 0곳)',
+    /JSON\.stringify\(watchlistGroups\),/.test(APP) && !/watchlistHighlight/.test(APP));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:watchlist — ${pass} passed, ${fail} failed\n`);

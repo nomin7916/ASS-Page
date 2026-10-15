@@ -4,14 +4,14 @@ import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, P
 import CustomDatePicker from './CustomDatePicker';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
-import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize } from '../watchlistGroups';
+import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize, watchHighlightOf, nextWatchHighlight, toggleWatchHighlight, clearWatchHighlights } from '../watchlistGroups';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
 // - 단일 position:fixed div (백드롭/오버레이 없음 → 아래 앱 클릭·스크롤 통과)
 // - z 1050 (dialog 1000 < 여기 < LoadingOverlay 1100)
 // - 타이틀 바만 드래그 핸들, window mousemove/touchmove 리스너로 이동, 뷰포트 클램프
 const WATCHLIST_Z = 1050;
-// 종목명 열은 고정폭 열(그립16+점6+미니차트56+등락율64+현재가96+삭제12+여백/gap 80 ≈ 330px)을 뺀 나머지라,
+// 종목명 열은 고정폭 열(하이라이트 띠12+그립16+점6+미니차트56+등락율64+현재가96+삭제12+여백/gap 80 ≈ 340px)을 뺀 나머지라,
 // 폭이 좁으면 국내 ETF 풀네임(예: "KODEX 금융고배당TOP10타겟위클리커버드콜")이 대부분 잘린다.
 // 종목 리스트에 640px = 종목명 약 310px 확보 → 긴 ETF명도 한 줄에 그대로 보인다.
 // ⚠️ PANEL_W = 640(리스트) + SIDEBAR_W(그룹 사이드바). 사이드바를 넣으면서 폭을 안 늘리면 종목명이
@@ -479,8 +479,14 @@ export default function WatchlistPopup({
   const recordRecent = (stock) => {
     updateGroups((prev) => {
       const arr = Array.isArray(prev) ? prev : [];
-      const entry = { id: generateId(), code: stock.code, market: stock.market, name: stock.name || '', addedAt: Date.now() };
       const recent = arr.find((g) => g.id === RECENT_ID);
+      // 다시 본 종목은 새 항목으로 맨 앞에 붙는다 — 그 종목에 칠해 둔 하이라이트는 함께 옮긴다
+      // (안 그러면 최근조회에서 칠한 색이 등락율을 한 번 누를 때마다 사라진다).
+      const old = (recent?.stocks || []).find((s) => (s.code || '').toLowerCase() === (stock.code || '').toLowerCase());
+      const entry = {
+        id: generateId(), code: stock.code, market: stock.market, name: stock.name || '', addedAt: Date.now(),
+        ...(watchHighlightOf(old?.highlight) ? { highlight: old.highlight } : {}),
+      };
       const others = arr.filter((g) => g.id !== RECENT_ID);
       const prevStocks = (recent?.stocks || []).filter((s) => (s.code || '').toLowerCase() !== (stock.code || '').toLowerCase());
       const stocks = [entry, ...prevStocks].slice(0, RECENT_CAP);
@@ -631,6 +637,33 @@ export default function WatchlistPopup({
     });
     return scored.map((x) => x.s);
   })();
+
+  // ───────── 종목 하이라이트 (행 왼쪽 끝 클릭 — 사용자 요청 2026-10) ─────────
+  // 칠해 둔 종목이 기간·정렬을 바꿀 때 리스트 어디로 가는지 한눈에 찾게 한다. 칠할 때마다 다른 색이다.
+  // ⚠️ 색 고르기·켜고 끄기는 watchlistGroups.ts(순수 모듈)가 정본 — 여기서 손복제하면 '다른 색' 규칙이 갈린다.
+  // ⚠️ 쓰기는 updateGroups 단일 통로라 읽기 전용에서는 아무것도 쓰지 않는다(이미 칠한 색은 그대로 보인다).
+  const nextHl = watchHighlightOf(nextWatchHighlight(activeStocks));
+  const toggleHighlight = (stockId) => {
+    if (!activeGroup) return;
+    const gid = activeGroup.id;
+    updateGroups((prev) => toggleWatchHighlight(prev, gid, stockId));
+  };
+  const clearHighlights = () => {
+    if (!activeGroup) return;
+    const gid = activeGroup.id;
+    updateGroups((prev) => clearWatchHighlights(prev, gid));
+  };
+  // 위치 요약(칩) — 화면 순서(정렬 반영) 그대로라 칩의 순서가 곧 리스트 안 위치다.
+  const highlighted = sortedStocks
+    .map((s, i) => ({ s, i, c: watchHighlightOf(s.highlight) }))
+    .filter((x) => x.c);
+  // 칩을 누르면 그 행으로 — 리스트가 길면 칠한 종목이 화면 밖에 있을 수 있다.
+  const scrollToStock = (id) => {
+    const rows = listRef.current?.querySelectorAll('[data-watch-id]') || [];
+    for (const el of rows) {
+      if (el.getAttribute('data-watch-id') === id) { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); break; }
+    }
+  };
 
   // ───────── 순서 드래그 (원래순서 모드 + 수동 그룹 전용) ─────────
   // 정렬 중(sortDir≠null)이거나 '최근조회' 자동 그룹에선 비활성 — 보이는 순서=저장 순서일 때만 이동 허용.
@@ -1050,6 +1083,36 @@ export default function WatchlistPopup({
               </div>
             )}
 
+            {/* 하이라이트 위치 요약 — 칩 순서 = 리스트 안 순서. 등락율로 정렬 중이면 순위(N/M)도 함께 */}
+            {highlighted.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1 mb-2 text-[11px]">
+                <span className="text-gray-500 mr-0.5">하이라이트</span>
+                {highlighted.map(({ s, i, c }) => {
+                  const r = viewByCode[s.code]?.rate;
+                  const nm = quotes[s.code]?.name || s.name || s.code;
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => scrollToStock(s.id)}
+                      title={`${nm} — ${sortDir ? `${periodLabel} 등락율 ${i + 1}위 / ${sortedStocks.length}종목` : `리스트 ${i + 1}번째`} · 클릭하면 그 행으로 이동`}
+                      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 hover:brightness-125 transition"
+                      style={{ borderColor: `${c.hex}80`, backgroundColor: `${c.hex}1f` }}
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: c.hex }} />
+                      <span className="max-w-[110px] truncate text-gray-200">{nm}</span>
+                      {sortDir && <span className="text-gray-400 tabular-nums">{i + 1}/{sortedStocks.length}</span>}
+                      {r != null && <span className={`tabular-nums ${rateColor(r)}`}>{formatChangeRate(r)}</span>}
+                    </button>
+                  );
+                })}
+                {!readOnly && (
+                  <button onClick={clearHighlights} title="이 그룹의 하이라이트를 모두 지웁니다" className="ml-1 text-gray-500 hover:text-red-400 transition-colors">
+                    모두 해제
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* 종목 리스트 */}
             {activeStocks.length === 0 ? (
               <div className="text-center text-gray-600 text-xs py-8">코드를 입력해 종목을 추가하세요.</div>
@@ -1057,7 +1120,7 @@ export default function WatchlistPopup({
               <div className={`flex flex-col ${dragId != null ? 'select-none' : ''}`} ref={listRef}>
                 {/* 정렬 헤더 (종목 2개 이상일 때 — 등락율 클릭으로 오름/내림 토글) */}
                 {activeStocks.length >= 2 && (
-                  <div className="flex items-center gap-2 px-1 py-1 border-b border-gray-700/60 text-[10px] text-gray-500 select-none">
+                  <div className="flex items-center gap-2 pl-3 pr-1 py-1 border-b border-gray-700/60 text-[10px] text-gray-500 select-none">
                     {canReorder && <span className="w-4 shrink-0" />}
                     <span className="w-1.5 shrink-0" />
                     <span className="flex-1">종목</span>
@@ -1086,11 +1149,33 @@ export default function WatchlistPopup({
                   const isDragging = dragId === s.id;
                   const dropTop = canReorder && dragId != null && !isDragging && dragOverIndex === idx;
                   const dropBottom = canReorder && dragId != null && !isDragging && idx === sortedStocks.length - 1 && dragOverIndex === sortedStocks.length;
+                  const hl = watchHighlightOf(s.highlight);
                   return (
-                    <div key={s.id}>
+                    <div
+                      key={s.id}
+                      data-watch-id={s.id}
+                      className="relative group"
+                      // 칠한 종목은 행 전체(조회 실패 줄 포함)를 그 색으로 옅게 — 정렬을 바꿔도 눈이 따라간다.
+                      style={hl ? { backgroundColor: `${hl.hex}24` } : undefined}
+                    >
+                      {/* 하이라이트 띠 = 행 왼쪽 끝. 누르면 칠하고 다시 누르면 지운다(칠할 때마다 다른 색).
+                          ⚠️ 행 안의 다른 칸(그립·등락율·현재가)과 겹치지 않게 왼쪽 여백(pl-3) 안에만 둔다. */}
+                      {readOnly ? (
+                        hl && <span className="absolute left-0 top-0 bottom-0 w-2.5" style={{ backgroundColor: hl.hex }} />
+                      ) : (
+                        <button
+                          onClick={() => toggleHighlight(s.id)}
+                          aria-label={hl ? '하이라이트 해제' : '하이라이트'}
+                          title={hl
+                            ? `하이라이트(${hl.label}) — 다시 누르면 해제`
+                            : `클릭하여 하이라이트${nextHl ? `(${nextHl.label})` : ''} — 기간·정렬을 바꿔도 이 색으로 위치를 찾을 수 있습니다`}
+                          className={`absolute left-0 top-0 bottom-0 w-2.5 cursor-pointer transition-opacity ${hl ? '' : 'opacity-0 group-hover:opacity-30 hover:!opacity-70'}`}
+                          style={{ backgroundColor: hl ? hl.hex : nextHl?.hex }}
+                        />
+                      )}
                       <div
                         data-watch-row
-                        className={`flex items-center gap-2 px-1 py-1.5 border-b border-gray-800/50 hover:bg-white/[0.02] group ${isDragging ? 'opacity-40' : ''}`}
+                        className={`flex items-center gap-2 pl-3 pr-1 py-1.5 border-b border-gray-800/50 hover:bg-white/[0.02] ${isDragging ? 'opacity-40' : ''}`}
                         style={{ boxShadow: dropTop ? 'inset 0 2px 0 0 #fbbf24' : dropBottom ? 'inset 0 -2px 0 0 #fbbf24' : undefined }}
                       >
                         {canReorder && (
