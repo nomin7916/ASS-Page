@@ -1,10 +1,61 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-08-27  
+> 마지막 작업일: 2026-10-15  
 > 브랜치: main  
-> 작업 PC: 메인 PC
+> 작업 PC: 클라우드 세션
 
 ---
+
+## 2026-10-15 — [작업 규약] 커밋이 main이 아닌 작업 브랜치에만 올라가던 반복 오류 — `npm run ship`
+
+**대상 파일**: `scripts/ship.mjs`(신규) · `scripts/gate.mjs` · `package.json` · `CLAUDE.md` ·
+`memory/push-to-main.md`(신규) · `memory/MEMORY.md`
+
+> 브랜치에만 반영되고 main에는 적용되지 않는 현상이 계속되고 있습니다. 원인을 면밀히 분석해서
+> 다음 작업부터 오류가 나지 않게 지침을 정밀하게 개선해 주세요.
+
+### 1. 원인
+
+같은 날 세 세션(`great-curie`·`jolly-maxwell`·`ecstatic-hamilton`)이 전부 먼저 작업 브랜치에만 올렸다.
+- **지시 충돌을 이름 짓지 않았다**: 클라우드 세션 시스템 메시지는 "작업 브랜치 `claude/…`에 푸시, 다른
+  브랜치로 푸시 금지"이고 CLAUDE.md는 "브랜치는 main"이다. CLAUDE.md가 그 충돌을 언급하지 않아 세션마다
+  다시 판단했고, 판단은 매번 '시스템 지시가 더 구체적'이라 브랜치에만 올리는 쪽으로 기울었다.
+- **체크리스트가 '어디에 갔는가'를 재지 않았다**: 6항목 전부 커밋의 내용 검사였고 `git push`에 대상이 없었다.
+- **보고 형식이 실패를 가렸다**: 마지막 줄 "집 PC에서 Pull 필요"가 main이 안 바뀌어도 똑같이 찍혔다.
+- **게이트가 클라우드에서 영구 빨강이었다**: vite가 없어 build가 항상 `FAIL`이라 "❌ 차단"이 신호가 아닌
+  배경 소음이 됐다.
+
+### 2. 변경
+
+- `scripts/ship.mjs` + `npm run ship`: gate → `git push origin HEAD:main` + 작업 브랜치 → `origin/main`이
+  HEAD를 포함하는지 **원격 기준 재확인** → `✅ main 반영 확인 <해시>`. non-fast-forward면 force 없이 멈춘다.
+- `scripts/gate.mjs`: vite가 없으면 build를 `[SKIP] 실행 불가`로 따로 보고(차단 아님·통과도 아님).
+- `CLAUDE.md`: 충돌을 명시하고 이 절이 이긴다고 못 박음 · 체크리스트 6→7항목(6 = ship 확인 줄) ·
+  작업 흐름 6의 `git push` → `npm run ship` · 보고 마지막 두 줄 고정(ship 출력 복사) · "브랜치에 올렸다"는
+  미완료 보고로 규정.
+- `memory/push-to-main.md`: 같은 내용을 피드백 메모로(세션 시작 시 읽는 파일).
+
+### 3. 검증
+
+`npm run ship`를 이 커밋에 그대로 적용해 실제로 main 반영 확인 줄이 나오는지 확인(아래 로그 항목의 해시).
+
+## 2026-10-15 — [하이라이트] 포트폴리오·리밸런싱 표 행 하이라이트를 관심종목 방식으로
+
+**대상 파일**: `src/watchlistGroups.ts` · `src/hooks/usePortfolioState.ts` · `src/components/PortfolioTable.tsx` ·
+`src/components/RebalancingPanel.tsx` · `src/portfolioExcel.ts` · `src/constants.ts` · `CLAUDE.md`
+
+> 포트폴리오 테이블과 리밸런싱 테이블의 하이라이트 기능을 관심종목처럼 변경해 주세요.
+> (좌측 색탭을 누르면 노란색, 다른 종목을 눌러도 노란색이고 여러 번 탭을 해야 색이 변경됩니다.)
+
+- 옛 4색 사이클(노랑→슬레이트→로즈→갈색→해제)을 폐기하고 관심종목과 **같은 팔레트·같은 '다음 색' 규칙**
+  (`rowHighlightOf`·`nextRowHighlight`·`toggleRowHighlight`, 정본 `watchlistGroups.ts`). 저장 필드는 기존
+  `markedPortfolioRows`/`markedRebalRows` 그대로(영속화 신규 지점 0곳). 옛 값은 읽을 때만 가까운 색으로.
+- 띠: 포트폴리오 표 = 맨 왼쪽 칸 / 리밸런싱 표 = 행 맨 왼쪽 칸(정렬 모드 구분 칸, 묶음 모드 첫 고정 칸).
+  칠한 행 전체 옅은 배경 + 고정 칸 불투명 같은 색. 표 위 위치 요약 칩(`N/M`, 클릭 이동) + 모두 해제.
+- 엑셀 `MARK_XLSX_BG`를 팔레트에서 계산.
+- 검증: gate 23종 통과 · build 실행 불가(클라우드) · TypeScript 미정의 식별자 검사 별도 실행(0건).
+- ⚠️ 첫 커밋(`f262087`)은 작업 브랜치에만 올라가 사용자가 변경을 보지 못했다 → 위 규약 항목의 발단.
+
 
 ## 2026-08-27 — [포트폴리오 표] 엑셀(.xlsx) 내보내기 버튼
 

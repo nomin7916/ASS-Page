@@ -6,7 +6,7 @@
 //   실제로 `holdReasonText` import 누락이 build·undefcheck·scopecheck·verify 22종을 전부 통과해
 //   배포됐다. 한 명령으로 전부 돌리는 것이 유일하게 확실한 방법이다(전체 소요는 아래 출력 참조).
 //
-// 차단(blocking): importcheck · build · verify:* (calendar 제외)
+// 차단(blocking): importcheck · build(실행 가능한 환경에서만 — 아래 3단계) · verify:* (calendar 제외)
 // 참고(advisory): verify:calendar — nager.at 라이브 교차검증이라 공휴일 데이터 드리프트로 상시 실패할
 //                 수 있다. 여기서 차단하면 게이트가 영구 빨강이 되어 사람이 통째로 무시하게 된다.
 // 외부 도구(jsxcheck·undefcheck·scopecheck)는 저장소 밖 memory/tools 에 있어 **찾지 못하면 크게 알린다**.
@@ -54,8 +54,14 @@ for (const t of ['jsxcheck.mjs', 'undefcheck.mjs', 'scopecheck.mjs']) {
   else missingTools.push(t);
 }
 
-// 3) 빌드
-results.push(run('build', 'npm run build'));
+// 3) 빌드 — 이 환경에 vite가 없으면(클라우드 세션: node_modules 부재, npm install 금지) '실행 불가'로
+//    **따로** 보고한다. FAIL로 두면 게이트가 클라우드에서 영구 빨강이 되어 "❌ 차단"이 신호가 아니라
+//    배경 소음이 되고(2026-10-15 실측: 세션 내내 차단 1건이 떠 있어도 아무도 보지 않았다), 그 상태가
+//    main 미반영 같은 다른 실수를 가린다. 실행 불가는 건너뛴 것이지 통과가 아니다 — 보고에 그대로 적는다.
+const viteBin = path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite');
+const skipped = [];
+if (existsSync(viteBin)) results.push(run('build', 'npm run build'));
+else { skipped.push('build (node_modules 없음 — 이 환경에서 실행 불가)'); console.log('  [SKIP] build                  실행 불가'); }
 
 // 4) verify:* 전부 (importcheck 는 1단계에서 이미 돌았다)
 for (const k of verifyKeys) {
@@ -72,6 +78,10 @@ console.log(`\n  총 ${results.length}단계 / ${(total / 1000).toFixed(1)}초`)
 if (missingTools.length) {
   console.log(`\n  !! 외부 도구를 찾지 못해 건너뜀: ${missingTools.join(', ')}`);
   console.log('     CLAUDE_MEMORY_TOOLS=<디렉터리> 로 경로를 지정하세요.');
+}
+if (skipped.length) {
+  console.log(`\n  !! 실행 불가 ${skipped.length}건 — 통과가 아니다. 보고에 "실행 불가(클라우드)"로 그대로 적을 것:`);
+  for (const k of skipped) console.log(`    · ${k}`);
 }
 if (warned.length) {
   console.log(`\n  참고(차단 아님) ${warned.length}건 — 수동 검토:`);
