@@ -99,6 +99,7 @@ import {
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
+import { DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView } from './watchlistGroups';
 
 // 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
@@ -585,6 +586,15 @@ export default function App() {
   const [calendarMemos, setCalendarMemos] = useState<Record<string, any[]>>({});
   const [showWatchlist, setShowWatchlist] = useState(false);
   const [watchlistGroups, setWatchlistGroups] = useState<any[]>([]);
+  // 관심종목 보기 상태(조회 기간 · 직접 선택 시작/종료일 · 등락율 정렬) — 사용자가 마지막으로 고른 상태.
+  // chartPrefs.watchlistView로 Drive 저장(영속화 5지점 — state 리터럴·chartPrefsUpdatedAt deps·
+  // STATE 저장 deps·applyStateData·applyBackupData). 별도 창도 이 값을 받고 바꾼다(watchlist:view).
+  // ⚠️ 같은 값이면 같은 참조를 유지한다 — 새 객체면 chartPrefsUpdatedAt이 올라 헛된 Drive 저장이 나간다.
+  const [watchlistView, setWatchlistViewRaw] = useState(() => normalizeWatchView(DEFAULT_WATCH_VIEW));
+  const setWatchlistView = useCallback((v) => {
+    const next = normalizeWatchView(v);
+    setWatchlistViewRaw(prev => (sameWatchView(prev, next) ? prev : next));
+  }, []);
   const [showFlowBoard, setShowFlowBoard] = useState(false);
   const [flowMaps, setFlowMaps] = useState<any[]>([]);
   // ── 백테스트 ──
@@ -1115,6 +1125,7 @@ export default function App() {
       }
       if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
       if (stateData.chartPrefs.fxSlotCount !== undefined) setFxSlotCount(normalizeFxSlotCount(stateData.chartPrefs.fxSlotCount));
+      if (stateData.chartPrefs.watchlistView !== undefined) setWatchlistView(stateData.chartPrefs.watchlistView);
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
       if (stateData.chartPrefs.rebalanceSortConfigMap) setRebalanceSortConfigMap(stateData.chartPrefs.rebalanceSortConfigMap);
       // 통합 대시보드 비교종목 복원 — 앱은 항상 통합 대시보드에서 시작하므로 compStocks도 함께 설정
@@ -1259,6 +1270,7 @@ export default function App() {
       if (stateData.chartPrefs.acctHistPeriod !== undefined) setAcctHistPeriod(normalizeHistPeriod(stateData.chartPrefs.acctHistPeriod));
       if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
       if (stateData.chartPrefs.fxSlotCount !== undefined) setFxSlotCount(normalizeFxSlotCount(stateData.chartPrefs.fxSlotCount));
+      if (stateData.chartPrefs.watchlistView !== undefined) setWatchlistView(stateData.chartPrefs.watchlistView);
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
       if (stateData.chartPrefs.rebalanceSortConfigMap) setRebalanceSortConfigMap(stateData.chartPrefs.rebalanceSortConfigMap);
       // 리밸런싱 '추가' 수량·연동 — 백업 시점 값으로 되돌린다(목표비중과 같은 등급 — sticky 아님).
@@ -1329,7 +1341,7 @@ export default function App() {
   useEffect(() => {
     if (isInitialLoad.current) return;
     chartPrefsUpdatedAtRef.current = Date.now();
-  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, compStocks]);
+  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, compStocks]);
 
   // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
@@ -3372,9 +3384,10 @@ export default function App() {
      * — 별도 신호를 새로 만들면 두 값이 갈라진다.
      * ⚠️ deps에 `ledgerDataState` 필수 — 없으면 로드가 끝나도 창이 잠긴 채 남는다.
      */
-    postToWatchlistWin({ type: 'watchlist:live', groups: watchlistGroups, readOnly: !!adminViewingAs, dataState: ledgerDataState });
+    // 보기 상태(view)도 함께 싣는다 — 창은 dataState가 'ready'가 된 첫 메시지에서 한 번만 채택한다.
+    postToWatchlistWin({ type: 'watchlist:live', groups: watchlistGroups, view: watchlistView, readOnly: !!adminViewingAs, dataState: ledgerDataState });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchlistGroups, adminViewingAs, ledgerDataState, watchlistWinNonce]);
+  }, [watchlistGroups, watchlistView, adminViewingAs, ledgerDataState, watchlistWinNonce]);
 
   useEffect(() => {
     const onMsg = (e) => {
@@ -3396,6 +3409,10 @@ export default function App() {
         if (!Array.isArray(d.groups)) return;
         // 창이 보낸 것을 그대로 채택하지 말 것 — 최소한 객체가 아닌 항목은 거른다(렌더 예외 방지).
         setWatchlistGroups(d.groups.filter((g) => g && typeof g === 'object'));
+      } else if (d.type === 'watchlist:view') {
+        // 보기 상태(기간·정렬)도 관리자 열람 중에는 사용자 저장값을 바꾸지 않는다(인앱 팝업과 같은 규약).
+        if (adminViewingAsRef.current) return;
+        setWatchlistView(d.view);   // 정규화·같은 값 무시는 setter 안에서
       }
     };
     window.addEventListener('message', onMsg);
@@ -4149,7 +4166,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, rebalExtraQtyMap, rebalMaxAddLinkMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, rebalExtraQtyMap, rebalMaxAddLinkMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -4164,7 +4181,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, rebalExtraKey, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, rebalExtraKey, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -5368,6 +5385,9 @@ export default function App() {
         onClose={() => setShowWatchlist(false)}
         groups={watchlistGroups}
         onUpdateGroups={setWatchlistGroups}
+        view={watchlistView}
+        // 관리자 열람 중에는 사용자 저장값을 바꾸지 않는다 → 미전달이면 팝업 로컬 상태로 동작한다.
+        onViewChange={adminViewingAs ? null : setWatchlistView}
         onOpenWindow={openWatchlistWindow}
         readOnly={!!adminViewingAs}
         notice={

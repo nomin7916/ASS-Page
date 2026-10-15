@@ -4,7 +4,7 @@ import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, P
 import CustomDatePicker from './CustomDatePicker';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
-import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups } from '../watchlistGroups';
+import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView } from '../watchlistGroups';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
 // - 단일 position:fixed div (백드롭/오버레이 없음 → 아래 앱 클릭·스크롤 통과)
@@ -47,9 +47,9 @@ const dotCls = (st) =>
   st === 'loading' ? 'bg-amber-400 animate-pulse' : st === 'success' ? 'bg-emerald-500' : st === 'fail' ? 'bg-red-500' : 'bg-gray-600';
 
 const PERIODS = ['1일', '1주', '1개월', '3개월', '1년'];
-// 사용자가 시작일·종료일을 직접 고르는 기간(세션 로컬 — Drive 저장 안 함).
-// 종료일을 비우면 '현재'까지 — 구간 마지막 점을 실시간 현재가로 둔다.
-const CUSTOM = '직접';
+// 사용자가 시작일·종료일을 직접 고르는 기간. 종료일을 비우면 '현재'까지 — 구간 마지막 점을
+// 실시간 현재가로 둔다. 기간·시작/종료일·정렬은 `view` prop으로 저장된다(chartPrefs.watchlistView).
+const CUSTOM = WATCH_CUSTOM_PERIOD;
 // 달력 팝업은 body로 포털되므로 이 팝업(z 1050)보다 높아야 보인다(CustomDatePicker `zIndex` 규약).
 const PICKER_Z = 1070;
 const todayKST = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
@@ -115,6 +115,11 @@ export default function WatchlistPopup({
   readOnly = false,
   notice = '',
   onOpenWindow = null,
+  // 보기 상태(조회 기간 · 직접 선택 시작/종료일 · 등락율 정렬) — 사용자가 마지막으로 고른 상태.
+  // `onViewChange`가 함수면 **제어 모드**(값의 정본은 호출부 — 앱 탭은 chartPrefs로 Drive 저장,
+  // 별도 창은 앱 탭으로 전달), 아니면 이 컴포넌트 로컬(관리자 열람처럼 저장하지 않을 때).
+  view = null,
+  onViewChange = null,
 }) {
   const isPage = variant === 'page';
   const [pos, setPos] = useState(() => ({
@@ -145,10 +150,27 @@ export default function WatchlistPopup({
   const [codeInput, setCodeInput] = useState('');
   const [dailyMap, setDailyMap] = useState({});       // { [code]: [date, close][] } 일별 종가(팝업 로컬 — Drive 저장 안 함)
   const [intradayMap, setIntradayMap] = useState({}); // { [code]: number[] } 오늘 인트라데이(1일)
-  const [period, setPeriod] = useState('1개월');       // 미니차트 기간
-  const [customStart, setCustomStart] = useState('');  // 직접 선택 시작일(YYYY-MM-DD)
-  const [customEnd, setCustomEnd] = useState('');      // 직접 선택 종료일('' = 현재까지 실시간)
-  const [sortDir, setSortDir] = useState(null);        // 등락율 정렬: null(원래순서)|'desc'|'asc'
+  // ── 보기 상태: 기간(period) · 직접 선택 시작일/종료일('' = 현재까지 실시간) · 등락율 정렬(null|'desc'|'asc') ──
+  // ⚠️ 네 값을 **한 객체**로 다룬다. 따로 setState하면 한 클릭에서 두 값을 바꿀 때(📅 기간 = 시작일 채우기 +
+  //    기간 전환) 제어 모드에서 뒤 호출이 앞 호출을 낡은 값 위에 덮어 시작일이 사라진다.
+  const viewControlled = typeof onViewChange === 'function';
+  const [localView, setLocalView] = useState(() => normalizeWatchView(view || DEFAULT_WATCH_VIEW));
+  const curView = useMemo(
+    () => (viewControlled ? normalizeWatchView(view) : localView),
+    [viewControlled, view, localView],
+  );
+  // ⚠️ 같은 이벤트에서 patchView를 연달아 부를 때 두 번째가 첫 번째 결과 위에 합성되도록 ref로 동기 추적한다.
+  const viewRef = useRef(curView);
+  viewRef.current = curView;
+  const patchView = useCallback((patch) => {
+    const base = viewRef.current;
+    const next = normalizeWatchView({ ...base, ...(typeof patch === 'function' ? patch(base) : patch) });
+    if (sameWatchView(next, base)) return;   // 변화 없음 → 헛된 저장 방지
+    viewRef.current = next;
+    if (viewControlled) onViewChange(next);
+    else setLocalView(next);
+  }, [viewControlled, onViewChange]);
+  const { period, customStart, customEnd, sortDir } = curView;
   const [dragId, setDragId] = useState(null);          // 순서 드래그 중인 종목 id (원래순서 모드에서만)
   const [dragOverIndex, setDragOverIndex] = useState(null); // 삽입 슬롯 인덱스(0..N)
   const listRef = useRef(null);                        // 종목 리스트 컨테이너(행 geometry 측정)
@@ -378,7 +400,7 @@ export default function WatchlistPopup({
   };
 
   // 등락율 정렬 토글: 원래순서 → 내림차순 → 오름차순 → 원래순서
-  const cycleSort = () => setSortDir((d) => (d === null ? 'desc' : d === 'desc' ? 'asc' : null));
+  const cycleSort = () => patchView((v) => ({ sortDir: v.sortDir === null ? 'desc' : v.sortDir === 'desc' ? 'asc' : null }));
   const activeStocks = activeGroup?.stocks || [];
 
   // ⚠️ 미니차트 배열 · 등락율 · **기준가(base)** · 정렬 · 툴팁의 **단일 소스**. 어느 하나도 떼어 따로 계산하지 말 것 —
@@ -854,7 +876,7 @@ export default function WatchlistPopup({
               {PERIODS.map((pd) => (
                 <button
                   key={pd}
-                  onClick={() => setPeriod(pd)}
+                  onClick={() => patchView({ period: pd })}
                   title={pd === '1일'
                     ? '1일 — 미니차트는 장중 흐름(전일 종가 기준선 포함), 등락율·기준가는 전일 종가 대비 실시간'
                     : `${pd} — 미니차트·등락율·현재가 아래 기준가 모두 이 기간 기준`}
@@ -870,8 +892,7 @@ export default function WatchlistPopup({
               <button
                 onClick={() => {
                   // 처음 열면 시작일을 1개월 전으로 채워 곧바로 결과가 보이게 한다(바꿀 수 있다)
-                  if (!customStart) setCustomStart(cutoffFor('1개월'));
-                  setPeriod(CUSTOM);
+                  patchView((v) => ({ period: CUSTOM, customStart: v.customStart || cutoffFor('1개월') }));
                 }}
                 title="기간 직접 선택 — 시작일·종료일을 달력에서 고릅니다(종료일을 비우면 현재까지 실시간)"
                 className={`flex-1 inline-flex items-center justify-center gap-1 rounded px-1 py-1 text-[11px] font-medium border transition-colors ${
@@ -892,8 +913,8 @@ export default function WatchlistPopup({
                     zIndex={PICKER_Z}
                     followScroll
                     onChange={(v) => {
-                      setCustomStart(v);
-                      if (customEnd && v > customEnd) setCustomEnd(''); // 종료일이 시작일보다 앞이면 비운다
+                      // 종료일이 시작일보다 앞이면 비운다
+                      patchView((cur) => ({ customStart: v, customEnd: cur.customEnd && v > cur.customEnd ? '' : cur.customEnd }));
                     }}
                   />
                   <span className="text-gray-500 mx-1">~</span>
@@ -904,13 +925,13 @@ export default function WatchlistPopup({
                     zIndex={PICKER_Z}
                     followScroll
                     onChange={(v) => {
-                      if (customStart && v < customStart) { setCustomEnd(customStart); return; }
-                      setCustomEnd(v >= todayKST() ? '' : v); // 오늘 이후는 '현재까지'와 같다
+                      if (customStart && v < customStart) { patchView({ customEnd: customStart }); return; }
+                      patchView({ customEnd: v >= todayKST() ? '' : v }); // 오늘 이후는 '현재까지'와 같다
                     }}
                   />
                   {customEnd && (
                     <button
-                      onClick={() => setCustomEnd('')}
+                      onClick={() => patchView({ customEnd: '' })}
                       className="text-gray-500 hover:text-red-400 p-0.5 transition-colors"
                       title="종료일 비우기 — 현재까지 실시간으로 조회"
                     ><X size={10} /></button>

@@ -61,3 +61,49 @@ export function reorderManualWatchGroups(arr: any, id: any, to: any): any {
   slots.forEach((idx: number, k: number) => { out[idx] = next[k]; });
   return out;
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// 보기 상태(조회 기간 · 직접 선택 시작/종료일 · 등락율 정렬) — 사용자가 마지막으로 고른 상태를
+// `chartPrefs.watchlistView`에 저장해 팝업을 다시 열거나 앱을 새로고침해도 그대로 돌아오게 한다.
+// ⚠️ 저장값은 Drive·백업·별도 창 메시지로 들어오므로 **반드시 이 정규화를 통과**시킬 것 —
+//    손상값('weke' 같은 기간)이 state에 들어가면 기간 버튼 어느 것도 눌린 것으로 보이지 않는다.
+
+/** 기간 토글 값(화면 버튼 순서 그대로). `'직접'`은 시작일·종료일을 고르는 기간이다. */
+export const WATCH_PERIODS = ['1일', '1주', '1개월', '3개월', '1년', '직접'];
+export const WATCH_CUSTOM_PERIOD = '직접';
+
+/** 처음 쓰는 사용자의 보기 상태 — 종전 화면 기본값과 같다(하위호환의 축). */
+export const DEFAULT_WATCH_VIEW = Object.freeze({ period: '1개월', customStart: '', customEnd: '', sortDir: null });
+
+// 실제 달력에 있는 YYYY-MM-DD만 — 패턴만 보면 '2026-02-31'이 통과한다(utils.isValidIsoDate와 같은 판정).
+const isIsoDay = (s: any): boolean => {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  if (y < 1900 || y > 2999) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+};
+
+/**
+ * 손상값을 걸러 낸 보기 상태. **절대 던지지 않는다**(렌더 중 예외는 루트 ErrorBoundary까지 올라간다).
+ * - period: 화이트리스트 밖이면 기본값. `'직접'`인데 시작일이 없으면 결과를 낼 수 없으므로 기본값.
+ * - customEnd: 시작일보다 앞이면 비운다('' = 현재까지 실시간).
+ * - sortDir: `'desc'|'asc'`만, 그 외는 null(원래 순서).
+ */
+export function normalizeWatchView(v: any): { period: string; customStart: string; customEnd: string; sortDir: string | null } {
+  const o = v && typeof v === 'object' ? v : {};
+  const customStart = isIsoDay(o.customStart) ? o.customStart : '';
+  let customEnd = isIsoDay(o.customEnd) ? o.customEnd : '';
+  if (customEnd && customStart && customEnd < customStart) customEnd = '';
+  let period = WATCH_PERIODS.includes(o.period) ? o.period : DEFAULT_WATCH_VIEW.period;
+  if (period === WATCH_CUSTOM_PERIOD && !customStart) period = DEFAULT_WATCH_VIEW.period;
+  const sortDir = o.sortDir === 'desc' || o.sortDir === 'asc' ? o.sortDir : null;
+  return { period, customStart, customEnd, sortDir };
+}
+
+/** 두 보기 상태가 같은가 — 같으면 저장·전송을 건너뛴다(헛된 Drive 저장 방지). */
+export function sameWatchView(a: any, b: any): boolean {
+  const x = normalizeWatchView(a);
+  const y = normalizeWatchView(b);
+  return x.period === y.period && x.customStart === y.customStart && x.customEnd === y.customEnd && x.sortDir === y.sortDir;
+}

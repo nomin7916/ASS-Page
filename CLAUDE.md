@@ -6923,7 +6923,7 @@ markAsRead() / clearNotificationLog()
   (`viewByCode`의 `liveTail`). 시작일이 1년보다 이전이면 `loadDaily(stock, needFrom)`이 `fetchWatchDaily(…, fromDate)`로
   더 길게 다시 받는다(`dailyFromRef`가 받은 범위, `dailySeqRef`가 늦게 온 짧은 응답의 덮어쓰기 방지).
   ⚠️ 달력은 body 포털이라 `zIndex={PICKER_Z}`(1070 > 패널 1050) 필수(`verify:compare #G34d` census에 등록).
-  시작·종료일은 **세션 로컬**(Drive 저장 지점 0곳). 시작 종가가 없으면 현재가만으로 구간을 만들지 않는다(null 계약).
+  시작·종료일은 아래 '보기 상태 저장'으로 영속된다. 시작 종가가 없으면 현재가만으로 구간을 만들지 않는다(null 계약).
 - **코드→시장 판정(`detectMarket`)**: 계좌 컨텍스트 없음 → 코드 포맷 사용. **6자 영숫자+숫자(005930·
   0219E0)를 `extractFundCode`의 5~7자 펀드 규칙보다 먼저 KR로 판정**(안 그러면 국내 ETF가 미래에셋 펀드로
   오분류). MA:/URL→fund, 알파벳 티커→us, 그 외 5자+→fund. 잔여 오분류는 **실패 행의 시장 수동보정
@@ -6933,8 +6933,26 @@ markAsRead() / clearNotificationLog()
   재조회(teal 스피너). **notify는 z-1050 팝업에 가려지므로** 실패 피드백은 행 내부 상태점(빨간 점)으로만.
 - **등락율 정렬**: 종목 **2개 이상**일 때 리스트 상단 헤더의 `등락율` 셀(빈공간 포함 셀 전체) 클릭 →
   `sortDir` 토글(원래순서→내림→오름→원래순서). **정렬 아이콘/방향표시 없음**(PortfolioTable `th` 정렬과
-  동일 — 리스트 재배치가 피드백). `sortedStocks`는 뷰 전용 정렬(watchlistGroups 순서 미변경·Drive 저장
-  안 함), 시세 없는 종목은 원래순서로 뒤에. 헤더 열 폭은 행과 일치.
+  동일 — 리스트 재배치가 피드백). `sortedStocks`는 뷰 전용 정렬(**watchlistGroups 순서는 미변경** —
+  정렬 **방향**만 아래 '보기 상태 저장'으로 영속), 시세 없는 종목은 원래순서로 뒤에. 헤더 열 폭은 행과 일치.
+- **보기 상태 저장 = `chartPrefs.watchlistView` (2026-10 사용자 요청 — 세션 로컬로 되돌리지 말 것)**:
+  `{period, customStart, customEnd, sortDir}` — 마지막으로 고른 조회 기간(직접 선택 날짜 포함)과 등락율 정렬
+  방향이 팝업을 다시 열거나 앱을 새로고침해도(별도 창 포함) 그대로 돌아온다.
+  - **정규화·비교의 정본 = `watchlistGroups.ts`의 `normalizeWatchView`/`sameWatchView`**(import 0 순수 모듈 —
+    `verify:watchlist`가 직접 import). 기간 화이트리스트(6종) · 달력에 있는 날짜만 · 종료일<시작일이면 비움 ·
+    `'직접'`인데 시작일이 없으면 기본 기간 · 정렬은 `desc|asc|null`. **기본값 = 종전 화면 기본값**('1개월' · 정렬 없음).
+  - **⚠️ 팝업은 네 값을 한 객체(`patchView`)로만 바꾼다** — 개별 setState로 되돌리면 한 클릭에서 두 값을
+    바꾸는 경로(📅 기간 = 시작일 채우기 + 기간 전환)에서 제어 모드의 뒤 호출이 낡은 값 위에 덮어 시작일이
+    사라진다. `viewRef`로 같은 이벤트 안의 연속 호출을 동기 합성하고, 같은 값이면 아무것도 쓰지 않는다.
+  - **제어/비제어**: `onViewChange`가 함수면 제어 모드(값의 정본은 호출부), 아니면 팝업 로컬. App은 관리자
+    열람(`adminViewingAs`) 중에는 `null`을 넘겨 **사용자 저장값을 바꾸지 않는다**.
+  - **영속화 5지점**(chartPrefs 규약): state 리터럴 · `chartPrefsUpdatedAt` deps · STATE 저장 deps ·
+    `applyStateData` · `applyBackupData`. App setter는 정규화 후 **같은 값이면 같은 참조**(헛된 Drive 저장 방지).
+  - **별도 창**: 앱→창 `watchlist:live`에 `view`를 싣고, 창은 **`dataState === 'ready'`인 첫 메시지에서 한 번만**
+    채택한다(매번 채택하면 자기 메아리가 방금 누른 값을 되돌리고, 로드 전 기본값을 채택하면 저장값을 영영 못 받는다).
+    창→앱 `watchlist:view`는 **쓰기가 열려 있을 때만** 보내고, 앱 핸들러가 impersonation을 재확인한다.
+  - **알려진 한계(기존 chartPrefs와 동일)**: 계좌가 0개면 저장 effect가 조기 반환해 저장되지 않고, chartPrefs
+    단독 변경은 타 기기 즉시 반영이 안 된다(다음 로드에 반영).
 - **순서 드래그(⚠️ 회귀 주의 — 정렬과 별개 규약)**: 행 왼쪽 그립 핸들(`GripVertical`)을 잡아 그룹 내
   종목 순서를 드래그로 조정한다. `canReorder = activeGroup && !isAutoGroup && sortDir===null &&
   activeStocks.length>=2` — **원래순서 모드에서만** 활성(정렬 중이면 보이는 순서≠저장 순서라 핸들 미노출)이고
@@ -7027,7 +7045,7 @@ markAsRead() / clearNotificationLog()
   필수다(타이틀 바가 드래그 핸들이라 안 막으면 누르는 순간 패널 드래그가 시작된다).
 - **알려진 한계(의도)**: 인앱 팝업과 새 창을 동시에 열면 마지막 쓰기가 이긴다(⧉가 인앱 팝업을 닫으므로
   실사용에서 겹치는 구간은 짧다 — 달력·흐름도 창과 같은 절충). 앱 탭을 닫으면 창은 읽기 전용(구조적).
-- 검증: `npm run verify:watchlist` (직접 import `#1~#20` + 소스 텍스트 가드 `#G0~#G31`).
+- 검증: `npm run verify:watchlist` (직접 import `#1~#32` + 소스 텍스트 가드 `#G0~#G45` — 보기 상태 저장 `#21~#32`·`#G32~#G45`는 변이 18종 + 음성 대조 1종으로 검출 실증).
   ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 33종 + 음성 대조 1종**(자동 그룹 자리 고정 파괴 ·
   같은 참조 반환 제거 · `insertAt` 보정 제거 · 좌표계 어긋냄 2종 · 순수 모듈에 import 추가 · 재정렬
   손계산 복귀 · `isAutoGroupOf` 손복제 · `readOnly` 게이트 3종 · prop 직접 호출 복귀 · 가로 스크롤 칩

@@ -8,7 +8,8 @@
 //     #6~#16  reorderManualWatchGroups — 자동 그룹 자리 고정 · 변화 없으면 같은 참조 ·
 //             recordRecent(최근조회를 항상 맨 앞으로) 이후에도 사용자 순서가 살아남는가
 //     #17~#20 손상 입력 방어(throw 금지 — 렌더 중 예외는 루트 ErrorBoundary까지 올라간다)
-//   파트② 소스 텍스트 가드 (#G1~#G22)
+//     #21~#32 normalizeWatchView / sameWatchView — 보기 상태(기간·직접 선택 날짜·정렬) 저장값 정규화
+//   파트② 소스 텍스트 가드 (#G1~#G45)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다.
@@ -110,6 +111,27 @@ if (W) {
   S('#19 to가 정수가 아니면 같은 참조', () => reorderManualWatchGroups(base, 'a', 'x'), (v) => v === base);
   S('#20 항목에 id가 없어도 던지지 않는다', () => reorderManualWatchGroups([R, {}, { id: 'a' }], 'a', 0),
     (v) => Array.isArray(v));
+
+  // ── 보기 상태(조회 기간 · 직접 선택 시작/종료일 · 등락율 정렬) ──
+  const { normalizeWatchView: N, sameWatchView: SAME, DEFAULT_WATCH_VIEW: DEF, WATCH_PERIODS } = W;
+  const nv = (v) => S('(normalize)', () => N(v)) || {};
+  // ⚠️ 기본값 = 종전 화면 기본값('1개월', 정렬 없음) — 저장값이 없는 사용자는 종전과 똑같이 보여야 한다.
+  ok('#21 기본값은 1개월·정렬 없음(하위호환)', DEF.period === '1개월' && DEF.sortDir === null && DEF.customStart === '' && DEF.customEnd === '');
+  eq('#22 기간 목록 = 화면 버튼 6종(직접 포함)', (WATCH_PERIODS || []).join(','), '1일,1주,1개월,3개월,1년,직접');
+  eq('#23 정상 값은 그대로', JSON.stringify(nv({ period: '1년', customStart: '', customEnd: '', sortDir: 'asc' })),
+    JSON.stringify({ period: '1년', customStart: '', customEnd: '', sortDir: 'asc' }));
+  eq('#24 화이트리스트 밖 기간은 기본값', nv({ period: 'weke' }).period, '1개월');
+  eq('#25 직접 선택 + 시작일 보존', JSON.stringify(nv({ period: '직접', customStart: '2025-01-02', customEnd: '2025-06-30' })),
+    JSON.stringify({ period: '직접', customStart: '2025-01-02', customEnd: '2025-06-30', sortDir: null }));
+  eq('#26 직접 선택인데 시작일이 없으면 기본 기간(결과를 낼 수 없다)', nv({ period: '직접', customStart: '' }).period, '1개월');
+  eq('#27 달력에 없는 날짜는 버린다(2026-02-31)', nv({ period: '직접', customStart: '2026-02-31' }).customStart, '');
+  eq('#28 종료일이 시작일보다 앞이면 비운다(현재까지)', nv({ period: '직접', customStart: '2025-05-01', customEnd: '2025-04-01' }).customEnd, '');
+  eq('#29 정렬은 desc/asc만, 그 외는 null', [nv({ sortDir: 'desc' }).sortDir, nv({ sortDir: 'up' }).sortDir, nv({ sortDir: 1 }).sortDir].join(','), 'desc,,');
+  S('#30 null·문자열·배열 입력도 던지지 않고 기본값', () => [N(null), N('x'), N([1])],
+    (arr) => arr.every((v) => v.period === '1개월' && v.sortDir === null));
+  ok('#31 sameWatchView — 같은 내용이면 true(손상 키는 정규화 후 비교)',
+    SAME({ period: '1주', sortDir: 'desc' }, { period: '1주', customStart: '', customEnd: '', sortDir: 'desc', extra: 1 }));
+  ok('#32 sameWatchView — 정렬만 달라도 false', !SAME({ period: '1주', sortDir: 'desc' }, { period: '1주', sortDir: 'asc' }));
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -184,7 +206,7 @@ ok('#G17 main.tsx 가 URL 파라미터로 App 대신 창을 렌더한다',
 //    한 번 덮으면 백업으로도 되돌릴 수 없다(가계부 2026-08-30 사고와 같은 부류).
 ok('#G18 앱이 dataState를 함께 보내고 deps에도 넣는다',
   /type: 'watchlist:live'[^}]*dataState: ledgerDataState/.test(APP)
-  && /\}, \[watchlistGroups, adminViewingAs, ledgerDataState, watchlistWinNonce\]\);/.test(APP));
+  && /\}, \[watchlistGroups, watchlistView, adminViewingAs, ledgerDataState, watchlistWinNonce\]\);/.test(APP));
 ok('#G19 창은 dataState==="ready" 일 때만 쓰기를 연다(gotData·linked·readOnly 포함)',
   /const\s+writable\s*=\s*linked\s*&&\s*gotData\s*&&\s*!appReadOnly\s*&&\s*appDataState === 'ready'\s*;/.test(WIN));
 ok('#G20 창의 dataState 채택은 화이트리스트(fail-closed — 모르는 값은 loading)',
@@ -225,6 +247,46 @@ ok('#G30 창은 자체 ErrorBoundary label 을 갖는다(루트 경계는 label�
 //    원문으로 재면 그 설명 주석에 걸려 가드가 영구히 실패한다(실측: WatchlistPopup:223).
 ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   !/stockHistoryMap/.test(stripComments(POPUP)) && !/stockHistoryMap/.test(stripComments(WIN)));
+
+// ── 보기 상태 저장(조회 기간 · 직접 선택 날짜 · 등락율 정렬 — chartPrefs.watchlistView) ──
+// ⚠️ chartPrefs 영속화는 5지점이 한 세트다. 하나만 빠져도 조용히 유실된다
+//    (deps 누락 → 저장 미예약 / chartPrefsUpdatedAt 누락 → STATE write 스킵 / 로드 누락 → 다음 실행에 초기화).
+{
+  const literal = APP.match(/chartPrefs: \{[^}]*\}, intHistory,/);
+  ok('#G32 STATE 저장 payload 의 chartPrefs 리터럴에 watchlistView', !!literal && /\bwatchlistView\b/.test(literal[0]));
+  ok('#G33 chartPrefsUpdatedAt effect deps 에 watchlistView',
+    /fxCurrencies, fxSlotCount, watchlistView, compStocks\]\);/.test(APP));
+  ok('#G34 STATE 저장 effect deps 에 watchlistView',
+    /fxCurrencies, fxSlotCount, watchlistView, calendarMemos, watchlistGroups,/.test(APP));
+  eq('#G35 로드 2경로(applyStateData·applyBackupData)가 watchlistView 를 복원',
+    (APP.match(/if \(stateData\.chartPrefs\.watchlistView !== undefined\) setWatchlistView\(stateData\.chartPrefs\.watchlistView\);/g) || []).length, 2);
+  ok('#G36 App setter 는 정규화 + 같은 값이면 같은 참조(헛된 Drive 저장 방지)',
+    /const next = normalizeWatchView\(v\);\s*\n\s*setWatchlistViewRaw\(prev => \(sameWatchView\(prev, next\) \? prev : next\)\);/.test(APP));
+  ok('#G37 인앱 팝업에 view·onViewChange 배선(관리자 열람 중엔 미전달 = 로컬)',
+    /view=\{watchlistView\}/.test(APP) && /onViewChange=\{adminViewingAs \? null : setWatchlistView\}/.test(APP));
+  // ⚠️ 네 값을 따로 setState하면 한 클릭에서 두 값을 바꿀 때(📅 기간) 뒤 호출이 낡은 값 위에 덮어 시작일이 사라진다.
+  ok('#G38 팝업은 보기 상태를 한 객체(patchView)로만 바꾼다 — 개별 setter 부재',
+    !/\bset(Period|SortDir|CustomStart|CustomEnd)\(/.test(stripComments(POPUP))
+    && /const\s+patchView\s*=\s*useCallback\(/.test(POPUP));
+  ok('#G39 patchView 는 같은 값이면 아무것도 쓰지 않고, 제어 모드면 onViewChange 로 보낸다',
+    /if \(sameWatchView\(next, base\)\) return;/.test(POPUP)
+    && /if \(viewControlled\) onViewChange\(next\);\s*\n\s*else setLocalView\(next\);/.test(POPUP));
+  ok('#G40 📅 기간 버튼은 시작일 채우기 + 기간 전환을 한 번에(patchView 1회)',
+    /patchView\(\(v\) => \(\{ period: CUSTOM, customStart: v\.customStart \|\| cutoffFor\('1개월'\) \}\)\)/.test(POPUP));
+  ok('#G41 등락율 정렬도 patchView 경유(저장 대상)',
+    /const cycleSort = \(\) => patchView\(/.test(POPUP));
+  // ⚠️ 창은 앱 값을 'ready' 첫 메시지에서 한 번만 채택한다 — 매번 채택하면 메아리가 방금 누른 값을 되돌리고,
+  //    로드 전 메시지(기본값)를 채택하면 저장값을 영영 못 받는다.
+  ok('#G42 창은 dataState==="ready" 첫 메시지에서 한 번만 view 채택',
+    /if \(d\.dataState === 'ready' && !viewSeededRef\.current\) \{\s*\n\s*viewSeededRef\.current = true;\s*\n\s*setView\(normalizeWatchView\(d\.view\)\);/.test(WIN));
+  ok('#G43 창은 쓰기가 열려 있을 때만 view 를 앱으로 보낸다',
+    /if \(writableRef\.current\) post\(\{ type: 'watchlist:view', view: v \}\);/.test(WIN)
+    && /view=\{view\}\s*\n\s*onViewChange=\{onViewChange\}/.test(WIN));
+  ok('#G44 앱이 live 에 view 를 싣는다',
+    /type: 'watchlist:live', groups: watchlistGroups, view: watchlistView,/.test(APP));
+  ok('#G45 앱의 watchlist:view 핸들러가 impersonation 을 재확인하고 정규화 setter 를 쓴다',
+    /d\.type === 'watchlist:view'[\s\S]{0,300}?if \(adminViewingAsRef\.current\) return;\s*\n\s*setWatchlistView\(d\.view\);/.test(APP));
+}
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:watchlist — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

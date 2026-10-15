@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import WatchlistPopup from './WatchlistPopup';
 import ErrorBoundary from './ErrorBoundary';
+import { DEFAULT_WATCH_VIEW, normalizeWatchView } from '../watchlistGroups';
 
 /**
  * 관심종목 **별도 브라우저 창** (`/?watchlistWindow=1`).
@@ -35,6 +36,14 @@ const LINK_TIMEOUT_MS = 12000;
 
 export default function WatchlistWindow() {
   const [groups, setGroups] = useState([]);
+  /**
+   * 보기 상태(조회 기간 · 직접 선택 시작/종료일 · 등락율 정렬) — 정본은 앱 탭의 chartPrefs.watchlistView.
+   * ⚠️ 앱 값은 `dataState === 'ready'`인 **첫 메시지에서 한 번만** 채택한다. 매 메시지마다 채택하면
+   *    이 창이 보낸 값의 메아리가 늦게 도착해 방금 누른 기간을 한 박자 뒤로 되돌린다. 로드 전
+   *    메시지는 기본값을 실어 오므로 그걸 채택하면 저장된 값을 영영 못 받는다(그래서 'ready' 게이트).
+   */
+  const [view, setView] = useState(() => normalizeWatchView(DEFAULT_WATCH_VIEW));
+  const viewSeededRef = useRef(false);
   // 앱이 실어 보내는 impersonation 읽기 전용 신호. ⚠️ 이건 **UI 잠금**일 뿐이고 실제 방어선은
   //    App의 watchlist:groups 핸들러다(창은 조작 가능한 URL로 열리므로 App 측 재확인이 정본).
   const [appReadOnly, setAppReadOnly] = useState(false);
@@ -81,6 +90,10 @@ export default function WatchlistWindow() {
           setGroups(d.groups);
         }
         setAppReadOnly(!!d.readOnly);
+        if (d.dataState === 'ready' && !viewSeededRef.current) {
+          viewSeededRef.current = true;
+          setView(normalizeWatchView(d.view));
+        }
         // ⚠️ 화이트리스트 — 모르는 값은 `'loading'`으로 떨어뜨린다(fail-closed).
         setAppDataState(d.dataState === 'ready' || d.dataState === 'error' ? d.dataState : 'loading');
         gotDataRef.current = true; setGotData(true);
@@ -109,6 +122,16 @@ export default function WatchlistWindow() {
   //    아니다. 로드 전 메시지는 `groups: []`를 실어 오므로, 이 조건이 없으면 창이 편집 가능한
   //    빈 목록을 띄우고 거기서 그룹 하나만 만들어도 **저장된 관심종목을 덮는다**.
   const writable = linked && gotData && !appReadOnly && appDataState === 'ready';
+  const writableRef = useRef(writable);
+  writableRef.current = writable;
+
+  // 보기 상태 변경 — 화면은 즉시 바꾸고, 쓰기가 열려 있을 때만 앱 탭으로 보내 저장한다
+  // (읽기 전용·로드 전에는 이 창 안에서만 바뀐다 — 저장된 값을 덮지 않는다).
+  const onViewChange = useCallback((next) => {
+    const v = normalizeWatchView(next);
+    setView(v);
+    if (writableRef.current) post({ type: 'watchlist:view', view: v });
+  }, [post]);
 
   /**
    * ⚠️ WatchlistPopup은 `onUpdateGroups`에 **functional updater**를 넘긴다(호출부 10곳).
@@ -148,6 +171,8 @@ export default function WatchlistWindow() {
         variant="page"
         groups={groups}
         onUpdateGroups={onUpdateGroups}
+        view={view}
+        onViewChange={onViewChange}
         readOnly={!writable}
         notice={notice}
         onClose={() => { try { window.close(); } catch { /* 브라우저가 막으면 그대로 둔다 */ } }}
