@@ -7,18 +7,11 @@ import {
   TRANSFER_SUM_MAPS, depositRowOf, cashTransferBlockReason,
 } from '../utils';
 import { getTodayKST, getBackfillBoundaryForAccount } from './useMarketCalendar';
+import { toggleRowHighlight } from '../watchlistGroups';
 
-// 행 색상 마킹 4색 사이클(노랑→슬레이트→로즈→갈색→해제). 활성 계좌 경로와 by-id(카드 별도 창)
-// 경로가 **같은 함수**를 써야 두 화면의 색 순서가 갈리지 않는다.
-const MARK_ORDER = ['yellow', 'slate', 'rose', 'brown'];
-const cycleMarkedRow = (cur, itemId) => {
-  const next = { ...(cur ?? {}) };
-  const idx = MARK_ORDER.indexOf((cur ?? {})[itemId]);
-  if (idx === -1) next[itemId] = MARK_ORDER[0];
-  else if (idx < MARK_ORDER.length - 1) next[itemId] = MARK_ORDER[idx + 1];
-  else delete next[itemId];
-  return next;
-};
+// 행 하이라이트 — 관심종목과 같은 팔레트·규칙(칠할 때마다 다른 색, 다시 누르면 해제).
+// 활성 계좌 경로와 by-id(카드 별도 창) 경로가 **같은 함수**를 써야 두 화면의 색이 갈리지 않는다.
+const cycleMarkedRow = (cur, itemId) => toggleRowHighlight(cur, itemId);
 const toggleInList = (list, key) => {
   const cur = Array.isArray(list) ? list : [];
   return cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key];

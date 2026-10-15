@@ -10,6 +10,7 @@
 //    켜져 있어 TS·vite 어느 쪽도 문제되지 않는다.
 import { cleanNum, overseasInvestAmount, savingsMaturity, formatSavingsPeriod, formatSavingsDailyRate, depositKrwOf, depositKrwTotalOf, usdOfKrwFrame } from './utils.ts';
 import { buildXlsx, downloadXlsx } from './xlsxWriter.ts';
+import { WATCH_HIGHLIGHT_COLORS, rowHighlightOf } from './watchlistGroups.ts';
 import type { XlsxCell, XlsxMerge, XlsxSheet, XlsxStyle } from './xlsxWriter.ts';
 
 // ⚠️ `PortfolioTable.tsx`의 동명 상수/함수와 **문자 그대로 같아야** 한다(D/S 배지 판정).
@@ -72,15 +73,15 @@ export const FMT = {
   usdSignedPos: '[Red]"$"#,##0.00;[Blue]-"$"#,##0.00;[Red]"$"0.00',
 };
 
-// 행 색상 표시(4색 사이클)를 시트 배경으로 옮긴 값. `constants.MARK_STRIP_BG`의 원색을
-// 흰 종이 위 25% 틴트로 환산한 것 — 화면의 `MARK_ROW_BG`(어두운 배경 위 20~28% 알파)와
-// 같은 자리를 가리킨다. 표시하지 않으면 사용자가 일부러 칠해 둔 행 구분이 통째로 사라진다.
-export const MARK_XLSX_BG: Record<string, string> = {
-  yellow: 'FAECC1',
-  slate: 'E4E8ED',
-  rose: 'F8C7D1',
-  brown: 'ECD4C2',
-};
+// 행 하이라이트를 시트 배경으로 옮긴 값 — 팔레트 원색을 흰 종이 위 25% 틴트로 환산한다.
+// 키는 팔레트 key와 옛 4색 값 모두(옛 값은 rowHighlightOf가 가까운 팔레트 색으로 대응). 표시하지 않으면
+// 사용자가 일부러 칠해 둔 행 구분이 통째로 사라진다.
+const tintOnWhite = (hex: string, a = 0.25): string =>
+  [1, 3, 5].map(i => Math.round(255 * (1 - a) + parseInt(hex.slice(i, i + 2), 16) * a).toString(16).padStart(2, '0')).join('').toUpperCase();
+export const MARK_XLSX_BG: Record<string, string> = Object.fromEntries(
+  [...WATCH_HIGHLIGHT_COLORS.map(c => c.key), 'yellow', 'slate', 'rose', 'brown']
+    .map(k => [k, tintOnWhite((rowHighlightOf(k) as any).hex)]),
+);
 
 // ── 색상(화면 테마와 대응) ──────────────────────────────────────────────────
 const C = {

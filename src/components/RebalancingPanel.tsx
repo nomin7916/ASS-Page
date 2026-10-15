@@ -3,8 +3,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Maximize2, CalendarClock } from 'lucide-react';
 import { UI_CONFIG } from '../config';
-import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isManualCashRow, manualCashEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources } from '../utils';
+import { rowHighlightOf, nextRowHighlight } from '../watchlistGroups';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isManualCashRow, manualCashEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources, blendWithDarkBg } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { ladderWinId } from '../cardWindow';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
@@ -273,6 +273,37 @@ export default function RebalancingPanel({
   const [revealedCols, setRevealedCols] = useState({}); // 사용자가 칩으로 되살린 mode-hidden 열
   const isModeHidden = (k) => k === modeHiddenKey && !hiddenColumns.includes(k) && !revealedCols[k];
   const H = (k) => hiddenColumns.includes(k) || isModeHidden(k);
+
+  // ───────── 행 하이라이트 — 관심종목과 같은 팔레트·규칙(사용자 요청 2026-10) ─────────
+  // 종목명 칸 왼쪽 끝 띠를 누르면 칠하고 다시 누르면 지운다. 칠할 때마다 아직 안 쓴 색이다
+  // (정본 = watchlistGroups.ts). 칠한 행은 행 전체를 옅게, 가로 스크롤 고정 칸은 불투명한 같은 색으로.
+  const nextHl = rowHighlightOf(nextRowHighlight(markedRebalRows));
+  const hlStrip = (id, hl) => (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onToggleMarkedRebalRow(id); }}
+      aria-label={hl ? '하이라이트 해제' : '하이라이트'}
+      title={hl ? `하이라이트(${hl.label}) — 다시 누르면 해제` : `클릭하여 하이라이트${nextHl ? `(${nextHl.label})` : ''} — 정렬을 바꿔도 이 색으로 위치를 찾을 수 있습니다`}
+      className={`absolute left-0 top-0 bottom-0 w-2.5 cursor-pointer border-0 outline-none transition-opacity ${hl ? '' : 'opacity-0 group-hover:opacity-30 hover:!opacity-70'}`}
+      style={{ backgroundColor: hl ? hl.hex : nextHl?.hex }}
+    />
+  );
+  // 위치 요약 칩 — 표에 그려지는 순서(정렬 중이면 정렬 순서, 아니면 구분별 묶음 순서) 그대로.
+  const rbDisplayRows = (() => {
+    const data = Array.isArray(rebalanceData) ? rebalanceData : [];
+    if (rebalanceSortConfig?.key != null) return data;
+    const order = []; const g = {};
+    data.forEach(it => { const c = it.category || '기타'; if (!g[c]) { g[c] = []; order.push(c); } g[c].push(it); });
+    return order.flatMap(c => g[c]);
+  })();
+  const rbHlRows = rbDisplayRows.map((item, i) => ({ item, i, c: rowHighlightOf(markedRebalRows[item.id]) })).filter(x => x.c);
+  const rbTableRef = useRef(null);
+  const scrollToRbRow = (id) => {
+    const rows = rbTableRef.current?.querySelectorAll('[data-rb-row]') || [];
+    for (const el of rows) {
+      if (el.getAttribute('data-rb-row') === id) { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); break; }
+    }
+  };
   // 칩/스트립 클릭: mode-hidden 열은 저장 목록 대신 reveal 토글로 처리(저장 상태 오염 방지).
   // ⚠️ '수동 숨김 + 모드 숨김'이 겹친 열을 단순히 onToggleColumn으로 보내면, 저장 목록에서만 빠지고
   //    모드 숨김이 그대로라 **화면은 그대로인데 저장 상태만 조용히 바뀐다**(첫 클릭 무반응).
@@ -1024,7 +1055,35 @@ export default function RebalancingPanel({
               ⚠️ 개별 th의 z를 낮추는 방식으로 되돌리지 말 것 — 고정 헤더를 z-20으로 내리면
               가로 스크롤 시 DOM 뒤쪽의 일반 헤더(z-20)와 동률이 되어 종목명 헤더가 가려진다.
               ⚠️ isolate는 이 표 래퍼에만 — 카드 div에 걸면 그 안의 요소까지 갇힌다(모달들은 이 래퍼 밖). */}
-          <div className="overflow-x-auto bg-[#0f172a] isolate">
+          {/* 하이라이트 위치 요약 — 칩 순서 = 표 안 순서. 누르면 그 행으로 이동(관심종목과 같은 규약) */}
+          {rbHlRows.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 px-3 py-1.5 text-[11px] border-b border-gray-700/60 bg-[#0f172a]">
+              <span className="text-gray-500 mr-0.5">하이라이트</span>
+              {rbHlRows.map(({ item, i, c }) => {
+                const r = item.changeRate;
+                const nm = item.name || item.code || '(이름 없음)';
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => scrollToRbRow(item.id)}
+                    title={`${nm} — 표 ${i + 1}번째 / ${rbDisplayRows.length}행 · 클릭하면 그 행으로 이동`}
+                    className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 hover:brightness-125 transition"
+                    style={{ borderColor: `${c.hex}80`, backgroundColor: `${c.hex}1f` }}
+                  >
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: c.hex }} />
+                    <span className="max-w-[140px] truncate text-gray-200">{nm}</span>
+                    <span className="text-gray-400 tabular-nums">{i + 1}/{rbDisplayRows.length}</span>
+                    {r != null && <span className={`tabular-nums ${r > 0 ? 'text-red-400' : r < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatChangeRate(r)}</span>}
+                  </button>
+                );
+              })}
+              <button type="button" onClick={() => onResetAllMarkedRebalRows()} title="이 표의 하이라이트를 모두 지웁니다" className="ml-1 text-gray-500 hover:text-red-400 transition-colors">
+                모두 해제
+              </button>
+            </div>
+          )}
+          <div className="overflow-x-auto bg-[#0f172a] isolate" ref={rbTableRef}>
             <table className="w-full text-right text-[13px]">
               <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold text-center">
                 {(() => {
@@ -1039,7 +1098,7 @@ export default function RebalancingPanel({
                             <div
                               className="w-4 shrink-0 cursor-pointer hover:bg-red-400/20 transition-colors self-stretch"
                               onClick={() => onResetAllMarkedRebalRows()}
-                              title="전체 행 색상 초기화"
+                              title="하이라이트 모두 해제"
                             />
                             <div
                               className="flex-1 py-3 px-2 text-center cursor-pointer hover:bg-gray-700 transition-colors"
@@ -1408,24 +1467,26 @@ export default function RebalancingPanel({
                     const isLinked = !!maxAddLink[item.id];
                     // 연동 시 채울 수량 = 현재 추가가능(잔액÷현재가) + 이미 이 행이 가져간 추가(extra)
                     const linkCapacity = maxAdd + extraQty;
-                    const markColor = markedRebalRows[item.id];
-                    const rowMarkClass = markColor ? MARK_ROW_BG[markColor] : 'hover:bg-gray-800';
-                    const stickyCellClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-[#0f172a] group-hover:bg-gray-800';
+                    const hl = rowHighlightOf(markedRebalRows[item.id]);
+                    const rowMarkClass = hl ? '' : 'hover:bg-gray-800';
+                    const stickyCellClass = hl ? '' : 'bg-[#0f172a] group-hover:bg-gray-800';
+                    const hlSticky = hl ? { backgroundColor: blendWithDarkBg(hl.hex, 0.14, '#0f172a') } : {};
                     return (
-                      <tr key={item.id} className={`group border-b border-gray-700 ${rowMarkClass} transition-colors`}>
+                      <tr key={item.id} data-rb-row={item.id} className={`group border-b border-gray-700 ${rowMarkClass} transition-colors`} style={hl ? { backgroundColor: `${hl.hex}24` } : undefined}>
                         {catTd}
                         {!H('changeRate') && (
-                          <td className={`py-3 px-2 text-center ${stickyCellClass} transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: changeRateLeft, zIndex: 5 }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                          <td className={`py-3 px-2 text-center ${stickyCellClass} transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: changeRateLeft, zIndex: 5, ...hlSticky }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                             <span className={`text-xs font-bold ${(item.changeRate || 0) > 0 ? 'text-red-400' : (item.changeRate || 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.changeRate != null ? formatChangeRate(item.changeRate) : '-'}</span>
                           </td>
                         )}
                         {!H('returnRate') && (
-                          <td className={`py-3 px-2 text-center ${stickyCellClass} transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: returnRateLeft, zIndex: 5 }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                          <td className={`py-3 px-2 text-center ${stickyCellClass} transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: returnRateLeft, zIndex: 5, ...hlSticky }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                             <span className={`text-xs font-bold ${(item.returnRate || 0) > 0 ? 'text-red-400' : (item.returnRate || 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.returnRate != null ? formatChangeRate(item.returnRate) : '-'}</span>
                           </td>
                         )}
                         {!H('name') && (
-                          <td className={`py-3 px-4 text-center font-bold ${stickyCellClass} transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: nameLeft, zIndex: 5, color: itemColor }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                          <td className={`py-3 px-4 text-center font-bold ${stickyCellClass} transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: nameLeft, zIndex: 5, color: itemColor, ...hlSticky }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                            {hlStrip(item.id, hl)}
                             {(() => { const url = getItemUrl(item); return url ? <a href={url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 hover:underline" style={{ color: itemColor }}>{num}. {item.name}</a> : <div className="line-clamp-2">{num}. {item.name}</div>; })()}
                           </td>
                         )}
@@ -1801,13 +1862,12 @@ export default function RebalancingPanel({
                     return rebalanceData.map(item => {
                       const cat = item.category || '기타';
                       const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
-                      const mc = markedRebalRows[item.id];
-                      const bgClass = mc ? MARK_STICKY_BG[mc] : 'bg-[#0f172a] group-hover:bg-gray-800';
+                      const mhl = rowHighlightOf(markedRebalRows[item.id]);
+                      const bgClass = mhl ? '' : 'bg-[#0f172a] group-hover:bg-gray-800';
                       const catTd = H('category') ? null : (
                         <td
-                          className={`py-3 px-3 text-center font-bold border-r border-gray-700 align-middle ${bgClass} sticky left-0 z-[5] cursor-pointer transition-colors`}
-                          onClick={() => onToggleMarkedRebalRow(item.id)}
-                          title="클릭하여 매도/매수 표시 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                          className={`py-3 px-3 text-center font-bold border-r border-gray-700 align-middle ${bgClass} sticky left-0 z-[5] transition-colors`}
+                          style={mhl ? { backgroundColor: blendWithDarkBg(mhl.hex, 0.14, '#0f172a') } : undefined}
                         >
                           <div style={{ color: catColor }} className="text-xs">{cat}</div>
                         </td>

@@ -280,3 +280,36 @@ export function clearWatchHighlights(groups: any, groupId: any): any {
   };
   return out;
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// 포트폴리오 표·리밸런싱 표의 행 하이라이트(사용자 요청 2026-10) — 관심종목과 **같은 팔레트·같은 규칙**.
+// 저장은 계좌의 `markedPortfolioRows` / `markedRebalRows` = `{ [itemId]: 팔레트 key }`(기존 필드 그대로 —
+// 지문 `markedRowsKey`·로드 스프레드가 이미 있어 영속화 신규 지점 0곳).
+// ⚠️ 옛 4색 사이클 값('yellow'|'slate'|'rose'|'brown')은 **읽을 때만** 가까운 팔레트 색으로 보여 준다
+//    (저장값을 조용히 바꾸지 않는다). 다음 색 고르기·해제도 그 대응을 거쳐 판정한다.
+const LEGACY_ROW_MARK: Record<string, string> = Object.freeze({ yellow: 'amber', slate: 'white', rose: 'pink', brown: 'orange' }) as any;
+
+/** 행 하이라이트 저장값 → 팔레트 항목(옛 4색 값 포함). 없거나 손상값이면 null. */
+export function rowHighlightOf(key: any): { key: string; hex: string; label: string } | null {
+  if (typeof key !== 'string') return null;
+  return watchHighlightOf(LEGACY_ROW_MARK[key] || key);
+}
+
+/** 행 하이라이트 맵에서 다음에 칠할 색 — 관심종목과 같은 규칙(아직 안 쓴 색 → 가장 적게 쓴 색). */
+export function nextRowHighlight(map: any): string {
+  const vals = map && typeof map === 'object' && !Array.isArray(map) ? Object.values(map) : [];
+  return nextWatchHighlight(vals.map((k) => ({ highlight: rowHighlightOf(k)?.key })));
+}
+
+/**
+ * `itemId` 행의 하이라이트를 켜고 끈 새 맵. 켜져 있으면 키 삭제, 꺼져 있으면(손상값 포함) 다음 색.
+ * 입력은 변형하지 않는다.
+ */
+export function toggleRowHighlight(map: any, itemId: any): Record<string, string> {
+  const cur = map && typeof map === 'object' && !Array.isArray(map) ? map : {};
+  const id = String(itemId);
+  const next: Record<string, string> = { ...cur };
+  if (rowHighlightOf(cur[id])) delete next[id];
+  else next[id] = nextRowHighlight(cur);
+  return next;
+}
