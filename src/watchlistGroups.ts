@@ -107,3 +107,88 @@ export function sameWatchView(a: any, b: any): boolean {
   const y = normalizeWatchView(b);
   return x.period === y.period && x.customStart === y.customStart && x.customEnd === y.customEnd && x.sortDir === y.sortDir;
 }
+
+// ── 팝업 크기(인앱 팝업 전용 — 별도 창은 브라우저가 창 크기를 정한다) ──
+// 폭·높이를 **따로** 기억한다: 오른쪽 가장자리만 끌었으면 높이는 종전처럼 내용에 맞춰 자란다(null = 자동).
+// 하한은 '손상값 거르기'용 최소 바닥이다 — 실제 최소 크기(사이드바 펼침 여부에 따라 다르다)는
+// 컴포넌트가 표시 시점에 다시 묶는다. 상한은 큰 모니터를 넉넉히 덮는 값.
+export const WATCH_SIZE_FLOOR = 200;
+export const WATCH_SIZE_CEIL = 6000;
+
+const sizeDim = (n: any): number | null => {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return null;
+  return Math.min(WATCH_SIZE_CEIL, Math.max(WATCH_SIZE_FLOOR, Math.round(n)));
+};
+
+/**
+ * 손상값을 걸러 낸 팝업 크기. `null` = 기본 크기(종전 동작). **절대 던지지 않는다.**
+ * 폭·높이가 둘 다 자동이면 객체가 아니라 null을 돌려준다(저장값이 기본 상태를 한 가지 모양으로만 갖게).
+ */
+export function normalizeWatchSize(v: any): { w: number | null; h: number | null } | null {
+  if (!v || typeof v !== 'object') return null;
+  const w = sizeDim(v.w);
+  const h = sizeDim(v.h);
+  return w === null && h === null ? null : { w, h };
+}
+
+/** 두 팝업 크기가 같은가 — 같으면 저장을 건너뛴다(헛된 Drive 저장 방지). */
+export function sameWatchSize(a: any, b: any): boolean {
+  const x = normalizeWatchSize(a);
+  const y = normalizeWatchSize(b);
+  if (x === null || y === null) return x === y;
+  return x.w === y.w && x.h === y.h;
+}
+
+// 화면 여백 — 팝업 CSS 상한(maxWidth calc(100vw - 20px) / maxHeight calc(100vh - 10px))과 **같은 값**이어야
+// 끄는 동안 계산한 크기와 놓은 뒤 표시되는 크기가 같다(다르면 놓는 순간 크기가 튄다).
+export const WATCH_VIEW_MARGIN_X = 20;
+export const WATCH_VIEW_MARGIN_Y = 10;
+
+/**
+ * 모서리·가장자리를 끄는 중의 패널 사각형(순수 함수 — 절대 던지지 않는다).
+ * st = 시작 시점 `{ dir, x, y, w, h, minW, minH }`(dir = 'n'|'s'|'e'|'w'|'ne'|'nw'|'se'|'sw'),
+ * dx·dy = 포인터 이동량, vw·vh = 뷰포트 크기.
+ * - **반대편 가장자리는 제자리**다(왼쪽을 끌면 오른쪽 끝이 고정 — 창 크기 조절과 같은 감각).
+ * - 최소 크기 아래로 줄지 않고, 화면 밖으로 넓어지지 않는다.
+ */
+export function resizeWatchRect(st: any, dx: any, dy: any, vw: any, vh: any): { x: number; y: number; w: number; h: number } {
+  const num = (n: any, d = 0) => (typeof n === 'number' && Number.isFinite(n) ? n : d);
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  const o = st && typeof st === 'object' ? st : {};
+  const dir = typeof o.dir === 'string' ? o.dir : '';
+  const x0 = num(o.x), y0 = num(o.y), w0 = num(o.w), h0 = num(o.h);
+  const ddx = num(dx), ddy = num(dy);
+  const VW = num(vw, 1024), VH = num(vh, 768);
+  const minW = Math.max(WATCH_SIZE_FLOOR, num(o.minW));
+  const minH = Math.max(WATCH_SIZE_FLOOR, num(o.minH));
+  const maxW = Math.max(minW, VW - WATCH_VIEW_MARGIN_X);
+  const maxH = Math.max(minH, VH - WATCH_VIEW_MARGIN_Y);
+  let x = x0, y = y0, w = w0, h = h0;
+  if (dir.includes('e')) w = clamp(w0 + ddx, minW, Math.min(maxW, VW - x0));
+  if (dir.includes('w')) {
+    const right = x0 + w0;
+    x = clamp(x0 + ddx, Math.max(0, right - maxW), right - minW);
+    w = right - x;
+  }
+  if (dir.includes('s')) h = clamp(h0 + ddy, minH, Math.min(maxH, VH - y0));
+  if (dir.includes('n')) {
+    const bottom = y0 + h0;
+    y = clamp(y0 + ddy, Math.max(0, bottom - maxH), bottom - minH);
+    h = bottom - y;
+  }
+  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+}
+
+/**
+ * 놓은 뒤 저장할 크기 — **끈 축만** 바꾸고 나머지 축은 이전 저장값(자동이면 null)을 그대로 둔다.
+ * 오른쪽 가장자리만 끌었는데 높이까지 그 순간의 실측값으로 박으면, 내용에 맞춰 자라던 높이가 고정돼 버린다.
+ */
+export function watchSizeAfterResize(dir: any, rect: any, prev: any): { w: number | null; h: number | null } | null {
+  const d = typeof dir === 'string' ? dir : '';
+  const p = normalizeWatchSize(prev);
+  const r = rect && typeof rect === 'object' ? rect : {};
+  return normalizeWatchSize({
+    w: /[ew]/.test(d) ? r.w : (p ? p.w : null),
+    h: /[ns]/.test(d) ? r.h : (p ? p.h : null),
+  });
+}

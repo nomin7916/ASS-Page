@@ -4,7 +4,7 @@ import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, P
 import CustomDatePicker from './CustomDatePicker';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
-import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView } from '../watchlistGroups';
+import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize } from '../watchlistGroups';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
 // - 단일 position:fixed div (백드롭/오버레이 없음 → 아래 앱 클릭·스크롤 통과)
@@ -18,6 +18,23 @@ const WATCHLIST_Z = 1050;
 //    그만큼 쪼그라들어 위 640px의 존재 이유가 통째로 무너진다 — 둘은 한 세트다. (좁은 화면은 maxWidth로 클램프)
 const SIDEBAR_W = 180;
 const PANEL_W = 640 + SIDEBAR_W;
+// 크기 조절 하한 — 리스트 칸의 고정 열(그립·차트·등락율·현재가 ≈ 290px)이 겹치지 않는 최소 폭과
+// 기간 토글·리스트 몇 줄이 보이는 최소 높이. 사이드바를 펼치면 그 폭만큼 더 필요하다(minW 참조).
+const LIST_MIN_W = 320;
+const PANEL_MIN_H = 260;
+// 모서리·가장자리 손잡이(사용자 요청 2026-10 — 폴더 창처럼 끌어서 크기를 바꾼다).
+// ⚠️ 손잡이는 패널 테두리에 **걸쳐서**(바깥 5px · 안쪽 3px) 둔다 — 안쪽으로만 두면 오른쪽 손잡이가 리스트의
+//    세로 스크롤바(6px)를 덮어 스크롤바를 잡을 수 없다. 그래서 패널(overflow-hidden) 밖의 래퍼에 둔다.
+const RESIZE_HANDLES = [
+  { dir: 'n', cursor: 'ns-resize', style: { top: -5, left: 14, right: 14, height: 8 } },
+  { dir: 's', cursor: 'ns-resize', style: { bottom: -5, left: 14, right: 14, height: 8 } },
+  { dir: 'e', cursor: 'ew-resize', style: { right: -5, top: 14, bottom: 14, width: 8 } },
+  { dir: 'w', cursor: 'ew-resize', style: { left: -5, top: 14, bottom: 14, width: 8 } },
+  { dir: 'nw', cursor: 'nwse-resize', style: { top: -4, left: -4, width: 18, height: 18 } },
+  { dir: 'ne', cursor: 'nesw-resize', style: { top: -4, right: -4, width: 18, height: 18 } },
+  { dir: 'sw', cursor: 'nesw-resize', style: { bottom: -4, left: -4, width: 18, height: 18 } },
+  { dir: 'se', cursor: 'nwse-resize', style: { bottom: -4, right: -4, width: 18, height: 18 } },
+];
 const MARKET_LABEL = { kr: '국내', us: '해외', fund: '펀드' };
 const RECENT_ID = WATCH_RECENT_ID;   // 자동 '최근조회' 그룹의 예약 id
 const RECENT_NAME = '최근조회';
@@ -120,6 +137,10 @@ export default function WatchlistPopup({
   // 별도 창은 앱 탭으로 전달), 아니면 이 컴포넌트 로컬(관리자 열람처럼 저장하지 않을 때).
   view = null,
   onViewChange = null,
+  // 팝업 크기 `{ w, h }`(null = 기본 크기 · 각 축 null = 자동). `onSizeChange`가 함수면 제어 모드
+  // (앱 탭이 chartPrefs로 Drive 저장), 아니면 이 컴포넌트 로컬. 별도 창(page)은 쓰지 않는다.
+  size = null,
+  onSizeChange = null,
 }) {
   const isPage = variant === 'page';
   const [pos, setPos] = useState(() => ({
@@ -171,6 +192,78 @@ export default function WatchlistPopup({
     else setLocalView(next);
   }, [viewControlled, onViewChange]);
   const { period, customStart, customEnd, sortDir } = curView;
+
+  // ── 팝업 크기 — 모서리·가장자리를 끌어 폭·높이를 바꾼다(인앱 팝업 전용) ──
+  // ⚠️ 끄는 동안의 크기는 **로컬(liveRect)에만** 두고 손을 놓을 때 한 번만 저장한다 — 포인터가 움직일
+  //    때마다 저장하면 프레임마다 chartPrefs가 바뀌어 Drive 저장이 폭주한다.
+  const sizeControlled = typeof onSizeChange === 'function';
+  const [localSize, setLocalSize] = useState(() => normalizeWatchSize(size));
+  const curSize = useMemo(
+    () => (sizeControlled ? normalizeWatchSize(size) : localSize),
+    [sizeControlled, size, localSize],
+  );
+  const sizeRef = useRef(curSize);
+  sizeRef.current = curSize;
+  const commitSize = useCallback((s) => {
+    const next = normalizeWatchSize(s);
+    if (sameWatchSize(next, sizeRef.current)) return;   // 변화 없음 → 헛된 저장 방지
+    sizeRef.current = next;
+    if (sizeControlled) onSizeChange(next);
+    else setLocalSize(next);
+  }, [sizeControlled, onSizeChange]);
+  // 표시 최소 폭 — 사이드바를 펼치면 그 폭만큼 더 필요하다(저장값이 그보다 좁으면 표시할 때 넓힌다).
+  const minW = sidebarOpen ? SIDEBAR_W + LIST_MIN_W : LIST_MIN_W + 32;
+  const [liveRect, setLiveRect] = useState(null);   // 끄는 중의 { x, y, w, h, dir }
+  const liveRectRef = useRef(null);
+  const resizeRef = useRef(null);                   // 시작 시점 { dir, sx, sy, x, y, w, h, minW, minH, moved }
+  const resizeRafRef = useRef(0);
+  useEffect(() => () => { if (resizeRafRef.current) cancelAnimationFrame(resizeRafRef.current); }, []);
+  const onResizeDown = (e, dir) => {
+    if (isPage || (e.button != null && e.button !== 0)) return;
+    const el = rootRef.current;
+    if (!el) return;
+    e.stopPropagation();
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    const r = el.getBoundingClientRect();
+    resizeRef.current = { dir, sx: e.clientX, sy: e.clientY, x: r.left, y: r.top, w: r.width, h: r.height, minW, minH: PANEL_MIN_H, moved: false };
+  };
+  const onResizeMove = (e) => {
+    const st = resizeRef.current;
+    if (!st) return;
+    const dx = e.clientX - st.sx, dy = e.clientY - st.sy;
+    if (!st.moved && dx === 0 && dy === 0) return;
+    st.moved = true;
+    liveRectRef.current = { ...resizeWatchRect(st, dx, dy, window.innerWidth, window.innerHeight), dir: st.dir };
+    // 화면 갱신은 프레임당 한 번 — 리스트(미니차트)가 포인터 이벤트마다 다시 그려지지 않게.
+    if (!resizeRafRef.current) {
+      resizeRafRef.current = requestAnimationFrame(() => {
+        resizeRafRef.current = 0;
+        setLiveRect(liveRectRef.current);
+      });
+    }
+  };
+  const endResize = () => {
+    const st = resizeRef.current;
+    if (!st) return;
+    resizeRef.current = null;
+    if (resizeRafRef.current) { cancelAnimationFrame(resizeRafRef.current); resizeRafRef.current = 0; }
+    const r = liveRectRef.current;
+    liveRectRef.current = null;
+    setLiveRect(null);
+    // 누르기만 하고 움직이지 않았으면 아무것도 저장하지 않는다(클릭 한 번이 '자동 높이'를 실측값으로 박지 않게).
+    if (!st.moved || !r) return;
+    setPos({ x: r.x, y: r.y });
+    commitSize(watchSizeAfterResize(st.dir, r, sizeRef.current));
+  };
+  // 손잡이 더블클릭 = 기본 크기로(유일한 되돌리기 경로). 화면 밖으로 밀리지 않게 가운데로 다시 놓는다.
+  const resetSize = () => {
+    commitSize(null);
+    setPos((p) => ({
+      x: Math.max(10, Math.round((window.innerWidth - Math.min(PANEL_W, window.innerWidth - 20)) / 2)),
+      y: p.y,
+    }));
+  };
   const [dragId, setDragId] = useState(null);          // 순서 드래그 중인 종목 id (원래순서 모드에서만)
   const [dragOverIndex, setDragOverIndex] = useState(null); // 삽입 슬롯 인덱스(0..N)
   const listRef = useRef(null);                        // 종목 리스트 컨테이너(행 geometry 측정)
@@ -225,9 +318,11 @@ export default function WatchlistPopup({
     if (!open || isPage) return;
     const id = requestAnimationFrame(() => {
       const w = rootRef.current?.offsetWidth || PANEL_W;
+      const h = rootRef.current?.offsetHeight || 0;
       setPos({
         x: Math.max(10, Math.round((window.innerWidth - w) / 2)),
-        y: Math.max(20, Math.round(window.innerHeight * 0.12)),
+        // 저장된 높이가 크면 12% 지점에서 시작할 때 아래가 화면 밖으로 잘린다 → 바닥이 들어오게 올린다.
+        y: Math.max(10, Math.min(Math.round(window.innerHeight * 0.12), window.innerHeight - h - 10)),
       });
     });
     return () => cancelAnimationFrame(id);
@@ -631,15 +726,25 @@ export default function WatchlistPopup({
 
   const sidebarInput = 'w-full bg-gray-900 border border-amber-500/50 rounded px-2 py-1 text-xs text-white outline-none';
 
-  return (
+  // 표시 크기 — 끄는 중이면 그 값, 아니면 저장값(없으면 기본). 끄지 않는 축은 저장값(자동이면 내용에 맞춤).
+  // ⚠️ CSS 상한(maxWidth/maxHeight)은 `resizeWatchRect`의 화면 여백과 같은 값이다 — 다르면 놓는 순간 크기가 튄다.
+  const liveV = !!liveRect && /[ns]/.test(liveRect.dir);
+  const dispW = liveRect ? liveRect.w : Math.max(minW, curSize?.w ?? PANEL_W);
+  const dispH = liveV ? liveRect.h : (curSize?.h ?? null);
+  const panelLeft = liveRect ? liveRect.x : pos.x;
+  const panelTop = liveRect ? liveRect.y : pos.y;
+
+  const panel = (
     <div
       ref={rootRef}
       style={isPage
         ? { position: 'fixed', inset: 0 }
-        : { position: 'fixed', left: pos.x, top: pos.y, zIndex: WATCHLIST_Z, width: PANEL_W, maxWidth: 'calc(100vw - 20px)', maxHeight: '82vh' }}
+        : (dispH != null
+          ? { width: '100%', height: dispH, maxHeight: 'calc(100vh - 10px)' }
+          : { width: '100%', maxHeight: '82vh' })}
       className={isPage
         ? 'bg-[#0b1120] flex flex-col'
-        : 'rounded-2xl shadow-2xl overflow-hidden border border-gray-600/60 bg-[#0b1120] flex flex-col'}
+        : `rounded-2xl shadow-2xl overflow-hidden border border-gray-600/60 bg-[#0b1120] flex flex-col ${liveRect ? 'select-none' : ''}`}
     >
       {/* 타이틀 바 — 팝업 모드에서만 드래그 핸들(별도 창은 브라우저가 창을 옮긴다) */}
       <div
@@ -1077,6 +1182,38 @@ export default function WatchlistPopup({
         ) : null}
         </div>
       </div>
+    </div>
+  );
+
+  // 별도 창은 브라우저가 창 크기를 정한다 — 손잡이 없이 패널만.
+  if (isPage) return panel;
+
+  // 인앱 팝업 — 래퍼(위치·폭)가 패널과 크기 조절 손잡이를 함께 담는다. 패널이 overflow-hidden이라
+  // 테두리에 걸치는 손잡이는 그 바깥(래퍼)에 둬야 잘리지 않는다.
+  return (
+    <div style={{ position: 'fixed', left: panelLeft, top: panelTop, zIndex: WATCHLIST_Z, width: dispW, maxWidth: 'calc(100vw - 20px)' }}>
+      {panel}
+      {RESIZE_HANDLES.map((hd) => (
+        <div
+          key={hd.dir}
+          onPointerDown={(e) => onResizeDown(e, hd.dir)}
+          onPointerMove={onResizeMove}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          onLostPointerCapture={endResize}
+          onDoubleClick={resetSize}
+          title="끌어서 크기 조절 · 더블클릭하면 기본 크기로"
+          style={{ position: 'absolute', zIndex: 2, cursor: hd.cursor, touchAction: 'none', ...hd.style }}
+        />
+      ))}
+      {/* 오른쪽 아래 모서리 표시 — 크기를 바꿀 수 있다는 단서(클릭은 위 'se' 손잡이가 받는다) */}
+      <svg
+        width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"
+        style={{ position: 'absolute', right: 4, bottom: 4, pointerEvents: 'none', zIndex: 1 }}
+        className="text-gray-500"
+      >
+        <path d="M9 2 L2 9 M9 6 L6 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      </svg>
     </div>
   );
 }
