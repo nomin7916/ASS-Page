@@ -66,20 +66,28 @@ const kstYmd = (date: Date): string =>
 // 미니 차트용 최근 ~1년 일별 종가 이력. [date, close][](오름차순) | null.
 // 1주/1개월/3개월/1년 토글은 이 1건을 팝업에서 기간별로 슬라이스(재조회 없이 즉시 반영).
 // ⚠️ 반환값은 팝업 로컬 맵에만 저장(공유 stockHistoryMap 오염 금지 — 보유종목 평가액 불변식 보호).
-export async function fetchWatchDaily(market: WatchMarket, code: string):
+// fromDate(YYYY-MM-DD, 선택) — 관심종목 '기간 직접 선택'이 1년보다 이전 시작일을 고르면 그만큼 더 받는다.
+// 미지정·1년 이내면 종전과 같은 범위(하위호환).
+export async function fetchWatchDaily(market: WatchMarket, code: string, fromDate?: string):
   Promise<[string, number][] | null> {
   const c = (code || '').trim();
   if (!c) return null;
+  let span = 0; // 오늘부터 fromDate까지의 달력일 + 여유
+  if (fromDate && /^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+    const ms = Date.now() - Date.UTC(+fromDate.slice(0, 4), +fromDate.slice(5, 7) - 1, +fromDate.slice(8, 10));
+    if (Number.isFinite(ms) && ms > 0) span = Math.ceil(ms / 86400000) + 15;
+  }
   let data: Record<string, number> | null = null;
   try {
     if (market === 'kr') {
-      const r = await fetchNaverStockHistory(c, 300); // 최근 ~300거래일(fchart) ≈ 1.2년
+      // 최근 ~300거래일(fchart) ≈ 1.2년. 그보다 이전이면 달력일 × 0.72(거래일 비율) + 여유.
+      const r = await fetchNaverStockHistory(c, Math.max(300, Math.ceil(span * 0.72) + 10));
       data = r?.data || null;
     } else if (market === 'us') {
-      const r = await fetchUsStockHistory(c.toUpperCase(), daysAgo(370));
+      const r = await fetchUsStockHistory(c.toUpperCase(), daysAgo(Math.max(370, span)));
       data = r?.data || null;
     } else {
-      const start = daysAgo(400);
+      const start = daysAgo(Math.max(400, span));
       const end = daysAgo(0);
       if (/^MA:/i.test(c)) data = await fetchMiraeFundNavHistory(c, start, end);
       else if (/^[A-Za-z0-9]{5,7}$/.test(c)) data = await fetchMiraeFundNavHistory(`MA:${c.toUpperCase()}`, start, end);

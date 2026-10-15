@@ -6891,6 +6891,12 @@ markAsRead() / clearNotificationLog()
     툴팁(`priceTitle`)은 `기준일 종가 → 현재가`를 밝히고 1일은 근사(≈)임을 명시한다.
   - **영속화 지점 0곳**: `viewByCode`·`rate`·`base`·`points`는 전부 매 렌더 파생값이고 `dailyMap`/`intradayMap`은
     팝업 로컬(메모리 전용)이다. `watchlistGroups` 스키마·`portfolioStructureKey`·복원 sticky 전 지점 무수정.
+- **기간 직접 선택(`CUSTOM='직접'`, 2026-10 사용자 요청)**: 기간 토글 옆 `📅 기간` 버튼 → 시작일·종료일
+  `CustomDatePicker` 2개. **종료일을 비우면 '현재까지'** — 구간 마지막 점을 실시간 현재가로 대체/덧붙인다
+  (`viewByCode`의 `liveTail`). 시작일이 1년보다 이전이면 `loadDaily(stock, needFrom)`이 `fetchWatchDaily(…, fromDate)`로
+  더 길게 다시 받는다(`dailyFromRef`가 받은 범위, `dailySeqRef`가 늦게 온 짧은 응답의 덮어쓰기 방지).
+  ⚠️ 달력은 body 포털이라 `zIndex={PICKER_Z}`(1070 > 패널 1050) 필수(`verify:compare #G34d` census에 등록).
+  시작·종료일은 **세션 로컬**(Drive 저장 지점 0곳). 시작 종가가 없으면 현재가만으로 구간을 만들지 않는다(null 계약).
 - **코드→시장 판정(`detectMarket`)**: 계좌 컨텍스트 없음 → 코드 포맷 사용. **6자 영숫자+숫자(005930·
   0219E0)를 `extractFundCode`의 5~7자 펀드 규칙보다 먼저 KR로 판정**(안 그러면 국내 ETF가 미래에셋 펀드로
   오분류). MA:/URL→fund, 알파벳 티커→us, 그 외 5자+→fund. 잔여 오분류는 **실패 행의 시장 수동보정

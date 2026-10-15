@@ -1,6 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose, ExternalLink } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose, ExternalLink, Calendar } from 'lucide-react';
+import CustomDatePicker from './CustomDatePicker';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
 import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups } from '../watchlistGroups';
@@ -46,6 +47,12 @@ const dotCls = (st) =>
   st === 'loading' ? 'bg-amber-400 animate-pulse' : st === 'success' ? 'bg-emerald-500' : st === 'fail' ? 'bg-red-500' : 'bg-gray-600';
 
 const PERIODS = ['1일', '1주', '1개월', '3개월', '1년'];
+// 사용자가 시작일·종료일을 직접 고르는 기간(세션 로컬 — Drive 저장 안 함).
+// 종료일을 비우면 '현재'까지 — 구간 마지막 점을 실시간 현재가로 둔다.
+const CUSTOM = '직접';
+// 달력 팝업은 body로 포털되므로 이 팝업(z 1050)보다 높아야 보인다(CustomDatePicker `zIndex` 규약).
+const PICKER_Z = 1070;
+const todayKST = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
 // 일별 기간의 시작 컷오프 날짜(YYYY-MM-DD). '1일'은 인트라데이라 미사용.
 // ⚠️ 반드시 KST 달력일에 앵커할 것. 과거엔 `new Date()`를 그대로 `toISOString()`(UTC)으로 잘라
 //    KST 00:00~09:00에는 컷오프가 하루 앞당겨졌다 — 구간 첫 종가가 하루 더 이른 거래일이 되어
@@ -139,12 +146,16 @@ export default function WatchlistPopup({
   const [dailyMap, setDailyMap] = useState({});       // { [code]: [date, close][] } 일별 종가(팝업 로컬 — Drive 저장 안 함)
   const [intradayMap, setIntradayMap] = useState({}); // { [code]: number[] } 오늘 인트라데이(1일)
   const [period, setPeriod] = useState('1개월');       // 미니차트 기간
+  const [customStart, setCustomStart] = useState('');  // 직접 선택 시작일(YYYY-MM-DD)
+  const [customEnd, setCustomEnd] = useState('');      // 직접 선택 종료일('' = 현재까지 실시간)
   const [sortDir, setSortDir] = useState(null);        // 등락율 정렬: null(원래순서)|'desc'|'asc'
   const [dragId, setDragId] = useState(null);          // 순서 드래그 중인 종목 id (원래순서 모드에서만)
   const [dragOverIndex, setDragOverIndex] = useState(null); // 삽입 슬롯 인덱스(0..N)
   const listRef = useRef(null);                        // 종목 리스트 컨테이너(행 geometry 측정)
   const loadedDailyRef = useRef(new Set());            // 일별 조회 완료/진행 코드:market
   const loadedIntradayRef = useRef(new Set());         // 인트라데이 조회 완료/진행 코드:market
+  const dailyFromRef = useRef({});                     // 코드:market → 받은 일별 이력의 요청 시작일
+  const dailySeqRef = useRef({});                      // 코드:market → 조회 세대(늦게 온 짧은 응답이 긴 응답을 덮지 않게)
 
   const list = Array.isArray(groups) ? groups : [];
   const activeGroup = list.find((g) => g.id === activeGroupId) || list[0] || null;
@@ -221,13 +232,21 @@ export default function WatchlistPopup({
   };
 
   // 미니차트 일별 종가(~1년) — 팝업 로컬 dailyMap에만 저장(공유 stockHistoryMap 미접촉으로 보유종목 평가 불변식 보호)
-  const loadDaily = async (stock) => {
+  // needFrom(선택) — 직접 선택 기간의 시작일. 이미 받은 이력이 그보다 늦게 시작하면 더 길게 다시 받는다.
+  const loadDaily = async (stock, needFrom = '') => {
     const key = stock.code + ':' + stock.market;
-    if (loadedDailyRef.current.has(key)) return;
+    const have = dailyFromRef.current[key];
+    if (loadedDailyRef.current.has(key) && (!needFrom || (have && have <= needFrom))) return;
     loadedDailyRef.current.add(key);
-    const pairs = await fetchWatchDaily(stock.market, stock.code);
-    if (pairs && pairs.length >= 2) setDailyMap((p) => ({ ...p, [stock.code]: pairs }));
-    else {
+    const from = needFrom && (!have || needFrom < have) ? needFrom : (have || '');
+    const seq = (dailySeqRef.current[key] || 0) + 1;
+    dailySeqRef.current[key] = seq;
+    const pairs = await fetchWatchDaily(stock.market, stock.code, from || undefined);
+    if (dailySeqRef.current[key] !== seq) return; // 더 새 조회가 있다
+    if (pairs && pairs.length >= 2) {
+      dailyFromRef.current[key] = from && from < cutoffFor('1년') ? from : cutoffFor('1년');
+      setDailyMap((p) => ({ ...p, [stock.code]: pairs }));
+    } else {
       // 실패도 '조회 완료'로 남긴다 — 안 그러면 기간 등락율이 '…'(조회 중)에서 영영 못 벗어난다.
       // 이미 받아 둔 데이터가 있으면 덮지 않는다(시장 수동 보정 재조회 실패 시 기존 이력 보존).
       setDailyMap((p) => (stock.code in p ? p : { ...p, [stock.code]: null }));
@@ -253,7 +272,7 @@ export default function WatchlistPopup({
     const key = stock.code + ':' + stock.market;
     loadQuote(stock);
     loadedDailyRef.current.delete(key);
-    loadDaily(stock);
+    loadDaily(stock, period === CUSTOM ? customStart : '');
     if (period === '1일') {
       loadedIntradayRef.current.delete(key);
       loadIntraday(stock);
@@ -265,6 +284,12 @@ export default function WatchlistPopup({
     if (!open || !activeGroup) return;
     (activeGroup.stocks || []).forEach((s) => { loadQuote(s); loadDaily(s); });
   }, [open, activeGroup?.id]);
+
+  // 직접 선택 시작일이 1년보다 이전이면 그만큼 일별 이력을 더 받는다(활성 그룹 종목만)
+  useEffect(() => {
+    if (!open || !activeGroup || period !== CUSTOM || !customStart) return;
+    (activeGroup.stocks || []).forEach((s) => loadDaily(s, customStart));
+  }, [open, activeGroup?.id, period, customStart]);
 
   // 기간이 '1일'이면(1일 상태로 열림/그룹전환/토글) 활성 그룹 인트라데이 조회
   useEffect(() => {
@@ -314,7 +339,7 @@ export default function WatchlistPopup({
       (g.id === activeGroup.id ? { ...g, stocks: [...(g.stocks || []), stock] } : g)));
     setCodeInput('');
     loadQuote(stock);
-    loadDaily(stock);
+    loadDaily(stock, period === CUSTOM ? customStart : '');
     if (period === '1일') loadIntraday(stock);
   };
   const removeStock = (stockId) => {
@@ -329,7 +354,7 @@ export default function WatchlistPopup({
       stocks: (g.stocks || []).map((s) => (s.id === stock.id ? { ...s, market } : s)),
     })));
     loadQuote({ ...stock, market });
-    loadDaily({ ...stock, market });
+    loadDaily({ ...stock, market }, period === CUSTOM ? customStart : '');
     if (period === '1일') loadIntraday({ ...stock, market });
   };
 
@@ -395,7 +420,23 @@ export default function WatchlistPopup({
         continue;
       }
       const daily = dailyMap[s.code] || [];
-      const win = cut ? daily.filter(([dt]) => dt >= cut) : daily;
+      let win;
+      let liveTail = false;
+      if (period === CUSTOM) {
+        // 시작일 미지정이면 구간 없음(null 계약 — 0.00%로 단언하지 않는다)
+        win = customStart ? daily.filter(([dt]) => dt >= customStart && (!customEnd || dt <= customEnd)) : [];
+        // 종료일을 비우면 '현재까지' — 마지막 점을 실시간 현재가로 둔다(오늘 일봉이 있으면 대체, 없으면 덧붙임).
+        // 시작 종가가 하나도 없으면 현재가만으로 구간을 만들지 않는다.
+        const livePx = q ? Number(q.price) : 0;
+        if (!customEnd && win.length && livePx > 0) {
+          const today = todayKST();
+          const lastD = win[win.length - 1][0];
+          win = lastD >= today ? [...win.slice(0, -1), [lastD, livePx]] : [...win, [today, livePx]];
+          liveTail = true;
+        }
+      } else {
+        win = cut ? daily.filter(([dt]) => dt >= cut) : daily;
+      }
       const first = win[0];
       const last = win[win.length - 1];
       // ⚠️ 등락율과 기준가는 **같은 게이트**를 쓴다 — 갈리면 화면에 분모 없는 %(또는 %없는 분모)가 떠서
@@ -412,12 +453,22 @@ export default function WatchlistPopup({
         //    실제 기준일을 그대로 노출하는 것이 그 어긋남을 사용자에게 알리는 방법이다.
         base: ok ? { date: first[0], price: first[1], approx: false } : null,
         live: false,
+        liveTail,                            // 직접 선택 + 종료일 비움 → 마지막 점이 실시간 현재가
         loaded: s.code in dailyMap,          // 조회 완료(실패 포함) 여부 — '조회 중'과 '데이터 부족'을 구분
         hasDaily: Array.isArray(dailyMap[s.code]), // 이력을 실제로 받았는가 — '조회 실패'와 '구간 종가 부족'을 구분
       };
     }
     return out;
-  }, [activeStocks, quotes, dailyMap, intradayMap, period]);
+  }, [activeStocks, quotes, dailyMap, intradayMap, period, customStart, customEnd]);
+
+  // 화면 문구용 기간 이름 — 직접 선택이면 실제 구간을 쓴다(연도 포함 YY/MM/DD).
+  const periodLabel = period === CUSTOM
+    ? (customStart ? `${fmtBaseDate(customStart)}~${customEnd ? fmtBaseDate(customEnd) : '현재'}` : '직접 선택(시작일 미지정)')
+    : period;
+  // 헤더 아랫줄은 폭이 좁아(w-16) 월/일만 — 전체 구간은 툴팁(periodLabel)에 있다.
+  const periodShort = period === CUSTOM
+    ? (customStart ? `${customStart.slice(5).replace('-', '/')}~${customEnd ? customEnd.slice(5).replace('-', '/') : '현재'}` : '직접')
+    : period;
 
   // 등락율 셀 툴팁 — 이 숫자가 '무엇 대비 몇 %'인지(기준일·기준가 → 종점)를 그대로 밝힌다.
   const rateTitle = (s, v) => {
@@ -427,10 +478,11 @@ export default function WatchlistPopup({
     if (v.rate == null) {
       const why = !v.loaded ? '종가 이력 조회 중'
         : !v.hasDaily ? '종가 이력을 받지 못함 — 현재가를 클릭하면 다시 조회합니다'
+        : period === CUSTOM && !customStart ? '시작일을 선택하세요'
         : '이 구간에 종가가 1개뿐';
-      return `${period} 등락율 · ${why} — 클릭하면 종목 상세 보기`;
+      return `${periodLabel} 등락율 · ${why} — 클릭하면 종목 상세 보기`;
     }
-    return `${period} 등락율 · ${v.from[0]} ${fmtPrice(s.market, v.from[1])} → ${v.to[0]} ${fmtPrice(s.market, v.to[1])} — 클릭하면 종목 상세 보기`;
+    return `${periodLabel} 등락율 · ${v.from[0]} ${fmtPrice(s.market, v.from[1])} → ${v.liveTail ? '현재가(실시간)' : v.to[0]} ${fmtPrice(s.market, v.to[1])} — 클릭하면 종목 상세 보기`;
   };
 
   // 현재가 셀 툴팁 — 아래 작은 줄(기준가)이 '무엇 대비'인지 밝히고 클릭 동작(새로고침)도 함께 안내한다.
@@ -442,7 +494,9 @@ export default function WatchlistPopup({
     const now = q ? fmtPrice(s.market, q.price) : '-';
     return b.approx
       ? `1일 등락율 기준가 · 전일 종가 ≈ ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(현재가와 등락률에서 역산한 추정값입니다)\n${REFRESH_HINT}`
-      : `${period} 등락율 기준가 · ${b.date} 종가 ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(휴장·상장일 때문에 정확히 ${period} 전이 아닐 수 있어 실제 기준일을 표시합니다)\n${REFRESH_HINT}`;
+      : period === CUSTOM
+        ? `${periodLabel} 등락율 기준가 · ${b.date} 종가 ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(시작일이 휴장일이거나 상장 전이면 그 뒤 첫 거래일을 기준으로 합니다)\n${REFRESH_HINT}`
+        : `${period} 등락율 기준가 · ${b.date} 종가 ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(휴장·상장일 때문에 정확히 ${period} 전이 아닐 수 있어 실제 기준일을 표시합니다)\n${REFRESH_HINT}`;
   };
 
   // 정렬 적용된 표시 목록 (등락율 없는 종목은 원래순서로 뒤에)
@@ -813,7 +867,62 @@ export default function WatchlistPopup({
                   {pd}
                 </button>
               ))}
+              <button
+                onClick={() => {
+                  // 처음 열면 시작일을 1개월 전으로 채워 곧바로 결과가 보이게 한다(바꿀 수 있다)
+                  if (!customStart) setCustomStart(cutoffFor('1개월'));
+                  setPeriod(CUSTOM);
+                }}
+                title="기간 직접 선택 — 시작일·종료일을 달력에서 고릅니다(종료일을 비우면 현재까지 실시간)"
+                className={`flex-1 inline-flex items-center justify-center gap-1 rounded px-1 py-1 text-[11px] font-medium border transition-colors ${
+                  period === CUSTOM
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                    : 'border-gray-700 text-gray-400 hover:text-amber-300'
+                }`}
+              >
+                <Calendar size={11} /> 기간
+              </button>
             </div>
+            {period === CUSTOM && (
+              <div className="mb-2 rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5">
+                <div className="flex items-center gap-1 text-[11px] text-gray-300">
+                  <span className="text-gray-500 mr-1">시작</span>
+                  <CustomDatePicker
+                    value={customStart}
+                    zIndex={PICKER_Z}
+                    followScroll
+                    onChange={(v) => {
+                      setCustomStart(v);
+                      if (customEnd && v > customEnd) setCustomEnd(''); // 종료일이 시작일보다 앞이면 비운다
+                    }}
+                  />
+                  <span className="text-gray-500 mx-1">~</span>
+                  <span className="text-gray-500 mr-1">종료</span>
+                  <CustomDatePicker
+                    value={customEnd}
+                    placeholder="현재"
+                    zIndex={PICKER_Z}
+                    followScroll
+                    onChange={(v) => {
+                      if (customStart && v < customStart) { setCustomEnd(customStart); return; }
+                      setCustomEnd(v >= todayKST() ? '' : v); // 오늘 이후는 '현재까지'와 같다
+                    }}
+                  />
+                  {customEnd && (
+                    <button
+                      onClick={() => setCustomEnd('')}
+                      className="text-gray-500 hover:text-red-400 p-0.5 transition-colors"
+                      title="종료일 비우기 — 현재까지 실시간으로 조회"
+                    ><X size={10} /></button>
+                  )}
+                </div>
+                <div className="mt-1 text-[10px] text-gray-500">
+                  {customStart
+                    ? (customEnd ? '선택한 종료일 종가까지의 등락율입니다.' : '종료일을 비우면 현재까지 — 마지막 값은 실시간 현재가입니다.')
+                    : '시작일을 선택하세요.'}
+                </div>
+              </div>
+            )}
 
             {/* 종목 리스트 */}
             {activeStocks.length === 0 ? (
@@ -831,11 +940,11 @@ export default function WatchlistPopup({
                         축소 폭이 행과 갈리고 열이 어긋난다. 폭을 바꿀 땐 행의 등락율 셀도 같이 바꿀 것. */}
                     <button
                       onClick={cycleSort}
-                      title={`${period} 등락율 정렬 — 클릭하여 내림/오름/원래순서`}
+                      title={`${periodLabel} 등락율 정렬 — 클릭하여 내림/오름/원래순서`}
                       className="w-16 shrink-0 text-right cursor-pointer transition-colors hover:text-gray-300 leading-tight"
                     >
                       <span className="block">등락율</span>
-                      <span className="block text-[9px] text-amber-400/70">{period}</span>
+                      <span className="block text-[9px] text-amber-400/70 whitespace-nowrap">{periodShort}</span>
                     </button>
                     {/* ⚠️ 헤더·행 모두 w-24 shrink-0 — 행이 2줄(현재가 + 기준가)이라 min-content가 헤더와
                         달라졌다. shrink를 허용하면 좁은 화면에서 두 칸이 서로 다른 폭으로 줄어 열이 어긋난다

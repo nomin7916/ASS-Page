@@ -996,7 +996,9 @@ const PICKER_HOSTS = readdirSync(join(ROOT, 'src/components'))
   .map(([f, n]) => `${f}:${n}`)
   .sort();
 eq('#G34d 달력 호출처 census(새 호스트는 z를 의식적으로 정할 것)', PICKER_HOSTS,
-  ['ChartRangeControls.tsx:2', 'IntegratedDashboard.tsx:1', 'PortfolioTable.tsx:3', 'VerifyEvalModal.tsx:1']);
+  ['ChartRangeControls.tsx:2', 'IntegratedDashboard.tsx:1', 'PortfolioTable.tsx:3', 'VerifyEvalModal.tsx:1',
+   // 관심종목(z 1050) — PICKER_Z 1070을 명시한다(포털 팝업이 패널 뒤로 숨지 않게).
+   'WatchlistPopup.tsx:2']);
 
 // ── 포털된 팝업의 이벤트가 호스트를 닫아 버리지 않는가 ────────────────────────────────
 // ⚠️ 포털해도 이벤트는 **React 트리**를 따라 올라간다(DOM 트리가 아니다) — 호스트의 닫기
