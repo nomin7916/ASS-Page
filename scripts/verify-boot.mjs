@@ -642,5 +642,51 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+console.log('\n── 파트⑧ 로드 실패·지연 세션의 쓰기 차단 (2026-10 사용자 보고 — 빈 화면) ──');
+{
+  // 발단: Drive 불러오기가 늦거나 실패해도 부팅은 끝까지 진행돼 isInitialLoad가 풀리고 800ms 자동저장이 열렸다.
+  // 화면은 '계좌가 없습니다'라 사용자가 계좌를 만들거나 공지 '확인'·관리자 접근 토글·'앱 닫기'를 누르면
+  // 빈(또는 한 계좌짜리) STATE가 Drive의 실제 데이터를 덮을 수 있었다.
+  const ds = stripComments(read('src/hooks/useDriveSync.ts'));
+  const app = stripComments(read('src/App.tsx'));
+  const dash = stripComments(read('src/components/IntegratedDashboard.tsx'));
+
+  // G26 saveAllToDrive 진입부에서 STATE 미적용이면 반환한다(모든 자동·수동·종료 저장의 단일 관문).
+  const sad = slice(ds, 'const saveAllToDrive = async', "setSS('saving');");
+  ok('G26 saveAllToDrive가 STATE 미적용(로드 실패·지연) 세션에서 저장하지 않는다(fail-closed)',
+    sad.length > 100 && /if \(!stateAppliedRef\.current\) \{[\s\S]*?return;\s*\}/.test(sad));
+  ok('G26b 그 게이트는 토큰 확인·폴더 조회보다 앞이다(아무것도 쓰지 않고 끝난다)',
+    sad.indexOf('stateAppliedRef.current') >= 0 && sad.indexOf('stateAppliedRef.current') < sad.indexOf('const token = driveTokenRef.current'));
+  ok('G26c 차단 사실은 세션당 한 번만 알린다(자동저장이 편집마다 다시 부른다)',
+    /saveBlockedNotifiedRef\.current = true;[\s\S]{0,200}notify\(/.test(sad));
+
+  // G27 '앱 닫기'(handleAppClose)는 saveAllToDrive를 거치지 않고 STATE를 직접 쓰므로 같은 게이트를 직접 둔다.
+  const hac = slice(app, 'const handleAppClose = async', 'saveVersionedBackup(token, folderId, stateCore');
+  ok('G27 handleAppClose의 직접 STATE 쓰기가 stateAppliedRef로 게이팅된다',
+    hac.length > 100 && /if \(driveTokenRef\.current && stateAppliedRef\.current\) \{/.test(hac)
+      && hac.indexOf('stateAppliedRef.current') < hac.indexOf('saveDriveFile(token, folderId, DRIVE_FILES.STATE'));
+  ok('G27b App이 useDriveSync에서 stateAppliedRef를 받는다', /lastAutoBackupAtRef, stateAppliedRef,\s*\} = useDriveSync\(/.test(app));
+
+  // G28 토큰 갱신 대기가 영영 끝나지 않는 경로 차단 — GIS 오류는 error_callback으로만 온다.
+  const itc = slice(ds, 'const initTokenClient = () => {', 'const checkAndSyncFromDrive = async');
+  ok('G28 initTokenClient가 error_callback에서 대기 중인 토큰 Promise를 null로 끝낸다',
+    /error_callback:\s*\(\)\s*=>\s*\{[\s\S]*?pendingTokenResolveRef\.current\(null\)/.test(itc));
+
+  // G29 빈 화면을 '계좌 없음'으로 보이지 않는다 + 데이터 확정 전엔 계좌 추가 잠금.
+  ok('G29 App이 IntegratedDashboard에 dataState(STATE 확정 신호)를 넘긴다',
+    /<IntegratedDashboard\s+dataState=\{ledgerDataState\}/.test(app));
+  ok("G29b 대시보드 prop 기본값은 'ready'(미전달 시 종전 동작)", /dataState = 'ready',/.test(dash));
+  const emptyRow = slice(dash, "portfolioSummaries.filter(s => !s.deletedAt).length === 0 && (", '</tbody>');
+  ok("G29c 빈 계좌 행이 error/loading을 '계좌 없음'보다 먼저 분기한다",
+    emptyRow.indexOf("dataState === 'error'") > 0
+      && emptyRow.indexOf("dataState !== 'ready'") > emptyRow.indexOf("dataState === 'error'")
+      && emptyRow.indexOf('계좌가 없습니다') > emptyRow.indexOf("dataState !== 'ready'"));
+  ok('G29d 실패·지연 안내에 새로고침 버튼이 있다',
+    count(emptyRow, /window\.location\.reload\(\)/g) === 2);
+  ok("G29e '새 계좌'·'직접입력' 버튼이 데이터 확정 전 잠긴다",
+    count(dash, /disabled=\{dataState !== 'ready'\}/g) === 2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:boot — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

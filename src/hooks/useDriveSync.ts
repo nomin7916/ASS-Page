@@ -156,6 +156,8 @@ export function useDriveSync({
   //    "Drive를 읽기 전에 빈 상태를 덮어쓰지 않기"뿐이므로, 종료 저장(pagehide·탭 숨김·비활동 로그아웃)은
   //    이 플래그만 본다. 800ms 자동저장·chartPrefs·알림로그·폴링의 isInitialLoad 게이트는 그대로다.
   const stateAppliedRef = useRef(false);
+  // 위 게이트가 저장을 막았다는 사실을 세션당 한 번만 알린다(자동저장이 편집마다 다시 부르므로).
+  const saveBlockedNotifiedRef = useRef(false);
   // ── 하루 1회 종료 백업 ──
   // 마지막 auto 백업 시각(ms). 부팅 완료 후 Drive 목록(_auto.json 최신 createdTime)으로 시드하고, 백업을 낼 때
   // 낙관적으로 Date.now()를 세운다. ⚠️ STATE·localStorage·sessionStorage에 저장하지 않는다 — Drive 목록에서
@@ -396,6 +398,18 @@ export function useDriveSync({
     }
     // 전환 중 — 관리자↔사용자 데이터 교체 중 저장 차단 (편집 모드 자체는 저장 허용)
     if (adminTransitioningRef.current) return;
+    // ⚠️ Drive의 STATE를 아직 화면에 적용하지 못했으면(로드 실패·지연) **어떤 저장도 하지 않는다**(fail-closed).
+    //    로드가 실패해도 부팅은 끝까지 진행돼 isInitialLoad가 풀리므로 800ms 자동저장이 열린다. 그 상태에서
+    //    화면은 '계좌가 없습니다'라 사용자가 계좌를 하나 만들면 그 한 계좌짜리 STATE가 Drive의 실제 데이터를
+    //    통째로 덮어쓴다. 수동 저장 버튼도 같은 경로라 함께 막는다. 성공 로드·신규 사용자 확인만 이 플래그를 세운다.
+    if (!stateAppliedRef.current) {
+      if (!saveBlockedNotifiedRef.current) {
+        saveBlockedNotifiedRef.current = true;
+        notify('Drive에서 데이터를 불러오지 못해 저장을 멈췄습니다. 새로고침(F5) 해 주세요 — 기존 데이터는 그대로 있습니다.', 'error');
+      }
+      setDriveStatus('error');
+      return;
+    }
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     const isAdminEdit = !!adminViewingAsRef.current;
@@ -566,6 +580,15 @@ export function useDriveSync({
           }
           if (pendingTokenResolveRef.current) {
             pendingTokenResolveRef.current(t);
+            pendingTokenResolveRef.current = null;
+          }
+        },
+        // ⚠️ 팝업 차단·창 닫힘 등 OAuth 응답 이전 오류는 callback이 아니라 error_callback으로만 온다.
+        //    없으면 토큰 갱신을 기다리는 Promise(pendingTokenResolveRef)가 영영 끝나지 않아, 그 위에서
+        //    기다리던 Drive 불러오기·저장이 통째로 멈춘다(화면은 빈 채로 남는다). null로 끝내 호출부의 실패 처리로 넘긴다.
+        error_callback: () => {
+          if (pendingTokenResolveRef.current) {
+            pendingTokenResolveRef.current(null);
             pendingTokenResolveRef.current = null;
           }
         },

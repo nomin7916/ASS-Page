@@ -790,7 +790,7 @@ export default function App() {
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
-    initSession, seedLastAutoBackupAt, lastAutoBackupAtRef,
+    initSession, seedLastAutoBackupAt, lastAutoBackupAtRef, stateAppliedRef,
   } = useDriveSync({
     authUser,
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
@@ -3696,7 +3696,9 @@ export default function App() {
     // "앱 닫기"로 종료할 때마다 비교종목이 초기화되던 버그 방지 (메인 저장과 동일 필드 보장)
     const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), ...(nextLedger ? { ledgerBooks: nextLedger } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const minWait = new Promise<void>(r => setTimeout(r, 2000));
-    if (driveTokenRef.current) {
+    // ⚠️ STATE를 Drive에서 불러오지 못한 세션이면 쓰지 않는다 — 이 경로는 saveAllToDrive를 거치지 않고
+    //    STATE를 직접 덮어쓰므로 그 게이트가 닿지 않는다(빈 계좌 목록이 실제 데이터를 지운다).
+    if (driveTokenRef.current && stateAppliedRef.current) {
       const token = driveTokenRef.current;
       const { stockHistoryMap: _shm, marketIndices: _mi, marketIndicators: _mInd, indicatorHistoryMap: _ihm, ...stateCore } = state;
       const savePromise = (async () => {
@@ -5236,6 +5238,7 @@ export default function App() {
 
         {showIntegratedDashboard && (
           <IntegratedDashboard
+            dataState={ledgerDataState}
             intHistory={computedIntHistory}
             intTotals={intTotals}
             intMonthlyHistory={intMonthlyHistory}

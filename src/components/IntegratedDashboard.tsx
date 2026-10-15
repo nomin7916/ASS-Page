@@ -59,6 +59,9 @@ const blendWithDarkBg = (hex, alpha, bgHex = '#1e293b') => {
 };
 
 export default function IntegratedDashboard({
+  // Drive STATE 로드 상태(App의 ledgerDataState — STATE 확정 직후 한 곳에서 서는 앱 전역 신호).
+  // 'ready'가 아니면 빈 계좌 목록은 '계좌 없음'이 아니라 '아직 못 불러옴'이다 — 미전달 시 종전 동작.
+  dataState = 'ready',
   intHistory,
   intTotals,
   intMonthlyHistory,
@@ -521,7 +524,9 @@ export default function IntegratedDashboard({
                     <button
                       ref={newAccBtnRef}
                       onClick={handleNewAccToggle}
-                      className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded"
+                      disabled={dataState !== 'ready'}
+                      title={dataState !== 'ready' ? '데이터를 불러온 뒤에 계좌를 추가할 수 있습니다' : undefined}
+                      className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                     >
                       <Plus size={12} /> 새 계좌 <span className="text-[9px] opacity-60">▼</span>
                     </button>
@@ -555,7 +560,7 @@ export default function IntegratedDashboard({
                     )}
                   </div>
                   <div className="relative" ref={simpleMenuRef}>
-                    <button onClick={() => setShowSimpleMenu(v => !v)} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded" title="직접입력 계좌 추가">
+                    <button onClick={() => setShowSimpleMenu(v => !v)} disabled={dataState !== 'ready'} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent" title={dataState !== 'ready' ? '데이터를 불러온 뒤에 계좌를 추가할 수 있습니다' : '직접입력 계좌 추가'}>
                       <Plus size={12} /> 직접입력 <span className="text-[10px]">▾</span>
                     </button>
                     {showSimpleMenu && (
@@ -823,7 +828,23 @@ export default function IntegratedDashboard({
                     });
                     })()}
                     {portfolioSummaries.filter(s => !s.deletedAt).length === 0 && (
-                      <tr><td colSpan={13} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                      <tr><td colSpan={13} className="py-8 text-center text-gray-500 text-xs">
+                        {/* ⚠️ 로드 전·실패 상태를 '계좌 없음'으로 보이지 말 것 — 사용자가 데이터가 사라진 줄 알고
+                            새 계좌를 만들게 된다(그 입력이 정확히 저장된 데이터를 덮는 경로였다). */}
+                        {dataState === 'error' ? (
+                          <span className="text-amber-300">
+                            ⚠ Google Drive에서 데이터를 불러오지 못했습니다. 기존 데이터는 Drive에 그대로 있습니다.{' '}
+                            <button onClick={() => window.location.reload()} className="underline font-bold text-amber-200 hover:text-white">새로고침</button>
+                          </span>
+                        ) : dataState !== 'ready' ? (
+                          <span className="text-sky-300">
+                            Google Drive에서 데이터를 불러오는 중입니다… 30초 넘게 이 화면이면{' '}
+                            <button onClick={() => window.location.reload()} className="underline font-bold text-sky-200 hover:text-white">새로고침</button>해 주세요.
+                          </span>
+                        ) : (
+                          <>계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</>
+                        )}
+                      </td></tr>
                     )}
                   </tbody>
                   <tfoot className="border-t-2 border-red-700 bg-red-900/20">
