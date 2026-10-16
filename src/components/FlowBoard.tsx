@@ -476,7 +476,7 @@ export default function FlowBoard({
     return id;
   }, [map, patchNodeById, readOnly]);
 
-  // 팝업에서 고를 수 있는 '선으로 이어진 도형'의 총액·소계·잔액 행
+  // 팝업에서 고를 수 있는 '선으로 이어진 도형'의 행 — 구분선을 뺀 전부(항목·총액·소계·잔액)
   const editorRefOptions = useMemo(() => {
     if (!editorNode || !map) return [];
     const ids = [];
@@ -492,7 +492,7 @@ export default function FlowBoard({
       const comp = nodeTables.tableOf(id);
       const picks = [];
       rows.forEach((r, idx) => {
-        if (!r || !(r.kind === 'total' || r.kind === 'subtotal' || r.kind === 'balance')) return;
+        if (!r || r.kind === 'rule') return;
         picks.push({ idx, id: r.id || '', kind: r.kind, label: r.label || '', text: comp[idx]?.text || '' });
       });
       if (picks.length) out.push({ nodeId: id, name: viewOf(n).displayName || '(이름 없음)', rows: picks });

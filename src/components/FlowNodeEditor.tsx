@@ -422,7 +422,7 @@ export default function FlowNodeEditor({
                 <span className="text-gray-600">항목 이름 오른쪽 체크 = 실행 표시 · S = 취소선 · I = 기울임</span><br />
                 <span className="text-gray-600">항목·총액의 금액은 직접 입력하거나 계좌(또는 전체 계좌 합계)를 연결할 수 있습니다</span><br />
                 <span className="text-gray-600">총액·소계·잔액은 다른 행을 골라 더하거나 뺄 수 있습니다(값 칸 왼쪽 버튼)</span><br />
-                <span className="text-gray-600">선으로 이어진 도형의 총액·소계·잔액도 값 출처에서 고를 수 있습니다</span>
+                <span className="text-gray-600">선으로 이어진 도형의 항목·총액·소계·잔액도 값 출처에서 고를 수 있습니다</span>
               </div>
             ) : rows.map((r, i) => {
               const auto = r.kind === 'subtotal' || r.kind === 'balance';
@@ -505,7 +505,7 @@ export default function FlowNodeEditor({
                       {r.portfolioId && r.portfolioId !== FLOW_TABLE_LINK_ALL && !accountOptions.some(o => o.id === r.portfolioId) && (
                         <option value={r.portfolioId}>(연결 끊김)</option>
                       )}
-                      {/* 선으로 이어진 도형의 총액·소계·잔액(사용자 요청 2026-10) */}
+                      {/* 선으로 이어진 도형의 행 — 구분선을 뺀 전부(사용자 요청 2026-10) */}
                       {refOptions.map(g => (
                         <optgroup key={g.nodeId} label={`이어진 도형 · ${g.name}`}>
                           {g.rows.map(x => (
@@ -535,7 +535,7 @@ export default function FlowNodeEditor({
                   ) : nr ? (
                     <div
                       className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-teal-200 bg-gray-800/40 border border-teal-800/70 rounded truncate"
-                      title={computed[i]?.text === '-' ? '이어진 도형의 값을 구하지 못했습니다(도형·행 삭제, 또는 서로를 참조하는 순환). 합계에서 제외됩니다.' : `${refNameOf(nr) || '이어진 도형'} 값(자동)`}
+                      title={computed[i]?.text === '-' ? '이어진 도형의 값을 구하지 못했습니다(도형·행 삭제, 숫자가 아닌 값, 또는 서로를 참조하는 순환). 합계에서 제외됩니다.' : `${refNameOf(nr) || '이어진 도형'} 값(자동)`}
                     >{computed[i]?.text || '-'}</div>
                   ) : r.portfolioId && (isItem || r.kind === 'total') ? (
                     <div

@@ -1517,7 +1517,7 @@ export function computeFlowTable(
  * ⚠️ 순환(A가 B의 행을, B가 A의 행을 참조 / 자기 자신 참조)은 **정적으로 미리 찾아** 그 도형으로 들어가는
  *    참조를 전부 null로 만든다. 계산 도중 방문 표시로 끊으면 어느 도형을 먼저 그렸느냐에 따라 값이
  *    달라진다(같은 데이터가 화면마다 다른 숫자). 정적 판정이면 순환에 걸린 쪽은 언제나 '-'다.
- * 참조 가능한 행 = 총액·소계·잔액(사용자 요구: "연결된 합계, 소계, 총액").
+ * 참조 가능한 행 = 구분선을 뺀 **모든 행**(항목·총액·소계·잔액 — 사용자 요구: "모선의 항목 전체").
  */
 export function makeFlowNodeRowResolver(nodes: unknown, linkedValueOf?: (pid: string) => number | null) {
   const list = Array.isArray(nodes) ? nodes : [];
@@ -1557,7 +1557,7 @@ export function makeFlowNodeRowResolver(nodes: unknown, linkedValueOf?: (pid: st
     if (cyclic.has(nodeId)) return null;
     const rows = tableOf(nodeId);
     const r = rows.find(x => x.id === rowId);
-    if (!r || !(r.kind === 'total' || r.kind === 'subtotal' || r.kind === 'balance')) return null;
+    if (!r || r.kind === 'rule') return null;
     return r.value;
   };
   const tableOf = (nodeId: string): FlowTableComputedRow[] => {

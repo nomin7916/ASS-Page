@@ -758,7 +758,7 @@ function computeFlowTable(table, linkedValueOf, nodeRefValueOf) {
  * ⚠️ 순환(A가 B의 행을, B가 A의 행을 참조 / 자기 자신 참조)은 **정적으로 미리 찾아** 그 도형으로 들어가는
  *    참조를 전부 null로 만든다. 계산 도중 방문 표시로 끊으면 어느 도형을 먼저 그렸느냐에 따라 값이
  *    달라진다(같은 데이터가 화면마다 다른 숫자). 정적 판정이면 순환에 걸린 쪽은 언제나 '-'다.
- * 참조 가능한 행 = 총액·소계·잔액(사용자 요구: "연결된 합계, 소계, 총액").
+ * 참조 가능한 행 = 구분선을 뺀 **모든 행**(항목·총액·소계·잔액 — 사용자 요구: "모선의 항목 전체").
  */
 function makeFlowNodeRowResolver(nodes, linkedValueOf) {
   const list = Array.isArray(nodes) ? nodes : [];
@@ -798,7 +798,7 @@ function makeFlowNodeRowResolver(nodes, linkedValueOf) {
     if (cyclic.has(nodeId)) return null;
     const rows = tableOf(nodeId);
     const r = rows.find(x => x.id === rowId);
-    if (!r || !(r.kind === 'total' || r.kind === 'subtotal' || r.kind === 'balance')) return null;
+    if (!r || r.kind === 'rule') return null;
     return r.value;
   };
   const tableOf = (nodeId) => {
@@ -1733,7 +1733,8 @@ console.log('\n■ 도형 간 표 참조 — 이어진 도형의 총액·소계�
   eq('#180b 가져온 값이 기본 잔액 계산에 들어간다', t[4].text, '-202,977,206');
   eq('#180c 참조 행은 linked', t[1].linked, true);
   eq('#180d 계산 결과에 숫자 값과 id가 실린다', JSON.stringify([R1.tableOf('isa')[3].value, R1.tableOf('isa')[3].id]), JSON.stringify([117977206, 's']));
-  eq('#181 참조 가능 = 총액·소계·잔액만(항목 참조는 null)', R1.resolve('isa', 'a'), null);
+  eq('#181 항목 행도 참조할 수 있다(모선의 항목 전체)', R1.resolve('isa', 'a'), 97977206);
+  eq('#181c 구분선·숫자 아닌 항목은 null', makeFlowNodeRowResolver([N('m', [X('rule', '', '', { id: 'q' }), X('item', '메모', '약 3억', { id: 'w' })])]).resolve('m', 'q') ?? makeFlowNodeRowResolver([N('m', [X('item', '메모', '약 3억', { id: 'w' })])]).resolve('m', 'w'), null);
   eq('#181b 없는 도형·행은 null', [R1.resolve('nope', 's'), R1.resolve('isa', 'zz')].join(','), ',');
   // 순환: A의 총액이 B의 잔액을, B의 총액이 A의 잔액을 참조
   const cA = N('A', [X('total', 'T', '', { nodeRef: { nodeId: 'B', rowId: 'b1' } }), X('balance', 'z', '', { id: 'a1' })]);
@@ -2793,9 +2794,9 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
   ok('#G184 FlowBoard: 도형 간 참조 해석기를 시트 단위로 한 번 만들어 캔버스·팝업이 공유',
     /makeFlowNodeRowResolver\(map\?\.nodes \|\| \[\], tableLinkValue\)/.test(boardNC) && /tableOfNode=\{nodeTables\.tableOf\}/.test(boardNC) && /nodeRefValueOf=\{nodeTables\.resolve\}/.test(boardNC));
   // ⚠️ 후보는 '선으로 이어진' 도형만(사용자 요구). 엣지 양방향 모두.
-  ok('#G184b FlowBoard: 참조 후보 = 선으로 이어진 도형의 총액·소계·잔액',
+  ok('#G184b FlowBoard: 참조 후보 = 선으로 이어진 도형의 구분선 뺀 모든 행',
     /const other = e\.from === editorNode\.id \? e\.to : e\.to === editorNode\.id \? e\.from : null;/.test(boardNC)
-    && /r\.kind === 'total' \|\| r\.kind === 'subtotal' \|\| r\.kind === 'balance'/.test(boardNC));
+    && /if \(!r \|\| r\.kind === 'rule'\) return;/.test(boardNC));
   ok('#G184c FlowBoard: 참조 대상 행 id는 고를 때만 붙이고 읽기 전용이면 붙이지 않는다',
     /const ensureNodeRowId = useCallback/.test(boardNC) && /if \(readOnly\) return null;/.test(boardNC) && /refOptions=\{editorRefOptions\}/.test(boardNC));
   ok('#G184d FlowNodeEditor: 값 출처에 이어진 도형 묶음', /<optgroup key=\{g\.nodeId\} label=\{`이어진 도형 · \$\{g\.name\}`\}>/.test(edNC));
