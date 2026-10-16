@@ -35,6 +35,23 @@ const stripComments = (s) => s
   .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
 
 // ───────── 참조 구현 (src/utils.ts buildHistDetailRows 미러) ─────────
+// utils.ts isKrwLedgerRow / depositKrwTotalOf / overseasKrwPrincipalAt 미러 — 해외계좌 원화 예수금은 통합(원화
+// 프레임)에서 원화 투자원금이다(2026-10). 과거 날짜는 라이브 원화 예수금에서 그 날짜 이후의 원화 행으로 역추산한다.
+const isKrwLedgerRow = (row) => row?.currency === 'KRW';
+const depositKrwTotalOf = (items, isOverseas) =>
+  (items || []).reduce((s, it) => s + (it?.type === 'deposit' && isOverseas ? (Number(it?.depositAmountKrw) || 0) : 0), 0);
+const overseasKrwPrincipalAt = (date, krwCashLive, depositHistory, depositHistory2) => {
+  let v = Number(krwCashLive) || 0;
+  for (const d of depositHistory || []) {
+    if (!d || !isKrwLedgerRow(d) || !((d.date || '') > (date || ''))) continue;
+    v -= Number(d.amount) || 0;
+  }
+  for (const w of depositHistory2 || []) {
+    if (!w || !isKrwLedgerRow(w) || !((w.date || '') > (date || ''))) continue;
+    v += Number(w.amount) || 0;
+  }
+  return Math.max(0, v);
+};
 const EMPTY_HIST_DETAIL = { rows: [], totalEval: 0, totalPrincipal: 0, totalDeposit: 0, totalProfit: 0, totalReturnRate: null };
 
 const buildHistDetailRows = (opts) => {
@@ -91,11 +108,12 @@ const buildHistDetailRows = (opts) => {
     const currentPrincipalKRW = (p.principal || 0) * fxRate;
     const deps = p.depositHistory || [];
     const wds = p.depositHistory2 || [];
-    const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
-    const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+    const futureDeposits = deps.filter(d => d.date > date && !isKrwLedgerRow(d)).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+    const futureWithdrawals = wds.filter(d => d.date > date && !isKrwLedgerRow(d)).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+    const krwPrincipal = isOverseas ? overseasKrwPrincipalAt(date, depositKrwTotalOf(p.portfolio, true), deps, wds) : 0;
     const effPrincipal = isCash
       ? evalAmt
-      : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
+      : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals) + krwPrincipal;
     totalPrincipal += effPrincipal;
     const depositAmt = isCash
       ? effPrincipal
@@ -352,6 +370,26 @@ console.log('\n── 파트① 참조 구현 미러 ──');
     .flatMap(d => buildHistDetailRows({ ...f20, date: d }).rows)
     .filter(r => r.depositAmount > r.evalAmount);
   ok('#26 어느 날짜에도 예수금 > 평가금액이 없다', overs.length === 0);
+
+  // #27 해외계좌 원화 예수금 = 통합 원화 투자원금(2026-10): 라이브 원화 예수금에서 그 날짜 이후의 원화 입금을 뺀다.
+  //     원화 행(currency KRW)은 달러 원금 역추산에 섞이지 않는다(#11의 달러 부분은 그대로).
+  const f27 = {
+    portfolios: [{
+      id: 'O', name: '해외', accountType: 'overseas', principal: 100, avgExchangeRate: 1300,
+      portfolio: [{ id: 'd', type: 'deposit', depositAmount: 50, depositAmountKrw: 20000000 }],
+      depositHistory: [{ date: '2026-10-16', amount: 20000000, currency: 'KRW', fxRate: 0 }, { date: '2026-05-01', amount: 10, fxRate: 1400 }],
+      depositHistory2: [{ date: '2026-05-02', amount: 5, fxRate: 1200 }],
+    }],
+    portfolioSummaries: [{ id: 'O', name: '해외', depositAmount: 0 }],
+    accountSeriesById: { O: series([['2026-04-01', 200000], ['2026-10-16', 220000]]) },
+    realtimeDate: '', liveTotalEval: 0,
+  };
+  const r27a = buildHistDetailRows({ ...f27, date: '2026-10-20' });
+  ok('#27 원화 입금 이후 날짜: 원금 = 달러 원금×환율 + 원화 예수금 (원화 행은 달러 역추산에서 제외)',
+    near(r27a.rows[0].principal, 100 * 1300 + 20000000));
+  const r27b = buildHistDetailRows({ ...f27, date: '2026-04-02' });
+  ok('#27b 원화 입금 이전 날짜: 원화 몫 0 · 달러 역추산은 #11과 같다',
+    near(r27b.rows[0].principal, 100 * 1300 - 10 * 1400 + 5 * 1200));
 }
 
 console.log('\n── 파트② 교차검증 (달력 칸 총자산 = 팝업 소계) ──');
@@ -460,6 +498,21 @@ console.log('\n── 파트②-b 미러 드리프트 가드 (실제 모듈 vs �
       accountSeriesById: { O: series([['2026-04-01', 200000]]) },
       realtimeDate: '', liveTotalEval: 0,
     });
+
+    // ⚠️ 원화 예수금·원화 원장 행이 실린 해외 케이스가 없으면 이 가드는 2026-10 분기(overseasKrwPrincipalAt)에
+    //    **눈이 먼다** — 원화 행을 달러 역추산에 되섞거나 원화 몫을 빼도 드리프트 0건으로 통과한다.
+    const ovKrw = {
+      portfolios: [{
+        id: 'O', name: '해외', accountType: 'overseas', principal: 100, avgExchangeRate: 1300,
+        portfolio: [{ id: 'd', type: 'deposit', depositAmount: 50, depositAmountKrw: 20000000 }],
+        depositHistory: [{ date: '2026-10-16', amount: 20000000, currency: 'KRW', fxRate: 0 }, { date: '2026-11-01', amount: 10, fxRate: 1400 }],
+        depositHistory2: [{ date: '2026-10-25', amount: 3000000, currency: 'KRW', fxRate: 0 }],
+      }],
+      portfolioSummaries: [{ id: 'O', name: '해외', depositAmount: 0 }],
+      accountSeriesById: { O: series([['2026-04-01', 200000], ['2026-10-16', 220000]]) },
+      realtimeDate: '', liveTotalEval: 0,
+    };
+    ['2026-04-02', '2026-10-20', '2026-10-30'].forEach(d => push(`overseas-krw ${d}`, { ...ovKrw, date: d }));
 
     push('zero-principal', {
       date: '2026-04-02',

@@ -60,7 +60,11 @@ function buildTransferLedgerRows(args) {
     id: a.transferId || '', code: String(a.code || ''), name: String(a.name || ''),
     quantity: qty, market: M, cost: C, itemType: a.itemType || 'stock',
     fromId: a.sourceId || '', fromName: srcName, toId: a.targetId || '', toName: tgtName,
+    ...(a.currency ? { currency: String(a.currency) } : {}),
   };
+  // 해외계좌 원화 예수금 쪽 행만 원화 행(currency KRW · fxRate 0) — 플래그 없으면 종전과 동일.
+  const srcKrw = !!a.krwSrc, tgtKrw = !!a.krwTgt;
+  const krwRow = (on) => (on ? { currency: 'KRW', fxRate: 0 } : {});
   const isCash = a.itemType === 'cash';
   const unit = a.itemType === 'fund' ? '좌' : (a.itemType === 'savings' || isCash) ? '' : '주';
   const label = isCash
@@ -70,17 +74,17 @@ function buildTransferLedgerRows(args) {
   return {
     srcWithdrawal: {
       id: ids[0] || generateId(), date: a.dateSrc, amount: M, principalDeducted: C,
-      fxRate: 1, noPrincipal: false, memo: `[이관→${tgtName}] ${label}`,
+      fxRate: 1, noPrincipal: false, ...krwRow(srcKrw), memo: `[이관→${tgtName}] ${label}`,
       transfer: { ...meta, role: 'out' },
     },
     tgtDeposit: {
       id: ids[1] || generateId(), date: a.dateTgt, amount: M,
-      fxRate: 1, noPrincipal: false, memo: `[이관←${srcName}] ${label}`,
+      fxRate: 1, noPrincipal: false, ...krwRow(tgtKrw), memo: `[이관←${srcName}] ${label}`,
       transfer: { ...meta, role: 'in' },
     },
     tgtGainRow: Math.round(G) === 0 ? null : {
       id: ids[2] || generateId(), date: a.dateTgt, amount: 0, principalDeducted: G,
-      fxRate: 1, noPrincipal: false,
+      fxRate: 1, noPrincipal: false, ...krwRow(tgtKrw),
       memo: isCash
         ? `[이관←${srcName}] ${label} — 원금 미이동 보정(금액 이동 없음)`
         : `[이관←${srcName}] ${label} 평가차익 ${G > 0 ? '+' : ''}${formatNumber(Math.round(G))} — 원금 보정(금액 이동 없음)`,
@@ -128,10 +132,12 @@ function cumDepositsUpTo(date, deps, wds) {
   let cum = 0;
   for (const d of deps || []) {
     if ((d.date || '') > date) continue;
+    if (d.currency === 'KRW') continue;   // 원화 행은 달러 원금이 아니다(utils.ts isKrwLedgerRow 미러)
     if (!d.noPrincipal) cum += cleanNum(d.amount);
   }
   for (const w of wds || []) {
     if ((w.date || '') > date) continue;
+    if (w.currency === 'KRW') continue;
     if (!w.noPrincipal) cum -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount));
   }
   return cum;
@@ -859,6 +865,48 @@ console.log('\n── 파트⑥ 현금 이관 원장 회계 ──');
       s.srcWithdrawal.memo === '[이관→ISA] KODEX 미국배당커버드콜액티브 704주'
       && /평가차익 \+850,608 — 원금 보정\(금액 이동 없음\)$/.test(s.tgtGainRow.memo));
   }
+
+  // ── D. 원화 ↔ 해외계좌 **원화 예수금** (2026-10 사용자 요청) ──
+  // 국내(COVERD) 예수금 20,000,000 → 해외계좌(환전 전용)의 원화 예수금. 해외 쪽 행만 원화 행(currency:'KRW' ·
+  // fxRate 0)이고 국내 쪽 행은 종전 그대로다. 원금은 반드시 함께 이동(cost = M)한다 — 그 원화는 통합에서
+  // 원화 투자원금 그 자체라 '수익만 이동'을 표현할 수 없다.
+  {
+    const KM = 20000000, KD = '2026-10-16';
+    const r = buildTransferLedgerRows({
+      transferId: 'cash-krw', itemType: 'cash', code: '', name: '원화 예수금', quantity: 0,
+      market: KM, cost: KM, dateSrc: KD, dateTgt: KD, currency: 'KRW', krwSrc: false, krwTgt: true,
+      sourceId: 'A', sourceName: 'COVERD', targetId: 'O', targetName: '환전 전용',
+      rowIds: ['k-out', 'k-in', 'k-gain'],
+    });
+    ok('#59g 국내 → 해외 원화: 대상 입금 행만 원화 행(currency KRW · fxRate 0)',
+      r.tgtDeposit.currency === 'KRW' && r.tgtDeposit.fxRate === 0);
+    ok('#59h 국내 → 해외 원화: 원계좌 출금 행은 종전 그대로(원화 태그 없음 · fxRate 1)',
+      !('currency' in r.srcWithdrawal) && r.srcWithdrawal.fxRate === 1);
+    ok('#59i 원금 동반 이동이라 보정 행이 없다', r.tgtGainRow === null);
+    ok('#59j 메타에 통화가 실린다 (달력 패드가 해외계좌의 원화 이관을 ₩로 표기)',
+      r.srcWithdrawal.transfer.currency === 'KRW' && r.tgtDeposit.transfer.currency === 'KRW');
+    near('#59k 대상계좌 **달러** 원금은 원화 행으로 바뀌지 않는다 (cumDepositsUpTo가 원화 행을 건너뛴다)',
+      cumDepositsUpTo(KD, [r.tgtDeposit], []), 0);
+    near('#59l 원계좌(국내) 원금 delta = −M', cumDepositsUpTo(KD, [], [r.srcWithdrawal]), -KM);
+    // 통합 ①-c — 원화 행은 배율 1이라 같은 날 쌍이 그대로 상쇄된다(IN = OUT = 0).
+    const nt = intFlowNetted([{ deps: [], wds: [r.srcWithdrawal] }, { deps: [r.tgtDeposit], wds: [] }], KD);
+    ok('#59m 통합 뷰에서 국내 → 해외 원화 이관 쌍이 상쇄된다', nt.in === 0 && nt.out === 0);
+    // 반대 방향(해외 원화 → 국내): 원계좌 출금 행만 원화 행.
+    const b = buildTransferLedgerRows({
+      transferId: 'cash-krw2', itemType: 'cash', code: '', name: '원화 예수금', quantity: 0,
+      market: KM, cost: KM, dateSrc: KD, dateTgt: KD, currency: 'KRW', krwSrc: true, krwTgt: false,
+      sourceId: 'O', sourceName: '환전 전용', targetId: 'A', targetName: 'COVERD',
+      rowIds: ['k2-out', 'k2-in', 'k2-gain'],
+    });
+    ok('#59n 해외 원화 → 국내: 원계좌 출금 행만 원화 행',
+      b.srcWithdrawal.currency === 'KRW' && b.srcWithdrawal.fxRate === 0 && !('currency' in b.tgtDeposit));
+    near('#59o 해외 원화 → 국내: 해외 달러 원금 불변 · 국내 원금 +M',
+      cumDepositsUpTo(KD, [], [b.srcWithdrawal]) + cumDepositsUpTo(KD, [b.tgtDeposit], []), KM);
+    // 플래그가 없으면 종전과 같다(하위호환의 축) — 기존 cash 픽스처에 원화 태그·통화 메타가 없어야 한다.
+    const plain = mkCash(true);
+    ok('#59p 플래그 없는 현금 이관은 원화 태그·통화 메타가 없다 (종전 결과 불변)',
+      !('currency' in plain.srcWithdrawal) && !('currency' in plain.tgtDeposit) && !('currency' in plain.srcWithdrawal.transfer));
+  }
 }
 
 // ── 파트⑦ 현금 이관 배선 가드 (#60~#72) ────────────────────────────────────────
@@ -894,9 +942,10 @@ console.log('\n── 파트⑦ 현금 이관 배선 가드 ──');
   ok('#62c 원장 쌍도 같은 커밋에서 기록된다',
     /depositHistory2: \[rows\.srcWithdrawal, \.\.\.\(p\.depositHistory2 \|\| \[\]\)\]/.test(cfn)
     && /depositHistory: \[rows\.tgtDeposit, \.\.\.\(p\.depositHistory \|\| \[\]\)\]/.test(cfn));
-  ok('#62d 원금도 같은 커밋에서 이동한다',
-    /principal: Math\.max\(0, cleanNum\(p\.principal\) - cost\)/.test(cfn)
-    && /principal: cleanNum\(p\.principal\) \+ cost/.test(cfn));
+  // ⚠️ 2026-10: 원화 예수금 쪽(srcKrw/tgtKrw)은 달러 원금(p.principal)에 손대지 않는다 — 삼항의 두 가지 모두 단언한다.
+  ok('#62d 원금도 같은 커밋에서 이동한다 (원화 예수금 쪽은 달러 원금 불변)',
+    /principal: srcKrw \? p\.principal : Math\.max\(0, cleanNum\(p\.principal\) - cost\)/.test(cfn)
+    && /principal: tgtKrw \? p\.principal : cleanNum\(p\.principal\) \+ cost/.test(cfn));
 
   ok('#63 기록일은 getBackfillBoundaryForAccount (getTodayKST·effectiveDateKey 아님)',
     (cfn.match(/getBackfillBoundaryForAccount\(/g) || []).length === 2 && !/getTodayKST\(/.test(cfn));
@@ -907,14 +956,17 @@ console.log('\n── 파트⑦ 현금 이관 배선 가드 ──');
     /const sRow = depositRowOf\(s\);/.test(cfn) && /if \(!sRow\) return prev;/.test(cfn));
 
   // ⚠️ 자격 판정이 화면과 라이터에서 갈리면 "목록에는 보이는데 눌러도 아무 일이 없다"가 된다.
-  ok('#65 자격 판정은 cashTransferBlockReason 단일 소스 (라이터·화면 공유)',
-    /if \(cashTransferBlockReason\(srcType, tgt\)\) return false;/.test(cfn)
-    && /const reason = cashTransferBlockReason\(srcType, p\);/.test(app));
+  ok('#65 자격 판정은 cashTransferBlockReason 단일 소스 (라이터·화면 공유, 통화까지 같은 값)',
+    /if \(cashTransferBlockReason\(srcType, tgt, currency\)\) return false;/.test(cfn)
+    && /const reason = cashTransferBlockReason\(srcType, p, cashTransferCurrency\);/.test(app));
   ok('#65b 현금성 계좌는 소스로 쓸 수 없다 (예수금 행도 원장 UI도 없다)',
     /if \(srcType === 'simple' \|\| srcType === 'matong'\) return false;/.test(cfn));
-  ok('#65c 원장 UI가 없는 대상(마통)과 통화 불일치는 utils가 차단한다',
+  // ⚠️ 2026-10: 통화 규칙이 '계좌 타입 일치'에서 '옮기는 돈의 통화'로 바뀌었다 — 달러는 해외계좌끼리,
+  //    원화는 국내 계좌·해외계좌의 원화 예수금 모두 허용. 옛 `(t === 'overseas') !== (srcType === 'overseas')`로 되돌리지 말 것.
+  ok('#65c 원장 UI가 없는 대상(마통)과 달러 → 국내는 utils가 차단한다',
     /if \(t === 'matong'\) return '마통 계좌';/.test(utils)
-    && /if \(\(t === 'overseas'\) !== \(srcType === 'overseas'\)\) return '통화 불일치';/.test(utils));
+    && /if \(cur === 'USD' && t !== 'overseas'\) return '통화 불일치';/.test(utils)
+    && !/\(t === 'overseas'\) !== \(srcType === 'overseas'\)/.test(utils));
 
   // 직접입력(simple) 대상은 예수금 행이 없어 평가액이 곧 현금이다.
   // ⚠️ 그 계좌의 원금은 원장이 아니라 평가액에서 파생되므로 보정 행을 쓰지 않는다.
@@ -944,16 +996,18 @@ console.log('\n── 파트⑦ 현금 이관 배선 가드 ──');
 
   // ⚠️ 버튼은 **첫 예수금 행에만** — 라이터가 첫 행을 옮기므로 다른 행에 두면 누른 행과 실제로
   //    줄어드는 행이 갈린다.
-  ok('#69 예수금 행에 이관 버튼이 있다 (첫 행에만)',
-    /\{onTransferCash && di === 0 \? \(/.test(pt) && /onClick=\{onTransferCash\}/.test(pt));
+  // ⚠️ `onClick={onTransferCash}`로 되돌리지 말 것 — 클릭 이벤트가 첫 인자로 넘어가 App이 통화로 오인한다.
+  ok('#69 예수금 행에 이관 버튼이 있다 (첫 행에만 · 인자 없이 호출)',
+    /\{onTransferCash && di === 0 \? \(/.test(pt) && /onClick=\{\(\) => onTransferCash\(\)\}/.test(pt));
   ok('#69b 버튼이 없으면 종전 자물쇠 셀 그대로다 (열 개수 불변)',
     /<td className="text-center py-2\.5 bg-gray-800\/50">🔒<\/td>/.test(pt));
 
-  ok('#70 App이 예수금 행 버튼과 모달을 배선한다',
-    /onTransferCash=\{\(\) => setShowCashTransfer\(true\)\}/.test(app)
+  ok('#70 App이 예수금 행 버튼과 모달을 배선한다 (원화 예수금 행은 \'KRW\' 모드)',
+    /onTransferCash=\{\(cur\) => setShowCashTransfer\(cur === 'KRW' \? 'KRW' : true\)\}/.test(app)
     && /<CashTransferModal/.test(app));
-  ok('#70b 전액 버튼은 라이터가 옮기는 바로 그 행의 잔액을 쓴다',
-    /cash: cleanNum\(depositRowOf\(activePortfolio\)\?\.depositAmount\)/.test(app));
+  ok('#70b 전액 버튼은 라이터가 옮기는 바로 그 행의 잔액을 쓴다 (원화 모드면 원화 예수금)',
+    /cash: krw \? depositKrwOf\(row, true\) : cleanNum\(row\?\.depositAmount\)/.test(app)
+    && /const row = depositRowOf\(activePortfolio\);/.test(app));
   ok('#70c 대상 목록은 모달을 열었을 때만 계산한다 (시세 갱신마다 전 계좌 순회 방지)',
     /if \(!showCashTransfer \|\| !activePortfolio\) return \[\];/.test(app));
   ok('#71 계좌 타입 라벨은 두 이관 모달이 공유한다 (손복제 금지)',
@@ -970,6 +1024,38 @@ console.log('\n── 파트⑦ 현금 이관 배선 가드 ──');
   // 직접입력 대상은 evalAmount만 바뀔 수 있다 — 그 필드도 지문에 있어야 조용한 유실이 없다.
   ok('#72b 지문에 직접입력 계좌의 평가액·원금수동 플래그가 들어 있다',
     /evalAmount: p\.evalAmount/.test(fp) && /principalManual: !!p\.principalManual/.test(fp));
+
+  // ── 파트⑧ 원화 ↔ 해외계좌 원화 예수금 이관 배선 (2026-10) ──
+  // 해외계좌의 원화 예수금(depositAmountKrw)은 달러 예수금과 다른 필드다 — 라이터가 그 필드를 움직이고,
+  // 달러 원금(p.principal)에는 손대지 않으며, 원금 이동을 강제한다(통합에서 원화 예수금 = 원화 투자원금).
+  ok('#73 라이터: 원화 예수금 쪽은 depositAmountKrw를 움직인다 (출금·입금 각 1곳)',
+    /depositAmountKrw: cleanNum\(x\.depositAmountKrw\) - M/.test(cfn)
+    && /depositAmountKrw: cleanNum\(x\.depositAmountKrw\) \+ M/.test(cfn));
+  ok('#73b 라이터: 원화 예수금이 끼면 원금 이동을 강제한다 (수익만 이동 불가)',
+    /const krwSide = srcKrw \|\| tgtKrw;/.test(cfn)
+    && /const movePrincipal = krwSide \? true : !!plan\?\.movePrincipal;/.test(cfn));
+  ok('#73c 라이터: 원장 행에 통화·원화 플래그를 넘긴다 (해외 쪽 행만 원화 행)',
+    /currency, krwSrc: srcKrw, krwTgt: tgtKrw,/.test(cfn)
+    && /const currency = \(srcType === 'overseas' && plan\?\.currency !== 'KRW'\) \? 'USD' : 'KRW';/.test(cfn));
+  ok('#74 utils: 원화 플래그가 해당 쪽 행에만 currency KRW · fxRate 0을 단다 (원계좌 1 · 대상 2)',
+    /const krwRow = \(on\) => \(on \? \{ currency: 'KRW', fxRate: 0 \} : \{\}\);/.test(utils)
+    && (utils.match(/\.\.\.krwRow\(srcKrw\)/g) || []).length === 1
+    && (utils.match(/\.\.\.krwRow\(tgtKrw\)/g) || []).length === 2);
+  const krwSlice = (() => { const i = pt.indexOf('예수금 (KRW CASH)'); return i < 0 ? '' : pt.slice(i, pt.indexOf('</React.Fragment>', i)); })();
+  ok('#75 표: 원화 예수금 행에 이관 버튼이 있고 원화 모드로 연다',
+    krwSlice.length > 200 && /onClick=\{\(\) => onTransferCash\('KRW'\)\}/.test(krwSlice));
+  ok('#75b App: 통화는 한 변수(cashTransferCurrency)로 자격·잔액·라이터·모달에 같이 흐른다',
+    /const cashTransferCurrency = activePortfolioAccountType === 'overseas' && showCashTransfer !== 'KRW' \? 'USD' : 'KRW';/.test(app)
+    && /currency: cashTransferCurrency,/.test(app)
+    && /transferableCashOf\(p, cashTransferCurrency\)/.test(app)
+    && /sourceKrwCash=\{activePortfolioAccountType === 'overseas' && cashTransferCurrency === 'KRW'\}/.test(app));
+  ok('#76 모달: 원화 예수금이 끼면 원금 이동이 잠기고 그 값으로 확정한다',
+    /const principalLocked = !!sourceKrwCash \|\| !!\(target && target\.toKrwCash\);/.test(mod)
+    && /movePrincipal: movePrincipalEff/.test(mod) && /원금도 함께 이동 \(고정\)/.test(mod));
+  ok('#77 utils: 원화 모드의 잔액은 해외계좌의 원화 예수금이다',
+    /if \(t === 'overseas' && currency === 'KRW'\) return depositKrwOf\(row, true\);/.test(utils));
+  ok('#77b 달력 이관 패드는 메타의 통화를 우선한다 (해외계좌의 원화 이관을 ₩로)',
+    (read('src/components/CalendarModal.tsx').match(/r\.currency \|\| padTransfer\.currency/g) || []).length === 3);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:transfer — ${pass} passed, ${fail} failed\n`);

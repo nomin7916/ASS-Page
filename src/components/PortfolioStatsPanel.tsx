@@ -316,7 +316,7 @@ export default function PortfolioStatsPanel({
                 <div className="text-gray-500 text-[10px] font-bold mb-1">계산</div>
                 <div className="text-gray-400">평가 KRW  =  {formatCurrency(evalExCash)}</div>
                 {krwCash !== 0 && (
-                  <div className="text-amber-400/80 text-[10px] pl-2">원화 예수금 {formatCurrency(krwCash)} 제외 — 투자원금이 아닌 환전 전 대기 자금</div>
+                  <div className="text-amber-400/80 text-[10px] pl-2">원화 예수금 {formatCurrency(krwCash)} 제외 — 달러 투자원금에 없는 환전 전 원화 (통합 대시보드에서는 원화 투자원금으로 집계)</div>
                 )}
                 <div className="text-gray-400">원금 KRW  =  {formatCurrency(principalKRW)}</div>
                 <div className="text-gray-400 pt-0.5">= ( {formatCurrency(evalExCash)}  ÷  {formatCurrency(principalKRW)} )  −  1</div>

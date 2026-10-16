@@ -924,10 +924,13 @@ export function usePortfolioState({
   //    그래서 예수금·원금·원장을 **하나의 setPortfolios 안에서** 함께 옮긴다.
   // ⚠️ 원금 이동 여부는 사용자가 고른다(2026-09 확정) — cost = movePrincipal ? M : 0.
   //    나머지 회계는 buildTransferLedgerRows가 종목 이관과 **완전히 같은 규칙**으로 처리한다.
+  // ⚠️ 원화 ↔ 해외계좌 **원화 예수금**(depositAmountKrw) 이관(2026-10): 국내 → 해외 원화, 해외 원화 → 국내·직접입력,
+  //    해외 원화 → 해외 원화를 허용한다(plan.currency 'KRW'). 해외 쪽 원장 행은 원화 행(currency:'KRW')이라
+  //    달러 원금·달러 흐름에 섞이지 않고, 통합은 그 원화를 원화 투자원금으로 본다(utils.overseasKrwPrincipalAt).
   // ⚠️ 단일 setPortfolios · id 생성은 updater 밖 · updater 안에서 재확인(멱등) —
   //    전부 transferStockToPortfolio와 같은 근거다(그 주석 참조).
   const transferCashToPortfolio = (plan) => {
-    const { sourceId, targetId, movePrincipal } = plan || {};
+    const { sourceId, targetId } = plan || {};
     const M = cleanNum(plan?.amount);
     if (!sourceId || !targetId || sourceId === targetId || !(M > 0)) return false;
     const src = portfolios.find(p => p && p.id === sourceId);
@@ -937,16 +940,26 @@ export function usePortfolioState({
     const tgtType = tgt.accountType || 'portfolio';
     // 현금성 계좌는 예수금 행도 원장 UI도 없어 **소스로 쓸 수 없다**(개별 뷰 진입 자체가 막혀 있다).
     if (srcType === 'simple' || srcType === 'matong') return false;
-    if (cashTransferBlockReason(srcType, tgt)) return false;
+    // 옮기는 돈의 통화 — 해외계좌는 달러 예수금(기본) 또는 원화 예수금(plan.currency 'KRW'), 국내는 항상 원화.
+    const currency = (srcType === 'overseas' && plan?.currency !== 'KRW') ? 'USD' : 'KRW';
+    if (cashTransferBlockReason(srcType, tgt, currency)) return false;
     if (!depositRowOf(src)) return false;
+    // 해외계좌의 **원화 예수금**(depositAmountKrw)이 드나드는 쪽 — 그 행은 depositAmount(USD)가 아니라
+    // depositAmountKrw를 움직이고, 원장 행은 원화 행(currency:'KRW')으로 남긴다(buildTransferLedgerRows krwSrc/krwTgt).
+    const srcKrw = srcType === 'overseas' && currency === 'KRW';
+    const tgtKrw = tgtType === 'overseas' && currency === 'KRW';
+    const krwSide = srcKrw || tgtKrw;
+    // ⚠️ 원화 예수금이 한쪽이라도 끼면 원금은 **반드시 함께** 움직인다 — 그 원화는 통합 대시보드에서 원화 투자원금
+    //    그 자체라(utils.overseasKrwPrincipalAt) '수익만 이동'을 표현할 저장 필드가 없다. 모달도 그 선택지를 잠근다.
+    const movePrincipal = krwSide ? true : !!plan?.movePrincipal;
 
     const cost = movePrincipal ? M : 0;
     const dateSrc = plan.dateSrc || getBackfillBoundaryForAccount(srcType);
     const dateTgt = plan.dateTgt || getBackfillBoundaryForAccount(tgtType);
     const rows = buildTransferLedgerRows({
       transferId: generateId(),
-      itemType: 'cash', code: '', name: '예수금', quantity: 0,
-      market: M, cost, dateSrc, dateTgt,
+      itemType: 'cash', code: '', name: krwSide ? '원화 예수금' : '예수금', quantity: 0,
+      market: M, cost, dateSrc, dateTgt, currency, krwSrc: srcKrw, krwTgt: tgtKrw,
       sourceId, sourceName: src.name, targetId, targetName: tgt.name,
       rowIds: [generateId(), generateId(), generateId()],
     });
@@ -963,9 +976,12 @@ export function usePortfolioState({
           return {
             ...p,
             portfolio: (p.portfolio || []).map(x => (x && x.id === sRow.id
-              ? { ...x, depositAmount: cleanNum(x.depositAmount) - M }
+              ? (srcKrw
+                ? { ...x, depositAmountKrw: cleanNum(x.depositAmountKrw) - M }
+                : { ...x, depositAmount: cleanNum(x.depositAmount) - M })
               : x)),
-            principal: Math.max(0, cleanNum(p.principal) - cost),
+            // 원화 예수금 이관은 달러 원금(p.principal)에 손대지 않는다 — 원화 원금은 원화 예수금 그 자체다.
+            principal: srcKrw ? p.principal : Math.max(0, cleanNum(p.principal) - cost),
             depositHistory2: [rows.srcWithdrawal, ...(p.depositHistory2 || [])],
           };
         }
@@ -993,14 +1009,17 @@ export function usePortfolioState({
             };
           }
           const tRow = depositRowOf(p);
+          // 대상이 해외계좌의 원화 예수금이면 depositAmountKrw를, 그 외는 depositAmount를 올린다.
+          const bumpCash = (x) => (tgtKrw
+            ? { ...x, depositAmountKrw: cleanNum(x.depositAmountKrw) + M }
+            : { ...x, depositAmount: cleanNum(x.depositAmount) + M });
           return {
             ...p,
             portfolio: tRow
-              ? (p.portfolio || []).map(x => (x && x.id === tRow.id
-                ? { ...x, depositAmount: cleanNum(x.depositAmount) + M }
-                : x))
-              : [...(p.portfolio || []), { id: newDepositId, type: 'deposit', depositAmount: M }],
-            principal: cleanNum(p.principal) + cost,
+              ? (p.portfolio || []).map(x => (x && x.id === tRow.id ? bumpCash(x) : x))
+              : [...(p.portfolio || []), bumpCash({ id: newDepositId, type: 'deposit', depositAmount: 0 })],
+            // 원화 예수금으로 받으면 달러 원금(p.principal)은 그대로 — 원화 원금은 원화 예수금 그 자체다.
+            principal: tgtKrw ? p.principal : cleanNum(p.principal) + cost,
             depositHistory: [rows.tgtDeposit, ...(p.depositHistory || [])],
             depositHistory2: rows.tgtGainRow
               ? [rows.tgtGainRow, ...(p.depositHistory2 || [])]

@@ -1,10 +1,54 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-10-15  
+> 마지막 작업일: 2026-10-16  
 > 브랜치: main  
-> 작업 PC: 클라우드 세션
+> 작업 PC: 사용자 Mac mini 로컬 세션(node 없음 — python3 대체 검증)
 
 ---
+
+## 2026-10-16 — [통합·이관] 해외계좌 원화 예수금 = 통합 원화 투자원금 · 원화 ↔ 해외 원화 예수금 현금 이관 · 원장 새 행 기록일
+
+**대상 파일**: `src/utils.ts` · `src/hooks/useIntegratedData.ts` · `src/hooks/usePortfolioState.ts` · `src/App.tsx` ·
+`src/components/PortfolioTable.tsx` · `CashTransferModal.tsx` · `DepositPanel.tsx` · `CalendarModal.tsx` · `AdminPortal.tsx` ·
+`PortfolioStatsPanel.tsx` · `IntegratedDashboard.tsx` · `scripts/verify-transfer.mjs` · `verify-overseas-invest.mjs` ·
+`verify-calendar-detail.mjs` · `verify-deposit-ledger.mjs` · `CLAUDE.md`
+
+> 총자산현황의 일일 수익율이 계산되지 않고 있습니다. COVERD 계좌에서 출금을 했는데 출금을 하면 수익율 계산이
+> 표시가 안되는 경우가 있습니다. 그리고 COVERD 계좌에서 예수금 일부를 해외계좌 원화 예수금으로 이체를 했는데
+> 현재는 원화를 해외계좌 예수금으로 이체가 안됩니다. 이 부분을 개선하고 전체 수익율 및 전체 총자산 계산이
+> 정확하게 될 수 있게 검토 합니다.
+
+### 1. 원인
+
+- **전체 수익율 과대**: 옛 규약 '원화 예수금은 투자원금 미반영'이 원화 프레임인 통합 대시보드에도 적용돼, COVERD
+  원금은 출금으로 20,000,000 줄었는데 받는 쪽(5826_환전 전용) 원금에는 들어가지 않았다 → 그 돈이 통째로 '수익'
+  (현금뿐인 계좌가 +66.30%, 전체 +11.67%).
+- **현금 이관 불가**: `cashTransferBlockReason`이 '계좌 타입 일치'로 통화를 판정해 국내 → 해외를 전부 차단했다.
+- **일일 수익율 `-`**: 손으로 적은 출금 원장(10/15 = `getTodayKST`)과 예수금을 줄인 기록일(21시 이후 = 10/16)이 하루
+  어긋나 흐름이 '반영 대기'로 이월됐고, 통합에서는 받는 쪽에 원장 행이 없어 쌍이 상쇄되지 않았다.
+- 부수 결함: `overseasPrincipalAt`(개별 차트·추이표 달러 원금)이 원화 원장 행을 거르지 않아 ₩+ 원화 입금이 달러 원금에
+  그대로 더해졌고, `buildHistDetailRows`는 원화 행을 `fxRate 0 || 1`로 달러 역추산에 섞었다.
+
+### 2. 변경
+
+- `utils.overseasKrwPrincipalAt` 신설 — 통합(원화 프레임)의 원화 투자원금 단일 소스. 소비자 4곳(`portfolioSummaries`·
+  `effectivePrincipal`·`buildHistDetailRows`·`AdminPortal.computePrincipal`). 달러 원금·개별 해외 화면은 무변경.
+- 현금 이관: 통화 규칙을 '옮기는 돈의 통화'로(원화 → 국내·직접입력·해외 원화 예수금 / 달러 → 해외끼리). 해외계좌 원화
+  예수금(KRW CASH) 행에 이관 버튼 신설, 라이터는 `depositAmountKrw`를 움직이고 달러 원금은 불변, 해외 쪽 원장 행만
+  원화 행(`currency:'KRW'`). 원화가 끼면 원금 이동 강제(모달 잠금 + 사유).
+- 입출금 내역 새 행 기본 날짜 = `getBackfillBoundaryForAccount(accountType)`(평가 기록 반영일). 현금 이관 모달과 같은 규약.
+- 문구: KRW CASH 툴팁·요약 카드 각주를 '달러 투자원금 미반영 · 통합에서는 원화 원금'으로, 통합 표 투자원금 셀에 분해 툴팁.
+
+### 3. 검증
+
+- 이 세션에는 node가 없어(`which node` 없음, `node_modules` 없음) **소스 텍스트 가드를 python3로 재현**: `verify:transfer`
+  파트⑦(갱신)·⑧, `verify:overseas` 파트④, `verify:deposit-ledger #G5`, `verify:twr #30d` 영향분 — 전부 통과.
+  변이 14종 + 음성 대조 1종으로 검출 실증. importcheck 포팅(누락 import 0) · 괄호 균형 HEAD 대비 차이 0 ·
+  `buildHistDetailRows` 미러 ↔ 실모듈 텍스트 동기 확인 · 신규 직접 import 단언의 기대값을 python 포팅으로 검산.
+- **실행 못 한 것**: `npm run build`(vite 없음) · verify 스크립트의 node 실행 전체. node가 있는 세션에서 `npm run gate`
+  를 반드시 돌릴 것(새 케이스 #57~#60g·#59g~#59p·#73~#77b·#27·D1 `overseas-krw`).
+- 사용자 데이터 정정 안내: 5826_환전 전용 입금 내역에 ₩+ 원화 입금 20,000,000을 COVERD 출금과 **같은 날짜**로 추가
+  (과거 원금·통합 흐름 상쇄), 앞으로는 KRW CASH 행 이관 버튼 사용.
 
 ## 2026-10-15 — [작업 규약] 커밋이 main이 아닌 작업 브랜치에만 올라가던 반복 오류 — `npm run ship`
 

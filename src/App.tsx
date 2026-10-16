@@ -89,7 +89,7 @@ import {
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows, analyzeTransferMerge,
-  depositRowOf, transferableCashOf, cashTransferBlockReason,
+  depositRowOf, transferableCashOf, cashTransferBlockReason, depositKrwOf,
   buildHistDetailRows, EMPTY_HIST_DETAIL,
   buildRebalTargetEntryFrom, sameRebalTargetEntry, upsertRebalTargetMemo,
   buildLadderTrade, upsertLadderTradeMemo, listLadderLogs, deleteLadderTrade,
@@ -1682,6 +1682,9 @@ export default function App() {
   //    "목록에는 보이는데 눌러도 아무 일이 없다"가 구조적으로 생기지 않는다(fail-closed).
   // ⚠️ 모달을 열었을 때만 계산한다 — portfolios는 시세 갱신마다 새 배열이라 상시 계산하면 그 비용을
   //    안 쓰는 사용자가 매번 치른다(btActive·transfersByDate와 동일 게이팅).
+  // 옮기는 돈의 통화 — 해외계좌의 원화 예수금 행(KRW CASH) 버튼으로 열면 'KRW', 달러 예수금 행이면 'USD', 국내는 항상 'KRW'.
+  // ⚠️ showCashTransfer는 false | true(달러/국내 예수금 행) | 'KRW'(해외계좌 원화 예수금 행) 셋 중 하나다.
+  const cashTransferCurrency = activePortfolioAccountType === 'overseas' && showCashTransfer !== 'KRW' ? 'USD' : 'KRW';
   const cashTransferTargets = useMemo(() => {
     if (!showCashTransfer || !activePortfolio) return [];
     const srcType = activePortfolioAccountType;
@@ -1689,17 +1692,19 @@ export default function App() {
       .filter(p => p && p.id !== activePortfolioId && !p.deletedAt)
       .map(p => {
         const t = p.accountType || 'portfolio';
-        const reason = cashTransferBlockReason(srcType, p);
+        const reason = cashTransferBlockReason(srcType, p, cashTransferCurrency);
         return {
           id: p.id, name: p.name, isTest: !!p.isTest,
           typeLabel: ACCOUNT_TYPE_SHORT_LABEL[t] || t,
           isCash: t === 'simple',
-          cash: transferableCashOf(p),
+          // 원화를 해외계좌로 보내면 그 계좌의 **원화 예수금**(환전 전 원화)으로 들어간다 — 모달이 그 사실과 원금 고정을 안내한다.
+          toKrwCash: t === 'overseas' && cashTransferCurrency === 'KRW',
+          cash: transferableCashOf(p, cashTransferCurrency),
           blocked: !!reason, reason,
         };
       })
       .sort((a, b) => (a.blocked ? 1 : 0) - (b.blocked ? 1 : 0));
-  }, [showCashTransfer, portfolios, activePortfolioId, activePortfolio, activePortfolioAccountType]);
+  }, [showCashTransfer, portfolios, activePortfolioId, activePortfolio, activePortfolioAccountType, cashTransferCurrency]);
 
   // 이관 가능한 현금 = 활성 계좌의 첫 예수금 행 잔액. 라이터(transferCashToPortfolio)가 옮기는
   // 바로 그 행이라, 화면에 보이는 '전액'과 실제로 줄어드는 금액이 갈리지 않는다.
@@ -1707,18 +1712,21 @@ export default function App() {
   //    getBackfillBoundaryForAccount는 시각 의존이라 오래 열어 둔 탭에서 낡을 수 있다. 지우지 말 것.
   const cashTransferSource = useMemo(() => {
     if (!activePortfolio) return { cash: 0, principal: 0, date: '' };
+    const row = depositRowOf(activePortfolio);
+    const krw = activePortfolioAccountType === 'overseas' && cashTransferCurrency === 'KRW';
     return {
-      cash: cleanNum(depositRowOf(activePortfolio)?.depositAmount),
-      principal: cleanNum(activePortfolio.principal),
+      cash: krw ? depositKrwOf(row, true) : cleanNum(row?.depositAmount),
+      // 원화 예수금은 그 자체가 원화 원금(통합)이라 달러 원금 미리보기가 무의미하다 → null(모달이 그 줄을 숨긴다)
+      principal: krw ? null : cleanNum(activePortfolio.principal),
       date: getBackfillBoundaryForAccount(activePortfolioAccountType),
     };
-  }, [activePortfolio, activePortfolioAccountType, showCashTransfer]);
+  }, [activePortfolio, activePortfolioAccountType, showCashTransfer, cashTransferCurrency]);
 
   const handleTransferCash = (targetId, opts) => {
     if (!activePortfolioId || !opts) return;
     const ok = transferCashToPortfolio({
       sourceId: activePortfolioId, targetId,
-      amount: opts.amount, movePrincipal: !!opts.movePrincipal,
+      amount: opts.amount, movePrincipal: !!opts.movePrincipal, currency: cashTransferCurrency,
     });
     if (ok) setShowCashTransfer(false);
   };
@@ -4918,7 +4926,7 @@ export default function App() {
             onBlur={handleStockBlur}
             onDelete={handleDeleteStock}
             onTransfer={(id) => setTransferItemId(id)}
-            onTransferCash={() => setShowCashTransfer(true)}
+            onTransferCash={(cur) => setShowCashTransfer(cur === 'KRW' ? 'KRW' : true)}
             onAddStock={handleAddStock}
             onAddFund={handleAddFund}
             onAddSavings={handleAddSavings}
@@ -5429,7 +5437,8 @@ export default function App() {
           sourceCash={cashTransferSource.cash}
           sourcePrincipal={cashTransferSource.principal}
           recordDate={cashTransferSource.date}
-          currency={activePortfolioAccountType === 'overseas' ? 'USD' : 'KRW'}
+          currency={cashTransferCurrency}
+          sourceKrwCash={activePortfolioAccountType === 'overseas' && cashTransferCurrency === 'KRW'}
           targets={cashTransferTargets}
           onConfirm={handleTransferCash}
           onClose={() => setShowCashTransfer(false)}

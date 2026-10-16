@@ -1150,7 +1150,8 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       <td className={`text-left py-1 px-1 truncate ${r.role === 'out' ? 'text-blue-300' : 'text-red-300'}`}>
                         {r.role === 'out' ? `→ ${r.toName || '계좌'}` : `← ${r.fromName || '계좌'}`}
                       </td>
-                      <td className="text-right text-gray-200 py-1 pl-1">{fmtMoney(r.market, padTransfer.currency)}</td>
+                      {/* 현금 이관 메타의 currency(원화 예수금 이관 = 'KRW')가 있으면 그것이 우선 — 해외계좌라도 원화는 ₩로 */}
+                      <td className="text-right text-gray-200 py-1 pl-1">{fmtMoney(r.market, r.currency || padTransfer.currency)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1161,9 +1162,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                     <div key={`c${r.rowId || i}`} className="flex items-center justify-between text-[10px] text-gray-500">
                       <span className="truncate">{r.name || r.code || '종목'} 매입원가</span>
                       <span className="shrink-0 text-gray-400">
-                        {fmtMoney(r.cost, padTransfer.currency)}
+                        {fmtMoney(r.cost, r.currency || padTransfer.currency)}
                         <span className={`ml-2 ${r.market - r.cost > 0 ? 'text-red-400' : r.market - r.cost < 0 ? 'text-blue-400' : ''}`}>
-                          {r.market - r.cost > 0 ? '+' : ''}{fmtMoney(r.market - r.cost, padTransfer.currency)}
+                          {r.market - r.cost > 0 ? '+' : ''}{fmtMoney(r.market - r.cost, r.currency || padTransfer.currency)}
                         </span>
                       </span>
                     </div>

@@ -660,8 +660,11 @@ export default function IntegratedDashboard({
                                 <span onClick={e => { e.stopPropagation(); switchToPortfolio(s.id); }} title="클릭하여 계좌 열기" className={`font-bold select-none cursor-pointer hover:underline ${s.isTest ? 'italic text-green-400' : 'text-blue-300'}`}>{s.name}</span>
                               )}
                             </td>
-                            {/* 투자원금 */}
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold">
+                            {/* 투자원금 — 해외계좌는 달러 원금 × 환율 + 원화 예수금(통합에서는 원화 투자원금, utils.overseasKrwPrincipalAt) */}
+                            <td
+                              className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold"
+                              title={!hideAmounts && s.krwCash ? `달러 원금 ${formatCurrency(s.principal - s.krwCash)} + 원화 예수금 ${formatCurrency(s.krwCash)} (환전 전 원화 = 원화 투자원금)` : undefined}
+                            >
                               {isSimple ? (
                                 hideAmounts ? '••••••' : (
                                 <input

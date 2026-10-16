@@ -921,9 +921,9 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   <td className="p-0 align-middle bg-gray-800/50">
                     <div className="flex items-stretch justify-center h-full min-h-[36px]">
                       <button
-                        onClick={onTransferCash}
+                        onClick={() => onTransferCash()}
                         className="flex-1 flex items-center justify-center text-sky-400 hover:text-sky-100 hover:bg-sky-600/40 border-r border-gray-600/60 transition-colors"
-                        title="예수금을 다른 계좌로 이관"
+                        title={isOverseas ? '달러 예수금을 다른 해외계좌로 이관' : '예수금을 다른 계좌로 이관 (해외계좌의 원화 예수금으로도 보낼 수 있습니다)'}
                       ><TransferIcon size={13} /></button>
                       <span className="flex-1 flex items-center justify-center" title="예수금 행은 삭제할 수 없습니다">🔒</span>
                     </div>
@@ -944,7 +944,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     <td
                       className="py-3 px-3 border-r border-gray-600 text-center text-amber-400 text-[14px] cursor-help"
                       colSpan={depositColSpan}
-                      title={'환전 전 원화 잔액\n· 평가금액: 환율을 곱하지 않고 원화 그대로 총 평가액에 더합니다\n· 달러 금액·달러 수익률에는 넣지 않습니다(환율이 움직여도 이 값은 변하지 않습니다)\n· 투자원금에는 반영되지 않습니다\n· 입출금 내역의 ₩+ 버튼으로 원화 입금·출금을 기록합니다'}
+                      title={'환전 전 원화 잔액\n· 평가금액: 환율을 곱하지 않고 원화 그대로 총 평가액에 더합니다\n· 달러 금액·달러 수익률에는 넣지 않습니다(환율이 움직여도 이 값은 변하지 않습니다)\n· 달러 투자원금에는 반영되지 않습니다 (통합 대시보드에서는 원화 투자원금으로 집계합니다)\n· 입출금 내역의 ₩+ 버튼으로 원화 입금·출금을 기록합니다\n· 오른쪽 이관 아이콘으로 다른 계좌와 원화를 주고받습니다'}
                     >
                       <span className="tracking-[0.2em]">예수금 (KRW CASH)</span>
                     </td>
@@ -979,7 +979,22 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('profit') && (
                     <td className="py-3 px-3 border-r border-gray-600 text-right text-gray-500">₩0</td>
                   )}
-                  <td className="text-center py-2.5 bg-gray-800/50" title="원화 예수금 행은 삭제할 수 없습니다(비우려면 0을 입력하세요)">🔒</td>
+                  {/* 원화 예수금 이관(국내 계좌·다른 해외계좌의 원화 예수금으로) + 자물쇠 — 열 개수는 그대로 1칸.
+                      onTransferCash('KRW')가 모달을 원화 모드로 연다(App cashTransferCurrency). */}
+                  {onTransferCash ? (
+                    <td className="p-0 align-middle bg-gray-800/50">
+                      <div className="flex items-stretch justify-center h-full min-h-[36px]">
+                        <button
+                          onClick={() => onTransferCash('KRW')}
+                          className="flex-1 flex items-center justify-center text-amber-300 hover:text-amber-100 hover:bg-amber-600/30 border-r border-gray-600/60 transition-colors"
+                          title="원화 예수금을 다른 계좌로 이관 (국내 계좌 또는 다른 해외계좌의 원화 예수금)"
+                        ><TransferIcon size={13} /></button>
+                        <span className="flex-1 flex items-center justify-center" title="원화 예수금 행은 삭제할 수 없습니다(비우려면 0을 입력하세요)">🔒</span>
+                      </div>
+                    </td>
+                  ) : (
+                    <td className="text-center py-2.5 bg-gray-800/50" title="원화 예수금 행은 삭제할 수 없습니다(비우려면 0을 입력하세요)">🔒</td>
+                  )}
                 </tr>
               )}
               </React.Fragment>

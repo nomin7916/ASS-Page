@@ -571,5 +571,68 @@ if (U) {
   }
 }
 
+// ── 파트④ 해외계좌 원화 예수금 = 통합(원화 프레임)의 원화 투자원금 (2026-10 사용자 요청) ─────────
+// 발단: COVERD 예수금 20,000,000을 해외계좌(환전 전용)의 원화 예수금으로 옮기자 원계좌 원금은 줄었는데
+// 받는 쪽 원금에는 들어가지 않아(옛 규약 '투자원금 미반영') 통합 투자원금이 그만큼 줄고 그 돈이 통째로
+// '수익'으로 찍혔다(현금뿐인 계좌가 +66.30%, 전체 수익율 +11.67%로 부풀림). 통합에서는 원화 예수금을
+// 그대로 원화 투자원금으로 본다 — 달러 투자원금·개별 해외 화면의 통화 분리 원칙은 그대로다.
+console.log('\n── 파트④ 원화 예수금 = 통합 원화 투자원금 (src/utils.ts 직접 import) ──');
+if (U) {
+  const { overseasKrwPrincipalAt, overseasPrincipalAt, cashTransferBlockReason, transferableCashOf } = U;
+  const near = (name, got, want, tol = 1e-6) => ok(name, Math.abs(got - want) <= tol);
+  const KM = 20000000;
+  const krwIn = { id: 'k1', date: '2026-10-16', amount: KM, currency: 'KRW', fxRate: 0 };
+  const krwOut = { id: 'k2', date: '2026-10-20', amount: 5000000, currency: 'KRW', fxRate: 0 };
+  const usdIn = { id: 'u1', date: '2026-10-18', amount: 1000, fxRate: 1330 };
+  near('#57 라이브 원화 예수금 = 오늘의 원화 원금', overseasKrwPrincipalAt('2026-10-21', KM - 5000000, [krwIn], [krwOut]), KM - 5000000);
+  near('#57b 원화 입금 이전 날짜는 그 입금을 뺀다 (현재값 − 미래 흐름)', overseasKrwPrincipalAt('2026-10-15', KM, [krwIn], []), 0);
+  near('#57c 원화 출금 이전 날짜는 그 출금을 되더한다', overseasKrwPrincipalAt('2026-10-19', KM - 5000000, [krwIn], [krwOut]), KM);
+  near('#57d 달러 행은 원화 원금 역추산에 섞이지 않는다', overseasKrwPrincipalAt('2026-10-15', KM, [krwIn, usdIn], []), 0);
+  near('#57e 음수는 0으로 클램프 (원장이 예수금보다 큰 손상 데이터)', overseasKrwPrincipalAt('2026-10-15', 100, [krwIn], []), 0);
+  near('#57f 원화 예수금 0 · 원화 행 없음이면 항상 0 (기존 계좌의 통합 원금 불변)', overseasKrwPrincipalAt('2026-10-15', 0, [usdIn], []), 0);
+  // ⚠️ overseasPrincipalAt(달러 원금)은 원화 행을 **건너뛴다** — 거르지 않으면 원화 20,000,000이 달러 원금에 더해진다.
+  near('#58 overseasPrincipalAt: 원화 입금 행은 달러 원금에 들어가지 않는다',
+    overseasPrincipalAt('2026-10-21', [krwIn, usdIn], [], 0, '2026-01-01'), 1000);
+  near('#58b overseasPrincipalAt: 원화 출금 행도 달러 원금을 깎지 않는다',
+    overseasPrincipalAt('2026-10-21', [usdIn], [krwOut], 0, '2026-01-01'), 1000);
+  // 현금 이관 자격 — 원화는 국내·해외 원화 예수금 모두, 달러는 해외계좌끼리.
+  const dom = { accountType: 'portfolio' }, ov = { accountType: 'overseas' }, mt = { accountType: 'matong' };
+  ok('#59 국내 → 해외(원화 예수금) 허용', cashTransferBlockReason('portfolio', ov, 'KRW') === '');
+  ok('#59b 해외 원화 → 국내 허용', cashTransferBlockReason('overseas', dom, 'KRW') === '');
+  ok('#59c 해외 달러 → 국내 차단 (통화 불일치)', cashTransferBlockReason('overseas', dom, 'USD') === '통화 불일치');
+  ok('#59d 통화 미전달이면 원계좌 타입에서 추정 (해외 = 달러 → 국내 차단 · 국내 = 원화 → 해외 허용)',
+    cashTransferBlockReason('overseas', dom) === '통화 불일치' && cashTransferBlockReason('portfolio', ov) === '');
+  ok('#59e 마통은 통화와 무관하게 차단', cashTransferBlockReason('portfolio', mt, 'KRW') === '마통 계좌');
+  const ovAcct = { accountType: 'overseas', portfolio: [{ id: 'd', type: 'deposit', depositAmount: 4045.33, depositAmountKrw: 11 }] };
+  near('#59f transferableCashOf: 원화 모드면 해외계좌의 원화 예수금', transferableCashOf(ovAcct, 'KRW'), 11);
+  near('#59g transferableCashOf: 미전달이면 종전대로 달러 예수금', transferableCashOf(ovAcct), 4045.33);
+}
+{
+  const uid = read('src/hooks/useIntegratedData.ts');
+  const utils = read('src/utils.ts');
+  const ap = read('src/components/AdminPortal.tsx');
+  const stats = read('src/components/PortfolioStatsPanel.tsx');
+  const pt = read('src/components/PortfolioTable.tsx');
+  ok('#60 통합 계좌 행 원금 = 달러 원금 × 환율 + 원화 예수금',
+    /const krwCash = p\.accountType === 'overseas' \? depositKrwTotalOf\(items, true\) : 0;/.test(uid)
+    && /const principalKRW = prin \* summaryAvgFx \+ krwCash;/.test(uid));
+  ok('#60b 통합 추이 원금(effectivePrincipal)이 원화 몫을 공유 함수로 역추산한다',
+    /const krwPart = isOverseas \? overseasKrwPrincipalAt\(date, krwCashLive, deps, wds\) : 0;/.test(uid)
+    && /return sum \+ usdPart \+ krwPart;/.test(uid));
+  ok('#60c 달러 원금 역추산은 여전히 원화 행을 거른다 (원화 입금이 달러 원금을 소급해 깎지 않게)',
+    (uid.match(/d\.date > date && !isKrwLedgerRow\(d\)/g) || []).length === 2);
+  ok('#60d 팝업(buildHistDetailRows)도 같은 공유 함수를 쓴다 (차트·팝업 원금 일치)',
+    /const krwPrincipal = isOverseas \? overseasKrwPrincipalAt\(date, depositKrwTotalOf\(p\.portfolio, true\), deps, wds\) : 0;/.test(utils)
+    && /: Math\.max\(0, currentPrincipalKRW - futureDeposits \+ futureWithdrawals\) \+ krwPrincipal;/.test(utils));
+  ok('#60e 관리자 포털 총 원금도 원화 예수금을 더한다',
+    /\+ \(isOverseas \? depositKrwTotalOf\(p\.portfolio, true\) : 0\)/.test(ap));
+  const opa = utils.slice(utils.indexOf('export const overseasPrincipalAt'), utils.indexOf('export const overseasKrwPrincipalAt'));
+  ok('#60f overseasPrincipalAt가 원화 행을 건너뛴다 (달러 원금 오염 방지)',
+    opa.length > 100 && (opa.match(/if \(isKrwLedgerRow\((d|w)\)\) continue;/g) || []).length === 2);
+  ok('#60g 화면 문구가 "달러 투자원금에는 미반영 · 통합에서는 원화 원금"으로 갈라 말한다',
+    /달러 투자원금에는 반영되지 않습니다 \(통합 대시보드에서는 원화 투자원금으로 집계합니다\)/.test(pt)
+    && /통합 대시보드에서는 원화 투자원금으로 집계/.test(stats));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:overseas — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

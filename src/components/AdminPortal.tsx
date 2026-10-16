@@ -10,7 +10,7 @@ import {
   getOrCreateAdminFolder, saveAdminUserCache, loadAdminUserCache,
   saveAdminPortalConfig, loadAdminPortalConfig,
 } from '../driveStorage';
-import { cleanNum, calcPortfolioEvalDetail, formatShortDate, generateId } from '../utils';
+import { cleanNum, calcPortfolioEvalDetail, formatShortDate, generateId, depositKrwTotalOf } from '../utils';
 import { fetchStockInfo, fetchUsStockInfo, fetchFundInfo, fetchMiraeFundInfo } from '../api';
 
 interface ApprovedUser { email: string; name?: string; }
@@ -216,7 +216,8 @@ function computePrincipal(portfolios: any[]): number {
   for (const p of (portfolios || [])) {
     const isOverseas = p.accountType === 'overseas';
     const avgFx = isOverseas ? (Number(p.avgExchangeRate) || 1) : 1;
-    principal += (Number(p.principal) || 0) * avgFx;
+    // 해외계좌 원화 예수금 = 원화 투자원금(통합 대시보드 portfolioSummaries와 같은 규약 — utils.overseasKrwPrincipalAt 주석)
+    principal += (Number(p.principal) || 0) * avgFx + (isOverseas ? depositKrwTotalOf(p.portfolio, true) : 0);
   }
   return principal;
 }

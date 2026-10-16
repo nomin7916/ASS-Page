@@ -16,6 +16,8 @@ const fmtAmt = (n, currency) => (currency === 'USD'
 
 const CashTransferModal = ({
   sourceName, sourceCash = 0, sourcePrincipal = 0, currency = 'KRW',
+  // 원계좌가 해외계좌의 **원화 예수금**(KRW CASH 행)인가 — 달러 원금은 변하지 않고, 원금 이동이 고정된다.
+  sourceKrwCash = false,
   targets = [], recordDate = '', onConfirm, onClose,
 }) => {
   const panelRef = useRef(null);
@@ -44,6 +46,10 @@ const CashTransferModal = ({
   }, [onClose]);
 
   const target = targets.find(t => t.id === targetId) || null;
+  // 해외계좌의 **원화 예수금**이 한쪽이라도 끼면 원금은 반드시 함께 움직인다 — 그 원화는 통합 대시보드에서 원화
+  // 투자원금 그 자체라 '수익만 이동'을 표현할 저장 필드가 없다(라이터 transferCashToPortfolio도 같은 규칙으로 강제).
+  const principalLocked = !!sourceKrwCash || !!(target && target.toKrwCash);
+  const movePrincipalEff = principalLocked ? true : movePrincipal;
   const avail = cleanNum(sourceCash);
   const amount = cleanNum(amtText);
   const isUsd = currency === 'USD';
@@ -60,7 +66,7 @@ const CashTransferModal = ({
   const run = async () => {
     if (!canRun) return;
     setBusy(true);
-    try { await onConfirm(target.id, { amount: M, movePrincipal }); } finally { setBusy(false); }
+    try { await onConfirm(target.id, { amount: M, movePrincipal: movePrincipalEff }); } finally { setBusy(false); }
   };
 
   const Row = ({ label, value, tone = 'text-gray-200', sub = null }) => (
@@ -96,7 +102,7 @@ const CashTransferModal = ({
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
           <div className="min-w-0">
             <div className="text-[14px] font-bold text-gray-100 truncate">현금 이관</div>
-            <div className="text-[11px] text-gray-500 truncate">{sourceName} 예수금을 다른 계좌로</div>
+            <div className="text-[11px] text-gray-500 truncate">{sourceName} {sourceKrwCash ? '원화 예수금' : '예수금'}을 다른 계좌로</div>
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-200 transition-colors shrink-0 ml-2" title="닫기 (Esc)">
             <X size={16} />
@@ -135,7 +141,7 @@ const CashTransferModal = ({
             <div className="text-[11px] text-gray-500 mb-1">이관 대상 계좌</div>
             {targets.length === 0 ? (
               <div className="text-[12px] text-amber-300/90 bg-amber-500/10 border border-amber-700/40 rounded px-3 py-2">
-                이관할 수 있는 계좌가 없습니다. 같은 통화의 계좌만 대상이 됩니다.
+                이관할 수 있는 계좌가 없습니다. 원화는 국내 계좌·해외계좌의 원화 예수금으로, 달러는 해외계좌끼리만 보낼 수 있습니다.
               </div>
             ) : (
               <div className="space-y-1 max-h-[152px] overflow-y-auto pr-0.5">
@@ -157,7 +163,7 @@ const CashTransferModal = ({
                       {t.isTest && <span className="ml-1 text-[10px] text-emerald-400 italic">TEST</span>}
                     </span>
                     <span className="text-[10px] shrink-0 text-gray-500">
-                      {t.blocked ? t.reason : `${t.typeLabel} · ${fmtAmt(t.cash, currency)}`}
+                      {t.blocked ? t.reason : `${t.typeLabel} · ${t.toKrwCash ? '원화 예수금 ' : ''}${fmtAmt(t.cash, currency)}`}
                     </span>
                   </button>
                 ))}
@@ -168,6 +174,16 @@ const CashTransferModal = ({
           {/* 원금 반영 여부 — 사용자 확정 규약(2026-09): 금액과 별개로 매번 고른다. */}
           <div>
             <div className="text-[11px] text-gray-500 mb-1">투자원금 반영</div>
+            {principalLocked ? (
+              /* 원화 예수금(환전 전 원화)이 끼면 '수익만 이동'을 표현할 수 없다 — 선택지를 잠그고 이유를 보인다 */
+              <div className="px-2.5 py-2 rounded border border-amber-700/50 bg-amber-500/10">
+                <div className="text-[12px] font-bold text-amber-200">원금도 함께 이동 (고정)</div>
+                <div className="text-[10px] text-gray-400 mt-0.5 leading-relaxed">
+                  해외계좌의 원화 예수금(환전 전 원화)은 통합 대시보드에서 원화 투자원금으로 집계되므로
+                  '수익만 이동'은 고를 수 없습니다. 원계좌 원금이 줄고 대상계좌의 원화 원금이 같은 금액만큼 늘어납니다.
+                </div>
+              </div>
+            ) : (
             <div className="space-y-1">
               <OptBtn
                 on={movePrincipal}
@@ -182,6 +198,7 @@ const CashTransferModal = ({
                 desc="양쪽 원금이 변하지 않습니다. 이관 금액만큼 원계좌 수익금이 줄고 대상계좌 수익금이 늘어납니다."
               />
             </div>
+            )}
           </div>
 
           {/* 미리보기 */}
@@ -195,18 +212,21 @@ const CashTransferModal = ({
                 tone="text-gray-300"
               />
               <Row
-                label="대상 예수금"
+                label={target.toKrwCash ? '대상 원화 예수금' : '대상 예수금'}
                 value={`${fmtAmt(target.cash, currency)} → ${fmtAmt(cleanNum(target.cash) + M, currency)}`}
                 tone="text-gray-300"
               />
+              {/* 원계좌가 원화 예수금이면 달러 원금은 변하지 않는다(sourcePrincipal null) — 줄 자체를 숨긴다 */}
+              {sourcePrincipal != null && (
               <Row
                 label="원계좌 투자원금"
-                value={movePrincipal
+                value={movePrincipalEff
                   ? `${fmtAmt(sourcePrincipal, currency)} → ${fmtAmt(Math.max(0, cleanNum(sourcePrincipal) - M), currency)}`
                   : '변동 없음'}
-                tone={movePrincipal ? 'text-gray-300' : 'text-gray-500'}
-                sub={movePrincipal ? '수익금은 그대로 유지됩니다' : `수익금이 ${fmtAmt(M, currency)} 줄어듭니다`}
+                tone={movePrincipalEff ? 'text-gray-300' : 'text-gray-500'}
+                sub={movePrincipalEff ? '수익금은 그대로 유지됩니다' : `수익금이 ${fmtAmt(M, currency)} 줄어듭니다`}
               />
+              )}
             </div>
           )}
 
@@ -225,9 +245,20 @@ const CashTransferModal = ({
                   직접입력 계좌는 예수금 행이 없어 평가금액이 같은 금액만큼 늘어납니다.
                 </span>
               )}
+              {target.toKrwCash && (
+                <span className="block mt-1 text-amber-300/90">
+                  대상계좌의 원화 예수금(환전 전 원화)으로 들어갑니다 — 통합 대시보드에서는 원화 투자원금으로 집계되고,
+                  달러 투자원금·달러 수익률에는 넣지 않습니다. 나중에 환전하면 입출금 내역에 원화 출금(₩+)과 달러 입금을 함께 기록하세요.
+                </span>
+              )}
+              {sourceKrwCash && (
+                <span className="block mt-1 text-gray-600">
+                  원계좌의 원화 예수금에서 나갑니다 (달러 원금은 변하지 않습니다).
+                </span>
+              )}
               {/* 원계좌 원금이 이관 금액보다 작으면 0으로 클램프된다 — 과거 원금 역산이 그만큼
                   어긋나므로(종목 이관과 같은 한계) 조용히 넘기지 않고 미리 알린다. */}
-              {movePrincipal && M > cleanNum(sourcePrincipal) && (
+              {sourcePrincipal != null && movePrincipalEff && M > cleanNum(sourcePrincipal) && (
                 <span className="block mt-1 text-amber-300/90">
                   ⚠️ 이관 금액이 원계좌 투자원금({fmtAmt(sourcePrincipal, currency)})보다 큽니다.
                   원금은 0으로 내려가고 그만큼은 이동하지 않습니다 — '원금은 그대로'를 고려하세요.

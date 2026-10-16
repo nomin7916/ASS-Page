@@ -1114,14 +1114,45 @@ export const resolveRecordPrincipal = (effectiveValue, record, date, sortedHistA
 //    평탄 적용하면 출금이 있는 계좌에서 출금 이전 과거 행의 원금·수익금이 두 화면에서 갈린다
 //    (출금 시 principal 필드만 principalDeducted만큼 줄기 때문).
 // sortedDeposits/sortedWithdrawals: 날짜 오름차순(조기 break 전제).
+// ⚠️ 원화 행(currency:'KRW')은 건너뛴다 — 이 함수는 **달러 원금**이다(cumDepositsUpTo와 같은 규약). 거르지 않으면
+//    원화 입금 20,000,000이 달러 원금에 그대로 더해져 차트 '나의 수익률'·추이표 누적이 통째로 무너진다.
 export const overseasPrincipalAt = (date, sortedDeposits, sortedWithdrawals, principalProp, portfolioStartDate) => {
   let amount = 0;
-  for (const d of sortedDeposits || []) { if (d.date > date) break; if (!d.noPrincipal) amount += cleanNum(d.amount); }
-  for (const w of sortedWithdrawals || []) { if (w.date > date) break; if (!w.noPrincipal) amount -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
+  for (const d of sortedDeposits || []) { if (d.date > date) break; if (isKrwLedgerRow(d)) continue; if (!d.noPrincipal) amount += cleanNum(d.amount); }
+  for (const w of sortedWithdrawals || []) { if (w.date > date) break; if (isKrwLedgerRow(w)) continue; if (!w.noPrincipal) amount -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
   const prin = cleanNum(principalProp);
   if (amount === 0 && date >= (portfolioStartDate || '') && prin > 0) amount = prin;
   if (amount > 0 && prin > amount) amount = prin;
   return amount;
+};
+
+// ── 해외계좌 원화 예수금 = 통합 대시보드(원화 프레임)의 **원화 투자원금** (2026-10 사용자 요청) ─────────
+// 발단: COVERD 예수금 20,000,000을 해외계좌(환전 전용)의 원화 예수금으로 옮기자, 원계좌 원금은 20,000,000
+// 줄었는데 받는 쪽 원금에는 들어가지 않아(옛 규약 ② '투자원금 미반영') 통합 투자원금이 그만큼 줄고 그 돈이
+// 통째로 '수익'이 됐다(실측: 현금뿐인 계좌가 수익 +66.30%, 전체 수익율 +11.67%로 부풀림).
+// → 통합(원화 프레임)에서는 해외계좌의 원화 예수금을 **그대로 원화 투자원금**으로 본다. 다른 계좌의 원금이
+//   이관으로 옮겨 온 돈이라 받는 쪽에서도 원금이어야 통합 투자원금·전체 수익율이 이관 전후로 변하지 않는다.
+// ⚠️ 달러 투자원금(p.principal, USD 프레임)에는 종전대로 넣지 않는다 — 개별 해외계좌 화면은 원화를 평가·원금
+//    양쪽에서 빼는 '통화 분리 원칙' 그대로다(위 depositKrwTotalOf 주석). 이 함수는 통합 소비자 3곳
+//    (useIntegratedData portfolioSummaries·computedIntHistory effectivePrincipal, buildHistDetailRows) +
+//    관리자 포털 computePrincipal 전용이다.
+// 과거 날짜는 원장의 원화 행으로 역추산한다: 라이브 원화 예수금에서 그 날짜 **이후**의 원화 입금을 빼고 원화
+// 출금을 더한다('현재값 − 미래 흐름' — 같은 소비자들의 달러 부분과 동일 규약). 그래서 원화를 옮긴 날짜가
+// 원장에 있어야 그 이전 날짜의 원금이 정확하다(현금 이관 모달은 그 행을 자동으로 만든다).
+// ⚠️ noPrincipal·principalDeducted를 보지 않는다 — '원화 예수금 = 원화 원금'이라는 정의상 원화 예수금을
+//    바꾼 모든 입출금이 곧 원금 변동이다(달러 부분의 역추산도 raw amount만 본다).
+// ⚠️ 원화 예수금이 0이고 원화 행이 없으면 항상 0 — 기존 모든 계좌의 통합 원금이 한 원도 바뀌지 않는다(하위호환의 축).
+export const overseasKrwPrincipalAt = (date, krwCashLive, depositHistory, depositHistory2) => {
+  let v = cleanNum(krwCashLive);
+  for (const d of depositHistory || []) {
+    if (!d || !isKrwLedgerRow(d) || !((d.date || '') > (date || ''))) continue;
+    v -= cleanNum(d.amount);
+  }
+  for (const w of depositHistory2 || []) {
+    if (!w || !isKrwLedgerRow(w) || !((w.date || '') > (date || ''))) continue;
+    v += cleanNum(w.amount);
+  }
+  return Math.max(0, v);
 };
 
 // ── 종목 계좌 간 이관 (transfer) ─────────────────────────────────────────────────
@@ -1170,7 +1201,15 @@ export const buildTransferLedgerRows = (args: any) => {
     itemType: a.itemType || 'stock',
     fromId: a.sourceId || '', fromName: srcName,
     toId: a.targetId || '', toName: tgtName,
+    // 현금 이관의 통화('KRW'|'USD') — 메모 달력 이관 패드가 해외계좌의 원화 이관을 ₩로 표기하는 근거.
+    ...(a.currency ? { currency: String(a.currency) } : {}),
   };
+  // 해외계좌 **원화 예수금**(depositAmountKrw) 쪽 행은 원장의 원화 행(currency:'KRW' · fxRate 0)으로 기록한다 —
+  // 그래야 cumDepositsUpTo·overseasPrincipalAt(달러 원금)이 그 행을 건너뛰고 krwFlowRateOf가 배율 1로 읽는다.
+  // ⚠️ 국내 계좌 쪽 행에는 이 태그를 달지 말 것 — 국내 원장은 그 자체가 원화고, 태그가 붙으면 cumDepositsUpTo가
+  //    그 행을 원금에서 빼 버린다. 플래그가 없으면(종목 이관·국내↔국내·달러↔달러) 종전 결과와 한 글자도 다르지 않다.
+  const srcKrw = !!a.krwSrc, tgtKrw = !!a.krwTgt;
+  const krwRow = (on) => (on ? { currency: 'KRW', fxRate: 0 } : {});
   // 현금(예수금) 이관은 수량 개념이 없다 — 라벨에 금액을 싣는다. 현금은 시가 = 원가라 '평가차익'이
   // 존재할 수 없으므로, 보정 행의 문구도 '원금 미이동'으로 갈린다(아래 tgtGainRow 참조).
   // ⚠️ itemType이 'cash'가 아니면 이 분기는 종전 결과를 한 글자도 바꾸지 않는다(하위호환의 축).
@@ -1183,13 +1222,13 @@ export const buildTransferLedgerRows = (args: any) => {
   return {
     srcWithdrawal: {
       id: ids[0] || generateId(), date: a.dateSrc, amount: M, principalDeducted: C,
-      fxRate: 1, noPrincipal: false,
+      fxRate: 1, noPrincipal: false, ...krwRow(srcKrw),
       memo: `[이관→${tgtName}] ${label}`,
       transfer: { ...meta, role: 'out' },
     },
     tgtDeposit: {
       id: ids[1] || generateId(), date: a.dateTgt, amount: M,
-      fxRate: 1, noPrincipal: false,
+      fxRate: 1, noPrincipal: false, ...krwRow(tgtKrw),
       memo: `[이관←${srcName}] ${label}`,
       transfer: { ...meta, role: 'in' },
     },
@@ -1197,7 +1236,7 @@ export const buildTransferLedgerRows = (args: any) => {
     // 금액 0 = 현금 이동 없음(흐름 기여 0), principalDeducted = G 만큼 원금만 되돌린다.
     tgtGainRow: Math.round(G) === 0 ? null : {
       id: ids[2] || generateId(), date: a.dateTgt, amount: 0, principalDeducted: G,
-      fxRate: 1, noPrincipal: false,
+      fxRate: 1, noPrincipal: false, ...krwRow(tgtKrw),
       memo: isCash
         ? `[이관←${srcName}] ${label} — 원금 미이동 보정(금액 이동 없음)`
         : `[이관←${srcName}] ${label} 평가차익 ${G > 0 ? '+' : ''}${formatNumber(Math.round(G))} — 원금 보정(금액 이동 없음)`,
@@ -1221,24 +1260,32 @@ export const depositRowOf = (p: any): any =>
 
 // 지금 옮길 수 있는 현금. 현금성(직접입력) 계좌는 평가액 전체가 곧 현금이다.
 // ⚠️ matong(마이너스 통장)은 '보유 현금'이 아니라 한도·사용액이라 0을 돌려준다(대상에서도 차단).
-export const transferableCashOf = (p: any): number => {
+// currency 'KRW'를 주면 해외계좌는 **원화 예수금**(depositAmountKrw)을 돌려준다(국내는 예수금 그 자체가 원화).
+// 미전달이면 종전대로 depositAmount(해외 = USD).
+export const transferableCashOf = (p: any, currency?: string): number => {
   const t = p?.accountType || 'portfolio';
   if (t === 'matong') return 0;
   if (t === 'simple') return cleanNum(p?.evalAmount);
   const row = depositRowOf(p);
-  return row ? cleanNum(row.depositAmount) : 0;
+  if (!row) return 0;
+  if (t === 'overseas' && currency === 'KRW') return depositKrwOf(row, true);
+  return cleanNum(row.depositAmount);
 };
 
 // 현금 이관 대상 자격 — 사유 문자열(빈 문자열이면 가능). 화면과 라이터가 **같은 함수**를 써야
 // "목록에는 보이는데 눌러도 아무 일이 없다"가 생기지 않는다(fail-closed).
 // ⚠️ 종목 이관과 달리 시장(crypto/gold) 구분은 보지 않는다 — 현금은 통화만 맞으면 같은 돈이다.
-export const cashTransferBlockReason = (srcType: string, tgt: any): string => {
+// currency = 옮기는 돈의 통화('KRW'|'USD'). 미전달이면 원계좌 타입에서 추정(해외 = USD, 그 외 = KRW).
+//   · 원화는 국내 계좌로도, 해외계좌의 **원화 예수금**(환전 전 원화)으로도 갈 수 있다(2026-10 사용자 요청 —
+//     "COVERD 예수금 일부를 해외계좌 원화 예수금으로 이체").
+//   · 달러는 해외계좌끼리만 — 국내 원장 amount·principal은 원화라 단위가 어긋난다.
+export const cashTransferBlockReason = (srcType: string, tgt: any, currency?: string): string => {
   if (!tgt) return '계좌 없음';
   if (tgt.deletedAt) return '삭제됨';
   const t = tgt.accountType || 'portfolio';
   if (t === 'matong') return '마통 계좌';
-  // 통화가 다르면 원장 amount·principal의 단위가 어긋난다(해외 계좌는 전부 USD 기준).
-  if ((t === 'overseas') !== (srcType === 'overseas')) return '통화 불일치';
+  const cur = currency || (srcType === 'overseas' ? 'USD' : 'KRW');
+  if (cur === 'USD' && t !== 'overseas') return '통화 불일치';
   return '';
 };
 
@@ -2623,12 +2670,16 @@ export const buildHistDetailRows = (opts) => {
     const currentPrincipalKRW = (p.principal || 0) * fxRate;
     const deps = p.depositHistory || [];
     const wds = p.depositHistory2 || [];
-    const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
-    const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+    // ⚠️ 원화 행(currency:'KRW')은 달러 원금 역추산에서 빼고, 아래 원화 원금(overseasKrwPrincipalAt)이 따로 본다 —
+    //    섞으면 원화 입금이 달러 원금을 소급해서 깎는다(useIntegratedData effectivePrincipal과 같은 분리).
+    const futureDeposits = deps.filter(d => d.date > date && !isKrwLedgerRow(d)).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+    const futureWithdrawals = wds.filter(d => d.date > date && !isKrwLedgerRow(d)).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+    // 해외계좌 원화 예수금 = 통합(원화 프레임)의 원화 투자원금 — 추이 차트(computedIntHistory)와 같은 공유 함수.
+    const krwPrincipal = isOverseas ? overseasKrwPrincipalAt(date, depositKrwTotalOf(p.portfolio, true), deps, wds) : 0;
     // 현금성 계좌는 투자원금=평가금액=예수금 불변 → 수익·수익률 항상 0. 그 외는 입출금 시점 보정식 유지.
     const effPrincipal = isCash
       ? evalAmt
-      : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
+      : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals) + krwPrincipal;
     totalPrincipal += effPrincipal;
     // ⚠️ 시장 계좌 예수금은 **그날의 기록값**이다(자산검증 모달과 같은 소스 = 보유 스냅샷).
     //    `summary.depositAmount`는 **오늘의 라이브** 예수금이라 과거 날짜에 쓰면 안 된다 —

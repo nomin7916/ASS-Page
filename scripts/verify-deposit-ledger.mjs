@@ -158,10 +158,14 @@ ok('#G4 표는 정렬된 결과를 렌더한다 (입금·출금)',
   /\{depositWithSumSorted\.map\(\(h\) =>/.test(panelNC) && /\{depositWithSum2Sorted\.map\(\(h\) =>/.test(panelNC));
 ok('#G4b 편집은 originalIndex로 저장 배열을 가리킨다 (표시 순서 인덱스로 쓰면 다른 행이 고쳐진다)',
   (panelNC.match(/n\[h\.originalIndex\]/g) || []).length >= 8);
-ok('#G5 새 행 날짜는 KST 오늘 (UTC면 한국 00~09시에 어제가 되어 날짜순 표에서 새 행이 맨 위가 아니다)',
-  /date: getTodayKST\(\),/.test(between(panelNC, 'const newLedgerRow', '});'))
-  && /import \{ getTodayKST \} from '\.\.\/hooks\/useMarketCalendar';/.test(panel)
-  && !/toISOString/.test(between(panelNC, 'const newLedgerRow', '});')));
+// ⚠️ 2026-10: KST 오늘(getTodayKST)에서 **그 계좌의 평가 기록 반영일**로 바뀌었다 — 저녁에 적은 출금이 '오늘' 원장에,
+//    함께 줄인 예수금은 '내일' 기록에 실려 그날 일간 수익률이 '-'(반영 대기)로 잠기던 것을 막는다(현금 이관 모달과
+//    같은 날짜 규약). UTC(toISOString)·getTodayKST 어느 쪽으로도 되돌리지 말 것.
+ok('#G5 새 행 날짜는 그 계좌의 평가 기록 반영일 (getBackfillBoundaryForAccount — UTC·KST 오늘 금지)',
+  /date: getBackfillBoundaryForAccount\(activePortfolioAccountType \|\| 'portfolio'\),/.test(between(panelNC, 'const newLedgerRow', '});'))
+  && /import \{ getBackfillBoundaryForAccount \} from '\.\.\/hooks\/useMarketCalendar';/.test(panel)
+  && !/toISOString/.test(between(panelNC, 'const newLedgerRow', '});'))
+  && !/getTodayKST\(\)/.test(between(panelNC, 'const newLedgerRow', '});')));
 ok('#G6 CSV도 날짜순 합계를 쓴다 (depositWithSum 경유)',
   /buildDepositCSV\(depositWithSum\)/.test(appNC) && /buildDepositCSV\(depositWithSum2\)/.test(appNC));
 ok('#G7 사용법에 합계 규칙이 적혀 있다',

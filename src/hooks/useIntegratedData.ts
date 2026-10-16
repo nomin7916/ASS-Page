@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, accumulateDailySeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt, depositRowEval, isKrwLedgerRow, krwFlowRateOf, isManualCashRow, manualCashEval, MANUAL_CASH_CATEGORY } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, accumulateDailySeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt, depositRowEval, isKrwLedgerRow, krwFlowRateOf, isManualCashRow, manualCashEval, MANUAL_CASH_CATEGORY, depositKrwTotalOf, overseasKrwPrincipalAt } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -61,7 +61,10 @@ export function useIntegratedData({
       const summaryAvgFx = p.accountType === 'overseas'
         ? ((isActive ? avgExchangeRate : (p.avgExchangeRate || 0)) || summaryFxRate)
         : 1;
-      const principalKRW = prin * summaryAvgFx;
+      // 해외계좌 원화 예수금은 통합(원화 프레임)에서 **원화 투자원금**이다(utils.overseasKrwPrincipalAt 주석 참조) —
+      // 원금에 없으면 이관해 온 원화가 통째로 '수익'으로 찍힌다. 달러 원금(prin, USD)과 별도 항이라 환율을 곱하지 않는다.
+      const krwCash = p.accountType === 'overseas' ? depositKrwTotalOf(items, true) : 0;
+      const principalKRW = prin * summaryAvgFx + krwCash;
       let totalEval = 0, depositAmt = 0;
       const cats = {};
       items.forEach(item => {
@@ -94,7 +97,7 @@ export function useIntegratedData({
           ? (totalEval / principalKRW - 1) * 100
           : (Math.pow(totalEval / principalKRW, 365.25 / days) - 1) * 100
         : 0;
-      return { id: p.id, name, startDate, currentEval: totalEval, principal: principalKRW, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest, deletedAt: p.deletedAt || '' };
+      return { id: p.id, name, startDate, currentEval: totalEval, principal: principalKRW, krwCash, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest, deletedAt: p.deletedAt || '' };
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolios, activePortfolioId, portfolio, principal, avgExchangeRate, portfolioStartDate, title, marketIndicators.usdkrw]);
@@ -499,20 +502,24 @@ export function useIntegratedData({
         const currentPrincipalKRW = currentPrincipal * fxRate;
         const deps = isActive ? depositHistory : (p.depositHistory || []);
         const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
-        return { startDate, currentPrincipalKRW, deps, wds, isOverseas, deletedAt: p.deletedAt || '' };
+        // 해외계좌 라이브 원화 예수금 — 통합(원화 프레임)의 원화 투자원금(utils.overseasKrwPrincipalAt). 달러 원금과 별도 항.
+        const krwCashLive = isOverseas ? depositKrwTotalOf(isActive ? portfolio : (p.portfolio || []), true) : 0;
+        return { startDate, currentPrincipalKRW, krwCashLive, deps, wds, isOverseas, deletedAt: p.deletedAt || '' };
       });
     return [...dateToTotal.entries()]
       .map(([date, evalAmount]) => {
-        let effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, deps, wds, isOverseas, deletedAt }) => {
+        let effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, krwCashLive, deps, wds, isOverseas, deletedAt }) => {
           if (!startDate || startDate > date) return sum;
           const cutoff = cutoffOf(deletedAt);
           if (cutoff && date >= cutoff) return sum; // 삭제 계좌: 경계일부터 원금 미기여(평가와 동일 경계)
-          // ⚠️ 원화 행은 투자원금에 들어가지 않으므로(2026-09 사용자 확정) 역추산에서도 제외한다 —
-          //    여기서 빼지 않으면 원화 입금이 과거 원금을 소급해서 깎는다.
+          // ⚠️ 원화 행은 **달러 원금** 역추산에서 제외한다 — 여기서 빼지 않으면 원화 입금이 달러 원금을 소급해서 깎는다.
+          //    원화 몫은 아래 overseasKrwPrincipalAt(원화 예수금 = 원화 원금, 2026-10)이 원화 행만으로 따로 역추산한다.
           const depRate = (d) => isOverseas ? (d.fxRate || 1) : 1;
           const futureDeposits = deps.filter(d => d.date > date && !isKrwLedgerRow(d)).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
           const futureWithdrawals = wds.filter(d => d.date > date && !isKrwLedgerRow(d)).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
-          return sum + Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
+          const usdPart = Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
+          const krwPart = isOverseas ? overseasKrwPrincipalAt(date, krwCashLive, deps, wds) : 0;
+          return sum + usdPart + krwPart;
         }, 0);
         // 현금성 계좌: 원금=평가(날짜별 잔액) → 평가와 동일 합산 → 수익 0 유지
         effectivePrincipal += cashByDate.get(date) || 0;

@@ -3,7 +3,7 @@ import React, { useState, useRef } from 'react';
 import { Plus, Download, Trash2, Calendar, Maximize2, X, Check, HelpCircle } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav, isKrwLedgerRow } from '../utils';
 import { sortArrow } from '../chartUtils';
-import { getTodayKST } from '../hooks/useMarketCalendar';
+import { getBackfillBoundaryForAccount } from '../hooks/useMarketCalendar';
 
 // 헤더 환율 배지(평균·현재) 표기 — 입력 환율이 소수 2자리라 반올림하면 그 값이 사라진다
 const formatFxRate = (n) => cleanNum(n).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -36,8 +36,11 @@ export default function DepositPanel({
   //    포함돼(useIntegratedData rateOf / App usdFlowRate) 입금일에 가짜 수익이 찍히지 않는다.
   const newLedgerRow = (krw) => ({
     id: generateId(),
-    // KST 기준 오늘 — UTC(toISOString)면 한국 00:00~09:00에 어제 날짜가 되어 날짜순 표에서 새 행이 맨 위가 아니다.
-    date: getTodayKST(),
+    // 기록일 = 이 계좌의 **평가 기록이 반영되는 날짜**(국내 계좌는 21:00 이후·새벽 = 다음 거래 기록일, 해외는 07:30 경계) —
+    // 현금 이관 모달·자산검증 스냅샷과 같은 날짜 규약(getBackfillBoundaryForAccount). KST 달력일(getTodayKST)로 두면
+    // 저녁에 적은 출금은 '오늘' 원장에, 함께 줄인 예수금은 '내일' 기록에 실려 그날 일간 수익률이 '-'(반영 대기)로
+    // 잠기고 다음 날이 이틀치를 합산했다(사용자 보고 2026-10). UTC(toISOString)는 00:00~09:00에 어제가 되어 금지.
+    date: getBackfillBoundaryForAccount(activePortfolioAccountType || 'portfolio'),
     amount: 0,
     // 원화 행은 환율을 쓰지 않는다 — 값을 남기면 마커·누적이 그 값을 곱해 ≈1,355배 어긋난다.
     fxRate: krw ? 0 : (isOverseas ? (marketIndicators.usdkrw || 1) : 1),
@@ -208,7 +211,7 @@ export default function DepositPanel({
                     <th className={`py-1.5 border-r border-gray-600 px-1 ${isOverseas ? 'w-[70px]' : 'w-[75px]'} text-yellow-400 font-normal text-center`}>{isOverseas ? '합계($)' : '합계'}</th>
                     <th className="py-1.5 border-r border-gray-600 text-center px-1 font-normal whitespace-nowrap">메모</th>
                     <th className="py-1.5 w-[28px] text-center font-normal">
-                      <button onClick={() => setDepositHistory([newLedgerRow(false), ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                      <button onClick={() => setDepositHistory([newLedgerRow(false), ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가 (기록일 = 평가 기록 반영일 · 국내 계좌는 21시 이후 다음 날)"><Plus size={12} /></button>
                       {isOverseas && <button onClick={() => setDepositHistory([newLedgerRow(true), ...depositHistory])} className="text-amber-400 hover:text-amber-200 transition-colors text-[11px] font-bold leading-none" title="원화 행 추가 (환전 전 원화 입력)">&#8361;+</button>}
                     </th>
                   </tr>
@@ -282,7 +285,7 @@ export default function DepositPanel({
                     <th className={`py-1.5 border-r border-gray-600 px-1 ${isOverseas ? 'w-[70px]' : 'w-[75px]'} text-yellow-400 font-normal text-center`}>{isOverseas ? '합계($)' : '합계'}</th>
                     <th className="py-1.5 border-r border-gray-600 text-center px-1 font-normal whitespace-nowrap">메모</th>
                     <th className="py-1.5 w-[28px] text-center font-normal">
-                      <button onClick={() => setDepositHistory2([newLedgerRow(false), ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                      <button onClick={() => setDepositHistory2([newLedgerRow(false), ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가 (기록일 = 평가 기록 반영일 · 국내 계좌는 21시 이후 다음 날)"><Plus size={12} /></button>
                       {isOverseas && <button onClick={() => setDepositHistory2([newLedgerRow(true), ...depositHistory2])} className="text-amber-400 hover:text-amber-200 transition-colors text-[11px] font-bold leading-none" title="원화 행 추가 (환전 전 원화 입력)">&#8361;+</button>}
                     </th>
                   </tr>

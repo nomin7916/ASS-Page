@@ -11,6 +11,11 @@ PATH에 `/opt/homebrew/bin` 없음). 이 파일을 근거로 "돌릴 수 있다"
 (`memory/tools/{jsxcheck,undefcheck,scopecheck}.mjs` 3종도 저장소에 **없다** — CLAUDE.md가 게이트로
 규정하지만 파일이 존재한 적이 없다.)
 
+**2026-10-16 추가 실측**: 사용자 Mac mini **로컬** 세션(`/Users/aruimacmini/Documents/GitHub/ASS-Page`)에도 node가
+없었다(`which node` 없음, `mdfind`로도 바이너리 0건, `node_modules` 없음, python3 3.9만). 그래서 `npm run ship`도
+돌릴 수 없다 → 같은 절차를 git으로 직접 한다: `git push origin HEAD:main` → `git fetch origin main` →
+`git merge-base --is-ancestor HEAD origin/main` 이 0이면 `✅ main 반영 확인 <해시>`를 보고에 적되 **"ship 대신 수동"**임을 명시.
+
 **node가 없을 때의 대체 게이트(2026-08-21 실증)** — 이것으로 실제 결함 2건을 잡았다:
 1. **소스 텍스트 가드는 python3로 그대로 재현**한다. 알고리즘 포팅이 아니라 **같은 정규식을 같은 파일에
    돌리는 것**이라 등가다(verify 스크립트의 `stripComments`도 함께 옮길 것 — 이 저장소는 금지 사유를
