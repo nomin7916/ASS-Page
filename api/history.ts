@@ -6,6 +6,7 @@ export const config = { runtime: 'edge' };
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
 
 import { getKisToken } from './_kisToken.js';
+import { fetchKisDailyRange } from './_kisDaily.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
@@ -415,51 +416,25 @@ async function fetchNaverWorldstockHistory(code: string, d1: string, d2: string)
 }
 
 // KIS 국내 주식 실제 종가 이력 (FID_ORG_ADJ_PRC=1 → 원주가, 수정주가 미반영)
+// ⚠️ KIS는 호출당 최대 100건(구간의 최근 100거래일)만 준다 — 2년 구간을 한 번만 부르면 앞쪽이 통째로
+//    빠진다. 페이지 넘김은 api/_kisDaily.ts(stock-history와 공유)가 맡는다.
 async function fetchKisDomesticActualHistory(code: string, token: string, d1: string): Promise<Record<string, number>> {
   const result: Record<string, number> = {};
   const today   = new Date().toISOString().split('T')[0].replace(/-/g, '');
   const startY  = parseInt((d1 || '20210101').slice(0, 4), 10);
   const endYear = new Date().getFullYear();
+  const deadlineAt = Date.now() + 20000;   // Edge 응답 시작 제한 전에 받은 만큼 돌려준다
 
   for (let year = startY; year <= endYear; year += 2) {
     const dateFrom = `${year}0101`;
     const rawTo    = `${Math.min(year + 1, endYear)}1231`;
     const dateTo   = rawTo <= today ? rawTo : today;
-
-    const params = new URLSearchParams({
-      FID_COND_MRKT_DIV_CODE: 'J',
-      FID_INPUT_ISCD:         code,
-      FID_INPUT_DATE_1:       dateFrom,
-      FID_INPUT_DATE_2:       dateTo,
-      FID_PERIOD_DIV_CODE:    'D',
-      FID_ORG_ADJ_PRC:        '1',  // 원주가 (실제종가, 수정주가 미반영)
+    const r = await fetchKisDailyRange({
+      code, token, appKey: KIS_APP_KEY, appSecret: KIS_APP_SECRET,
+      dateFrom, dateTo, timeoutMs: 10000, deadlineAt,
     });
-
-    try {
-      const res = await fetch(
-        `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice?${params}`,
-        {
-          headers: {
-            'Content-Type':  'application/json',
-            'authorization': `Bearer ${token}`,
-            'appkey':        KIS_APP_KEY,
-            'appsecret':     KIS_APP_SECRET,
-            'tr_id':         'FHKST03010100',
-            'custtype':      'P',
-          },
-          signal: AbortSignal.timeout(10000),
-        }
-      );
-      if (!res.ok) { console.error(`[kis-domestic] ${code} chunk=${dateFrom}-${dateTo} status=${res.status}`); continue; }
-      const json = await res.json();
-      for (const row of (json.output2 ?? [])) {
-        const d     = String(row.stck_bsop_date ?? '');
-        const price = parseInt(String(row.stck_clpr ?? '0'), 10);
-        if (d.length === 8 && !isNaN(price) && price > 0) {
-          result[`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`] = price;
-        }
-      }
-    } catch (e) { console.error(`[kis-domestic] ${code} chunk=${dateFrom}-${dateTo} error=${e}`); continue; }
+    Object.assign(result, r.data);
+    if (r.truncated) break;
   }
   return result;
 }

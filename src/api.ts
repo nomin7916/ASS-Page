@@ -29,14 +29,19 @@ const normalizeKrCode = (code: string) => (code || '').trim().toUpperCase();
 // KST 오늘(YYYYMMDD) — 엣지 캐시 키 회전용(아래 asOf).
 const kstDateCompact = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
 
+// 서버 응답 형식 세대 — 캐시 키에만 쓴다(서버는 모르는 파라미터라 무시). 2 = KIS 100건 상한 페이지 넘김 서버.
+// ⚠️ 서버 수집 방식을 바꿔 과거 응답을 믿을 수 없게 되면 이 값을 올려 엣지 캐시를 비켜 간다.
+const KIS_HISTORY_CACHE_GEN = '2';
+
 export const fetchKISStockHistory = async (
   code: string,
   fromYear: number = 2000
-): Promise<{ data: Record<string, number>; source: string; partial?: boolean } | null> => {
+): Promise<{ data: Record<string, number>; source: string; partial?: boolean; paged?: boolean } | null> => {
   try {
     // asOf: 서버 라우트는 모르는 파라미터라 무시하지만 **엣지 캐시 키가 하루 단위로 회전**한다 — 같은 날 재요청은
     // 캐시 히트, 다음 날은 새 응답. 이게 없으면 24h 캐시가 전날의 '당일 장중 행'을 다음 날 아침에 다시 돌려준다.
-    const params = new URLSearchParams({ code: normalizeKrCode(code), fromYear: String(fromYear), asOf: kstDateCompact() });
+    // gen: 페이지 넘김 이전 서버의 응답(2년 구간마다 앞쪽 누락)이 같은 날 캐시에서 돌아오지 않게 한다.
+    const params = new URLSearchParams({ code: normalizeKrCode(code), fromYear: String(fromYear), asOf: kstDateCompact(), gen: KIS_HISTORY_CACHE_GEN });
     const res = await fetch(`/api/stock-history?${params}`, {
       // 서버 maxDuration: 60s와 일치. 동시성 제한(4)로 KIS rate limit 폭주 방지 + 청크별 재시도.
       signal: AbortSignal.timeout(60000),

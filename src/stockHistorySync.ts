@@ -92,11 +92,19 @@ export const applyStagedMerges = (
 // 코드별 실제종가 마이그레이션 마커.
 //  at       — 마지막 **전체**(full) KIS 조회를 완료한 KST 날짜. 30일이 지나면 다시 전체 조회해 과거 정정을 흡수한다.
 //  lastDate — 마커가 보증하는 마지막 실제종가 날짜(응답 최대 날짜 중 오늘 미만; 21:00 이후엔 오늘 허용).
-export interface RealCloseMarker { at: string; lastDate: string }
+//  v        — 마커를 세운 서버 응답의 세대. 없으면 1(구버전).
+export interface RealCloseMarker { at: string; lastDate: string; v?: number }
 export interface StockMeta { realClose: Record<string, RealCloseMarker> }
 
 // 마커의 at이 이 일수보다 오래됐으면 증분이 아니라 전체 조회로 되돌린다(배당·분할 소급 정정, 부분 응답 잔재 흡수).
 export const MARKER_FULL_REFRESH_DAYS = 30;
+// 현재 마커 세대 — 이보다 낮은(또는 v가 없는) 마커는 전체 조회 대상이다.
+// ⚠️ v1 마커는 페이지 넘김 이전 서버(api/stock-history.ts가 2년 구간마다 최근 100건만 받음)의 응답으로 세워졌다.
+//    그 응답은 구간마다 앞쪽 ~390거래일이 빠져 있었는데도 partial:false라 '완전'으로 쳐졌고, 빈 날짜는
+//    fchart 수정종가로 채워져 Drive에 남았다(실측 480040 2026-05-14 실제 19,245 vs 저장 16,509).
+//    세대를 올리면 마커가 신선해도 **한 번** 전체 조회해 그 날짜들을 실제종가로 덮어쓴다(overwrite).
+//    서버 수집 방식이 다시 바뀌어 과거 응답을 믿을 수 없게 되면 이 값을 올린다.
+export const REAL_CLOSE_MARKER_VERSION = 2;
 // '마커 있음'이어도 캐시 키가 이 수 이하면 전체 조회 — 단일 stamp만 남은 코드를 증분으로 오판하지 않기 위함.
 export const MIN_CACHED_KEYS_FOR_INCREMENTAL = 3;
 
@@ -112,15 +120,21 @@ export const normalizeStockMeta = (raw: unknown): StockMeta => {
   if (isPlainObject(rc)) {
     for (const [code, m] of Object.entries(rc)) {
       if (!code || !isPlainObject(m)) continue;
-      const at = (m as any).at, lastDate = (m as any).lastDate;
+      const at = (m as any).at, lastDate = (m as any).lastDate, v = (m as any).v;
       if (!isIsoDate(at) || !isIsoDate(lastDate)) continue;
-      out[code] = { at, lastDate };
+      // v는 양의 정수일 때만 남긴다(손상값은 버림 = 구세대로 강등 → 전체 조회. 안전한 방향).
+      out[code] = Number.isInteger(v) && v > 0 ? { at, lastDate, v } : { at, lastDate };
     }
   }
   return { realClose: out };
 };
 
-// 두 마커 집합 병합 — 같은 코드는 lastDate가 더 늦은 쪽(동률이면 at이 더 늦은 쪽) 채택. 입력은 변형하지 않는다.
+// 두 마커 집합 병합 — 같은 코드는 **세대(v)가 높은 쪽**, 같은 세대면 lastDate가 더 늦은 쪽(동률이면 at이 더 늦은 쪽)
+// 채택. 입력은 변형하지 않는다.
+// ⚠️ 세대를 먼저 본다 — 날짜만 보면 같은 날 구서버로 세운 v1 마커(at·lastDate 동일)가 방금 세운 v2 마커를 이겨
+//    (동률이면 기존 유지) 치유 결과가 버려지고 그날 접속마다 전체 재조회가 반복된다. 반대로 낮은 세대가 lastDate만
+//    늦다고 높은 세대를 밀어내지도 않는다(마커가 맵보다 앞서지 않는 보수적 방향).
+const markerGen = (m: RealCloseMarker | undefined) => (m && m.v) || 1;
 export const mergeStockMeta = (
   base: Record<string, RealCloseMarker> | null | undefined,
   incoming: Record<string, RealCloseMarker> | null | undefined,
@@ -128,7 +142,10 @@ export const mergeStockMeta = (
   const out: Record<string, RealCloseMarker> = { ...(base || {}) };
   for (const [code, m] of Object.entries(incoming || {})) {
     const cur = out[code];
-    if (!cur || m.lastDate > cur.lastDate || (m.lastDate === cur.lastDate && m.at > cur.at)) out[code] = m;
+    if (!cur) { out[code] = m; continue; }
+    const gm = markerGen(m), gc = markerGen(cur);
+    if (gm !== gc) { if (gm > gc) out[code] = m; continue; }
+    if (m.lastDate > cur.lastDate || (m.lastDate === cur.lastDate && m.at > cur.at)) out[code] = m;
   }
   return out;
 };
@@ -152,7 +169,7 @@ export interface KorHistoryPlan { full: string[]; incremental: string[]; skip: s
 
 // 국내 코드별 이력 조회 계획. 결과 세 집합은 **서로소**이고 합집합 = 입력 codes(중복 제거).
 //  force              → 전부 full(HistoryPanel의 강제 재조회 — 마커 무시).
-//  마커 없음 / 캐시 키 ≤ 3 → full.
+//  마커 없음 / 마커 세대 < REAL_CLOSE_MARKER_VERSION / 캐시 키 ≤ 3 → full.
 //  마커 at이 MARKER_FULL_REFRESH_DAYS보다 오래됨 → full(과거 정정 흡수).
 //  lastDate >= lastTradingDay → skip(이미 최신).
 //  그 외 → incremental(lastDate 이후만).
@@ -171,6 +188,7 @@ export const planKorHistoryFetch = (
     const m = meta?.[code];
     const keyCount = Object.keys(map?.[code] || {}).length;
     if (!m || keyCount <= MIN_CACHED_KEYS_FOR_INCREMENTAL) { plan.full.push(code); continue; }
+    if ((m.v || 1) < REAL_CLOSE_MARKER_VERSION) { plan.full.push(code); continue; }
     if (daysBetweenIso(m.at, opts.todayKST) > MARKER_FULL_REFRESH_DAYS) { plan.full.push(code); continue; }
     if (m.lastDate >= opts.lastTradingDay) { plan.skip.push(code); continue; }
     plan.incremental.push(code);

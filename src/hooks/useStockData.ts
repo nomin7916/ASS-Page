@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend, savingsEval, depositRowEval, isManualCashRow, manualCashEval } from '../utils';
 import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount, getTodayKST, getKrSettledTodayDate } from './useMarketCalendar';
-import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays, mergeCodeHistory, applyStagedMerges, mergeStagedPatch, mergeStockMeta } from '../stockHistorySync';
+import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays, mergeCodeHistory, applyStagedMerges, mergeStagedPatch, mergeStockMeta, REAL_CLOSE_MARKER_VERSION } from '../stockHistorySync';
 import type { StagedCodeMerge } from '../stockHistorySync';
 
 // 이력 패스 워치독(ms) — 스트림(KIS·US·NAV)이 이 시간 안에 못 끝나면 도착분만 커밋하고 settled(partial=true)로 강등한다.
@@ -75,12 +75,12 @@ const isKoreanCode = (code: string) => /^[A-Za-z0-9]{6}$/.test(code) && /\d/.tes
 //    그러면 매 세션 재조회 + `<1500` 조건으로 fchart(수정종가) 보강이 상시 발동한다.
 // 서버(api/stock-history.ts)가 partial 플래그를 준다: DEADLINE 초과로 오래된 청크를 못 봤거나
 // 실패한 청크가 있으면 true. 이 신호가 건수보다 정확하다.
-// ⚠️ 응답이 24h 엣지 캐시되므로 구버전 캐시에는 partial이 없다 → undefined면 옛 휴리스틱으로 폴백.
-const isCompleteKisHistory = (res: { partial?: boolean } | null, dateCount: number) => {
-  if (!res) return false;
-  if (typeof res.partial === 'boolean') return !res.partial;
-  return dateCount >= 100;
-};
+// ⚠️ `paged === true`(KIS 100건 상한을 페이지로 넘긴 서버)인 응답만 완전으로 친다 — 그 이전 서버는 2년 구간마다
+//    최근 100건만 받고도 partial:false를 찍었다(구간 앞쪽 누락 → 빈 날짜가 fchart 수정종가로 채워짐 —
+//    api/_kisDaily.ts 상단 주석). 표시가 없는 응답으로 마커를 세우면 그 누락이 v2 마커 아래 영구히 남는다.
+//    건수 휴리스틱 폴백(dateCount >= 100)으로 되돌리지 말 것 — 바로 그 불완전 응답이 100건 이상이다.
+const isCompleteKisHistory = (res: { partial?: boolean; paged?: boolean } | null, _dateCount?: number) =>
+  !!res && res.paged === true && res.partial === false;
 
 export function useStockData({
   portfolio, setPortfolio,
@@ -148,15 +148,18 @@ export function useStockData({
   //    이력 패스는 맵을 스테이징에 모으므로(패스 정착 때 1회 커밋), 마커만 먼저 전진하면 그 사이 저장에서
   //    "마커는 최신인데 맵엔 없는" 파일이 박혀 다음 세션이 그 구간을 최대 30일 건너뛴다(pruneStockMeta 주석).
   //    비교종목 경로는 맵을 즉시 커밋하므로 defer 없이 그대로 쓴다.
-  const pendingMetaRef = useRef<Record<string, { at: string; lastDate: string }>>({});
+  // ⚠️ v는 항상 현재 세대(REAL_CLOSE_MARKER_VERSION)로 쓴다 — 호출부가 이미 isCompleteKisHistory(paged 응답)로
+  //    걸렀으므로 이 마커는 페이지 넘김 서버의 응답이 보증한다. v를 빼면 planKorHistoryFetch가 매 세션 전체 조회한다.
+  const pendingMetaRef = useRef<Record<string, { at: string; lastDate: string; v?: number }>>({});
   const markRealClose = (code: string, data: Record<string, number> | null | undefined, full: boolean, defer = false) => {
     const today = getTodayKST();
     const lastDate = markerLastDateOf(data, today, getKrSettledTodayDate());
     if (!lastDate) return;
     const prev = pendingMetaRef.current[code] || stockMetaRef.current[code];
     const at = full || !prev ? today : prev.at;
-    if (defer) pendingMetaRef.current = { ...pendingMetaRef.current, [code]: { at, lastDate } };
-    else stockMetaRef.current = { ...stockMetaRef.current, [code]: { at, lastDate } };
+    const v = REAL_CLOSE_MARKER_VERSION;
+    if (defer) pendingMetaRef.current = { ...pendingMetaRef.current, [code]: { at, lastDate, v } };
+    else stockMetaRef.current = { ...stockMetaRef.current, [code]: { at, lastDate, v } };
   };
 
   const extractFundCode = (input: string): string => {

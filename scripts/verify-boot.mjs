@@ -101,8 +101,9 @@ try {
 }
 if (SH) {
   const { normalizeStockMeta, mergeStockMeta, planKorHistoryFetch, markerLastDateOf, shiftIsoDays, daysBetweenIso,
-          pruneStockMeta, MARKER_FULL_REFRESH_DAYS, MIN_CACHED_KEYS_FOR_INCREMENTAL } = SH;
+          pruneStockMeta, MARKER_FULL_REFRESH_DAYS, MIN_CACHED_KEYS_FOR_INCREMENTAL, REAL_CLOSE_MARKER_VERSION } = SH;
   eq('#2 상수 — 전체 재조회 30일 · 증분 최소 캐시 키 3', [MARKER_FULL_REFRESH_DAYS, MIN_CACHED_KEYS_FOR_INCREMENTAL], [30, 3]);
+  eq('#2b 마커 세대 = 2(KIS 100건 상한 페이지 넘김 서버)', REAL_CLOSE_MARKER_VERSION, 2);
 
   // ── normalizeStockMeta ──
   eq('#3 meta 부재/손상은 빈 마커(미마이그로 강등)', [normalizeStockMeta(undefined), normalizeStockMeta(null), normalizeStockMeta('x'), normalizeStockMeta({ realClose: [] })].map(m => Object.keys(m.realClose).length), [0, 0, 0, 0]);
@@ -114,6 +115,13 @@ if (SH) {
     eq('#3c 정규화 멱등(+여분 필드 제거)', normalizeStockMeta(once), once);
     eq('#3c-2 여분 필드가 제거된다', Object.keys(once.realClose.A).sort(), ['at', 'lastDate']);
   }
+  {
+    const base = { at: '2026-09-01', lastDate: '2026-09-03' };
+    const n = normalizeStockMeta({ realClose: { A: { ...base, v: 2 }, B: { ...base, v: 0 }, C: { ...base, v: 1.5 }, D: { ...base, v: '2' }, E: { ...base, v: null } } }).realClose;
+    eq('#3d 세대 v는 양의 정수만 남기고 손상값은 버린다(= 구세대로 강등 → 전체 조회)',
+      [n.A.v, 'v' in n.B, 'v' in n.C, 'v' in n.D, 'v' in n.E], [2, false, false, false, false]);
+    eq('#3e v가 있는 마커도 정규화 멱등', normalizeStockMeta({ realClose: n }).realClose, n);
+  }
 
   // ── mergeStockMeta ──
   eq('#4 병합은 lastDate가 늦은 쪽(동률이면 at이 늦은 쪽) 채택 + 입력 불변',
@@ -122,6 +130,14 @@ if (SH) {
              const out = mergeStockMeta(base, inc);
              return [out.A.at, out.B.at, out.C.at, base.A.at, Object.keys(base).length]; })(),
     ['2026-08-01', '2026-08-03', '2026-08-05', '2026-08-01', 2]);
+  {
+    const v1 = { at: '2026-10-16', lastDate: '2026-10-15' };            // 같은 날 구서버로 세운 마커
+    const v2 = { at: '2026-10-16', lastDate: '2026-10-15', v: 2 };      // 방금 페이지 넘김 응답으로 세운 마커
+    eq('#4b 세대가 높은 마커가 이긴다 — 날짜가 같아도 v2가 v1을 대체하고, v1은 lastDate가 늦어도 v2를 밀어내지 못한다',
+      [mergeStockMeta({ A: v1 }, { A: v2 }).A.v, mergeStockMeta({ A: v2 }, { A: { at: '2026-10-17', lastDate: '2026-10-16' } }).A.v,
+       mergeStockMeta({ A: v2 }, { A: { ...v2, lastDate: '2026-10-16', at: '2026-10-17' } }).A.lastDate],
+      [2, 2, '2026-10-16']);
+  }
 
   // ── 날짜 산술 ──
   eq('#5 shiftIsoDays/daysBetweenIso — 월·연 경계', [shiftIsoDays('2026-01-01', -1), shiftIsoDays('2026-02-28', 1), daysBetweenIso('2026-08-01', '2026-09-01'), daysBetweenIso('2026-09-01', '2026-08-31')], ['2025-12-31', '2026-03-01', 31, -1]);
@@ -129,10 +145,11 @@ if (SH) {
   // ── planKorHistoryFetch ──
   const rich = (n = 10) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`2026-08-${String(i + 1).padStart(2, '0')}`, 100 + i]));
   const O = { force: false, todayKST: '2026-09-04', lastTradingDay: '2026-09-03' };
-  const fresh = { at: '2026-09-01', lastDate: '2026-09-03' };
-  const stale = { at: '2026-09-01', lastDate: '2026-08-29' };
-  const old = { at: '2026-08-01', lastDate: '2026-09-03' };       // at이 34일 전 → full
-  const edge = { at: '2026-08-05', lastDate: '2026-09-03' };      // 정확히 30일 → 아직 증분/skip
+  // 픽스처는 현재 세대(v: 2) 마커 — v가 없으면 구세대라 #6c·#6d가 전부 full로 바뀐다(#6j가 그 규칙을 따로 단언).
+  const fresh = { at: '2026-09-01', lastDate: '2026-09-03', v: 2 };
+  const stale = { at: '2026-09-01', lastDate: '2026-08-29', v: 2 };
+  const old = { at: '2026-08-01', lastDate: '2026-09-03', v: 2 };       // at이 34일 전 → full
+  const edge = { at: '2026-08-05', lastDate: '2026-09-03', v: 2 };      // 정확히 30일 → 아직 증분/skip
   eq('#6 마커 없음 = full', planKorHistoryFetch(['A'], { A: rich() }, {}, O), { full: ['A'], incremental: [], skip: [] });
   eq('#6b 캐시 키 ≤ 3이면 마커가 신선해도 full(단일 stamp 오판 방지)', planKorHistoryFetch(['A'], { A: rich(3) }, { A: fresh }, O).full, ['A']);
   eq('#6c 마커 신선(lastDate ≥ lastTradingDay) = skip', planKorHistoryFetch(['A'], { A: rich() }, { A: fresh }, O), { full: [], incremental: [], skip: ['A'] });
@@ -147,6 +164,15 @@ if (SH) {
     eq('#6h-2 분류', p, { full: ['C'], incremental: ['B'], skip: ['A', 'D'] });
   }
   eq('#6i map/meta가 null이어도 던지지 않는다', planKorHistoryFetch(['A'], null, null, O), { full: ['A'], incremental: [], skip: [] });
+  {
+    const v1 = { at: '2026-09-01', lastDate: '2026-09-03' };           // 페이지 넘김 이전 서버가 세운 마커
+    eq('#6j 구세대 마커(v 없음·v:1)는 신선해도 full — 2년 구간마다 앞쪽이 빠진 응답을 한 번 다시 받아 실제종가로 덮는다',
+      [planKorHistoryFetch(['A'], { A: rich() }, { A: v1 }, O).full, planKorHistoryFetch(['A'], { A: rich() }, { A: { ...v1, v: 1 } }, O).full,
+       planKorHistoryFetch(['A'], { A: rich() }, { A: { ...v1, v: 2 } }, O).skip],
+      [['A'], ['A'], ['A']]);
+    eq('#6j-2 정규화가 버린 손상 v도 구세대로 본다(full)',
+      planKorHistoryFetch(['A'], { A: rich() }, normalizeStockMeta({ realClose: { A: { ...v1, v: 'x' } } }).realClose, O).full, ['A']);
+  }
 
   // ── markerLastDateOf ──
   eq('#7 lastDate = 응답 최대 날짜 중 오늘 미만(장중 당일 행 제외)', markerLastDateOf({ '2026-09-02': 1, '2026-09-03': 1, '2026-09-04': 1 }, '2026-09-04', null), '2026-09-03');
@@ -159,8 +185,127 @@ if (SH) {
     eq('#7e 맵이 비면 전부 버린다 / meta가 비면 빈 객체', [pruneStockMeta(meta, {}), pruneStockMeta({}, map), pruneStockMeta(null, null)], [{}, {}, {}]);
     eq('#7f 손상 마커(lastDate 형식 불량)도 버린다', pruneStockMeta({ X: { at: '2026-09-01', lastDate: 'bad' } }, { X: { bad: 1 } }), {});
     eq('#7g 입력을 변형하지 않는다', [Object.keys(meta).length, Object.keys(map).length], [3, 2]);
+    eq('#7h 남는 마커의 세대 v는 그대로 저장된다(빠지면 다음 세션이 구세대로 보고 매번 전체 조회)',
+      pruneStockMeta({ A: { at: '2026-09-01', lastDate: '2026-09-03', v: 2 } }, map).A, { at: '2026-09-01', lastDate: '2026-09-03', v: 2 });
   }
   eq('#7c 미래 날짜·손상 키 무시, 채택할 날짜 없으면 null', [markerLastDateOf({ '2026-09-05': 1, 'bad': 1 }, '2026-09-04', null), markerLastDateOf({}, '2026-09-04', null), markerLastDateOf(null, '2026-09-04', null)], [null, null, null]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KIS 일별 시세 페이지 넘김(api/_kisDaily.ts 직접 import · 가짜 fetch).
+// 사고(2026-10-16): KIS FHKST03010100은 호출당 최대 100건(구간의 **최근** 100거래일)만 주는데 서버가 2년 구간을
+// 한 번씩만 불러 구간마다 앞쪽 ~390거래일을 버렸고(partial:false), 클라이언트가 그 빈 날짜를 fchart 수정종가로
+// 채웠다(480040 2026-05-14 실제 19,245 vs 차트 16,509). 가짜 KIS는 그 상한 동작을 그대로 흉내 낸다.
+console.log('\n── 파트① KIS 일별 시세 페이지 넘김 (api/_kisDaily.ts 직접 import) ──');
+let KD = null;
+try {
+  KD = await import(pathToFileURL(join(ROOT, 'api/_kisDaily.ts')).href);
+} catch (e) {
+  const unsupported = e && (e.code === 'ERR_UNKNOWN_FILE_EXTENSION' || /Unknown file extension/.test(String(e.message)));
+  if (unsupported) console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 이 파트를 건너뜁니다 (${e.code || e.message}).`);
+  else { fail++; console.log(`  ✗ api/_kisDaily.ts 를 import하지 못했습니다: ${e.message}`); }
+}
+if (KD) {
+  const { fetchKisDailyRange, prevYmd, KIS_DAILY_PAGE_CAP } = KD;
+  // 평일 거래일 생성(YYYYMMDD) — 휴장일은 무시해도 상한 동작 검증에는 충분하다.
+  const weekdays = (from, to) => {
+    const out = [];
+    const t = new Date(Date.UTC(+from.slice(0, 4), +from.slice(4, 6) - 1, +from.slice(6, 8)));
+    const end = Date.UTC(+to.slice(0, 4), +to.slice(4, 6) - 1, +to.slice(6, 8));
+    for (; t.getTime() <= end; t.setUTCDate(t.getUTCDate() + 1)) {
+      const w = t.getUTCDay();
+      if (w !== 0 && w !== 6) out.push(t.toISOString().slice(0, 10).replace(/-/g, ''));
+    }
+    return out;
+  };
+  const DAYS = weekdays('20240102', '20251231');
+  const priceOf = (d) => 10000 + (+d.slice(2)) % 997;
+  // 가짜 KIS: 구간 [D1, D2]의 최근 100거래일만(내림차순) 돌려준다. opts로 실패·이상 응답을 주입한다.
+  const fakeKis = (opts = {}) => {
+    const calls = [];
+    const f = async (url) => {
+      const q = new URL(url).searchParams;
+      const d1 = q.get('FID_INPUT_DATE_1'), d2 = q.get('FID_INPUT_DATE_2');
+      calls.push([d1, d2]);
+      if (opts.failWhen && opts.failWhen(d1, d2, calls.length)) return { ok: false, status: 500, json: async () => ({}) };
+      if (opts.rtFail) return { ok: true, status: 200, json: async () => ({ rt_cd: '1', msg1: 'EGW00201' }) };
+      const inRange = (opts.ignoreRange ? DAYS : DAYS.filter(d => d >= d1 && d <= d2)).slice().sort().reverse();
+      const page = inRange.slice(0, opts.cap ?? KIS_DAILY_PAGE_CAP).map(d => ({ stck_bsop_date: d, stck_clpr: String(opts.zeroOn?.has(d) ? 0 : priceOf(d)) }));
+      return { ok: true, status: 200, json: async () => ({ rt_cd: '0', output2: page }) };
+    };
+    return { f, calls };
+  };
+  const base = { code: '480040', token: 't', appKey: 'k', appSecret: 's', retryDelaysMs: [] };
+  const iso = (d) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  const expectAll = (from, to) => DAYS.filter(d => d >= from && d <= to).map(iso);
+  const silence = async (fn) => { const e = console.error; console.error = () => {}; try { return await fn(); } finally { console.error = e; } };
+
+  eq('#K0 prevYmd — 월·연·윤년 경계', [prevYmd('20260101'), prevYmd('20260301'), prevYmd('20240301'), prevYmd('20261016')], ['20251231', '20260228', '20240229', '20261015']);
+  {
+    const k = fakeKis();
+    const r = await fetchKisDailyRange({ ...base, dateFrom: '20240101', dateTo: '20251231', fetchImpl: k.f });
+    const want = expectAll('20240101', '20251231');
+    eq('#K1 2년 구간(≈520거래일)을 페이지로 넘겨 **전부** 받는다(옛 서버는 최근 100건뿐)',
+      [Object.keys(r.data).sort().length, Object.keys(r.data).sort()[0], r.ok, r.truncated], [want.length, want[0], true, false]);
+    // ⚠️ 옵셔널 체이닝 필수 — 페이지 넘김이 죽으면 calls[1]이 없어 스크립트가 통째로 죽고 결과가 '검출'로 위장된다.
+    eq('#K1b 페이지 수 = ⌈건수/100⌉, 두 번째 페이지 끝 = 첫 페이지 최초일의 하루 전', [r.pages, k.calls[1]?.[1]],
+      [Math.ceil(want.length / 100), prevYmd(DAYS.filter(d => d <= '20251231').slice(-100)[0])]);
+    eq('#K1c 값은 그 날짜의 실제 종가(덮어쓰기·누락 없음)', r.data['2024-05-14'], priceOf('20240514'));
+  }
+  {
+    const k = fakeKis();
+    const r = await fetchKisDailyRange({ ...base, maxPages: 1, dateFrom: '20240101', dateTo: '20251231', fetchImpl: k.f });
+    eq('#K2 (사고 재현) 한 번만 부르면 최근 100건뿐이다 — 상한에 걸려 멈췄으면 truncated로 드러난다',
+      [Object.keys(r.data).length, r.truncated, Object.keys(r.data).sort()[0] > '2025-01-01'], [100, true, true]);
+  }
+  {
+    const k = fakeKis();
+    const r = await fetchKisDailyRange({ ...base, dateFrom: '20251001', dateTo: '20251231', fetchImpl: k.f });
+    eq('#K3 100건 미만 구간은 1페이지로 끝난다', [r.pages, Object.keys(r.data).length, r.ok, r.truncated], [1, expectAll('20251001', '20251231').length, true, false]);
+  }
+  {
+    const want = DAYS.filter(d => d <= '20251231').slice(-100);   // 정확히 100거래일 구간
+    const k = fakeKis();
+    const r = await fetchKisDailyRange({ ...base, dateFrom: want[0], dateTo: '20251231', fetchImpl: k.f });
+    eq('#K4 정확히 100건이면 다음 페이지를 확인하고 구간 시작에서 멈춘다(누락 없음)',
+      [Object.keys(r.data).length, r.ok, r.truncated, r.pages <= 2], [100, true, false, true]);
+  }
+  {
+    const k = fakeKis({ failWhen: (d1, d2) => d2 < '20251231' });
+    const r = await silence(() => fetchKisDailyRange({ ...base, dateFrom: '20240101', dateTo: '20251231', fetchImpl: k.f }));
+    eq('#K5 둘째 페이지 실패 → ok=false(부분), 받은 첫 페이지는 남는다', [r.ok, Object.keys(r.data).length], [false, 100]);
+  }
+  {
+    const k = fakeKis({ failWhen: (d1, d2, n) => n === 1 });
+    const r = await silence(() => fetchKisDailyRange({ ...base, retryDelaysMs: [0], dateFrom: '20251001', dateTo: '20251231', fetchImpl: k.f }));
+    eq('#K6 실패 후 재시도 성공이면 ok=true(초당 한도 회복)', [r.ok, Object.keys(r.data).length, k.calls.length], [true, expectAll('20251001', '20251231').length, 2]);
+  }
+  {
+    const k = fakeKis({ rtFail: true });
+    const r = await silence(() => fetchKisDailyRange({ ...base, dateFrom: '20251001', dateTo: '20251231', fetchImpl: k.f }));
+    eq('#K7 rt_cd≠0(초당 한도 등)은 실패로 친다', [r.ok, Object.keys(r.data).length], [false, 0]);
+  }
+  {
+    const k = fakeKis();
+    const r = await fetchKisDailyRange({ ...base, deadlineAt: Date.now() - 1, dateFrom: '20240101', dateTo: '20251231', fetchImpl: k.f });
+    eq('#K8 시한이 지났으면 부르지 않고 truncated', [r.pages, r.truncated, k.calls.length], [0, true, 0]);
+  }
+  {
+    const k = fakeKis({ ignoreRange: true });
+    const r = await fetchKisDailyRange({ ...base, dateFrom: '20240101', dateTo: '20250630', fetchImpl: k.f });
+    eq('#K9 구간 끝을 무시하는 응답이면 같은 요청을 반복하지 않고 멈춘다(truncated)', [r.truncated, k.calls.length <= 2], [true, true]);
+  }
+  {
+    // 꽉 찬 페이지에 종가 0(거래정지) 행이 섞여도 '날짜가 있는 행 수'로 상한을 판정해 다음 페이지를 부른다.
+    const last100 = DAYS.filter(d => d <= '20251231').slice(-100);
+    const k = fakeKis({ zeroOn: new Set(last100.slice(0, 3)) });
+    const r = await fetchKisDailyRange({ ...base, dateFrom: '20250101', dateTo: '20251231', fetchImpl: k.f });
+    eq('#K10 종가 0 행이 있어도 꽉 찬 페이지면 앞쪽을 계속 받는다(0 종가는 저장하지 않음)',
+      [Object.keys(r.data).length, r.pages >= 2, r.data[iso(last100[0])]], [expectAll('20250101', '20251231').length - 3, true, undefined]);
+  }
+  eq('#K11 구간이 뒤집혔거나 날짜 형식이 틀리면 부르지 않는다',
+    [(await fetchKisDailyRange({ ...base, dateFrom: '20251231', dateTo: '20250101', fetchImpl: fakeKis().f })).pages,
+     (await fetchKisDailyRange({ ...base, dateFrom: '2025-01-01', dateTo: '20251231', fetchImpl: fakeKis().f })).pages], [0, 0]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -566,8 +711,8 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
   ok('G20 markRealClose는 defer 인자를 받고, defer면 pendingMetaRef에만 적재한다(비교종목 경로는 즉시)',
     mrcNew.length > 100
     && /markRealClose = \(code: string, data: Record<string, number> \| null \| undefined, full: boolean, defer = false\)/.test(mrcNew)
-    && /if \(defer\) pendingMetaRef\.current = \{ \.\.\.pendingMetaRef\.current, \[code\]: \{ at, lastDate \} \};/.test(mrcNew)
-    && /else stockMetaRef\.current = \{ \.\.\.stockMetaRef\.current, \[code\]: \{ at, lastDate \} \};/.test(mrcNew)
+    && /if \(defer\) pendingMetaRef\.current = \{ \.\.\.pendingMetaRef\.current, \[code\]: \{ at, lastDate, v \} \};/.test(mrcNew)
+    && /else stockMetaRef\.current = \{ \.\.\.stockMetaRef\.current, \[code\]: \{ at, lastDate, v \} \};/.test(mrcNew)
     && /const prev = pendingMetaRef\.current\[code\] \|\| stockMetaRef\.current\[code\];/.test(mrcNew));
   ok('G20b 비교종목 2경로는 defer 없이(맵을 즉시 커밋하므로) 마커를 바로 쓴다',
     count(sd, /markRealClose\(comp\.code, rKIS\.data, true\)/g) === 2);
@@ -685,6 +830,42 @@ console.log('\n── 파트⑧ 로드 실패·지연 세션의 쓰기 차단 (2
     count(emptyRow, /window\.location\.reload\(\)/g) === 2);
   ok("G29e '새 계좌'·'직접입력' 버튼이 데이터 확정 전 잠긴다",
     count(dash, /disabled=\{dataState !== 'ready'\}/g) === 2);
+
+  // ── G30 KIS 100건 상한 페이지 넘김 + 마커 세대(2026-10 사고: 2년 구간마다 앞쪽 누락 → fchart 수정종가 혼입) ──
+  {
+    const kd = read('api/_kisDaily.ts');
+    const shRoute = stripComments(read('api/stock-history.ts'));
+    const hiRoute = stripComments(read('api/history.ts'));
+    const sd = stripComments(read('src/hooks/useStockData.ts'));
+    const mrcNew = slice(sd, 'const markRealClose = (code', 'const extractFundCode');
+    ok('G30 api/_kisDaily.ts는 import 0건·process.env 미사용·enum/namespace 없음(검증이 직접 import한다)',
+      !/^import /m.test(kd) && !/process\.env/.test(stripComments(kd)) && !/\benum\b|\bnamespace\b/.test(stripComments(kd)));
+    ok('G30b stock-history 라우트는 구간을 fetchKisDailyRange로 받고, KIS 일별 시세를 직접 부르지 않는다(구간당 1회 호출 부활 차단)',
+      /import \{ fetchKisDailyRange \} from '\.\/_kisDaily\.js';/.test(shRoute)
+      && /batch\.map\(\(\{ from, to \}\) => fetchKisDailyRange\(\{/.test(shRoute)
+      && !/inquire-daily-itemchartprice|FHKST03010100/.test(shRoute));
+    ok('G30c stock-history 응답에 paged: true가 실린다(클라이언트 완전성 판정의 근거)',
+      /JSON\.stringify\(\{ data: result, source: 'KIS-OpenAPI', partial, truncated, failedChunks, paged: true, pages \}\)/.test(shRoute));
+    ok('G30d 실패·잘린 구간은 partial에 반영된다(!ok → failedChunks, truncated 전파)',
+      /if \(!ok\) failedChunks\+\+;/.test(shRoute) && /if \(cut\) truncated = true;/.test(shRoute)
+      && /const partial = truncated \|\| failedChunks > 0;/.test(shRoute));
+    ok('G30e 조기 중단은 가장 오래된 구간이 **정상 응답으로** 비었을 때만이다(실패·잘림은 상장 전으로 오인하지 않는다)',
+      /oldestEmpty = ok && !cut && Object\.keys\(data\)\.length === 0;/.test(shRoute));
+    ok('G30f history 라우트의 KIS 원주가 폴백도 fetchKisDailyRange를 쓰고 KIS 일별 시세를 직접 부르지 않는다',
+      /import \{ fetchKisDailyRange \} from '\.\/_kisDaily\.js';/.test(hiRoute)
+      && /const r = await fetchKisDailyRange\(\{/.test(slice(hiRoute, 'async function fetchKisDomesticActualHistory', 'export default async function handler'))
+      && !/inquire-daily-itemchartprice|FHKST03010100/.test(hiRoute));
+    ok('G30g fetchKISStockHistory 요청에 캐시 세대(gen)가 붙는다(같은 날 구버전 응답 캐시 회피)',
+      /asOf: kstDateCompact\(\), gen: KIS_HISTORY_CACHE_GEN \}/.test(stripComments(read('src/api.ts'))));
+    ok('G30h isCompleteKisHistory는 paged === true && partial === false일 때만 완전이다(건수 휴리스틱 폴백 없음)',
+      /const isCompleteKisHistory = \(res: \{ partial\?: boolean; paged\?: boolean \} \| null, _dateCount\?: number\) =>\s*!!res && res\.paged === true && res\.partial === false;/.test(sd)
+      && !/dateCount >= 100/.test(stripComments(sd)));
+    ok('G30i markRealClose는 마커에 현재 세대 v를 싣는다(빠지면 매 세션 전체 조회)',
+      /const v = REAL_CLOSE_MARKER_VERSION;/.test(mrcNew)
+      && /import \{[^}]*REAL_CLOSE_MARKER_VERSION[^}]*\} from '\.\.\/stockHistorySync';/.test(sd));
+    ok('G30j planKorHistoryFetch는 구세대 마커를 full로 보낸다(사용부)',
+      /if \(\(m\.v \|\| 1\) < REAL_CLOSE_MARKER_VERSION\) \{ plan\.full\.push\(code\); continue; \}/.test(read('src/stockHistorySync.ts')));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
