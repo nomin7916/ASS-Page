@@ -1,9 +1,10 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose, ExternalLink, Calendar } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose, ExternalLink, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import CustomDatePicker from './CustomDatePicker';
-import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
-import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
+import { generateId, formatNumber, formatChangeRate } from '../utils';
+import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday, fetchWatchDividend, fmtWatchPrice } from '../watchlistQuote';
+import { periodCutoff, watchPeriodWindow, windowRate, stockDetailUrl, stockChartUrl, stockChartWindowName, chartPeriodFromWatch } from '../watchlistChart';
 import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize, watchHighlightOf, nextWatchHighlight, toggleWatchHighlight, clearWatchHighlights } from '../watchlistGroups';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
@@ -11,15 +12,21 @@ import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWa
 // - z 1050 (dialog 1000 < 여기 < LoadingOverlay 1100)
 // - 타이틀 바만 드래그 핸들, window mousemove/touchmove 리스너로 이동, 뷰포트 클램프
 const WATCHLIST_Z = 1050;
-// 종목명 열은 고정폭 열(하이라이트 띠12+그립16+점6+미니차트56+등락율64+현재가96+삭제12+여백/gap 80 ≈ 340px)을 뺀 나머지라,
-// 폭이 좁으면 국내 ETF 풀네임(예: "KODEX 금융고배당TOP10타겟위클리커버드콜")이 대부분 잘린다.
-// 종목 리스트에 640px = 종목명 약 310px 확보 → 긴 ETF명도 한 줄에 그대로 보인다.
-// ⚠️ PANEL_W = 640(리스트) + SIDEBAR_W(그룹 사이드바). 사이드바를 넣으면서 폭을 안 늘리면 종목명이
-//    그만큼 쪼그라들어 위 640px의 존재 이유가 통째로 무너진다 — 둘은 한 세트다. (좁은 화면은 maxWidth로 클램프)
+// 현재가 오른쪽 '분배금·분배율' 열(사용자 요청 2026-10 — 기본 숨김, 클릭하면 펼침).
+// ⚠️ 접힌 상태에도 같은 폭(DIV_TOGGLE_W)의 칸을 헤더·행 **양쪽**에 둔다 — 한쪽만 있으면 현재가 열이 어긋난다.
+// ⚠️ 펼치면 그 폭만큼 기본 폭·최소 폭을 함께 늘린다(종목명 칸이 그만큼 쪼그라들지 않게 — PANEL_W와 같은 이유).
+const DIV_COL_W = 96;
+const DIV_TOGGLE_W = 24;
+// 종목명 열은 고정폭 열(하이라이트 띠12+그립16+점6+미니차트56+등락율64+현재가96+분배 접힘24+삭제12+여백/gap 80
+// ≈ 364px)을 뺀 나머지라, 폭이 좁으면 국내 ETF 풀네임(예: "KODEX 금융고배당TOP10타겟위클리커버드콜")이 대부분 잘린다.
+// 종목 리스트에 640px + 분배 접힘 칸 = 종목명 약 310px 확보 → 긴 ETF명도 한 줄에 그대로 보인다.
+// ⚠️ PANEL_W = 640(리스트) + DIV_TOGGLE_W(분배 접힘 칸) + SIDEBAR_W(그룹 사이드바). 칸을 넣으면서 폭을 안
+//    늘리면 종목명이 그만큼 쪼그라들어 위 640px의 존재 이유가 통째로 무너진다 — 셋은 한 세트다.
+//    (좁은 화면은 maxWidth로 클램프)
 const SIDEBAR_W = 180;
-const PANEL_W = 640 + SIDEBAR_W;
-// 크기 조절 하한 — 리스트 칸의 고정 열(그립·차트·등락율·현재가 ≈ 290px)이 겹치지 않는 최소 폭과
-// 기간 토글·리스트 몇 줄이 보이는 최소 높이. 사이드바를 펼치면 그 폭만큼 더 필요하다(minW 참조).
+const PANEL_W = 640 + DIV_TOGGLE_W + SIDEBAR_W;
+// 크기 조절 하한 — 리스트 칸의 고정 열(그립·차트·등락율·현재가·분배 접힘 ≈ 314px)이 겹치지 않는 최소 폭과
+// 기간 토글·리스트 몇 줄이 보이는 최소 높이. 사이드바·분배금 열을 펼치면 그 폭만큼 더 필요하다(minW 참조).
 const LIST_MIN_W = 320;
 const PANEL_MIN_H = 260;
 // 모서리·가장자리 손잡이(사용자 요청 2026-10 — 폴더 창처럼 끌어서 크기를 바꾼다).
@@ -46,11 +53,13 @@ const MAX_STOCKS = 100;          // 그룹당 종목 소프트 상한
 // verify:watchlist가 미러 없이 그 모듈을 직접 import해 검증하므로 여기서 손복제하지 말 것.
 const isAutoGroupOf = isAutoWatchGroup;
 
-const fmtPrice = (market, price) => {
-  if (market === 'us') return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (market === 'fund') return formatFundPrice(price);
-  return formatNumber(price);
-};
+// 가격 표기는 종목 차트 창과 **공유**한다(watchlistQuote.fmtWatchPrice) — 두 화면에서 같은 종목이 다르게 찍히지 않게.
+const fmtPrice = fmtWatchPrice;
+// 분배금 표기 — 해외는 센트 이하 분배(예 $0.341)가 흔해 소수 4자리까지 보인다.
+const fmtDivAmount = (market, v) => (market === 'us'
+  ? '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+  : formatNumber(v));
+const fmtDivRate = (r) => (r != null && Number.isFinite(r) ? `${r.toFixed(2)}%` : '-');
 // '1일' 기준가(전일 종가)는 등락률에서 역산한 **실수**라 그대로 두면 국내 종목이 '11,249.061'처럼 찍힌다
 // (formatNumber = Intl 기본 소수 3자리). 시장의 표시 정밀도로 먼저 맞춘다 — 국내는 호가가 정수다.
 // ⚠️ fmtPrice(공용 포매터)를 고쳐서 해결하지 말 것: 현재가 등 다른 호출부의 표기까지 바뀐다.
@@ -76,27 +85,12 @@ const todayKST = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/
 //    **같은 데이터인데 시각에 따라 등락율·정렬 순서·툴팁 기준일이 달라진다**(등락율이 이 창에서
 //    파생되기 시작한 2026-08부터는 차트 외관이 아니라 화면 숫자가 흔들린다).
 //    시프트도 UTC 메서드로 해야 뷰어 로컬 타임존이 결과를 흔들지 않는다.
-const cutoffFor = (period) => {
-  const [y, m, dd] = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' }).split('-').map(Number);
-  const d = new Date(Date.UTC(y, m - 1, dd));
-  if (period === '1주') d.setUTCDate(d.getUTCDate() - 7);
-  else if (period === '1개월') d.setUTCMonth(d.getUTCMonth() - 1);
-  else if (period === '3개월') d.setUTCMonth(d.getUTCMonth() - 3);
-  else if (period === '1년') d.setUTCFullYear(d.getUTCFullYear() - 1);
-  else return '';
-  return d.toISOString().split('T')[0];
-};
+// ⚠️ 산술은 watchlistChart.periodCutoff가 정본 — 종목 차트 창이 같은 함수를 써서 팝업 등락율과
+//    차트 창의 '기간 수익률'이 같은 시작일을 쓴다(손복제하면 같은 기간에 두 화면의 %가 갈린다).
+const cutoffFor = (period) => periodCutoff(period, todayKST());
 
-// 등락율 클릭 시 여는 종목 상세페이지 URL (PortfolioTable과 동일 규칙)
-const detailUrl = (market, code) => {
-  if (market === 'fund') {
-    return /^MA:/i.test(code)
-      ? `https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=${code.replace(/^MA:/i, '')}`
-      : `https://www.funetf.co.kr/product/fund/view/${code}`;
-  }
-  if (market === 'us') return `https://finance.yahoo.com/quote/${code.toUpperCase()}`;
-  return `https://m.stock.naver.com/domestic/stock/${code.toUpperCase()}/total`;
-};
+// 등락율 클릭 시 여는 종목 상세페이지 URL (PortfolioTable과 동일 규칙 — 차트 창과 공유)
+const detailUrl = stockDetailUrl;
 
 // 최근 종가 미니 라인차트(인라인 SVG — 행마다 recharts 컨테이너를 쓰지 않아 가벼움).
 // 상승 red / 하락 blue (한국식). 데이터 2점 미만이면 빈칸.
@@ -171,6 +165,13 @@ export default function WatchlistPopup({
   const [codeInput, setCodeInput] = useState('');
   const [dailyMap, setDailyMap] = useState({});       // { [code]: [date, close][] } 일별 종가(팝업 로컬 — Drive 저장 안 함)
   const [intradayMap, setIntradayMap] = useState({}); // { [code]: number[] } 오늘 인트라데이(1일)
+  // 최근 분배금 — { [code]: 결과 | null(조회 실패) }. 팝업 로컬(메모리 전용 — Drive·계좌 dividendHistory에 쓰지 않는다).
+  const [divMap, setDivMap] = useState({});
+  const [divLoading, setDivLoading] = useState({});  // { [code]: true } 조회 중
+  const loadedDivRef = useRef(new Set());            // 분배금 조회 완료/진행 코드:market
+  // 종목 차트 창 — 종목마다 하나. 같은 종목을 다시 누르면 새로 열지 않고 그 창을 앞으로(추가한 비교 종목 보존).
+  const chartWinsRef = useRef({});
+  const [chartBlocked, setChartBlocked] = useState(false);
   // ── 보기 상태: 기간(period) · 직접 선택 시작일/종료일('' = 현재까지 실시간) · 등락율 정렬(null|'desc'|'asc') ──
   // ⚠️ 네 값을 **한 객체**로 다룬다. 따로 setState하면 한 클릭에서 두 값을 바꿀 때(📅 기간 = 시작일 채우기 +
   //    기간 전환) 제어 모드에서 뒤 호출이 앞 호출을 낡은 값 위에 덮어 시작일이 사라진다.
@@ -191,7 +192,7 @@ export default function WatchlistPopup({
     if (viewControlled) onViewChange(next);
     else setLocalView(next);
   }, [viewControlled, onViewChange]);
-  const { period, customStart, customEnd, sortDir } = curView;
+  const { period, customStart, customEnd, sortDir, showDiv } = curView;
 
   // ── 팝업 크기 — 모서리·가장자리를 끌어 폭·높이를 바꾼다(인앱 팝업 전용) ──
   // ⚠️ 끄는 동안의 크기는 **로컬(liveRect)에만** 두고 손을 놓을 때 한 번만 저장한다 — 포인터가 움직일
@@ -212,7 +213,9 @@ export default function WatchlistPopup({
     else setLocalSize(next);
   }, [sizeControlled, onSizeChange]);
   // 표시 최소 폭 — 사이드바를 펼치면 그 폭만큼 더 필요하다(저장값이 그보다 좁으면 표시할 때 넓힌다).
-  const minW = sidebarOpen ? SIDEBAR_W + LIST_MIN_W : LIST_MIN_W + 32;
+  // 분배금 열을 펼치면 그 열 폭만큼 더(고정 열이 겹치지 않게).
+  const divExtraW = showDiv ? DIV_COL_W : 0;
+  const minW = (sidebarOpen ? SIDEBAR_W + LIST_MIN_W : LIST_MIN_W + 32) + divExtraW;
   const [liveRect, setLiveRect] = useState(null);   // 끄는 중의 { x, y, w, h, dir }
   const liveRectRef = useRef(null);
   const resizeRef = useRef(null);                   // 시작 시점 { dir, sx, sy, x, y, w, h, minW, minH, moved }
@@ -379,6 +382,19 @@ export default function WatchlistPopup({
     if (pts && pts.length >= 2) setIntradayMap((p) => ({ ...p, [stock.code]: pts }));
     else loadedIntradayRef.current.delete(key);
   };
+  // 최근 분배금 — 분배금 열을 펼쳤을 때만 조회한다(접힌 동안 네트워크를 쓰지 않는다).
+  // force = 행 새로고침·시장 보정 — 캐시를 무시하고 다시 받는다.
+  const loadDividend = async (stock, force = false) => {
+    const key = stock.code + ':' + stock.market;
+    if (!force && loadedDivRef.current.has(key)) return;
+    loadedDivRef.current.add(key);
+    setDivLoading((p) => ({ ...p, [stock.code]: true }));
+    const r = await fetchWatchDividend(stock.market, stock.code);
+    setDivLoading((p) => { const n = { ...p }; delete n[stock.code]; return n; });
+    // 실패(null)도 '조회 완료'로 남긴다 — 안 그러면 '…'(조회 중)에서 못 벗어난다. 재시도는 허용.
+    setDivMap((p) => ({ ...p, [stock.code]: r }));
+    if (!r) loadedDivRef.current.delete(key);
+  };
 
   // 한 행 통째 새로고침(현재가 셀 클릭) — 시세 + 일별 종가 + (1일 탭이면) 인트라데이.
   // ⚠️ 캐시 ref를 먼저 비우고 재조회하는 것이 핵심. 등락율이 기간 시계열에서 파생되면서
@@ -394,6 +410,7 @@ export default function WatchlistPopup({
       loadedIntradayRef.current.delete(key);
       loadIntraday(stock);
     }
+    if (showDiv) loadDividend(stock, true);
   };
 
   // 팝업 열 때 + 그룹 전환 시 활성 그룹 종목만 조회(전체 그룹 동시 조회 금지)
@@ -413,6 +430,12 @@ export default function WatchlistPopup({
     if (!open || !activeGroup || period !== '1일') return;
     (activeGroup.stocks || []).forEach((s) => loadIntraday(s));
   }, [open, activeGroup?.id, period]);
+
+  // 분배금 열을 펼쳤으면(펼침/그룹 전환/열림) 활성 그룹 종목의 최근 분배금 조회
+  useEffect(() => {
+    if (!open || !activeGroup || !showDiv) return;
+    (activeGroup.stocks || []).forEach((s) => loadDividend(s));
+  }, [open, activeGroup?.id, showDiv]);
 
   // 활성 그룹 미지정 시 첫 그룹으로 고정 — recordRecent가 최근조회를 앞으로 재정렬해도 뷰가 튀지 않게
   useEffect(() => {
@@ -458,6 +481,7 @@ export default function WatchlistPopup({
     loadQuote(stock);
     loadDaily(stock, period === CUSTOM ? customStart : '');
     if (period === '1일') loadIntraday(stock);
+    if (showDiv) loadDividend(stock);
   };
   const removeStock = (stockId) => {
     if (!activeGroup) return;
@@ -473,6 +497,7 @@ export default function WatchlistPopup({
     loadQuote({ ...stock, market });
     loadDaily({ ...stock, market }, period === CUSTOM ? customStart : '');
     if (period === '1일') loadIntraday({ ...stock, market });
+    if (showDiv) loadDividend({ ...stock, market }, true);
   };
 
   // 상세페이지를 연 종목을 '최근조회' 자동 그룹에 기록(최근 우선, 코드 dedup, RECENT_CAP 상한).
@@ -499,6 +524,30 @@ export default function WatchlistPopup({
     window.open(detailUrl(s.market, s.code), '_blank');
     recordRecent({ ...s, name: q?.name || s.name || '' });
   };
+
+  // 미니차트 클릭 = 종목 비교 차트 **별도 브라우저 창**(`/?stockChartWindow=1`, 사용자 요청 2026-10).
+  // - 창은 App을 마운트하지 않고 시세를 스스로 조회한다(쓰기 0 — 브릿지가 없다).
+  // - 종목마다 창 하나: 이미 열려 있으면 다시 열지 않고 앞으로만(그 창에서 추가한 비교 종목 보존).
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다. features 인자는 주지 않는다
+  //    (크롬이 '팝업'으로 열어 주소창이 사라진다 — 관심종목 창과 같은 규약).
+  const openChartWindow = (s, q) => {
+    if (!s?.code) return;
+    const name = stockChartWindowName(s.code);
+    const existing = chartWinsRef.current[name];
+    if (existing && !existing.closed) { try { existing.focus(); } catch {} return; }
+    const w = window.open(stockChartUrl({
+      code: s.code, market: s.market, name: q?.name || s.name || '',
+      period: chartPeriodFromWatch(period), customStart, customEnd,
+    }), name);
+    // 차단되면 그 사실을 이 패널 안에 알린다(z-1050이라 토스트가 가려진다 — 인라인이 유일한 피드백).
+    if (!w) { setChartBlocked(true); return; }
+    chartWinsRef.current[name] = w;
+    setChartBlocked(false);
+    try { w.focus(); } catch {}
+  };
+
+  // 분배금 열 펼치기/접기 — 보기 상태(chartPrefs.watchlistView.showDiv)로 저장돼 다음에 열어도 그대로다.
+  const toggleDiv = () => patchView((v) => ({ showDiv: !v.showDiv }));
 
   // 등락율 정렬 토글: 원래순서 → 내림차순 → 오름차순 → 원래순서
   const cycleSort = () => patchView((v) => ({ sortDir: v.sortDir === null ? 'desc' : v.sortDir === 'desc' ? 'asc' : null }));
@@ -542,33 +591,20 @@ export default function WatchlistPopup({
         };
         continue;
       }
-      const daily = dailyMap[s.code] || [];
-      let win;
-      let liveTail = false;
-      if (period === CUSTOM) {
-        // 시작일 미지정이면 구간 없음(null 계약 — 0.00%로 단언하지 않는다)
-        win = customStart ? daily.filter(([dt]) => dt >= customStart && (!customEnd || dt <= customEnd)) : [];
-        // 종료일을 비우면 '현재까지' — 마지막 점을 실시간 현재가로 둔다(오늘 일봉이 있으면 대체, 없으면 덧붙임).
-        // 시작 종가가 하나도 없으면 현재가만으로 구간을 만들지 않는다.
-        const livePx = q ? Number(q.price) : 0;
-        if (!customEnd && win.length && livePx > 0) {
-          const today = todayKST();
-          const lastD = win[win.length - 1][0];
-          win = lastD >= today ? [...win.slice(0, -1), [lastD, livePx]] : [...win, [today, livePx]];
-          liveTail = true;
-        }
-      } else {
-        win = cut ? daily.filter(([dt]) => dt >= cut) : daily;
-      }
-      const first = win[0];
-      const last = win[win.length - 1];
-      // ⚠️ 등락율과 기준가는 **같은 게이트**를 쓴다 — 갈리면 화면에 분모 없는 %(또는 %없는 분모)가 떠서
-      //    사용자가 검산할 수 없다(이 두 번째 줄의 존재 이유가 검산이다).
-      const ok = win.length >= 2 && first[1] > 0;
+      // 구간 자르기·등락율은 watchlistChart의 공용 함수 — 종목 차트 창이 **같은 함수**로 '기간 수익률'을 내므로
+      // 팝업 등락율과 차트 창 숫자가 같은 기간에서 한 글자도 다르지 않다(손복제 금지).
+      // - 직접 선택: 시작일 미지정이면 구간 없음(null 계약), 종료일을 비우면 마지막 점 = 실시간 현재가.
+      const { win, liveTail } = watchPeriodWindow(dailyMap[s.code], {
+        period, cutoff: cut, customStart, customEnd, livePrice: q ? Number(q.price) : 0, today: todayKST(),
+      });
+      // ⚠️ 등락율과 기준가는 **같은 게이트**를 쓴다(windowRate가 rate를 낸 경우에만 base) — 갈리면 화면에
+      //    분모 없는 %(또는 %없는 분모)가 떠서 사용자가 검산할 수 없다(이 두 번째 줄의 존재 이유가 검산이다).
+      const { rate, first, last } = windowRate(win);
+      const ok = rate != null;
       out[s.code] = {
         points: win.map(([, c]) => c),
         // 2점 미만이면 '데이터 부족' → null. 0.00%로 단언하지 않는다(변동 없음과 구분 불가해짐).
-        rate: ok ? (last[1] / first[1] - 1) * 100 : null,
+        rate,
         from: first || null,
         to: last || null,
         // 기준가 = 등락율의 분모(구간 첫 종가)와 **같은 값**. 화면의 %를 그대로 검산할 수 있다.
@@ -620,6 +656,35 @@ export default function WatchlistPopup({
       : period === CUSTOM
         ? `${periodLabel} 등락율 기준가 · ${b.date} 종가 ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(시작일이 휴장일이거나 상장 전이면 그 뒤 첫 거래일을 기준으로 합니다)\n${REFRESH_HINT}`
         : `${period} 등락율 기준가 · ${b.date} 종가 ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(휴장·상장일 때문에 정확히 ${period} 전이 아닐 수 있어 실제 기준일을 표시합니다)\n${REFRESH_HINT}`;
+  };
+
+  // 분배금 칸 표시 — 상태 6종(조회 중 · 최근 1회 · 연간 · 기록 없음 · 펀드 미지원 · 조회 실패)을 뭉뚱그리지 않는다.
+  // ⚠️ 분배율 색은 빨강/파랑을 쓰지 않는다(옆 칸 등락율의 상승/하락 색과 혼동된다).
+  const divView = (s) => {
+    const key = s.code;
+    const d = divMap[key];
+    const nm = quotes[key]?.name || s.name || s.code;
+    const retry = '클릭하면 다시 조회';
+    if (divLoading[key] || !(key in divMap)) return { line1: '…', line2: '', title: `${nm} — 분배금 조회 중`, muted: true };
+    if (!d) return { line1: '-', line2: '조회 실패', title: `${nm} — 분배금을 불러오지 못했습니다. ${retry}`, muted: true, fail: true };
+    if (d.status === 'unsupported') return { line1: '-', line2: '', title: `${nm} — 펀드는 분배 이력을 조회할 수 없습니다`, muted: true };
+    if (d.status !== 'ok') return { line1: '없음', line2: '', title: `${nm} — 분배 기록이 없습니다. ${retry}`, muted: true };
+    if (d.kind === 'annual') {
+      return {
+        line1: fmtDivAmount(s.market, d.amount),
+        line2: `연 ${fmtDivRate(d.rate)}`,
+        title: `${nm} — 연간 주당배당금 ${fmtDivAmount(s.market, d.amount)} · 배당수익률 ${fmtDivRate(d.rate)}\n(일반 주식은 회차별 분배 이력이 없어 네이버 종목 요약의 연간 값을 표시합니다)\n${retry}`,
+      };
+    }
+    const basis = d.rateBasis === 'close'
+      ? '분배율 = 그 회차 분배금 ÷ 배당락 직전 거래일 종가'
+      : '분배율 = 그 회차 분배율(네이버 표기 — 배당락 무렵 주가 대비)';
+    const recent = (d.recent || []).map((r) => `${fmtBaseDate(r.exDate)} ${fmtDivAmount(s.market, r.amount)} (${fmtDivRate(r.rate)})`).join(' · ');
+    return {
+      line1: fmtDivAmount(s.market, d.amount),
+      line2: `${fmtDivRate(d.rate)} · ${fmtBaseDate(d.exDate)}`,
+      title: `${nm} — 최근 분배(배당락 ${d.exDate}) 분배금 ${fmtDivAmount(s.market, d.amount)} · 분배율 ${fmtDivRate(d.rate)}\n${basis} · 연환산 아님\n최근 ${(d.recent || []).length}회: ${recent}\n${retry}`,
+    };
   };
 
   // 정렬 적용된 표시 목록 (등락율 없는 종목은 원래순서로 뒤에)
@@ -762,7 +827,8 @@ export default function WatchlistPopup({
   // 표시 크기 — 끄는 중이면 그 값, 아니면 저장값(없으면 기본). 끄지 않는 축은 저장값(자동이면 내용에 맞춤).
   // ⚠️ CSS 상한(maxWidth/maxHeight)은 `resizeWatchRect`의 화면 여백과 같은 값이다 — 다르면 놓는 순간 크기가 튄다.
   const liveV = !!liveRect && /[ns]/.test(liveRect.dir);
-  const dispW = liveRect ? liveRect.w : Math.max(minW, curSize?.w ?? PANEL_W);
+  // 기본 폭(저장값 없음)은 분배금 열을 펼치면 그 폭만큼 넓어진다 — 종목명 칸 폭(PANEL_W의 존재 이유)을 지킨다.
+  const dispW = liveRect ? liveRect.w : Math.max(minW, curSize?.w ?? PANEL_W + divExtraW);
   const dispH = liveV ? liveRect.h : (curSize?.h ?? null);
   const panelLeft = liveRect ? liveRect.x : pos.x;
   const panelTop = liveRect ? liveRect.y : pos.y;
@@ -819,6 +885,12 @@ export default function WatchlistPopup({
       {notice && (
         <div className="px-3 py-1.5 text-[11px] text-amber-300 bg-amber-500/10 border-b border-amber-500/20 shrink-0">
           {notice}
+        </div>
+      )}
+      {chartBlocked && (
+        <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] text-amber-300 bg-amber-500/10 border-b border-amber-500/20 shrink-0">
+          <span className="flex-1">팝업이 차단돼 차트 창을 열지 못했습니다 — 주소창에서 팝업을 허용한 뒤 미니차트를 다시 누르세요.</span>
+          <button onClick={() => setChartBlocked(false)} title="닫기" className="shrink-0 text-amber-300/70 hover:text-amber-100"><X size={12} /></button>
         </div>
       )}
 
@@ -1118,8 +1190,9 @@ export default function WatchlistPopup({
               <div className="text-center text-gray-600 text-xs py-8">코드를 입력해 종목을 추가하세요.</div>
             ) : (
               <div className={`flex flex-col ${dragId != null ? 'select-none' : ''}`} ref={listRef}>
-                {/* 정렬 헤더 (종목 2개 이상일 때 — 등락율 클릭으로 오름/내림 토글) */}
-                {activeStocks.length >= 2 && (
+                {/* 열 헤더 — 등락율 클릭 = 정렬 토글(2개 이상일 때 의미), 분배 = 분배금 열 펼치기/접기.
+                    분배금 열 토글이 여기 있으므로 종목이 1개여도 헤더를 그린다. */}
+                {activeStocks.length >= 1 && (
                   <div className="flex items-center gap-2 pl-3 pr-1 py-1 border-b border-gray-700/60 text-[10px] text-gray-500 select-none">
                     {canReorder && <span className="w-4 shrink-0" />}
                     <span className="w-1.5 shrink-0" />
@@ -1139,6 +1212,32 @@ export default function WatchlistPopup({
                         달라졌다. shrink를 허용하면 좁은 화면에서 두 칸이 서로 다른 폭으로 줄어 열이 어긋난다
                         (등락율 칸이 w-16 shrink-0인 것과 같은 이유). 폭을 바꿀 땐 행의 현재가 셀도 같이 바꿀 것. */}
                     <span className="w-24 shrink-0 text-right">현재가</span>
+                    {/* 분배금·분배율 열 — 기본 숨김. 접힌 칸(DIV_TOGGLE_W)을 누르면 펼치고, 펼친 머리글을 누르면 접는다.
+                        ⚠️ 행에도 **같은 폭**의 칸이 있어야 한다(현재가 열 정렬) — 폭은 상수에서만 읽는다. */}
+                    {showDiv ? (
+                      <button
+                        onClick={toggleDiv}
+                        title="분배금 열 접기 — 최근 1회 분배금과 그 회차 분배율(일반 주식은 연간 주당배당금·배당수익률)"
+                        className="shrink-0 text-right cursor-pointer transition-colors hover:text-gray-300 leading-tight flex items-center justify-end gap-0.5"
+                        style={{ width: DIV_COL_W }}
+                      >
+                        <ChevronRight size={10} className="text-gray-600 shrink-0" />
+                        <span>
+                          <span className="block">분배금</span>
+                          <span className="block text-[9px] text-teal-400/70 whitespace-nowrap">분배율 · 배당락</span>
+                        </span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={toggleDiv}
+                        title="분배금·분배율 보기 — 가장 최근 분배일의 분배금과 분배율을 펼칩니다"
+                        className="shrink-0 flex flex-col items-center justify-center leading-none text-gray-500 hover:text-teal-300 transition-colors cursor-pointer"
+                        style={{ width: DIV_TOGGLE_W }}
+                      >
+                        <span className="text-[9px]">분배</span>
+                        <ChevronLeft size={10} />
+                      </button>
+                    )}
                     <span className="w-3 shrink-0" />
                   </div>
                 )}
@@ -1202,7 +1301,14 @@ export default function WatchlistPopup({
                             <span className="text-gray-600">· {MARKET_LABEL[s.market] || s.market}</span>
                           </div>
                         </div>
-                        <Sparkline points={v.points || []} rate={v.rate} />
+                        {/* 미니차트 클릭 = 이 종목의 비교 차트를 별도 브라우저 창으로(시세 반영 수익률 차트) */}
+                        <button
+                          onClick={() => openChartWindow(s, q)}
+                          title={`${q?.name || s.name || s.code} — 클릭하면 종목 비교 차트를 새 창으로 엽니다`}
+                          className="shrink-0 rounded cursor-pointer hover:bg-white/[0.07] hover:ring-1 hover:ring-gray-600 transition"
+                        >
+                          <Sparkline points={v.points || []} rate={v.rate} />
+                        </button>
                         <button
                           onClick={() => viewStock(s, q)}
                           title={rateTitle(s, v)}
@@ -1230,6 +1336,33 @@ export default function WatchlistPopup({
                             </span>
                           )}
                         </button>
+                        {/* 분배금·분배율 — 접혀 있으면 헤더와 같은 폭의 펼치기 칸, 펼치면 최근 1회 분배(클릭 = 다시 조회) */}
+                        {showDiv ? (() => {
+                          const dv = divView(s);
+                          return (
+                            <button
+                              onClick={() => loadDividend(s, true)}
+                              title={dv.title}
+                              className="shrink-0 text-right leading-tight cursor-pointer hover:brightness-125 transition"
+                              style={{ width: DIV_COL_W }}
+                            >
+                              <span className={`block text-[12px] tabular-nums whitespace-nowrap ${dv.muted ? 'text-gray-600' : 'text-gray-200'}`}>{dv.line1}</span>
+                              {dv.line2 && (
+                                <span className={`block text-[9px] tabular-nums whitespace-nowrap ${dv.fail ? 'text-red-400/80' : dv.muted ? 'text-gray-600' : 'text-teal-300/90'}`}>{dv.line2}</span>
+                              )}
+                            </button>
+                          );
+                        })() : (
+                          <button
+                            onClick={toggleDiv}
+                            title="분배금·분배율 보기"
+                            aria-label="분배금·분배율 보기"
+                            className="shrink-0 self-stretch flex items-center justify-center text-gray-700 opacity-0 group-hover:opacity-100 hover:text-teal-300 transition"
+                            style={{ width: DIV_TOGGLE_W }}
+                          >
+                            <ChevronLeft size={11} />
+                          </button>
+                        )}
                         {!readOnly && (
                           <button
                             onClick={() => removeStock(s.id)}

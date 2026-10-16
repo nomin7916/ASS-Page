@@ -5,6 +5,8 @@ import {
   fetchStockInfo, fetchUsStockInfo, fetchFundInfo, fetchMiraeFundInfo,
   fetchNaverStockHistory, fetchUsStockHistory, fetchFundNavHistory, fetchMiraeFundNavHistory,
 } from './api';
+import { pickNaverDividend, pickNaverAnnualDividend, pickYahooDividend } from './watchlistChart';
+import { formatNumber, formatFundPrice } from './utils';
 
 export type WatchMarket = 'kr' | 'us' | 'fund';
 
@@ -24,6 +26,13 @@ export function detectMarket(raw: string): WatchMarket {
   if (/^[A-Za-z0-9]{5,}$/.test(code)) return 'fund';
   return 'us';
 }
+
+// 시장별 가격 표기 — 관심종목 팝업과 종목 차트 창이 **공유**한다(같은 종목이 두 화면에서 다르게 찍히지 않게).
+export const fmtWatchPrice = (market: string, price: any): string => {
+  if (market === 'us') return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (market === 'fund') return formatFundPrice(price);
+  return formatNumber(price);
+};
 
 // 코드 → { name, price, changeRate } | null. 실패(모든 프록시 실패/미확인 코드) 시 null.
 export async function fetchWatchQuote(market: WatchMarket, code: string):
@@ -172,4 +181,54 @@ async function fetchNaverIntraday(code: string): Promise<number[] | null> {
     } catch { /* next proxy */ }
   }
   return null;
+}
+
+// ── 최근 분배금(관심종목 '분배금' 열) ─────────────────────────────────────────
+// 결과: { status:'ok', kind:'last'|'annual', amount, exDate, rate, rateBasis, recent[] }
+//     | { status:'none' }        — 응답은 정상인데 분배 기록이 없다
+//     | { status:'unsupported' } — 펀드(분배 이력 API 없음)
+//     | null                     — 모든 경로가 실패(다시 조회할 수 있다)
+// ⚠️ 결과는 관심종목 팝업 로컬 상태에만 둔다 — 계좌의 dividendHistory에 쓰지 말 것(보유하지 않은
+//    종목이 분배금 현황 표에 유령 행으로 새어 나온다. backtestFetch와 같은 규약).
+const proxyUrls = (u: string): string[] => [
+  `/api/proxy?url=${encodeURIComponent(u)}`,
+  `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+];
+
+// 프록시를 차례로 시도해 pick 결과가 null이 아닌 첫 응답을 돌려준다(전부 실패면 null).
+async function firstPicked(url: string, pick: (j: any) => any, timeoutMs = 9000): Promise<any> {
+  for (const p of proxyUrls(url)) {
+    try {
+      const res = await fetch(p, { signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) continue;
+      const picked = pick(await res.json());
+      if (picked) return picked;
+    } catch { /* next proxy */ }
+  }
+  return null;
+}
+
+export async function fetchWatchDividend(market: WatchMarket, code: string): Promise<any> {
+  const c = (code || '').trim();
+  if (!c) return null;
+  if (market === 'fund') return { status: 'unsupported' };
+  try {
+    if (market === 'us') {
+      const t = c.toUpperCase();
+      const base = t.includes('.') ? t.split('.')[0] : t;
+      return await firstPicked(`https://query1.finance.yahoo.com/v8/finance/chart/${base}?events=div&interval=1d&range=2y`, pickYahooDividend, 10000);
+    }
+    const k = c.toUpperCase();
+    // ① ETF 분배 이력(월·분기 분배 — 최근 1회분과 그 회차 분배율)
+    const etf = await firstPicked(`https://m.stock.naver.com/api/etf/${k}/dividend/history?page=1&pageSize=12&firstPageSize=12`, pickNaverDividend);
+    if (etf?.status === 'ok') return etf;
+    // ② 일반 주식은 ①이 빈 배열이다 — 종목 요약의 연간 주당배당금·배당수익률로 보완한다.
+    const annual = await firstPicked(`https://m.stock.naver.com/api/stock/${k}/integration`, pickNaverAnnualDividend);
+    if (annual?.status === 'ok') return annual;
+    if (etf?.status === 'none' || annual?.status === 'none') return { status: 'none' };
+    return null;
+  } catch {
+    return null;
+  }
 }

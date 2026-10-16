@@ -8,6 +8,7 @@ import BacktestWindow from './components/BacktestWindow.tsx'
 import CardWindow from './components/CardWindow.tsx'
 import LedgerWindow from './components/LedgerWindow.tsx'
 import WatchlistWindow from './components/WatchlistWindow.tsx'
+import StockChartWindow from './components/StockChartWindow.tsx'
 import ErrorBoundary from './components/ErrorBoundary.tsx'
 
 // 메모 달력 별도 창(`/?calendarWindow=1`)은 **App을 마운트하지 않는다** — 앱을 통째로 부팅하면
@@ -26,6 +27,9 @@ const CARD_WINDOW_BOOT = _params.get('cardWindow') === '1'
 const LEDGER_WINDOW_BOOT = _params.get('ledgerWindow') === '1'
 // 관심종목 별도 창(`/?watchlistWindow=1`)도 같은 규약 — App을 마운트하지 않는다.
 const WATCHLIST_WINDOW_BOOT = _params.get('watchlistWindow') === '1'
+// 종목 비교 차트 창(`/?stockChartWindow=1&code=…`, 관심종목 미니차트 클릭)도 같은 규약 — App을 마운트하지 않는다.
+// 이 창은 시세를 스스로 조회하고 아무것도 저장하지 않는다(브릿지 없음).
+const STOCK_CHART_WINDOW_BOOT = _params.get('stockChartWindow') === '1'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -36,6 +40,7 @@ createRoot(document.getElementById('root')!).render(
         : CARD_WINDOW_BOOT ? <CardWindow />
         : LEDGER_WINDOW_BOOT ? <LedgerWindow />
         : WATCHLIST_WINDOW_BOOT ? <WatchlistWindow />
+        : STOCK_CHART_WINDOW_BOOT ? <StockChartWindow />
         : <App />}
     </ErrorBoundary>
   </StrictMode>,

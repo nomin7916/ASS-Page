@@ -72,8 +72,11 @@ export function reorderManualWatchGroups(arr: any, id: any, to: any): any {
 export const WATCH_PERIODS = ['1일', '1주', '1개월', '3개월', '1년', '직접'];
 export const WATCH_CUSTOM_PERIOD = '직접';
 
-/** 처음 쓰는 사용자의 보기 상태 — 종전 화면 기본값과 같다(하위호환의 축). */
-export const DEFAULT_WATCH_VIEW = Object.freeze({ period: '1개월', customStart: '', customEnd: '', sortDir: null });
+/**
+ * 처음 쓰는 사용자의 보기 상태 — 종전 화면 기본값과 같다(하위호환의 축).
+ * showDiv = 현재가 오른쪽 '분배금·분배율' 열을 펼쳤는가(사용자 요청 2026-10 — **기본은 숨김**).
+ */
+export const DEFAULT_WATCH_VIEW = Object.freeze({ period: '1개월', customStart: '', customEnd: '', sortDir: null, showDiv: false });
 
 // 실제 달력에 있는 YYYY-MM-DD만 — 패턴만 보면 '2026-02-31'이 통과한다(utils.isValidIsoDate와 같은 판정).
 const isIsoDay = (s: any): boolean => {
@@ -89,8 +92,9 @@ const isIsoDay = (s: any): boolean => {
  * - period: 화이트리스트 밖이면 기본값. `'직접'`인데 시작일이 없으면 결과를 낼 수 없으므로 기본값.
  * - customEnd: 시작일보다 앞이면 비운다('' = 현재까지 실시간).
  * - sortDir: `'desc'|'asc'`만, 그 외는 null(원래 순서).
+ * - showDiv: `=== true`일 때만 펼침(옛 저장값·손상값은 숨김 — 기본 숨김 계약).
  */
-export function normalizeWatchView(v: any): { period: string; customStart: string; customEnd: string; sortDir: string | null } {
+export function normalizeWatchView(v: any): { period: string; customStart: string; customEnd: string; sortDir: string | null; showDiv: boolean } {
   const o = v && typeof v === 'object' ? v : {};
   const customStart = isIsoDay(o.customStart) ? o.customStart : '';
   let customEnd = isIsoDay(o.customEnd) ? o.customEnd : '';
@@ -98,14 +102,16 @@ export function normalizeWatchView(v: any): { period: string; customStart: strin
   let period = WATCH_PERIODS.includes(o.period) ? o.period : DEFAULT_WATCH_VIEW.period;
   if (period === WATCH_CUSTOM_PERIOD && !customStart) period = DEFAULT_WATCH_VIEW.period;
   const sortDir = o.sortDir === 'desc' || o.sortDir === 'asc' ? o.sortDir : null;
-  return { period, customStart, customEnd, sortDir };
+  const showDiv = o.showDiv === true;
+  return { period, customStart, customEnd, sortDir, showDiv };
 }
 
 /** 두 보기 상태가 같은가 — 같으면 저장·전송을 건너뛴다(헛된 Drive 저장 방지). */
 export function sameWatchView(a: any, b: any): boolean {
   const x = normalizeWatchView(a);
   const y = normalizeWatchView(b);
-  return x.period === y.period && x.customStart === y.customStart && x.customEnd === y.customEnd && x.sortDir === y.sortDir;
+  return x.period === y.period && x.customStart === y.customStart && x.customEnd === y.customEnd
+    && x.sortDir === y.sortDir && x.showDiv === y.showDiv;
 }
 
 // ── 팝업 크기(인앱 팝업 전용 — 별도 창은 브라우저가 창 크기를 정한다) ──

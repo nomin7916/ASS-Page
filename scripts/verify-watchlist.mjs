@@ -11,7 +11,11 @@
 //     #21~#32 normalizeWatchView / sameWatchView — 보기 상태(기간·직접 선택 날짜·정렬) 저장값 정규화
 //     #33~#50 normalizeWatchSize / sameWatchSize / resizeWatchRect / watchSizeAfterResize — 팝업 크기 조절
 //     #51~#69 종목 하이라이트 — 팔레트 · 다음 색(칠할 때마다 다른 색) · 켜고 끄기 · 모두 해제
-//   파트② 소스 텍스트 가드 (#G1~#G73)
+//   파트①-b `src/watchlistChart.ts` **직접 import** (#80~#95)
+//     #80~#83 기간 구간·등락율 — 옛 팝업 본문(legacy*)과 무작위 대조(팝업 숫자가 한 글자도 안 바뀌었는가)
+//     #84~#92 종목 비교 차트 창 — 행·직전 종가·구간 수익률·날짜 라벨·주소·창 이름
+//     #93~#95 최근 분배금 — 네이버 ETF 이력 · 일반 주식 연간 요약 · 야후(직전 종가 대비 분배율)
+//   파트② 소스 텍스트 가드 (#G1~#G95)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다.
@@ -121,10 +125,17 @@ if (W) {
   ok('#21 기본값은 1개월·정렬 없음(하위호환)', DEF.period === '1개월' && DEF.sortDir === null && DEF.customStart === '' && DEF.customEnd === '');
   eq('#22 기간 목록 = 화면 버튼 6종(직접 포함)', (WATCH_PERIODS || []).join(','), '1일,1주,1개월,3개월,1년,직접');
   eq('#23 정상 값은 그대로', JSON.stringify(nv({ period: '1년', customStart: '', customEnd: '', sortDir: 'asc' })),
-    JSON.stringify({ period: '1년', customStart: '', customEnd: '', sortDir: 'asc' }));
+    JSON.stringify({ period: '1년', customStart: '', customEnd: '', sortDir: 'asc', showDiv: false }));
   eq('#24 화이트리스트 밖 기간은 기본값', nv({ period: 'weke' }).period, '1개월');
   eq('#25 직접 선택 + 시작일 보존', JSON.stringify(nv({ period: '직접', customStart: '2025-01-02', customEnd: '2025-06-30' })),
-    JSON.stringify({ period: '직접', customStart: '2025-01-02', customEnd: '2025-06-30', sortDir: null }));
+    JSON.stringify({ period: '직접', customStart: '2025-01-02', customEnd: '2025-06-30', sortDir: null, showDiv: false }));
+  // ── 분배금 열 펼침(showDiv) — 기본 숨김(사용자 요청), 옛 저장값·손상값도 숨김 ──
+  ok('#25b showDiv 기본값은 false(기본 숨김)', DEF.showDiv === false && nv({}).showDiv === false);
+  eq('#25c showDiv는 === true 일 때만 펼침(문자열·1·"true"는 숨김)',
+    [nv({ showDiv: true }).showDiv, nv({ showDiv: 'true' }).showDiv, nv({ showDiv: 1 }).showDiv, nv({ showDiv: null }).showDiv].join(','),
+    'true,false,false,false');
+  // ⚠️ 비교에서 빠지면 '분배금 열만 펼친 클릭'이 같은 값으로 오판돼 저장되지 않는다.
+  ok('#25d sameWatchView 가 showDiv 차이를 잡는다', !SAME({ showDiv: true }, { showDiv: false }) && SAME({ showDiv: false }, {}));
   eq('#26 직접 선택인데 시작일이 없으면 기본 기간(결과를 낼 수 없다)', nv({ period: '직접', customStart: '' }).period, '1개월');
   eq('#27 달력에 없는 날짜는 버린다(2026-02-31)', nv({ period: '직접', customStart: '2026-02-31' }).customStart, '');
   eq('#28 종료일이 시작일보다 앞이면 비운다(현재까지)', nv({ period: '직접', customStart: '2025-05-01', customEnd: '2025-04-01' }).customEnd, '');
@@ -245,6 +256,211 @@ if (W) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+console.log('\n── 파트①-b 기간 구간 · 종목 비교 차트 · 최근 분배금 (src/watchlistChart.ts 직접 import) ──');
+
+let C = null;
+try {
+  C = await import(pathToFileURL(join(ROOT, 'src/watchlistChart.ts')).href);
+} catch (e) {
+  const unsupported = e && (e.code === 'ERR_UNKNOWN_FILE_EXTENSION' || /Unknown file extension/.test(String(e.message)));
+  if (unsupported) console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 파트①-b를 건너뜁니다 (${e.code}).`);
+  else { fail++; console.log(`  ✗ 파트①-b 모듈을 불러오지 못했습니다 — ${e && (e.code || e.message)}`); }
+}
+
+if (C) {
+  const { periodCutoff, watchPeriodWindow, windowRate, buildChartRows, closeOnOrBefore, rangeRate, chartDateLabel,
+    normalizeChartComps, normalizeChartView, chartPeriodFromWatch, stockChartUrl, stockChartWindowName, stockDetailUrl,
+    pickNaverDividend, pickNaverAnnualDividend, pickYahooDividend, CHART_PERIODS, MAX_CHART_COMPS } = C;
+
+  // ── 하위호환의 축: 팝업이 공용 함수로 옮겨 가기 **이전** 본문(커밋 bb637fe 시점) ──
+  // ⚠️ 이 두 함수는 src를 고칠 때 **따라 고치지 말 것** — 따라 고치면 '팝업 등락율이 한 글자도 안 바뀌었다'는
+  //    단언이 통째로 죽는다(verify:flow #103과 같은 규약).
+  const legacyCutoff = (period, today) => {
+    const [y, m, dd] = today.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1, dd));
+    if (period === '1주') d.setUTCDate(d.getUTCDate() - 7);
+    else if (period === '1개월') d.setUTCMonth(d.getUTCMonth() - 1);
+    else if (period === '3개월') d.setUTCMonth(d.getUTCMonth() - 3);
+    else if (period === '1년') d.setUTCFullYear(d.getUTCFullYear() - 1);
+    else return '';
+    return d.toISOString().split('T')[0];
+  };
+  const legacyView = (dailyIn, period, customStart, customEnd, q, today, cut) => {
+    const daily = dailyIn || [];
+    let win;
+    let liveTail = false;
+    if (period === '직접') {
+      win = customStart ? daily.filter(([dt]) => dt >= customStart && (!customEnd || dt <= customEnd)) : [];
+      const livePx = q ? Number(q.price) : 0;
+      if (!customEnd && win.length && livePx > 0) {
+        const lastD = win[win.length - 1][0];
+        win = lastD >= today ? [...win.slice(0, -1), [lastD, livePx]] : [...win, [today, livePx]];
+        liveTail = true;
+      }
+    } else {
+      win = cut ? daily.filter(([dt]) => dt >= cut) : daily;
+    }
+    const first = win[0];
+    const last = win[win.length - 1];
+    const ok = win.length >= 2 && first[1] > 0;
+    return { points: win.map(([, c]) => c), rate: ok ? (last[1] / first[1] - 1) * 100 : null, liveTail, base: ok ? first : null };
+  };
+  const newView = (daily, period, customStart, customEnd, q, today, cut) => {
+    const { win, liveTail } = watchPeriodWindow(daily, { period, cutoff: cut, customStart, customEnd, livePrice: q ? Number(q.price) : 0, today });
+    const { rate, first } = windowRate(win);
+    return { points: win.map(([, c]) => c), rate, liveTail, base: rate != null ? first : null };
+  };
+
+  // ── periodCutoff ──
+  {
+    const days = ['2026-01-31', '2026-03-31', '2026-02-28', '2024-02-29', '2026-10-16', '2025-12-31'];
+    let diff = 0;
+    for (const t of days) for (const p of ['1일', '1주', '1개월', '3개월', '1년', '직접', 'x']) {
+      if (periodCutoff(p, t) !== legacyCutoff(p, t)) diff++;
+    }
+    eq('#80 periodCutoff = 옛 팝업 cutoffFor(공유 기간 4종·월 넘침 규칙 포함) 차이 0건', diff, 0);
+  }
+  eq('#80b 월 넘침 규칙 보존(3/31 − 1개월 = 3/3)', periodCutoff('1개월', '2026-03-31'), '2026-03-03');
+  eq('#80c 차트 창 전용 기간(6개월·3년·5년)', [periodCutoff('6개월', '2026-10-16'), periodCutoff('3년', '2026-10-16'), periodCutoff('5년', '2026-10-16')].join(','),
+    '2026-04-16,2023-10-16,2021-10-16');
+  eq('#80d 잘못된 today·모르는 기간은 빈 문자열(던지지 않는다)', [periodCutoff('1주', 'bad'), periodCutoff('1주', null), periodCutoff('1일', '2026-10-16')].join('|'), '||');
+
+  // ── watchPeriodWindow / windowRate — 옛 팝업 본문과 결과가 같아야 한다(무작위 대조) ──
+  {
+    let seed = 7;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    const day = (n) => new Date(Date.UTC(2025, 0, 1) + n * 86400000).toISOString().slice(0, 10);
+    let diff = 0, cases = 0, tails = 0, nulls = 0;
+    for (let k = 0; k < 400; k++) {
+      const n = Math.floor(rnd() * 12);
+      const start0 = Math.floor(rnd() * 30);
+      const daily = [];
+      for (let i = 0; i < n; i++) daily.push([day(start0 + i * (1 + Math.floor(rnd() * 3))), Math.round((50 + rnd() * 100) * 100) / 100]);
+      const period = ['1주', '1개월', '직접', '직접', '1년'][Math.floor(rnd() * 5)];
+      const today = day(start0 + Math.floor(rnd() * 40));
+      const cut = period === '직접' ? '' : (rnd() < 0.2 ? '' : day(Math.floor(rnd() * 40)));
+      const cs = rnd() < 0.15 ? '' : day(Math.floor(rnd() * 35));
+      const ce = rnd() < 0.5 ? '' : day(Math.floor(rnd() * 45));
+      const csx = ce && cs && ce < cs ? '' : ce;   // 팝업은 normalizeWatchView를 거친 값만 받는다
+      const q = rnd() < 0.3 ? null : { price: rnd() < 0.15 ? 0 : Math.round((50 + rnd() * 100) * 100) / 100 };
+      const dIn = rnd() < 0.05 ? undefined : daily;
+      const a = legacyView(dIn, period, cs, csx, q, today, cut);
+      const b = newView(dIn, period, cs, csx, q, today, cut);
+      cases++;
+      if (a.liveTail) tails++;
+      if (a.rate == null) nulls++;
+      if (JSON.stringify(a) !== JSON.stringify(b)) diff++;
+    }
+    eq(`#81 팝업 등락율·미니차트·기준가가 옛 본문과 같다(${cases}건 · 현재가 꼬리 ${tails} · null ${nulls})`, diff, 0);
+    ok('#81b 무작위 표본이 현재가 꼬리·null 분기를 실제로 밟았다(죽은 대조 방지)', tails > 10 && nulls > 10);
+  }
+  {
+    const d = [['2026-10-12', 100], ['2026-10-13', 102], ['2026-10-14', 101]];
+    const custom = (o) => watchPeriodWindow(d, { period: '직접', ...o });
+    eq('#82 직접 선택 + 시작일 없음 → 빈 구간(null 계약)', custom({ customStart: '', livePrice: 105, today: '2026-10-16' }).win.length, 0);
+    eq('#82b 종료일 비움 + 오늘 일봉 없음 → 현재가를 덧붙인다',
+      JSON.stringify(custom({ customStart: '2026-10-13', livePrice: 105, today: '2026-10-16' })),
+      JSON.stringify({ win: [['2026-10-13', 102], ['2026-10-14', 101], ['2026-10-16', 105]], liveTail: true }));
+    eq('#82c 오늘 일봉이 있으면 그 값을 현재가로 대체',
+      JSON.stringify(custom({ customStart: '2026-10-12', livePrice: 99, today: '2026-10-14' }).win[2]), JSON.stringify(['2026-10-14', 99]));
+    ok('#82d 종료일이 있거나 현재가가 없으면 꼬리 없음',
+      custom({ customStart: '2026-10-12', customEnd: '2026-10-13', livePrice: 105, today: '2026-10-16' }).liveTail === false
+      && custom({ customStart: '2026-10-12', livePrice: 0, today: '2026-10-16' }).liveTail === false);
+    eq('#83 windowRate — 2점 미만은 null(0.00% 단언 금지)', windowRate([['2026-10-12', 100]]).rate, null);
+    eq('#83b windowRate — 마지막 ÷ 첫 종가 − 1', Math.round(windowRate(d).rate * 1e6) / 1e6, 1);
+    S('#83c 손상 입력에도 던지지 않는다', () => [watchPeriodWindow(null, null), windowRate('x'), watchPeriodWindow([[1, 2], ['a']], { period: '1주', cutoff: '' })],
+      (v) => v[0].win.length === 0 && v[1].rate === null && v[2].win.length === 0);
+  }
+
+  // ── 비교 차트 행 ──
+  {
+    const a = [['2026-10-01', 100], ['2026-10-02', 110], ['2026-10-05', 120]];
+    const b = [['2026-10-02', 50], ['2026-10-03', 40], ['2026-10-05', 55]];
+    const rows = S('(rows)', () => buildChartRows([{ key: 's0', win: a }, { key: 's1', win: b }])) || [];
+    eq('#84 날짜 합집합 · 오름차순', rows.map((r) => r.date).join(','), '2026-10-01,2026-10-02,2026-10-03,2026-10-05');
+    ok('#84b 각 종목은 **자기 구간 첫 종가**로 0% (늦게 시작한 종목도 0%에서 출발)', rows[0].s0 === 0 && rows[1].s1 === 0);
+    ok('#84c 그 날 종가가 없으면 null(0으로 단언 금지) · 종가 키도 함께', rows[0].s1 === null && rows[2].s0 === null && rows[2]['px:s1'] === 40);
+    // ⚠️ 차트 끝점 = 화면의 '기간 수익률'(windowRate) — 갈리면 선 끝과 칩 숫자가 다르게 보인다.
+    ok('#84d 마지막 행 값 = windowRate(win).rate', Math.abs(rows[3].s0 - windowRate(a).rate) < 1e-9 && Math.abs(rows[3].s1 - windowRate(b).rate) < 1e-9);
+    S('#84e 손상 입력에도 던지지 않는다', () => buildChartRows([null, { key: 's0', win: null }, { key: 1 }]), (v) => Array.isArray(v) && v.length === 0);
+    eq('#85 closeOnOrBefore — 휴장일이면 직전 거래일 종가', JSON.stringify(closeOnOrBefore(b, '2026-10-04')), JSON.stringify(['2026-10-03', 40]));
+    eq('#85b closeOnOrBefore — 첫 종가보다 앞이면 null', closeOnOrBefore(b, '2026-10-01'), null);
+    ok('#85c rangeRate — 순서를 바꿔 골라도 같은 값', rangeRate(a, '2026-10-05', '2026-10-02').rate === rangeRate(a, '2026-10-02', '2026-10-05').rate
+      && Math.abs(rangeRate(a, '2026-10-02', '2026-10-05').rate - (120 / 110 - 1) * 100) < 1e-9);
+    eq('#86 날짜 라벨 = YY/MM/DD (요일) — 요일은 UTC로(사진2: 26/10/16 (금))', chartDateLabel('2026-10-16'), '26/10/16 (금)');
+  }
+
+  // ── 차트 창 주소·이름·기간 ──
+  eq('#87 팝업 기간 → 차트 기간(1일은 장중이라 1개월)', ['1일', '1주', '1개월', '3개월', '1년', '직접', 'x'].map(chartPeriodFromWatch).join(','),
+    '1개월,1주,1개월,3개월,1년,직접,1년');
+  ok('#87b 차트 기간 목록에 팝업 기간(1일 제외)이 전부 있다', ['1주', '1개월', '3개월', '1년', '직접'].every((p) => CHART_PERIODS.includes(p)));
+  eq('#88 비교 종목 정리 — 중복(대소문자 무시)·기준 종목·잘못된 값 제외',
+    normalizeChartComps(['aapl', 'AAPL', ' 441640 ', '005930', 'bad code', '', null], '005930').join(','), 'aapl,441640');
+  eq('#88b 비교 종목 상한', normalizeChartComps(Array.from({ length: 12 }, (_, i) => `C${i}`), 'X').length, MAX_CHART_COMPS);
+  eq('#88c 문자열 입력(A,B)', normalizeChartComps('A,B,a', '').join(','), 'A,B');
+  eq('#89 차트 보기 상태 — 직접인데 시작일 없으면 기본 기간 · 종료일 < 시작일이면 비움',
+    JSON.stringify([normalizeChartView({ period: '직접' }), normalizeChartView({ period: '직접', customStart: '2026-05-01', customEnd: '2026-04-01' })]),
+    JSON.stringify([{ period: '1년', customStart: '', customEnd: '' }, { period: '직접', customStart: '2026-05-01', customEnd: '' }]));
+  {
+    const u = new URL('http://x' + stockChartUrl({ code: '441640', market: 'kr', name: ' KODEX 미국배당 ', period: '3개월', customStart: '2026-01-01', comps: ['AAPL', '441640'] }));
+    ok('#90 주소 — 창 부팅 플래그·코드·시장·기간·이름·비교 종목(기준 종목 제외)',
+      u.searchParams.get('stockChartWindow') === '1' && u.searchParams.get('code') === '441640' && u.searchParams.get('market') === 'kr'
+      && u.searchParams.get('period') === '3개월' && u.searchParams.get('name') === 'KODEX 미국배당' && u.searchParams.get('comp') === 'AAPL');
+    ok('#90b 프리셋 기간이면 from/to를 싣지 않는다', !u.searchParams.has('from') && !u.searchParams.has('to'));
+    const c = new URL('http://x' + stockChartUrl({ code: 'MA:ABC12', market: 'zz', period: '직접', customStart: '2026-01-02' }));
+    ok('#90c 직접 선택이면 from(필수)·to(있을 때만) · 모르는 시장은 생략',
+      c.searchParams.get('from') === '2026-01-02' && !c.searchParams.has('to') && !c.searchParams.has('market'));
+  }
+  ok('#91 창 이름 — 종목마다 하나(대소문자 무시)·창 이름에 못 쓰는 문자 치환',
+    stockChartWindowName('aapl') === stockChartWindowName('AAPL') && stockChartWindowName('441640') !== stockChartWindowName('AAPL')
+    && /^ass-stockchart-[A-Z0-9_]+$/.test(stockChartWindowName('https://www.funetf.co.kr/x')));
+  eq('#92 상세페이지 URL(옛 팝업 detailUrl과 같은 규칙)',
+    [stockDetailUrl('kr', '0043y0'), stockDetailUrl('us', 'jepi'), stockDetailUrl('fund', 'MA:ABC12'), stockDetailUrl('fund', 'K55105BU1234')].join(' '),
+    'https://m.stock.naver.com/domestic/stock/0043Y0/total https://finance.yahoo.com/quote/JEPI '
+    + 'https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=ABC12 https://www.funetf.co.kr/product/fund/view/K55105BU1234');
+
+  // ── 최근 분배금 — 실측 응답 형태(네이버 2026-10-16 / 야후) ──
+  {
+    // 네이버 ETF 분배 이력(441640 실측 — 정렬이 뒤섞여도 가장 최근 배당락을 고른다)
+    const nav = { totalCount: 49, result: [
+      { dividendAmount: 96, exDividendAt: '2026.09.14', dividendYield: 0.79 },
+      { dividendAmount: 94, exDividendAt: '2026.10.14', dividendYield: 0.77 },
+      { dividendAmount: 102, exDividendAt: '2026.08.13', dividendYield: 0.83 },
+      { dividendAmount: 103, exDividendAt: '2026.07.14', dividendYield: 0.79 },
+    ] };
+    const r = S('(naver)', () => pickNaverDividend(nav)) || {};
+    ok('#93 네이버 — 가장 최근 1회(94 · 0.77% · 2026-10-14), 최근 3회 내림차순',
+      r.status === 'ok' && r.kind === 'last' && r.amount === 94 && r.rate === 0.77 && r.exDate === '2026-10-14'
+      && (r.recent || []).map((x) => x.exDate).join(',') === '2026-10-14,2026-09-14,2026-08-13');
+    // ⚠️ '기록 없음'과 '조회 실패'를 구분한다 — 사용자가 할 일이 다르다(실패는 다시 조회).
+    eq('#93b 빈 결과 = 기록 없음(none)', pickNaverDividend({ totalCount: 0, result: [] })?.status, 'none');
+    ok('#93c 모양이 틀리면 null(조회 실패로 보고 다음 경로)', pickNaverDividend('<html>') === null && pickNaverDividend({ result: 'x' }) === null && pickNaverDividend(null) === null);
+    eq('#93d 항목이 있는데 전부 손상이면 null(기록 없음으로 단언하지 않는다)', pickNaverDividend({ result: [{ dividendAmount: 0, exDividendAt: 'x' }] }), null);
+    // 일반 주식(005930 실측 요약) — 회차 이력이 없어 연간 값을 쓴다
+    const integ = { totalInfos: [{ code: 'per', value: '9.71배' }, { code: 'dividendYieldRatio', value: '0.77%' }, { code: 'dividend', value: '1,668원' }] };
+    const a = pickNaverAnnualDividend(integ) || {};
+    ok('#94 네이버 요약 — 연간 주당배당금 1,668 · 배당수익률 0.77% (kind annual)', a.status === 'ok' && a.kind === 'annual' && a.amount === 1668 && a.rate === 0.77);
+    eq('#94b 배당 칸이 비거나 "-"면 none', [pickNaverAnnualDividend({ totalInfos: [] })?.status, pickNaverAnnualDividend({ totalInfos: [{ code: 'dividend', value: '-' }] })?.status].join(','), 'none,none');
+    eq('#94c 모양이 틀리면 null', pickNaverAnnualDividend({ foo: 1 }), null);
+    // 야후 — 분배율 = 분배금 ÷ 배당락 직전 거래일 종가(같은 응답의 일봉)
+    const T = (d) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), 13, 30) / 1000;
+    const y = { chart: { result: [{
+      meta: { currency: 'USD' },
+      timestamp: [T('2026-09-29'), T('2026-09-30'), T('2026-10-01'), T('2026-10-02')],
+      indicators: { quote: [{ close: [57.1, 56.8, 57.0, null] }] },
+      events: { dividends: { a: { amount: 0.371, date: T('2026-09-01') }, b: { amount: 0.341, date: T('2026-10-01') } } },
+    }] } };
+    const u = pickYahooDividend(y) || {};
+    ok('#95 야후 — 가장 최근 분배(0.341 · 2026-10-01) · 분배율 = 0.341 ÷ 직전 거래일 종가 56.8',
+      u.status === 'ok' && u.amount === 0.341 && u.exDate === '2026-10-01' && u.rateBasis === 'close'
+      && Math.abs(u.rate - (0.341 / 56.8) * 100) < 1e-9);
+    ok('#95b 직전 종가가 응답 구간 밖이면 분배율 null(지어내지 않는다)', u.recent?.[1]?.exDate === '2026-09-01' && u.recent[1].rate === null);
+    eq('#95c 분배 이벤트가 없으면 none', pickYahooDividend({ chart: { result: [{ timestamp: [], indicators: { quote: [{ close: [] }] } }] } })?.status, 'none');
+    eq('#95d 모양이 틀리면 null', pickYahooDividend({ chart: { result: [] } }), null);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 console.log('\n── 파트② 배선 가드 (소스 텍스트) ──');
 
 const POPUP = src('src/components/WatchlistPopup.tsx');
@@ -268,8 +484,8 @@ ok('#G3 그룹 목록은 세로 사이드바(aside + 자체 세로 스크롤)',
   && /ref=\{sidebarListRef\}[^>]*overflow-y-auto/.test(POPUP));
 ok('#G4 옛 가로 스크롤 칩 행이 없다(overflow-x-auto + whitespace-nowrap)',
   !/overflow-x-auto[^"]*whitespace-nowrap/.test(stripComments(POPUP)));
-ok('#G5 패널 폭은 리스트 640 + 사이드바 폭의 합(둘은 한 세트)',
-  /const\s+PANEL_W\s*=\s*640\s*\+\s*SIDEBAR_W\s*;/.test(POPUP));
+ok('#G5 패널 폭은 리스트 640 + 분배 접힘 칸 + 사이드바 폭의 합(셋은 한 세트)',
+  /const\s+PANEL_W\s*=\s*640\s*\+\s*DIV_TOGGLE_W\s*\+\s*SIDEBAR_W\s*;/.test(POPUP));
 ok('#G6 사이드바 접기/펼치기 두 방향이 모두 있다(펼치기가 유일한 복귀 경로)',
   /setSidebarOpen\(false\)/.test(POPUP) && /setSidebarOpen\(true\)/.test(POPUP)
   && /<PanelLeftClose\s/.test(POPUP) && /<PanelLeft\s/.test(POPUP));
@@ -447,9 +663,10 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     POPUP.includes(`maxWidth: 'calc(100vw - ${W?.WATCH_VIEW_MARGIN_X ?? 'X'}px)'`)
     && POPUP.includes(`maxHeight: 'calc(100vh - ${W?.WATCH_VIEW_MARGIN_Y ?? 'Y'}px)'`));
   // 저장값이 좁아도 사이드바를 펼치면 리스트가 겹치지 않게 표시 시점에 최소 폭으로 넓힌다.
-  ok('#G62 표시 폭은 최소 폭 이상(사이드바 펼침 반영)',
-    /const minW = sidebarOpen \? SIDEBAR_W \+ LIST_MIN_W : /.test(P)
-    && /Math\.max\(minW, curSize\?\.w \?\? PANEL_W\)/.test(P));
+  ok('#G62 표시 폭은 최소 폭 이상(사이드바·분배금 열 펼침 반영)',
+    /const minW = \(sidebarOpen \? SIDEBAR_W \+ LIST_MIN_W : LIST_MIN_W \+ 32\) \+ divExtraW;/.test(P)
+    && /const divExtraW = showDiv \? DIV_COL_W : 0;/.test(P)
+    && /Math\.max\(minW, curSize\?\.w \?\? PANEL_W \+ divExtraW\)/.test(P));
 }
 
 // ── 종목 하이라이트(행 왼쪽 끝 클릭) ──
@@ -491,6 +708,92 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     /\.\.\.\(watchHighlightOf\(old\?\.highlight\) \? \{ highlight: old\.highlight \} : \{\}\)/.test(P));
   ok('#G73 하이라이트는 watchlistGroups 지문에 실려 저장된다(영속화 신규 지점 0곳)',
     /JSON\.stringify\(watchlistGroups\),/.test(APP) && !/watchlistHighlight/.test(APP));
+}
+
+// ── 미니차트 클릭 → 종목 비교 차트 창 · 분배금 열(사용자 요청 2026-10) ──
+{
+  const CMOD = src('src/watchlistChart.ts');
+  const CHART = src('src/components/StockChartWindow.tsx');
+  const QUOTE = src('src/watchlistQuote.ts');
+  const P = stripComments(POPUP);
+  const CW = stripComments(CHART);
+  ok('#G74 소스 3종을 읽었다(watchlistChart · StockChartWindow · watchlistQuote)', !!CMOD && !!CHART && !!QUOTE);
+  ok('#G75 watchlistChart.ts 는 import 0건 · enum/namespace 없음(직접 import 검증)',
+    !/^\s*import\s/m.test(stripComments(CMOD)) && !/\b(enum|namespace)\s+\w/.test(stripComments(CMOD)));
+
+  // ⚠️ 팝업 등락율과 차트 창 '기간 수익률'의 단일 소스 — 한쪽이라도 손계산으로 돌아가면 같은 기간에 두 숫자가 갈린다.
+  ok('#G76 팝업 cutoffFor 는 periodCutoff 위임', /const cutoffFor = \(period\) => periodCutoff\(period, todayKST\(\)\);/.test(P));
+  ok('#G77 팝업 기간 구간·등락율은 공용 함수(watchPeriodWindow + windowRate) — 옛 인라인 필터 부재',
+    /watchPeriodWindow\(dailyMap\[s\.code\], \{/.test(P) && /const \{ rate, first, last \} = windowRate\(win\);/.test(P)
+    && !/daily\.filter\(\(\[dt\]\) => dt >= customStart/.test(P));
+  ok('#G78 차트 창도 같은 함수 + 같은 종가 소스(fetchWatchDaily)',
+    /watchPeriodWindow\(dailyMap\[s\.code\], \{/.test(CW) && /stat: windowRate\(win\)/.test(CW)
+    && /fetchWatchDaily\(s\.market, s\.code, from \|\| undefined\)/.test(CW) && /periodCutoff\(view\.period, today\)/.test(CW));
+
+  // ── 창 부팅·격리 ──
+  ok('#G79 main.tsx 가 URL 파라미터로 App 대신 차트 창을 렌더한다',
+    /const\s+STOCK_CHART_WINDOW_BOOT\s*=\s*_params\.get\('stockChartWindow'\)\s*===\s*'1'/.test(MAIN)
+    && /STOCK_CHART_WINDOW_BOOT \? <StockChartWindow \/>/.test(MAIN));
+  ok('#G80 차트 창은 자체 ErrorBoundary label 을 갖는다', /<ErrorBoundary label="종목 차트">/.test(CHART));
+  // ⚠️ 이 창은 쓰기가 0이다 — opener 브릿지·브라우저 저장소·공유 종가 맵에 닿는 순간 '두 번째 writer'나 평가액 오염이 된다.
+  ok('#G81 차트 창은 브릿지·저장소·stockHistoryMap 을 쓰지 않는다',
+    !/window\.opener|postMessage|localStorage|sessionStorage|stockHistoryMap|saveDriveFile/.test(CW));
+  ok('#G82 비교 종목·기간은 주소에만 남긴다(replaceState + 공용 URL 함수)',
+    /window\.history\.replaceState\(null, '', stockChartUrl\(\{/.test(CW));
+
+  // ── 미니차트 클릭 배선 ──
+  ok('#G83 미니차트는 버튼 안에 있고 클릭하면 openChartWindow(s, q)',
+    /onClick=\{\(\) => openChartWindow\(s, q\)\}[\s\S]{0,400}?<Sparkline points=\{v\.points \|\| \[\]\} rate=\{v\.rate\} \/>\s*\n\s*<\/button>/.test(P));
+  {
+    const m = P.match(/const openChartWindow = \(s, q\) => \{[\s\S]*?\n  \};/);
+    const body = m ? m[0] : '';
+    // ⚠️ features 인자 금지(크롬이 '팝업'으로 열어 주소창이 사라진다) · 이름 = 종목마다 하나.
+    ok('#G84 window.open(공용 URL, 종목별 이름) 2인자 · 이미 열렸으면 앞으로만 · 차단은 패널 안에 알린다',
+      /const name = stockChartWindowName\(s\.code\);/.test(body)
+      && /window\.open\(stockChartUrl\(\{[\s\S]*?\}\), name\);/.test(body)
+      && /if \(existing && !existing\.closed\) \{ try \{ existing\.focus\(\); \} catch \{\} return; \}/.test(body)
+      && /if \(!w\) \{ setChartBlocked\(true\); return; \}/.test(body)
+      && /\{chartBlocked && \(/.test(P));
+    ok('#G84b 팝업 기간을 차트 기간으로 넘긴다(1일 → 1개월)', /period: chartPeriodFromWatch\(period\), customStart, customEnd,/.test(body));
+  }
+
+  // ── 차트 렌더 ──
+  // ⚠️ 종목 코드를 선 dataKey로 쓰면 'BRK.B'의 점이 recharts 경로로 해석돼 선이 사라진다.
+  ok('#G85 선 dataKey 는 시리즈 키(s0…) — 종목 코드 금지', /const seriesKey = \(i\) => `s\$\{i\}`;/.test(CW)
+    && /dataKey=\{mode === 'pct' \? s\.key : `px:\$\{s\.key\}`\}/.test(CW));
+  {
+    const iLine = CW.indexOf('<Line');
+    const iDim = CW.indexOf('dim?.before && <ReferenceArea');
+    ok('#G86 딤 3밴드는 선보다 뒤에 선언 · ifOverflow="hidden" · CHART_SELECTION 토큰',
+      iLine > 0 && iDim > iLine
+      && (CW.match(/ifOverflow="hidden"/g) || []).length === 3
+      && /fill=\{CHART_SELECTION\.dimFill\}/.test(CW) && /stroke=\{CHART_SELECTION\.windowStroke\}/.test(CW));
+  }
+  ok('#G87 드래그 선택은 ref 정본 + window mouseup/blur 마무리 + 버튼 놓침 자가치유',
+    /const selRef = useRef\(/.test(CW) && /window\.addEventListener\('mouseup', up\);/.test(CW)
+    && /window\.addEventListener\('blur', up\);/.test(CW) && /if \(ev && ev\.buttons === 0\) \{ finishDrag\(\); return; \}/.test(CW));
+  ok('#G87b 기간을 바꾸면 선택 구간을 지운다(낡은 구간 잔존 방지)',
+    /setSel\(\{ left: '', right: '' \}\);\s*\n\s*\}, \[view\.period, view\.customStart, view\.customEnd\]\);/.test(CW));
+  ok('#G88 가격 표기는 팝업과 공유(fmtWatchPrice)', /const fmtPrice = fmtWatchPrice;/.test(P) && /fmtWatchPrice\(/.test(CW)
+    && /export const fmtWatchPrice = /.test(QUOTE));
+
+  // ── 분배금 열 ──
+  // ⚠️ 접힌 칸도 헤더·행 **양쪽**에 같은 폭으로 — 한쪽만 있으면 현재가 열이 어긋난다.
+  eq('#G89 접힌 칸(DIV_TOGGLE_W)은 헤더·행 2곳', (P.match(/style=\{\{ width: DIV_TOGGLE_W \}\}/g) || []).length, 2);
+  eq('#G89b 펼친 칸(DIV_COL_W)도 헤더·행 2곳', (P.match(/style=\{\{ width: DIV_COL_W \}\}/g) || []).length, 2);
+  ok('#G90 펼치기/접기는 보기 상태(patchView)로 — Drive 저장 대상', /const toggleDiv = \(\) => patchView\(\(v\) => \(\{ showDiv: !v\.showDiv \}\)\);/.test(P)
+    && (P.match(/onClick=\{toggleDiv\}/g) || []).length === 3);
+  ok('#G91 분배금 조회는 열을 펼쳤을 때만(effect 게이트)', /if \(!open \|\| !activeGroup \|\| !showDiv\) return;\s*\n\s*\(activeGroup\.stocks \|\| \[\]\)\.forEach\(\(s\) => loadDividend\(s\)\);/.test(P));
+  ok('#G92 분배금 결과는 팝업 로컬(divMap)에만 — 계좌 분배 이력에 쓰지 않는다', /setDivMap\(\(p\) => \(\{ \.\.\.p, \[stock\.code\]: r \}\)\);/.test(P)
+    && !/dividendHistory|actualDividend/.test(P));
+  ok('#G93 헤더는 종목 1개부터(분배금 토글이 헤더에 있다)', /\{activeStocks\.length >= 1 && \(/.test(P));
+  // ⚠️ 상태를 뭉뚱그리지 않는다 — '기록 없음'·'조회 실패'·'펀드 미지원'은 사용자가 할 일이 다르다.
+  ok('#G94 분배금 칸 상태 구분(조회 중 · 실패 · 펀드 · 없음 · 연간 · 최근 1회)',
+    ["line1: '…'", "line2: '조회 실패'", "d.status === 'unsupported'", "line1: '없음'", "d.kind === 'annual'", '연환산 아님'].every((t) => P.includes(t)));
+  ok('#G95 분배금 조회 경로: 펀드 미지원 · 국내 ETF 이력 → 일반 주식 연간 요약 · 해외 야후(공용 파서)',
+    /if \(market === 'fund'\) return \{ status: 'unsupported' \};/.test(QUOTE)
+    && /pickYahooDividend, 10000\)/.test(QUOTE)
+    && QUOTE.indexOf('pickNaverDividend);') > 0 && QUOTE.indexOf('pickNaverDividend);') < QUOTE.indexOf('pickNaverAnnualDividend);'));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:watchlist — ${pass} passed, ${fail} failed\n`);

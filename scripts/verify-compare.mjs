@@ -996,7 +996,10 @@ const PICKER_HOSTS = readdirSync(join(ROOT, 'src/components'))
   .map(([f, n]) => `${f}:${n}`)
   .sort();
 eq('#G34d 달력 호출처 census(새 호스트는 z를 의식적으로 정할 것)', PICKER_HOSTS,
-  ['ChartRangeControls.tsx:2', 'IntegratedDashboard.tsx:1', 'PortfolioTable.tsx:3', 'VerifyEvalModal.tsx:1',
+  ['ChartRangeControls.tsx:2', 'IntegratedDashboard.tsx:1', 'PortfolioTable.tsx:3',
+   // 종목 비교 차트 창(`/?stockChartWindow=1`) — 전체 화면 창이라 z가 높은 호스트가 없다 → 기본값 그대로.
+   'StockChartWindow.tsx:2',
+   'VerifyEvalModal.tsx:1',
    // 관심종목(z 1050) — PICKER_Z 1070을 명시한다(포털 팝업이 패널 뒤로 숨지 않게).
    'WatchlistPopup.tsx:2']);
 

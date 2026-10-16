@@ -15,7 +15,8 @@
 src/
 ├── App.tsx              # 메인 컴포넌트 (~2,099줄 — 분리 진행 중)
 ├── api.ts               # 외부 API 호출
-├── watchlistQuote.ts    # 관심종목 코드→시장 판정(detectMarket)·시세/이력 조회(api.ts 재사용)
+├── watchlistQuote.ts    # 관심종목 코드→시장 판정(detectMarket)·시세/이력/최근 분배금 조회(api.ts 재사용)
+├── watchlistChart.ts    # 관심종목 기간 구간·등락율·비교 차트 행·분배금 파서 (⚠️ import 0 — verify:watchlist 직접 import)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
@@ -56,7 +57,8 @@ src/
     ├── LoadingOverlay.tsx        # 앱 시작 블로킹 오버레이 (z-1100)
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
     ├── LoginGate.tsx             # 로그인 / PIN 인증 게이트
-    ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회)
+    ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회·분배금 열)
+    ├── StockChartWindow.tsx      # 종목 비교 차트 별도 창(/?stockChartWindow=1) — 미니차트 클릭, App 미마운트·쓰기 0
     ├── FlowBoard.tsx             # 자금 흐름도 보드(z=990) — 시트 탭 바, 로컬 사본 + idle 승격, overlay/page 겸용
     ├── FlowCanvas.tsx            # 흐름도 SVG 캔버스(React.memo) — 드래그·리사이즈·연결
     ├── FlowInspector.tsx         # 흐름도 속성 패널(날짜·이름·계좌연결·금액·메모) — id 앵커 draft
@@ -7190,6 +7192,64 @@ markAsRead() / clearNotificationLog()
   않으면 조용히 건너뛴다(실측: 3종이 '앵커 없음'으로 빠졌다).
   ⚠️ `#G31`처럼 '금지 토큰 부재'를 재는 가드는 반드시 **주석을 걷어낸 뒤** 잰다 — 이 저장소는 금지
   이유를 바로 그 자리 주석에 적으므로 원문으로 재면 그 설명에 걸려 영구히 실패한다(실측).
+
+**분배금·분배율 열 (현재가 오른쪽 — 기본 숨김, 2026-10 사용자 요청)**
+
+관심종목 리스트 현재가 오른쪽에 **가장 최근 분배일의 분배금과 분배율**을 보인다. 기본은 접혀 있고
+(좁은 '분배 ◂' 칸), 헤더나 행의 그 칸을 누르면 펼쳐진다. 펼친 머리글을 누르면 다시 접힌다.
+
+- **펼침 상태 = `watchlistView.showDiv`**(chartPrefs.watchlistView 안 — **영속화 신규 지점 0곳**). 앱 탭은 Drive로,
+  별도 창은 `watchlist:view`로 같은 값을 쓴다. `normalizeWatchView`가 `=== true`일 때만 펼침으로 보고
+  `sameWatchView`가 그 값까지 비교한다(빠지면 '펼치기만 한 클릭'이 저장되지 않는다).
+- **조회는 펼쳤을 때만**(effect 게이트 `!showDiv` — 접힌 동안 네트워크 0). 결과는 팝업 로컬 `divMap`
+  (메모리 전용). ⚠️ 계좌의 `dividendHistory`에 쓰지 말 것 — 보유하지 않은 종목이 분배금 현황 표에 유령 행으로
+  새어 나온다(backtestFetch와 같은 규약). 현재가 클릭(행 새로고침)·시장 보정도 분배금을 다시 받는다.
+- **조회 경로 = `watchlistQuote.fetchWatchDividend`**: 국내 = 네이버 ETF 분배 이력(최근 1회 + 그 회차 분배율 —
+  **네이버 표기값**) → 비면 종목 요약(`/api/stock/{code}/integration`)의 **연간** 주당배당금·배당수익률(일반 주식은
+  회차 이력이 없다 — 화면에 '연'을 붙여 구분) / 해외 = 야후 `events=div`(분배율 = 분배금 ÷ **배당락 직전 거래일
+  종가**, 같은 응답의 일봉) / 펀드 = 미지원. 응답 해석은 `watchlistChart.ts`의 순수 함수(`pickNaverDividend`·
+  `pickNaverAnnualDividend`·`pickYahooDividend`)가 정본이다.
+- **⚠️ 상태 6종을 뭉뚱그리지 않는다** — 조회 중(`…`) · 최근 1회 · 연간 · 기록 없음(`없음`) · 펀드 미지원(`-`) ·
+  조회 실패(`-` + 빨간 '조회 실패'). 파서도 '기록 없음'(정상 응답의 빈 배열)과 '실패'(모양이 틀린 응답 = null)를
+  구분하고, **항목은 있는데 전부 손상**이면 '기록 없음'으로 단언하지 않는다(null).
+- **⚠️ 분배율은 '그 회차 1회분'이다(연환산 아님)** — 툴팁이 그 사실과 기준(네이버 표기 / 직전 종가)을 밝힌다.
+  분배율 색은 teal(빨강/파랑은 옆 칸 등락율의 상승/하락으로 읽힌다).
+- **⚠️ 접힌 칸도 헤더·행 양쪽에 같은 폭**(`DIV_TOGGLE_W`) — 한쪽만 있으면 현재가 열이 어긋난다. 펼친 칸(`DIV_COL_W`)도
+  같다. `PANEL_W = 640 + DIV_TOGGLE_W + SIDEBAR_W`(종목명 310px 확보 — 셋은 한 세트), 펼치면 기본 폭·최소 폭에
+  `DIV_COL_W`를 더한다(`divExtraW`). 저장된 폭이 있으면 그 폭을 존중한다.
+- 헤더는 이제 **종목 1개부터** 그린다(분배 토글이 헤더에 있다 — 정렬은 2개 이상일 때만 의미).
+
+**미니차트 클릭 → 종목 비교 차트 별도 창 (`/?stockChartWindow=1`, 2026-10 사용자 요청)**
+
+리스트의 미니차트를 누르면 그 종목의 **시세 반영 수익률 비교 차트**(수익률 차트 화면의 비교종목 차트와 같은 모양)가
+새 브라우저 창으로 열린다. 비교 종목 추가(최대 8)·기간(1주~5년·직접)·수익률/종가 보기·드래그 구간 수익률을 지원한다.
+
+- **⚠️ 창은 App을 마운트하지 않고 쓰기가 0이다** — 시세·종가를 스스로 조회(공개 프록시/Edge 함수, 인증 불필요)하고
+  아무것도 저장하지 않으므로 **opener 브릿지가 없다**. 비교 종목·기간은 **주소(URL)에만** `history.replaceState`로
+  남긴다(새로고침해도 유지). ⚠️ localStorage·sessionStorage·Drive·`stockHistoryMap`에 닿지 말 것(#G81).
+- **⚠️ 팝업 등락율과 차트 '기간 수익률'의 단일 소스 = `src/watchlistChart.ts`**(순수 모듈, **import 0건** —
+  `verify:watchlist`가 직접 import). `periodCutoff`(팝업 `cutoffFor`가 위임) · `watchPeriodWindow`(구간 자르기 +
+  직접 선택 '현재까지' 꼬리) · `windowRate`(마지막 ÷ 첫 종가 − 1, 2점 미만 null)를 **두 화면이 같은 함수로** 쓰고
+  종가도 같은 소스(`fetchWatchDaily`)라, 같은 기간이면 팝업 등락율과 차트 끝점이 한 글자도 다르지 않다
+  (실측: 441640 1개월 −0.88% · 기준가 12,248 양쪽 동일). 팝업의 옛 인라인 계산은 이 공용 함수로 **옮겨졌고**,
+  `#81`이 옛 본문(legacy 미러 — src를 고칠 때 **따라 고치지 말 것**)과 400건 무작위 대조로 '팝업 숫자 불변'을 단언한다.
+- 종목마다 창 하나(`stockChartWindowName` — 대소문자 무시). 이미 열린 창은 다시 열지 않고 앞으로만(그 창에서 추가한
+  비교 종목 보존). `window.open(url, name)` **2인자**(features 금지 — 크롬이 팝업으로 열어 주소창이 사라진다), 차단되면
+  팝업 안 앰버 줄로 알린다(z-1050이라 토스트가 가려진다). 팝업의 '1일'은 장중이라 차트 창에서 **1개월**로 연다.
+- 차트: 각 종목을 **자기 구간 첫 종가**로 0%(늦게 상장한 종목도 0%에서 출발) — `buildChartRows`, 마지막 행 = `windowRate`.
+  ⚠️ 선 dataKey는 시리즈 키(`s0`…) — 종목 코드를 쓰면 'BRK.B'의 점이 recharts 경로로 해석된다. 드래그 선택은
+  ref 정본 + window mouseup/blur 마무리 + 버튼 놓침 자가치유, 딤 3밴드는 선보다 **뒤**·`ifOverflow="hidden"`·
+  `CHART_SELECTION` 토큰(수익률 차트와 같은 규약), 기간을 바꾸면 선택 해제, Esc로 해제.
+- 가격 표기는 `watchlistQuote.fmtWatchPrice`를 팝업과 공유한다.
+- **범위 밖(의도)**: 장중(1일) 차트 · 분배금 재투자 반영(총수익) 곡선 · 차트 창에서 관심종목 편집 · 비교 종목 색 변경.
+  **알려진 한계**: 로컬 `npm run dev`는 `/api/history`(Edge 함수)가 없어 차트 종가가 비고, 앱 전체도 `useDriveSync`의
+  타입 import(`DriveBackupEntry`) 때문에 dev 모드에서 로드되지 않는다(빌드·배포는 정상 — 기존 문제).
+- 검증: `verify:watchlist` 파트①-b `#80~#95`(직접 import — 옛 팝업 본문 대조 · 차트 행 · 주소 · 분배금 파서를 네이버·야후
+  실측 응답 형태로) + 가드 `#G74~#G95`. **변이 25종 + 음성 대조 1종으로 검출을 실증**했다(꼬리 대체 제거 · 컷오프 변경 ·
+  최근 분배를 가장 오래된 것으로 · 분배율 기준을 당일 종가로 · 차트 기준을 마지막 종가로 · 손상 응답을 '없음'으로 ·
+  showDiv truthy · sameWatchView 누락 · 행 접힌 칸 폭 · 조회 게이트 · 토글 로컬화 · features 추가 · 차단 안내 ·
+  컷오프 손계산 · 펼침 폭 · 헤더 2개부터 · dataKey 코드 · 자가치유/blur · 선택 해제 · label · 공용 함수 미사용 ·
+  localStorage · 부팅 분기 · 펀드 분기).
 
 ---
 
