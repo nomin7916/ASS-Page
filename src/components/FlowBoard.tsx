@@ -6,7 +6,7 @@ import FlowInspector from './FlowInspector';
 import FlowNodeEditor from './FlowNodeEditor';
 import { useFlowMapData } from '../hooks/useFlowMapData';
 import {
-  makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView,
+  makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView, flowLinkedAmount,
   countDanglingNodes, MAX_FLOW_NODES, MAX_FLOW_EDGES, MAX_FLOW_MAPS, MAX_FLOW_MAP_NAME,
   DEFAULT_FLOW_VIEWPORT, normalizeFlowViewport, sameFlowViewport, fitFlowViewport,
   addFlowMap, duplicateFlowMap, removeFlowMap, renameFlowMap, moveFlowMap, flowBundleEnabled,
@@ -350,6 +350,13 @@ export default function FlowBoard({
 
   const viewOf = useCallback(
     (node) => resolveFlowNodeView(node, portfolioById.get(node.portfolioId), summaryById.get(node.portfolioId)),
+    [portfolioById, summaryById],
+  );
+
+  // 표 값 칸의 계좌 연결 → 라이브 평가액. 캔버스(React.memo)와 팝업이 **같은 함수**를 써야
+  // 팝업이 보여 준 값과 도형에 그려진 값이 갈리지 않는다.
+  const tableLinkValue = useCallback(
+    (pid) => flowLinkedAmount(pid, portfolioById, summaryById),
     [portfolioById, summaryById],
   );
 
@@ -765,6 +772,7 @@ export default function FlowBoard({
             readOnly={readOnly}
             hideAmounts={hideAmounts}
             formatAmount={formatAmount}
+            tableLinkValue={tableLinkValue}
             connectFrom={connectFrom}
             onConnectFromChange={setConnectFrom}
             bundleEnabled={bundleOn}
@@ -886,6 +894,8 @@ export default function FlowBoard({
           initialTab={editor?.tab || 'memo'}
           initialPos={editorPos}
           onPosCommit={setEditorPos}
+          accountOptions={accountOptions}
+          linkValueOf={tableLinkValue}
         />
       )}
     </div>

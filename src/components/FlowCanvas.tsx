@@ -56,6 +56,7 @@ function FlowCanvasInner({
   readOnly,
   hideAmounts,
   formatAmount,
+  tableLinkValue,
   connectFrom,        // 연결 시작 노드 id (null이면 비활성)
   onConnectFromChange,
   bundleEnabled = true,   // 시트 단위 연결선 합치기(map.bundleEdges)
@@ -463,8 +464,11 @@ function FlowCanvasInner({
           // ⚠️ 렌더 스코프 선언 — 다른 최상위 블록의 지역 변수를 JSX가 참조하면 런타임
           //    ReferenceError로 화면이 통째로 오류 페이지가 되는데 @ts-nocheck + esbuild라
           //    빌드도 undefcheck도 잡지 못한다(initTradeRest 프로덕션 장애와 동일).
-          const tableRows = raw.table ? computeFlowTable(raw.table) : [];
+          const tableRows = raw.table ? computeFlowTable(raw.table, tableLinkValue) : [];
           const border = raw.table?.border || 'none';
+          // 계좌 연결 행은 실제 계좌 잔액이므로 '금액 숨기기'를 따른다. 소계·잔액도 그 값에서
+          // 파생되므로 함께 가린다(직접 입력만 있는 표는 종전 그대로 보인다).
+          const maskTable = hideAmounts && tableRows.some(r => r.linked);
           // ⚠️ 체크 칸은 **한 항목이라도 체크했을 때만** 그린다(= 체크리스트로 쓰기 시작한 표). 체크한
           //    적 없는 표까지 빈 칸을 그리면 기존 흐름도의 모양이 배포만으로 바뀐다.
           const showChecks = raw.table ? flowTableCheckStats(raw.table).done > 0 : false;
@@ -542,7 +546,7 @@ function FlowCanvasInner({
                             <span
                               className={`shrink-0 tabular-nums ${r.computed ? 'italic opacity-80' : ''}`}
                               style={border === 'all' ? { borderLeft: `1px solid ${gridColor}`, paddingLeft: 4 } : undefined}
-                            >{r.text}</span>
+                            >{maskTable && (r.linked || r.computed) ? '••••••' : r.text}</span>
                           </div>
                         )
                       ))}

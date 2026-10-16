@@ -221,6 +221,8 @@ function flowFingerprint(maps) {
               n.table.border ?? '',
               (Array.isArray(n.table.rows) ? n.table.rows : []).map(r => {
                 const f = flowTableRowFlags(r);
+                const pid = typeof r?.portfolioId === 'string' && r.portfolioId ? r.portfolioId : '';
+                if (pid) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid];
                 return f ? [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f] : [r?.kind ?? '', r?.label ?? '', r?.value ?? ''];
               }),
             ]
@@ -525,6 +527,8 @@ function normalizeFlowTable(raw) {
       ...(kind === 'item' && r.done === true ? { done: true } : {}),
       ...(kind !== 'rule' && r.strike === true ? { strike: true } : {}),
       ...(kind !== 'rule' && r.italic === true ? { italic: true } : {}),
+      ...((kind === 'item' || kind === 'total') && typeof r.portfolioId === 'string' && r.portfolioId.trim()
+        ? { portfolioId: r.portfolioId.trim().slice(0, 128) } : {}),
     });
   }
   if (rows.length === 0) return undefined;
@@ -541,6 +545,7 @@ function sameFlowTable(a, b) {
   for (let i = 0; i < ar.length; i++) {
     if (ar[i].kind !== br[i].kind || ar[i].label !== br[i].label || ar[i].value !== br[i].value) return false;
     if (ar[i].done !== br[i].done || ar[i].strike !== br[i].strike || ar[i].italic !== br[i].italic) return false;
+    if (ar[i].portfolioId !== br[i].portfolioId) return false;
   }
   return true;
 }
@@ -575,13 +580,42 @@ function clampFlowEditorPos(x, y, panelW, hostW, hostH) {
   };
 }
 
-function computeFlowTable(table) {
+const FLOW_TABLE_LINK_ALL = '__all__';
+
+function flowLinkedAmount(pid, portfolioById, summaryById) {
+  if (typeof pid !== 'string' || !pid) return null;
+  const evalOf = (id) => {
+    const s = summaryById?.get?.(id);
+    return s && typeof s.currentEval === 'number' && Number.isFinite(s.currentEval) ? s.currentEval : null;
+  };
+  if (pid === FLOW_TABLE_LINK_ALL) {
+    let sum = 0, any = false;
+    for (const [id, p] of portfolioById ? portfolioById.entries() : []) {
+      if (!p || p.deletedAt || p.isTest) continue;
+      const v = evalOf(id);
+      if (v === null) continue;
+      sum += v; any = true;
+    }
+    return any ? sum : null;
+  }
+  const p = portfolioById?.get?.(pid);
+  if (!p || p.deletedAt) return null;
+  return evalOf(pid);
+}
+
+function computeFlowTable(table, linkedValueOf) {
   const rows = table && Array.isArray(table.rows) ? table.rows : [];
   const out = [];
+  const isLinked = (r) => (r.kind === 'item' || r.kind === 'total') && typeof r.portfolioId === 'string' && !!r.portfolioId;
+  const valueOf = (r) => {
+    if (!isLinked(r)) return parseFlowNumber(r.value);
+    const v = linkedValueOf ? linkedValueOf(r.portfolioId) : null;
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  };
   let sumItemAll = 0, sumTotal = 0;
   for (const r of rows) {
     if (!r) continue;
-    const v = parseFlowNumber(r.value);
+    const v = valueOf(r);
     if (v === null) continue;
     if (r.kind === 'item') sumItemAll += v;
     else if (r.kind === 'total') sumTotal += v;
@@ -589,16 +623,19 @@ function computeFlowTable(table) {
   let section = 0;
   for (const r of rows) {
     if (!r) continue;
-    if (r.kind === 'rule') { section = 0; out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false }); continue; }
+    if (r.kind === 'rule') { section = 0; out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false, linked: false }); continue; }
     const strike = r.strike === true;
     const italic = r.italic === true;
-    if (r.kind === 'subtotal') { out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true, done: false, strike, italic }); continue; }
-    if (r.kind === 'balance') { out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true, done: false, strike, italic }); continue; }
-    const v = parseFlowNumber(r.value);
+    if (r.kind === 'subtotal') { out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true, done: false, strike, italic, linked: false }); continue; }
+    if (r.kind === 'balance') { out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true, done: false, strike, italic, linked: false }); continue; }
+    const linked = isLinked(r);
+    const v = valueOf(r);
     if (r.kind === 'item' && v !== null) section += v;
     out.push({
-      kind: r.kind, label: r.label, text: v === null ? asStr(r.value) : formatFlowNumber(v), computed: false,
-      done: r.kind === 'item' && r.done === true, strike, italic,
+      kind: r.kind, label: r.label,
+      text: v !== null ? formatFlowNumber(v) : linked ? '-' : asStr(r.value),
+      computed: false,
+      done: r.kind === 'item' && r.done === true, strike, italic, linked,
     });
   }
   return out;
@@ -1395,6 +1432,50 @@ console.log('\n■ 메모·표 팝업 위치 클램프 (가운데에서 열고, 
   //    묶지 않으면 clamp가 하한을 돌려줘 상한을 넘는다(위 #158f는 팝업이 넓어 이 분기를 밟지 않는다).
   eq('#158h 좁은 팝업 + 좁은 창에서도 상한을 넘지 않는다', clampFlowEditorPos(0, 0, 100, 100, 100).x, 100 - FLOW_EDITOR_GRIP_PX);
   deep('#158g 손상 입력은 0으로(팝업이 사라지지 않게)', clampFlowEditorPos(NaN, Infinity, 680, 1440, 900), { x: 0, y: 0 });
+}
+
+console.log('\n■ 표 값 칸 계좌 연결 (사용자 요청 2026-10)');
+{
+  const L = (kind, label, value, pid) => ({ kind, label, value, ...(pid !== undefined ? { portfolioId: pid } : {}) });
+  const pById = new Map([
+    ['a', { id: 'a' }], ['b', { id: 'b' }], ['t', { id: 't', isTest: true }], ['d', { id: 'd', deletedAt: '2026-01-01' }], ['z', { id: 'z' }],
+  ]);
+  const sById = new Map([
+    ['a', { id: 'a', currentEval: 100 }], ['b', { id: 'b', currentEval: 40 }], ['t', { id: 't', currentEval: 7 }],
+    ['d', { id: 'd', currentEval: 999 }], ['z', { id: 'z', currentEval: NaN }],
+  ]);
+  const lv = (pid) => flowLinkedAmount(pid, pById, sById);
+  eq('#160 연결 계좌의 현재 평가액', lv('a'), 100);
+  eq('#160b 삭제 계좌는 null(summary 실수치를 쓰지 않는다)', lv('d'), null);
+  eq('#160c 없는 계좌·NaN·빈 id는 null', [lv('nope'), lv('z'), lv(''), lv(undefined)].join(','), ',,,');
+  eq('#160d 전체 계좌 합계 = TEST·삭제 제외 합', lv(FLOW_TABLE_LINK_ALL), 140);
+  eq('#160e 전체 합계에 값이 하나도 없으면 null(0 단언 금지)', flowLinkedAmount(FLOW_TABLE_LINK_ALL, new Map(), new Map()), null);
+
+  const t = { border: 'none', rows: [L('total', '총액', '999', 'a'), L('item', 'x', '30'), L('item', 'y', '5', 'b'), L('rule', ''), L('subtotal', 's'), L('balance', '잔액')] };
+  const c = computeFlowTable(t, lv);
+  eq('#161 연결 행은 직접 입력값 대신 평가액', c[0].text, '100');
+  eq('#161b 잔액 = 연결 총액 − (직접 + 연결 항목)', c[5].text, '30');
+  eq('#161c 연결 표시', c.map(r => (r.linked ? 1 : 0)).join(''), '101000');
+  const cNone = computeFlowTable(t);
+  eq('#161d 해석 함수가 없으면 연결 행은 - 이고 합계에서 빠진다', [cNone[0].text, cNone[5].text].join('|'), '-|-30');
+  const cGone = computeFlowTable({ border: 'none', rows: [L('total', 'T', '50', 'd'), L('item', 'i', '10'), L('balance', 'B')] }, lv);
+  eq('#161e 삭제 계좌 연결은 - 이고 0으로 계산하지 않는다', [cGone[0].text, cGone[2].text].join('|'), '-|-10');
+  eq('#161f 연결 없는 표는 종전과 같다',
+    JSON.stringify(computeFlowTable({ border: 'none', rows: [L('total', 'T', '50'), L('item', 'i', '10'), L('balance', 'B')] }, lv).map(r => r.text)),
+    JSON.stringify(['50', '10', '40']));
+
+  const n = normalizeFlowTable({ rows: ['item', 'total', 'subtotal', 'balance', 'rule'].map(k => L(k, k, '1', ' a ')) });
+  eq('#162 계좌 연결은 항목·총액 행 전용(trim)', (n?.rows || []).map(r => r.portfolioId ?? '-').join(','), 'a,a,-,-,-');
+  eq('#162b 빈 문자열·숫자 연결은 저장하지 않는다',
+    (normalizeFlowTable({ rows: [L('item', 'a', '1', ''), L('item', 'b', '1', 7)] })?.rows || []).map(r => ('portfolioId' in r ? 1 : 0)).join(''), '00');
+  const nl = normalizeFlowTable({ rows: [L('total', 'T', '50', 'a')], border: 'all' });
+  eq('#162c 멱등(연결 포함)', JSON.stringify(normalizeFlowTable(nl)), JSON.stringify(nl));
+  eq('#162d 연결해도 직접 입력값은 보존된다(풀면 되살아난다)', nl?.rows?.[0]?.value, '50');
+  ok('#163 연결만 달라도 다른 표', !sameFlowTable({ border: 'none', rows: [L('item', 'a', '1')] }, { border: 'none', rows: [L('item', 'a', '1', 'a')] }));
+  ok('#163b 연결 대상이 달라도 다른 표', !sameFlowTable({ border: 'none', rows: [L('item', 'a', '1', 'b')] }, { border: 'none', rows: [L('item', 'a', '1', 'a')] }));
+  const fpMap = (rows) => [cleanMap({ id: 'm1', nodes: [{ ...mkNode({ id: 'n1' }), table: { rows, border: 'none' } }], edges: [] })];
+  ok('#164 지문이 계좌 연결에 반응', flowFingerprint(fpMap([L('item', 'a', '1')])) !== flowFingerprint(fpMap([L('item', 'a', '1', 'a')])));
+  ok('#164b 연결 없는 행의 지문은 종전 3칸 그대로', flowFingerprint(fpMap([L('item', 'a', '1')])).includes('["item","a","1"]'));
 }
 
 console.log('\n■ removeNode / pruneOrphanEdges');
@@ -2335,7 +2416,7 @@ const edNC = stripComments(editor);
   ok('#G173c FlowNodeEditor: 도달하지 않는 Escape 핸들러를 되살리지 않았다(처리는 보드가 한다)',
     !/e\.key === 'Escape'/.test(edNC));
   ok('#G174 FlowNodeEditor: 계산은 flowMap 공유 함수가 한다(팝업이 합을 다시 구하지 않는다)',
-    /const computed = computeFlowTable\(tbl\);/.test(edNC));
+    /const computed = computeFlowTable\(tbl, linkValueOf\);/.test(edNC));
   ok('#G174b FlowNodeEditor: 자동 계산 행은 값 입력을 막고 계산 결과를 보여 준다',
     /const auto = r\.kind === 'subtotal' \|\| r\.kind === 'balance';/.test(edNC) && /\{computed\[i\]\?\.text \|\| '0'\}/.test(edNC));
   ok('#G174c FlowNodeEditor: 붙여넣기도 공유 파서를 쓴다', /flowTableFromText\(pasteText\)/.test(edNC));
@@ -2345,7 +2426,7 @@ const edNC = stripComments(editor);
 {
   // ⚠️ 도형 안 표도 같은 계산을 써야 팝업이 보여 준 값과 화면이 갈리지 않는다.
   ok('#G175 FlowCanvas: 표를 flowMap 공유 함수로 계산',
-    /const tableRows = raw\.table \? computeFlowTable\(raw\.table\) : \[\];/.test(canvasNC));
+    /const tableRows = raw\.table \? computeFlowTable\(raw\.table, tableLinkValue\) : \[\];/.test(canvasNC));
   ok('#G175b FlowCanvas: 표를 실제로 렌더한다', /\{tableRows\.map\(\(r, i\) => \(/.test(canvasNC));
   ok('#G175c FlowCanvas: 선 표시가 저장값을 따른다',
     /const border = raw\.table\?\.border \|\| 'none';/.test(canvasNC) && /border !== 'none'/.test(canvasNC));
@@ -2401,7 +2482,7 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
   ok('#G178c flowMap.ts: 팝업 위치를 저장 필드로 만들지 않았다(세션 로컬)', !/editorPos|initialPos/.test(mod));
 }
 {
-  const rowBlk = sliceBetween(edNC, ') : rows.map((r, i) => {', '{auto ? (');
+  const rowBlk = sliceBetween(edNC, ') : rows.map((r, i) => {', ') : auto ? (');
   const labelAt = rowBlk.indexOf("placeholder={isRule ? '─────' : '항목 이름'}");
   ok('#G179 FlowNodeEditor: 실행 체크가 항목 이름 오른쪽에 있다', labelAt > 0 && rowBlk.indexOf('type="checkbox"') > labelAt);
   ok('#G179b 실행 체크는 항목 행에서만', /const isItem = r\.kind === 'item';/.test(rowBlk) && /\{isItem \? \(\s*<input\s+type="checkbox"/.test(rowBlk));
@@ -2412,6 +2493,15 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
   ok('#G179f 항목 이름 칸이 고른 서식을 그대로 보여 준다',
     /\$\{strikeOn && !isRule \? 'line-through' : ''\} \$\{italicOn && !isRule \? 'italic' : ''\}/.test(rowBlk));
   ok('#G179g 구분선에서는 서식 버튼을 잠근다', (rowBlk.match(/disabled=\{readOnly \|\| isRule\}/g) || []).length === 2);
+  // ⚠️ 팝업과 도형이 **같은 해석 함수**를 써야 숫자가 갈리지 않는다(보드의 tableLinkValue).
+  ok('#G182 FlowBoard: 표 계좌 연결 해석을 공유 함수로 만들어 캔버스·팝업 양쪽에 넘긴다',
+    /flowLinkedAmount\(pid, portfolioById, summaryById\)/.test(boardNC) && /tableLinkValue=\{tableLinkValue\}/.test(boardNC)
+    && /linkValueOf=\{tableLinkValue\}/.test(boardNC) && /accountOptions=\{accountOptions\}\s*\n\s*linkValueOf/.test(boardNC));
+  ok('#G182b FlowNodeEditor: 값 출처 선택은 항목·총액 행에만', /\{\(isItem \|\| r\.kind === 'total'\) \? \(\s*<select/.test(edNC));
+  ok('#G182c FlowNodeEditor: 직접 입력·전체 합계·계좌 목록 선택지', /<option value="">직접 입력<\/option>/.test(edNC)
+    && /<option value=\{FLOW_TABLE_LINK_ALL\}>전체 계좌 합계<\/option>/.test(edNC) && /accountOptions\.map\(o => \(/.test(edNC));
+  ok('#G182d FlowNodeEditor: 연결 해제는 직접 입력값을 지우지 않는다', /setRow\(i, \{ portfolioId: undefined \}, true\)/.test(edNC) && !/portfolioId: undefined, value/.test(edNC));
+  ok('#G182e FlowNodeEditor: 연결 행 값은 계산 결과를 읽기 전용으로', /r\.portfolioId && \(isItem \|\| r\.kind === 'total'\) \? \(\s*<div/.test(edNC));
   ok('#G179h 팝업의 실행 현황은 공유 함수로 센다',
     /const checks = flowTableCheckStats\(tbl\);/.test(edNC) && /실행 \{checks\.done\}\/\{checks\.total\}/.test(edNC));
 }
@@ -2423,7 +2513,10 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
     /const showChecks = raw\.table \? flowTableCheckStats\(raw\.table\)\.done > 0 : false;/.test(canvasNC) && /\{showChecks && r\.kind === 'item' && \(/.test(tb));
   const lab = tb.indexOf('{r.label}');
   const chk = tb.indexOf('{showChecks');
-  ok('#G180c FlowCanvas: 체크 칸이 항목 이름 오른쪽 · 값 왼쪽', lab > 0 && chk > lab && tb.indexOf('>{r.text}</span>') > chk);
+  ok('#G180c FlowCanvas: 체크 칸이 항목 이름 오른쪽 · 값 왼쪽', lab > 0 && chk > lab && tb.indexOf(": r.text}</span>") > chk);
+  // ⚠️ 계좌 연결 행은 실제 잔액 — '금액 숨기기'를 따른다(소계·잔액도 그 값에서 파생되므로 함께).
+  ok('#G181a FlowCanvas: 연결 표는 금액 숨기기를 따른다',
+    /const maskTable = hideAmounts && tableRows\.some\(r => r\.linked\);/.test(canvasNC) && /\{maskTable && \(r\.linked \|\| r\.computed\) \? '••••••' : r\.text\}/.test(tb));
   // ⚠️ 원본 행을 인덱스로 다시 읽으면 손상 행을 건너뛴 computeFlowTable과 인덱스가 어긋난다.
   ok('#G180d FlowCanvas: 체크 표시는 계산 결과의 done을 따른다', /\{r\.done && \(/.test(tb) && !/raw\.table\.rows\[/.test(canvasNC));
   ok('#G180e FlowCanvas: 체크 칸 색은 글자색을 따른다(밝은 채우기에서도 보이게)',
@@ -2755,6 +2848,34 @@ await (async () => {
           JSON.stringify(clampCases.map(a => real.clampFlowEditorPos(...a))), JSON.stringify(clampCases.map(a => clampFlowEditorPos(...a))));
         eq('#136n 팝업 한계 상수 일치',
           [real.FLOW_EDITOR_GRIP_PX, real.FLOW_EDITOR_HEADER_PX].join(','), [FLOW_EDITOR_GRIP_PX, FLOW_EDITOR_HEADER_PX].join(','));
+      }
+      // (8) 표 값 칸 계좌 연결 — 손상값·행 종류·삭제/TEST·해석 함수 유무를 결정적으로 밟는다.
+      {
+        const L = (kind, label, value, pid) => ({ kind, label, value, ...(pid !== undefined ? { portfolioId: pid } : {}) });
+        const pB = new Map([['a', { id: 'a' }], ['t', { id: 't', isTest: true }], ['d', { id: 'd', deletedAt: '2026-01-01' }]]);
+        const sB = new Map([['a', { currentEval: 100 }], ['t', { currentEval: 7 }], ['d', { currentEval: 999 }]]);
+        eq('#137 flowLinkedAmount 일치',
+          JSON.stringify(['a', 't', 'd', 'x', '', null, real.FLOW_TABLE_LINK_ALL].map(p => real.flowLinkedAmount(p, pB, sB))),
+          JSON.stringify(['a', 't', 'd', 'x', '', null, FLOW_TABLE_LINK_ALL].map(p => flowLinkedAmount(p, pB, sB))));
+        const lrows = [L('total', 'T', '9', 'a'), L('item', 'i', '3', 'd'), L('item', 'j', '2'), L('subtotal', 's', '', 'a'), L('rule', 'r', '', 'a'), L('balance', 'b', '', ' t '), L('item', 'k', '1', 7)];
+        eq('#137b normalizeFlowTable 연결 정규화 일치',
+          JSON.stringify(real.normalizeFlowTable({ rows: lrows })), JSON.stringify(normalizeFlowTable({ rows: lrows })));
+        const rv = (p) => real.flowLinkedAmount(p, pB, sB);
+        const mv = (p) => flowLinkedAmount(p, pB, sB);
+        eq('#137c computeFlowTable 연결 계산 일치',
+          JSON.stringify(real.computeFlowTable({ rows: lrows }, rv)), JSON.stringify(computeFlowTable({ rows: lrows }, mv)));
+        eq('#137d 해석 함수 없을 때도 일치',
+          JSON.stringify(real.computeFlowTable({ rows: lrows })), JSON.stringify(computeFlowTable({ rows: lrows })));
+        eq('#137e sameFlowTable 연결 비교 일치',
+          String(real.sameFlowTable({ border: 'none', rows: [L('item', 'a', '1')] }, { border: 'none', rows: [L('item', 'a', '1', 'a')] })),
+          String(sameFlowTable({ border: 'none', rows: [L('item', 'a', '1')] }, { border: 'none', rows: [L('item', 'a', '1', 'a')] })));
+        const nodeL = { id: 'n1', kind: 'rect', x: 0, y: 0, w: 180, h: 120, label: '', date: '', amountManual: null, memo: '', portfolioId: null, accountNameSnapshot: '', amountSource: 'none', table: { rows: [L('total', 'T', '9', 'a')], border: 'all' } };
+        const forcedL = [cleanMap({ id: 'm1', name: 123, nodes: [nodeL], edges: [] })];
+        eq('#137f 연결을 든 표의 재구축·지문 일치',
+          JSON.stringify([norm(real.normalizeFlowMaps(forcedL)), real.flowFingerprint(forcedL)]),
+          JSON.stringify([norm(normalizeFlowMaps(forcedL)), flowFingerprint(forcedL)]));
+        eq('#137g 실모듈도 재구축에서 연결을 보존', real.normalizeFlowMaps(forcedL)[0]?.nodes?.[0]?.table?.rows?.[0]?.portfolioId, 'a');
+        eq('#137h 예약 id 일치', real.FLOW_TABLE_LINK_ALL, FLOW_TABLE_LINK_ALL);
       }
     }
     eq('#133c layoutFlowLabels 무작위 400세트 일치', badLabel, 0);

@@ -156,7 +156,18 @@ export interface FlowTableRow {
   strike?: boolean;
   /** 항목 이름 기울임. 구분선을 뺀 모든 행. */
   italic?: boolean;
+  /**
+   * 계좌 연결(사용자 요청 2026-10) — 값 칸을 직접 입력 대신 **계좌의 현재 평가액**으로 채운다.
+   * 항목·총액 행 전용. `FLOW_TABLE_LINK_ALL`이면 전체 계좌 합계(TEST·삭제 제외).
+   * ⚠️ 연결해도 `value`(직접 입력값)는 **지우지 않는다** — 연결을 풀면 그 값이 되살아난다.
+   * ⚠️ 생략 = 직접 입력. 빈 문자열을 저장하지 말 것(기존 표가 '변경됨'이 된다).
+   * ⚠️ 금액은 저장하지 않고 매 렌더 라이브 재조회한다(노드 계좌 연결과 같은 계약).
+   */
+  portfolioId?: string;
 }
+
+/** 표 값 칸의 '전체 계좌 합계' 연결 예약 id. 실제 계좌 id(generateId)와 겹치지 않는다. */
+export const FLOW_TABLE_LINK_ALL = '__all__';
 
 export interface FlowTable {
   rows: FlowTableRow[];
@@ -701,6 +712,9 @@ export function flowFingerprint(maps: unknown): string {
                 //    '체크만 한 세션'이 portfolioUpdatedAt을 못 올려 STATE 저장이 통째로 스킵된다.
                 (Array.isArray(n.table.rows) ? n.table.rows : []).map((r: any) => {
                   const f = flowTableRowFlags(r);
+                  // ⚠️ 계좌 연결은 **있을 때만** 5번째 칸 — 없는 행은 종전 3칸/4칸 그대로(배포 churn 방지).
+                  const pid = typeof r?.portfolioId === 'string' && r.portfolioId ? r.portfolioId : '';
+                  if (pid) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid];
                   return f ? [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f] : [r?.kind ?? '', r?.label ?? '', r?.value ?? ''];
                 }),
               ]
@@ -1156,6 +1170,9 @@ export function normalizeFlowTable(raw: unknown): FlowTable | undefined {
       ...(kind === 'item' && row.done === true ? { done: true } : {}),
       ...(kind !== 'rule' && row.strike === true ? { strike: true } : {}),
       ...(kind !== 'rule' && row.italic === true ? { italic: true } : {}),
+      // ⚠️ 계좌 연결은 **항목·총액 행 전용**(소계·잔액은 자동 계산, 구분선은 값이 없다).
+      ...((kind === 'item' || kind === 'total') && typeof row.portfolioId === 'string' && row.portfolioId.trim()
+        ? { portfolioId: row.portfolioId.trim().slice(0, 128) } : {}),
     });
   }
   if (rows.length === 0) return undefined;
@@ -1178,6 +1195,8 @@ export function sameFlowTable(a: unknown, b: unknown): boolean {
     //    걸러져 저장되지 않고, 로드 정규화에서는 손상된 표시가 교정되지 않고 남는다.
     //    raw 비교(`!==`)라야 정규화 전 손상값('yes')과 생략을 구분한다.
     if (ar[i].done !== br[i].done || ar[i].strike !== br[i].strike || ar[i].italic !== br[i].italic) return false;
+    // ⚠️ 계좌 연결도 비교 대상 — 빠뜨리면 '연결만 바꾼 편집'이 팝업 flush에서 걸러져 저장되지 않는다.
+    if (ar[i].portfolioId !== br[i].portfolioId) return false;
   }
   return true;
 }
@@ -1248,6 +1267,37 @@ export interface FlowTableComputedRow {
   strike: boolean;
   /** 항목 이름 기울임 */
   italic: boolean;
+  /** 계좌에 연결된 행인가(값이 라이브 평가액). 연결이 풀린 계좌면 text는 '-'. */
+  linked: boolean;
+}
+
+/**
+ * 표 값 칸의 계좌 연결 → 금액. 값을 못 구하면 null(= 합계에서 제외, '-' 표시).
+ * ⚠️ 규칙은 노드 `resolveFlowNodeView`와 같다 — 삭제 계좌는 summary가 실수치를 그대로 담고
+ *    있으므로 여기서 명시적으로 null.
+ * `FLOW_TABLE_LINK_ALL` = 통합 대시보드 합산과 같은 집합(TEST·삭제 제외).
+ */
+export function flowLinkedAmount(pid: unknown, portfolioById: Map<string, any>, summaryById: Map<string, any>): number | null {
+  if (typeof pid !== 'string' || !pid) return null;
+  const evalOf = (id: string) => {
+    const s = summaryById?.get?.(id);
+    return s && typeof s.currentEval === 'number' && Number.isFinite(s.currentEval) ? s.currentEval : null;
+  };
+  if (pid === FLOW_TABLE_LINK_ALL) {
+    let sum = 0;
+    let any = false;
+    for (const [id, p] of portfolioById ? portfolioById.entries() : []) {
+      if (!p || p.deletedAt || p.isTest) continue;
+      const v = evalOf(id);
+      if (v === null) continue;
+      sum += v;
+      any = true;
+    }
+    return any ? sum : null;
+  }
+  const p = portfolioById?.get?.(pid);
+  if (!p || p.deletedAt) return null;
+  return evalOf(pid);
 }
 
 /**
@@ -1261,16 +1311,27 @@ export interface FlowTableComputedRow {
  * ⚠️ **숫자로 읽히지 않는 값은 합계에서 제외**하고 원문 그대로 보여 준다. 0으로 떨어뜨리면
  *    '약 3억'이라 적은 행이 조용히 0원으로 계산에 들어간다.
  */
-export function computeFlowTable(table: unknown): FlowTableComputedRow[] {
+export function computeFlowTable(
+  table: unknown,
+  linkedValueOf?: (pid: string) => number | null,
+): FlowTableComputedRow[] {
   const t = table as FlowTable | undefined;
   const rows = t && Array.isArray(t.rows) ? t.rows : [];
   const out: FlowTableComputedRow[] = [];
+  // ⚠️ 계좌 연결 행은 직접 입력값을 보지 않는다(풀면 되살아나도록 남겨 둔 값일 뿐이다).
+  //    해석 함수가 없거나 값을 못 구하면 null — 합계에서 빠지고 '-'로 보인다(0으로 단언하지 않는다).
+  const isLinked = (r: any) => (r.kind === 'item' || r.kind === 'total') && typeof r.portfolioId === 'string' && !!r.portfolioId;
+  const valueOf = (r: any): number | null => {
+    if (!isLinked(r)) return parseFlowNumber(r.value);
+    const v = linkedValueOf ? linkedValueOf(r.portfolioId) : null;
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  };
 
   let sumItemAll = 0;
   let sumTotal = 0;
   for (const r of rows) {
     if (!r) continue;
-    const v = parseFlowNumber(r.value);
+    const v = valueOf(r);
     if (v === null) continue;
     if (r.kind === 'item') sumItemAll += v;
     else if (r.kind === 'total') sumTotal += v;
@@ -1281,7 +1342,7 @@ export function computeFlowTable(table: unknown): FlowTableComputedRow[] {
     if (!r) continue;
     if (r.kind === 'rule') {
       section = 0;
-      out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false });
+      out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false, linked: false });
       continue;
     }
     // ⚠️ 표시는 **그리기 전용**이다 — 아래 합계 어디에도 참여하지 않는다(실행한 계획도 금액은 그대로).
@@ -1290,18 +1351,21 @@ export function computeFlowTable(table: unknown): FlowTableComputedRow[] {
     const strike = r.strike === true;
     const italic = r.italic === true;
     if (r.kind === 'subtotal') {
-      out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true, done: false, strike, italic });
+      out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true, done: false, strike, italic, linked: false });
       continue;
     }
     if (r.kind === 'balance') {
-      out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true, done: false, strike, italic });
+      out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true, done: false, strike, italic, linked: false });
       continue;
     }
-    const v = parseFlowNumber(r.value);
+    const linked = isLinked(r);
+    const v = valueOf(r);
     if (r.kind === 'item' && v !== null) section += v;
     out.push({
-      kind: r.kind, label: r.label, text: v === null ? asStr(r.value) : formatFlowNumber(v), computed: false,
-      done: r.kind === 'item' && r.done === true, strike, italic,
+      kind: r.kind, label: r.label,
+      text: v !== null ? formatFlowNumber(v) : linked ? '-' : asStr(r.value),
+      computed: false,
+      done: r.kind === 'item' && r.done === true, strike, italic, linked,
     });
   }
   return out;

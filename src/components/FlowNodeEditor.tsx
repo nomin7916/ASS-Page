@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { X, Plus, Trash2, ChevronUp, ChevronDown, ClipboardPaste } from 'lucide-react';
 import {
   computeFlowTable, normalizeFlowTable, flowTableFromText, sameFlowTable, flowTableCheckStats,
-  clampFlowEditorPos, FLOW_TABLE_BORDERS, MAX_FLOW_TABLE_ROWS, MAX_FLOW_TABLE_TEXT,
+  clampFlowEditorPos, FLOW_TABLE_BORDERS, MAX_FLOW_TABLE_ROWS, MAX_FLOW_TABLE_TEXT, FLOW_TABLE_LINK_ALL,
 } from '../flowMap';
 
 /**
@@ -59,7 +59,10 @@ const NO_DRAG_SELECTOR = 'button,input,select,textarea,a,label';
 const fmtToggleCls = (on) =>
   `w-6 h-6 shrink-0 rounded border text-[11px] leading-none transition disabled:opacity-25 ${on ? 'border-indigo-500 text-indigo-200 bg-indigo-900/40' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`;
 
-export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly, initialTab = 'memo', initialPos = null, onPosCommit }) {
+export default function FlowNodeEditor({
+  node, title, onPatch, onClose, readOnly, initialTab = 'memo', initialPos = null, onPosCommit,
+  accountOptions = [], linkValueOf,
+}) {
   const [tab, setTab] = useState(initialTab);
   // null = 가운데. 끄는 동안은 여기만 바뀌고, 놓을 때 onPosCommit으로 보드에 알린다.
   const [pos, setPos] = useState(initialPos);
@@ -157,7 +160,22 @@ export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly
   }, [pos, onPosCommit]);
 
   const rows = tbl?.rows || [];
-  const computed = computeFlowTable(tbl);
+  // ⚠️ 도형 안 표와 **같은 해석 함수**(보드의 tableLinkValue)로 계산한다 — 갈리면 팝업과 도형의 숫자가 다르다.
+  const computed = computeFlowTable(tbl, linkValueOf);
+  const accountNameOf = (pid) => {
+    if (pid === FLOW_TABLE_LINK_ALL) return '전체 계좌 합계';
+    const o = accountOptions.find(a => a.id === pid);
+    return o ? o.name : '';
+  };
+  /** 값 칸 연결 변경. '' = 직접 입력(직접 입력값은 지우지 않았으므로 그대로 되살아난다). */
+  const setLink = (i, pid) => {
+    const r = rows[i];
+    if (!r) return;
+    if (!pid) { setRow(i, { portfolioId: undefined }, true); return; }
+    // 이름이 비어 있으면 계좌명으로 채운다(사용자가 적은 이름은 건드리지 않는다).
+    const name = accountNameOf(pid);
+    setRow(i, { portfolioId: pid, ...(!r.label.trim() && name ? { label: name } : {}) }, true);
+  };
   const checks = flowTableCheckStats(tbl);
 
   /** 구조 변경 — 즉시 커밋한다(행 추가·삭제·이동·유형 변경은 blur가 없다). */
@@ -214,7 +232,7 @@ export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly
     <div
       ref={panelRef}
       data-flow-node-editor=""
-      className="absolute w-[680px] max-w-[94vw] h-[560px] max-h-[88vh] flex flex-col rounded-lg border border-gray-600 bg-[#0f1623] shadow-2xl shadow-black/70"
+      className="absolute w-[780px] max-w-[94vw] h-[560px] max-h-[88vh] flex flex-col rounded-lg border border-gray-600 bg-[#0f1623] shadow-2xl shadow-black/70"
       style={pos
         ? { zIndex: 60, left: pos.x, top: pos.y }
         : { zIndex: 60, left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }}
@@ -316,7 +334,8 @@ export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly
               <div className="h-full flex items-center justify-center text-center text-[11px] text-gray-500 leading-relaxed">
                 아래 버튼으로 행을 추가하세요.<br />
                 <span className="text-gray-600">소계 = 바로 위 구분선 이후 항목의 합 · 잔액 = 총액 합 − 항목 합</span><br />
-                <span className="text-gray-600">항목 이름 오른쪽 체크 = 실행 표시 · S = 취소선 · I = 기울임</span>
+                <span className="text-gray-600">항목 이름 오른쪽 체크 = 실행 표시 · S = 취소선 · I = 기울임</span><br />
+                <span className="text-gray-600">항목·총액의 금액은 직접 입력하거나 계좌(또는 전체 계좌 합계)를 연결할 수 있습니다</span>
               </div>
             ) : rows.map((r, i) => {
               const auto = r.kind === 'subtotal' || r.kind === 'balance';
@@ -371,7 +390,32 @@ export default function FlowNodeEditor({ node, title, onPatch, onClose, readOnly
                     title="항목 이름 기울임"
                     className={fmtToggleCls(italicOn && !isRule)}
                   ><span className="italic font-serif">I</span></button>
-                  {auto ? (
+                  {/* 값 출처 — 항목·총액 행만 직접 입력 / 계좌 연결을 고른다(사용자 요청 2026-10).
+                      다른 행은 같은 폭의 빈 칸으로 열을 맞춘다. */}
+                  {(isItem || r.kind === 'total') ? (
+                    <select
+                      disabled={readOnly}
+                      value={r.portfolioId || ''}
+                      onChange={e => setLink(i, e.target.value)}
+                      title={r.portfolioId ? `계좌 연결: ${accountNameOf(r.portfolioId) || '(연결 끊김)'} — 현재 평가액이 자동으로 들어갑니다` : '금액을 직접 입력합니다. 계좌를 고르면 그 계좌의 현재 평가액이 들어갑니다.'}
+                      className={`w-[96px] shrink-0 bg-gray-800 border rounded px-1 py-1 text-[10px] outline-none focus:border-indigo-500 ${r.portfolioId ? 'border-sky-700 text-sky-200' : 'border-gray-700 text-gray-400'}`}
+                    >
+                      <option value="">직접 입력</option>
+                      <option value={FLOW_TABLE_LINK_ALL}>전체 계좌 합계</option>
+                      {accountOptions.map(o => (
+                        <option key={o.id} value={o.id}>{o.name}{o.deleted ? ' (삭제됨)' : o.isTest ? ' (TEST)' : ''}</option>
+                      ))}
+                      {r.portfolioId && r.portfolioId !== FLOW_TABLE_LINK_ALL && !accountOptions.some(o => o.id === r.portfolioId) && (
+                        <option value={r.portfolioId}>(연결 끊김)</option>
+                      )}
+                    </select>
+                  ) : <span className="w-[96px] shrink-0" />}
+                  {r.portfolioId && (isItem || r.kind === 'total') ? (
+                    <div
+                      className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-sky-300 bg-gray-800/40 border border-sky-800/60 rounded truncate"
+                      title={computed[i]?.text === '-' ? '계좌 평가액을 구하지 못했습니다(삭제·연결 끊김·불러오는 중). 합계에서 제외됩니다.' : `${accountNameOf(r.portfolioId)} 현재 평가액(자동)`}
+                    >{computed[i]?.text || '-'}</div>
+                  ) : auto ? (
                     <div
                       className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-emerald-300/90 italic bg-gray-800/40 border border-gray-700/60 rounded truncate"
                       title="자동 계산된 값입니다"
