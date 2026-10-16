@@ -43,13 +43,21 @@ import {
 
 const ROW_KINDS = [
   { k: 'item', t: '항목', title: '값을 직접 적는 행. 소계·잔액 계산의 대상입니다.' },
-  { k: 'subtotal', t: '소계', title: '바로 위 구분선 이후의 항목 합이 자동으로 들어갑니다.' },
-  { k: 'total', t: '총액', title: '값을 직접 적는 행. 잔액 계산의 기준입니다.' },
-  { k: 'balance', t: '잔액', title: '총액 합에서 항목 합을 뺀 값이 자동으로 들어갑니다.' },
+  { k: 'subtotal', t: '소계', title: '기본: 바로 위 구분선 이후의 항목 합. 더하고 뺄 행을 직접 고를 수도 있습니다.' },
+  { k: 'total', t: '총액', title: '직접 적거나, 계좌에 연결하거나, 다른 행을 더하고 빼서 계산합니다. 잔액 계산의 기준입니다.' },
+  { k: 'balance', t: '잔액', title: '기본: 총액 합 − 항목 합. 더하고 뺄 행을 직접 고를 수도 있습니다.' },
   { k: 'rule', t: '구분선', title: '가로선만 그립니다. 소계는 이 선을 기준으로 끊깁니다.' },
 ];
 
 const BORDER_LABEL = { none: '없음', outline: '바깥만', all: '전체' };
+
+/** 총액 행 값 출처 드롭다운의 '항목 계산' 값(계좌 id와 겹치지 않는다). */
+const CALC_SOURCE = '__calc__';
+
+const isCalcTotalRow = (r) => r?.kind === 'total' && !!r.formula && typeof r.formula === 'object' && !Array.isArray(r.formula);
+/** 계산식이 가리킬 수 있는 행 — flowMap 정규화와 같은 규칙(항목 + 계산식 없는 총액). */
+const canRefRow = (r) => r?.kind === 'item' || (r?.kind === 'total' && !isCalcTotalRow(r));
+const formulaCount = (r) => (r?.formula && typeof r.formula === 'object' ? Object.keys(r.formula).length : 0);
 
 const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:border-indigo-500 outline-none';
 
@@ -72,6 +80,8 @@ export default function FlowNodeEditor({
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [notice, setNotice] = useState('');
+  // 계산식 패널이 열린 행 인덱스(세션 로컬). 행 추가·삭제·이동으로 인덱스가 밀리면 닫는다.
+  const [calcOpen, setCalcOpen] = useState(null);
 
   // flush는 언마운트에서 호출되므로 클로저가 아니라 ref를 읽어야 한다.
   const memoRef = useRef(memo); memoRef.current = memo;
@@ -168,13 +178,62 @@ export default function FlowNodeEditor({
     return o ? o.name : '';
   };
   /** 값 칸 연결 변경. '' = 직접 입력(직접 입력값은 지우지 않았으므로 그대로 되살아난다). */
+  /**
+   * 계산식이 참조할 행에 id를 붙인다(없는 행만). ⚠️ 계산식을 처음 쓸 때만 부른다 — 모든 표에 id를
+   * 만들면 기존 흐름도가 배포만으로 '변경됨'이 된다. 이벤트 핸들러 안이라 난수 id가 안전하다.
+   */
+  const withIds = (list) => {
+    const used = new Set(list.map(r => r.id).filter(Boolean));
+    return list.map(r => {
+      if (r.id || !(r.kind === 'item' || r.kind === 'total')) return r;
+      let id;
+      do { id = 'r' + Math.random().toString(36).slice(2, 9); } while (used.has(id));
+      used.add(id);
+      return { ...r, id };
+    });
+  };
+  /** 행 i의 계산식에서 행 j를 더하기('+')·빼기('-')·제외(null)로. */
+  const setOp = (i, j, op) => {
+    const list = withIds(rows);
+    const tid = list[j]?.id;
+    if (!tid) return;
+    const f = { ...(list[i].formula || {}) };
+    if (op) f[tid] = op; else delete f[tid];
+    // 소계·잔액은 고른 행이 없으면 기본 계산으로 돌아간다. 총액은 '항목 계산' 모드를 유지한다.
+    const keep = list[i].kind === 'total' ? f : (Object.keys(f).length ? f : undefined);
+    applyRows(list.map((r, k) => (k === i ? { ...r, formula: keep } : r)));
+  };
+  const setFormula = (i, formula) => applyRows(withIds(rows).map((r, k) => (k === i ? { ...r, formula } : r)));
+  /** 기본 계산과 같은 선택으로 시작한다(거기서 빼거나 더하기 쉽게). */
+  const loadDefaultFormula = (i) => {
+    const list = withIds(rows);
+    const f = {};
+    if (list[i].kind === 'balance') {
+      list.forEach((r, k) => {
+        if (k === i) return;
+        if (r.kind === 'total' && !isCalcTotalRow(r)) f[r.id] = '+';
+        else if (r.kind === 'item') f[r.id] = '-';
+      });
+    } else if (list[i].kind === 'subtotal') {
+      let s = i - 1;
+      while (s >= 0 && list[s].kind !== 'rule') s--;
+      for (let k = s + 1; k < i; k++) if (list[k].kind === 'item') f[list[k].id] = '+';
+    }
+    applyRows(list.map((r, k) => (k === i ? { ...r, formula: Object.keys(f).length ? f : (r.kind === 'total' ? {} : undefined) } : r)));
+  };
   const setLink = (i, pid) => {
     const r = rows[i];
     if (!r) return;
-    if (!pid) { setRow(i, { portfolioId: undefined }, true); return; }
+    if (pid === CALC_SOURCE) {
+      // 총액 '항목 계산' — 계좌 연결과 공존하지 않는다. 직접 입력값은 남겨 둔다(되돌리면 되살아난다).
+      applyRows(withIds(rows).map((x, k) => (k === i ? { ...x, portfolioId: undefined, formula: x.formula || {} } : x)));
+      setCalcOpen(i);
+      return;
+    }
+    if (!pid) { setRow(i, { portfolioId: undefined, formula: undefined }, true); return; }
     // 이름이 비어 있으면 계좌명으로 채운다(사용자가 적은 이름은 건드리지 않는다).
     const name = accountNameOf(pid);
-    setRow(i, { portfolioId: pid, ...(!r.label.trim() && name ? { label: name } : {}) }, true);
+    setRow(i, { portfolioId: pid, formula: undefined, ...(!r.label.trim() && name ? { label: name } : {}) }, true);
   };
   const checks = flowTableCheckStats(tbl);
 
@@ -206,10 +265,11 @@ export default function FlowNodeEditor({
     tblRef.current = { rows: next, border: tbl?.border ?? 'none' };
     if (commit) flushNow({ rows: next, border: tbl?.border ?? 'none' });
   };
-  const removeRow = (i) => applyRows(rows.filter((_, k) => k !== i));
+  const removeRow = (i) => { setCalcOpen(null); applyRows(rows.filter((_, k) => k !== i)); };
   const moveRow = (i, d) => {
     const j = i + d;
     if (j < 0 || j >= rows.length) return;
+    setCalcOpen(null);
     const next = rows.slice();
     const tmp = next[i]; next[i] = next[j]; next[j] = tmp;
     applyRows(next);
@@ -335,7 +395,8 @@ export default function FlowNodeEditor({
                 아래 버튼으로 행을 추가하세요.<br />
                 <span className="text-gray-600">소계 = 바로 위 구분선 이후 항목의 합 · 잔액 = 총액 합 − 항목 합</span><br />
                 <span className="text-gray-600">항목 이름 오른쪽 체크 = 실행 표시 · S = 취소선 · I = 기울임</span><br />
-                <span className="text-gray-600">항목·총액의 금액은 직접 입력하거나 계좌(또는 전체 계좌 합계)를 연결할 수 있습니다</span>
+                <span className="text-gray-600">항목·총액의 금액은 직접 입력하거나 계좌(또는 전체 계좌 합계)를 연결할 수 있습니다</span><br />
+                <span className="text-gray-600">총액·소계·잔액은 다른 행을 골라 더하거나 뺄 수 있습니다(값 칸 왼쪽 버튼)</span>
               </div>
             ) : rows.map((r, i) => {
               const auto = r.kind === 'subtotal' || r.kind === 'balance';
@@ -343,12 +404,18 @@ export default function FlowNodeEditor({
               const isItem = r.kind === 'item';
               const strikeOn = r.strike === true;
               const italicOn = r.italic === true;
+              const calcTotal = isCalcTotalRow(r);
+              // 계산식을 가질 수 있는 행 — 소계·잔액·항목 계산 총액
+              const ownsFormula = auto || calcTotal;
+              const custom = !!computed[i]?.custom;
+              const panelOpen = calcOpen === i && ownsFormula;
               return (
-                <div key={i} className="flex items-center gap-1 mb-1">
+                <React.Fragment key={i}>
+                <div className="flex items-center gap-1 mb-1">
                   <select
                     disabled={readOnly}
                     value={r.kind}
-                    onChange={e => setRow(i, { kind: e.target.value }, true)}
+                    onChange={e => { setCalcOpen(null); setRow(i, { kind: e.target.value, formula: undefined }, true); }}
                     className="w-[62px] shrink-0 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-[10px] text-gray-200 outline-none focus:border-indigo-500"
                   >
                     {ROW_KINDS.map(({ k, t, title: ti }) => <option key={k} value={k} title={ti}>{t}</option>)}
@@ -395,12 +462,13 @@ export default function FlowNodeEditor({
                   {(isItem || r.kind === 'total') ? (
                     <select
                       disabled={readOnly}
-                      value={r.portfolioId || ''}
+                      value={calcTotal ? CALC_SOURCE : (r.portfolioId || '')}
                       onChange={e => setLink(i, e.target.value)}
                       title={r.portfolioId ? `계좌 연결: ${accountNameOf(r.portfolioId) || '(연결 끊김)'} — 현재 평가액이 자동으로 들어갑니다` : '금액을 직접 입력합니다. 계좌를 고르면 그 계좌의 현재 평가액이 들어갑니다.'}
-                      className={`w-[96px] shrink-0 bg-gray-800 border rounded px-1 py-1 text-[10px] outline-none focus:border-indigo-500 ${r.portfolioId ? 'border-sky-700 text-sky-200' : 'border-gray-700 text-gray-400'}`}
+                      className={`w-[96px] shrink-0 bg-gray-800 border rounded px-1 py-1 text-[10px] outline-none focus:border-indigo-500 ${calcTotal ? 'border-violet-700 text-violet-200' : r.portfolioId ? 'border-sky-700 text-sky-200' : 'border-gray-700 text-gray-400'}`}
                     >
                       <option value="">직접 입력</option>
+                      {r.kind === 'total' && <option value={CALC_SOURCE}>항목 계산</option>}
                       <option value={FLOW_TABLE_LINK_ALL}>전체 계좌 합계</option>
                       {accountOptions.map(o => (
                         <option key={o.id} value={o.id}>{o.name}{o.deleted ? ' (삭제됨)' : o.isTest ? ' (TEST)' : ''}</option>
@@ -409,17 +477,26 @@ export default function FlowNodeEditor({
                         <option value={r.portfolioId}>(연결 끊김)</option>
                       )}
                     </select>
+                  ) : auto ? (
+                    <button
+                      type="button"
+                      onClick={() => setCalcOpen(o => (o === i ? null : i))}
+                      title="더하고 뺄 행을 고릅니다"
+                      className={`w-[96px] shrink-0 rounded border px-1 py-1 text-[10px] truncate transition ${custom ? 'border-violet-700 text-violet-200 bg-violet-900/20' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                    >{custom ? `선택 계산 ${formulaCount(r)}` : '기본 계산'} {panelOpen ? '▴' : '▾'}</button>
                   ) : <span className="w-[96px] shrink-0" />}
-                  {r.portfolioId && (isItem || r.kind === 'total') ? (
+                  {ownsFormula ? (
+                    <button
+                      type="button"
+                      onClick={() => setCalcOpen(o => (o === i ? null : i))}
+                      className={`w-[110px] shrink-0 px-2 py-1 text-xs text-right italic bg-gray-800/40 border rounded truncate ${custom ? 'text-violet-200 border-violet-800/70' : 'text-emerald-300/90 border-gray-700/60'}`}
+                      title={custom ? '고른 행을 더하고 뺀 값입니다 — 클릭하면 계산식을 엽니다' : '기본 계산 값입니다 — 클릭하면 더하고 뺄 행을 고를 수 있습니다'}
+                    >{computed[i]?.text || '0'}</button>
+                  ) : r.portfolioId && (isItem || r.kind === 'total') ? (
                     <div
                       className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-sky-300 bg-gray-800/40 border border-sky-800/60 rounded truncate"
                       title={computed[i]?.text === '-' ? '계좌 평가액을 구하지 못했습니다(삭제·연결 끊김·불러오는 중). 합계에서 제외됩니다.' : `${accountNameOf(r.portfolioId)} 현재 평가액(자동)`}
                     >{computed[i]?.text || '-'}</div>
-                  ) : auto ? (
-                    <div
-                      className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-emerald-300/90 italic bg-gray-800/40 border border-gray-700/60 rounded truncate"
-                      title="자동 계산된 값입니다"
-                    >{computed[i]?.text || '0'}</div>
                   ) : (
                     <input
                       className={`${inputCls} w-[110px] shrink-0 text-right ${isRule ? 'opacity-40' : ''}`}
@@ -439,6 +516,64 @@ export default function FlowNodeEditor({
                     </>
                   )}
                 </div>
+                {/* 계산식 패널 — 이 행에 더하고(+) 뺄(−) 행을 고른다(사용자 요청 2026-10). 행 바로 아래에
+                    펼친다(팝업 안이라 부동 팝오버는 스크롤 영역에 잘린다). */}
+                {panelOpen && (
+                  <div className="ml-[66px] mb-2 p-2 rounded border border-violet-800/60 bg-gray-900/70 text-[11px]">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-violet-200 font-semibold">{r.label || ROW_KINDS.find(x => x.k === r.kind)?.t} 계산</span>
+                      <span className="text-gray-500">+ 더하기 · − 빼기 · 제외</span>
+                      <div className="flex-1" />
+                      <span className="text-gray-300 tabular-nums">= {computed[i]?.text || '0'}</span>
+                    </div>
+                    {!custom && auto && (
+                      <div className="text-[10px] text-gray-500 mb-1.5">
+                        지금은 기본 계산입니다({r.kind === 'subtotal' ? '바로 위 구분선 이후 항목의 합' : '총액 합 − 항목 합'}). 아래에서 행을 고르면 그 식으로 바뀝니다.
+                      </div>
+                    )}
+                    {rows.some((x, j) => j !== i && canRefRow(x)) ? rows.map((x, j) => {
+                      if (j === i || !canRefRow(x)) return null;
+                      const op = x.id && r.formula ? r.formula[x.id] : undefined;
+                      const btn = (v, label, on) => (
+                        <button
+                          type="button"
+                          disabled={readOnly}
+                          onClick={() => setOp(i, j, v)}
+                          className={`w-7 h-5 rounded border text-[11px] leading-none transition disabled:opacity-40 ${on}`}
+                        >{label}</button>
+                      );
+                      return (
+                        <div key={j} className="flex items-center gap-1 py-0.5">
+                          <span className="w-9 shrink-0 text-[10px] text-gray-500">{x.kind === 'total' ? '총액' : '항목'}</span>
+                          <span className={`flex-1 min-w-0 truncate ${op ? 'text-gray-100' : 'text-gray-500'}`}>{x.label || '(이름 없음)'}</span>
+                          <span className={`w-[110px] shrink-0 text-right tabular-nums ${op ? 'text-gray-200' : 'text-gray-600'}`}>{computed[j]?.text || '-'}</span>
+                          {btn('-', '−', op === '-' ? 'border-sky-500 text-sky-200 bg-sky-900/40' : 'border-gray-700 text-gray-400 hover:text-gray-200')}
+                          {btn(null, '제외', !op ? 'border-gray-500 text-gray-200 bg-gray-700/40 w-9' : 'border-gray-700 text-gray-500 hover:text-gray-200 w-9')}
+                          {btn('+', '+', op === '+' ? 'border-rose-500 text-rose-200 bg-rose-900/40' : 'border-gray-700 text-gray-400 hover:text-gray-200')}
+                        </div>
+                      );
+                    }) : (
+                      <div className="text-[10px] text-gray-500">더하거나 뺄 항목·총액 행이 없습니다.</div>
+                    )}
+                    {!readOnly && (
+                      <div className="flex gap-1 mt-1.5 pt-1.5 border-t border-gray-700/60">
+                        {auto && (
+                          <button type="button" onClick={() => loadDefaultFormula(i)} className="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white"
+                            title="기본 계산과 같은 선택으로 채웁니다 — 거기서 빼거나 더하면 됩니다">기본 계산 불러오기</button>
+                        )}
+                        {auto && custom && (
+                          <button type="button" onClick={() => setFormula(i, undefined)} className="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white">기본 계산으로 되돌리기</button>
+                        )}
+                        {calcTotal && formulaCount(r) > 0 && (
+                          <button type="button" onClick={() => setFormula(i, {})} className="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white">모두 제외</button>
+                        )}
+                        <div className="flex-1" />
+                        <button type="button" onClick={() => setCalcOpen(null)} className="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200">닫기</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                </React.Fragment>
               );
             })}
           </div>

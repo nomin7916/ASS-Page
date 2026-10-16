@@ -164,7 +164,21 @@ export interface FlowTableRow {
    * ⚠️ 금액은 저장하지 않고 매 렌더 라이브 재조회한다(노드 계좌 연결과 같은 계약).
    */
   portfolioId?: string;
+  /**
+   * 행 id — **계산식이 이 행을 가리킬 때만** 존재한다(편집기가 부여). 생략이 기본.
+   */
+  id?: string;
+  /**
+   * 계산식(사용자 요청 2026-10) — 고른 행을 더하거나(+) 뺀다(−). 키 = 대상 행 id.
+   *   소계·잔액: 생략 = 기본 계산(소계 = 구역 항목 합 / 잔액 = Σ총액 − Σ항목). 있으면 그 식으로 대체.
+   *   총액: 객체가 있으면(비어 있어도) '항목 계산' 모드 — 직접 입력·계좌 연결 대신 이 식의 값.
+   * ⚠️ 가리킬 수 있는 행은 항목·계산식 없는 총액뿐(순환 방지). 정규화가 그 밖의 참조를 버린다.
+   */
+  formula?: Record<string, FlowTableOp>;
 }
+
+/** 계산식 연산자. */
+export type FlowTableOp = '+' | '-';
 
 /** 표 값 칸의 '전체 계좌 합계' 연결 예약 id. 실제 계좌 id(generateId)와 겹치지 않는다. */
 export const FLOW_TABLE_LINK_ALL = '__all__';
@@ -309,6 +323,8 @@ export const SNAP_GUIDE_MAX_REFS = 6;
  */
 export const MAX_FLOW_TABLE_ROWS = 30;
 export const MAX_FLOW_TABLE_TEXT = 80;
+/** 표 행 id 길이 상한(계산식 참조 키). */
+export const MAX_FLOW_TABLE_ROW_ID = 40;
 
 /* ── 메모·표 팝업 이동 한계 ─────────────────────────────────────────────────
  * 팝업은 가운데에서 열리고 제목 줄을 끌어 옮긴다. 화면 밖으로 완전히 밀어내면 다시 잡을 곳이
@@ -714,6 +730,10 @@ export function flowFingerprint(maps: unknown): string {
                   const f = flowTableRowFlags(r);
                   // ⚠️ 계좌 연결은 **있을 때만** 5번째 칸 — 없는 행은 종전 3칸/4칸 그대로(배포 churn 방지).
                   const pid = typeof r?.portfolioId === 'string' && r.portfolioId ? r.portfolioId : '';
+                  // ⚠️ 행 id·계산식도 **있을 때만** 6·7번째 칸(없는 행은 종전 형태 그대로).
+                  const rid = typeof r?.id === 'string' ? r.id : '';
+                  const fk = flowTableFormulaKey(r?.formula);
+                  if (rid || fk) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid, rid, fk];
                   if (pid) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid];
                   return f ? [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f] : [r?.kind ?? '', r?.label ?? '', r?.value ?? ''];
                 }),
@@ -1154,6 +1174,8 @@ export function normalizeFlowTable(raw: unknown): FlowTable | undefined {
   const src = raw as { rows?: unknown; border?: unknown };
   const rawRows = Array.isArray(src.rows) ? src.rows : [];
   const rows: FlowTableRow[] = [];
+  const rawFormulas: unknown[] = [];
+  const rawIds: unknown[] = [];
   for (const r of rawRows) {
     if (rows.length >= MAX_FLOW_TABLE_ROWS) break;
     if (!r || typeof r !== 'object') continue;
@@ -1174,9 +1196,58 @@ export function normalizeFlowTable(raw: unknown): FlowTable | undefined {
       ...((kind === 'item' || kind === 'total') && typeof row.portfolioId === 'string' && row.portfolioId.trim()
         ? { portfolioId: row.portfolioId.trim().slice(0, 128) } : {}),
     });
+    rawFormulas.push(row.formula);
+    rawIds.push(row.id);
   }
   if (rows.length === 0) return undefined;
+  applyFlowTableFormulas(rows, rawIds, rawFormulas);
   return { rows, border: asBorder(src.border) };
+}
+
+/**
+ * 계산 행 정규화(2단계) — 행 id와 계산식(formula)을 붙인다.
+ * ⚠️ id는 **있는 행에만** 둔다(편집기가 계산식을 처음 쓸 때 부여). 모든 행에 id를 만들면 기존 표가
+ *    전부 '변경됨'이 되어 배포만으로 지문이 바뀐다. 중복 id는 뒤엣것을 버린다.
+ * ⚠️ 계산식이 가리킬 수 있는 행 = **항목 + 계산식 없는 총액**뿐이다. 소계·잔액·계산 총액을 참조하면
+ *    순환이 생길 수 있어 아예 막는다. 사라진 행·자기 자신·잘못된 연산자 참조는 버린다.
+ * ⚠️ 키 순서는 **행 순서**로 정렬한다(멱등·지문 안정).
+ * 소계·잔액: 계산식이 비면 필드 생략 = 기본 계산. 총액: 객체가 있으면(비어 있어도) '항목 계산' 모드.
+ */
+function applyFlowTableFormulas(rows: FlowTableRow[], rawIds: unknown[], rawFormulas: unknown[]): void {
+  const seen = new Set<string>();
+  for (let i = 0; i < rows.length; i++) {
+    const id = typeof rawIds[i] === 'string' ? (rawIds[i] as string).trim().slice(0, MAX_FLOW_TABLE_ROW_ID) : '';
+    if (id && !seen.has(id)) { seen.add(id); rows[i].id = id; }
+  }
+  const isObj = (v: unknown) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const calcTotal = (i: number) => rows[i].kind === 'total' && isObj(rawFormulas[i]);
+  for (let i = 0; i < rows.length; i++) {
+    const k = rows[i].kind;
+    const ownsFormula = k === 'subtotal' || k === 'balance' || calcTotal(i);
+    if (!ownsFormula) continue;
+    const raw = isObj(rawFormulas[i]) ? (rawFormulas[i] as Record<string, unknown>) : {};
+    const f: Record<string, FlowTableOp> = {};
+    let n = 0;
+    for (let j = 0; j < rows.length; j++) {
+      if (j === i) continue;
+      const rj = rows[j];
+      if (!rj.id) continue;
+      if (!(rj.kind === 'item' || (rj.kind === 'total' && !calcTotal(j)))) continue;
+      const op = raw[rj.id];
+      if (op === '+' || op === '-') { f[rj.id] = op; n++; }
+    }
+    if (k === 'total') {
+      rows[i].formula = f;
+      delete rows[i].portfolioId;   // 계산 총액은 계좌 연결과 공존하지 않는다(어느 값인지 모호해진다)
+    } else if (n > 0) rows[i].formula = f;
+  }
+}
+
+/** 계산식 비교·지문 키. 없으면 ''(총액의 빈 계산식 `{}`은 '[]'로 구분된다). */
+export function flowTableFormulaKey(f: unknown): string {
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return '';
+  const o = f as Record<string, unknown>;
+  return JSON.stringify(Object.keys(o).map(k => [k, o[k]]));
 }
 
 /** 두 표가 같은가. ⚠️ 정규화 비교에 필요 — 객체라 `!==`로는 판정할 수 없다. */
@@ -1197,6 +1268,8 @@ export function sameFlowTable(a: unknown, b: unknown): boolean {
     if (ar[i].done !== br[i].done || ar[i].strike !== br[i].strike || ar[i].italic !== br[i].italic) return false;
     // ⚠️ 계좌 연결도 비교 대상 — 빠뜨리면 '연결만 바꾼 편집'이 팝업 flush에서 걸러져 저장되지 않는다.
     if (ar[i].portfolioId !== br[i].portfolioId) return false;
+    // ⚠️ 행 id·계산식도 비교 — 빠뜨리면 '더하기/빼기만 바꾼 편집'이 flush에서 걸러져 저장되지 않는다.
+    if (ar[i].id !== br[i].id || flowTableFormulaKey(ar[i].formula) !== flowTableFormulaKey(br[i].formula)) return false;
   }
   return true;
 }
@@ -1269,6 +1342,8 @@ export interface FlowTableComputedRow {
   italic: boolean;
   /** 계좌에 연결된 행인가(값이 라이브 평가액). 연결이 풀린 계좌면 text는 '-'. */
   linked: boolean;
+  /** 사용자 계산식(더하기·빼기 선택)으로 계산된 행인가 — 기본 계산과 구분해 보여 준다. */
+  custom: boolean;
 }
 
 /**
@@ -1302,8 +1377,10 @@ export function flowLinkedAmount(pid: unknown, portfolioById: Map<string, any>, 
 
 /**
  * 표 계산.
- *   소계 = 직전 구분선 이후의 item 합
- *   잔액 = Σtotal − Σitem
+ *   소계 = 직전 구분선 이후의 item 합        (기본 — 계산식이 있으면 그 식)
+ *   잔액 = Σtotal − Σitem                   (기본 — 계산식이 있으면 그 식)
+ *   총액 = 직접 입력 / 계좌 연결 / 항목 계산(계산식)
+ *   계산식 = 고른 행(항목·일반 총액)의 값을 +/− 로 합산. 계산 총액도 기본 잔액의 Σtotal에 들어간다.
  *
  * ⚠️ 잔액을 `Σtotal − Σsubtotal`로 바꾸지 말 것 — 소계를 안 쓰는 표에서 잔액이 총액 그대로가
  *    되고, 한 구역만 소계를 단 표에서는 나머지 항목이 통째로 빠진다. `Σitem`이라야 소계 유무와
@@ -1327,47 +1404,67 @@ export function computeFlowTable(
     return typeof v === 'number' && Number.isFinite(v) ? v : null;
   };
 
+  // 1) 기본 값 — 항목·계산식 없는 총액(직접 입력 또는 계좌 연결)
+  const isCalcTotal = (r: any) => r.kind === 'total' && !!r.formula && typeof r.formula === 'object' && !Array.isArray(r.formula);
+  const hasFormula = (r: any) => !!r.formula && typeof r.formula === 'object' && !Array.isArray(r.formula) && Object.keys(r.formula).length > 0;
+  const base: (number | null)[] = rows.map(r => (r && (r.kind === 'item' || (r.kind === 'total' && !isCalcTotal(r))) ? valueOf(r) : null));
+  const byId = new Map<string, number>();
+  rows.forEach((r, i) => {
+    if (r && typeof r.id === 'string' && r.id && base[i] !== null && (r.kind === 'item' || (r.kind === 'total' && !isCalcTotal(r)))) byId.set(r.id, base[i] as number);
+  });
+  // ⚠️ 참조가 가리키는 값이 없으면(숫자 아님·연결 실패·삭제된 행) 그 항은 건너뛴다 — 0으로 단언하지 않는다.
+  const evalFormula = (f: any) => {
+    let v = 0;
+    for (const k of Object.keys(f || {})) {
+      const x = byId.get(k);
+      if (x === undefined) continue;
+      v += f[k] === '-' ? -x : x;
+    }
+    return v;
+  };
+  // 2) 계산 총액 — 기본 값만 참조하므로 순환이 없다.
+  const vals = rows.map((r, i) => (r && isCalcTotal(r) ? evalFormula(r.formula) : base[i]));
+
   let sumItemAll = 0;
   let sumTotal = 0;
-  for (const r of rows) {
-    if (!r) continue;
-    const v = valueOf(r);
-    if (v === null) continue;
+  rows.forEach((r, i) => {
+    if (!r) return;
+    const v = vals[i];
+    if (v === null || v === undefined) return;
     if (r.kind === 'item') sumItemAll += v;
     else if (r.kind === 'total') sumTotal += v;
-  }
+  });
 
   let section = 0;   // 직전 구분선 이후의 item 합
-  for (const r of rows) {
-    if (!r) continue;
+  rows.forEach((r, i) => {
+    if (!r) return;
     if (r.kind === 'rule') {
       section = 0;
-      out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false, linked: false });
-      continue;
+      out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false, linked: false, custom: false });
+      return;
     }
-    // ⚠️ 표시는 **그리기 전용**이다 — 아래 합계 어디에도 참여하지 않는다(실행한 계획도 금액은 그대로).
-    //    도형 안 표가 원본 행을 인덱스로 다시 읽지 않도록 여기서 함께 실어 보낸다(손상 행을 건너뛰면
-    //    인덱스가 밀린다).
     const strike = r.strike === true;
     const italic = r.italic === true;
-    if (r.kind === 'subtotal') {
-      out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true, done: false, strike, italic, linked: false });
-      continue;
+    if (r.kind === 'subtotal' || r.kind === 'balance') {
+      const custom = hasFormula(r);
+      const v = custom ? evalFormula(r.formula) : r.kind === 'subtotal' ? section : sumTotal - sumItemAll;
+      out.push({ kind: r.kind, label: r.label, text: formatFlowNumber(v), computed: true, done: false, strike, italic, linked: false, custom });
+      return;
     }
-    if (r.kind === 'balance') {
-      out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true, done: false, strike, italic, linked: false });
-      continue;
+    if (isCalcTotal(r)) {
+      out.push({ kind: 'total', label: r.label, text: formatFlowNumber(vals[i] as number), computed: true, done: false, strike, italic, linked: false, custom: true });
+      return;
     }
     const linked = isLinked(r);
-    const v = valueOf(r);
+    const v = vals[i];
     if (r.kind === 'item' && v !== null) section += v;
     out.push({
       kind: r.kind, label: r.label,
       text: v !== null ? formatFlowNumber(v) : linked ? '-' : asStr(r.value),
       computed: false,
-      done: r.kind === 'item' && r.done === true, strike, italic, linked,
+      done: r.kind === 'item' && r.done === true, strike, italic, linked, custom: false,
     });
-  }
+  });
   return out;
 }
 

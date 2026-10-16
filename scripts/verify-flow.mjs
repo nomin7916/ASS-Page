@@ -55,6 +55,7 @@ const SNAP_TOL_PX = 6, SNAP_GUIDE_MAX_REFS = 6;
 const FLOW_GRID = 8;
 const FLOW_LABEL_FONT = 12, FLOW_LABEL_H = 22, FLOW_LABEL_PAD = 8, FLOW_LABEL_DOT_R = 5;
 const MAX_FLOW_TABLE_ROWS = 30, MAX_FLOW_TABLE_TEXT = 80;
+const MAX_FLOW_TABLE_ROW_ID = 40;
 const FLOW_EDITOR_GRIP_PX = 120, FLOW_EDITOR_HEADER_PX = 40;
 const FLOW_TABLE_ROW_KINDS = ['item', 'subtotal', 'total', 'balance', 'rule'];
 const FLOW_TABLE_BORDERS = ['none', 'outline', 'all'];
@@ -222,6 +223,9 @@ function flowFingerprint(maps) {
               (Array.isArray(n.table.rows) ? n.table.rows : []).map(r => {
                 const f = flowTableRowFlags(r);
                 const pid = typeof r?.portfolioId === 'string' && r.portfolioId ? r.portfolioId : '';
+                const rid = typeof r?.id === 'string' ? r.id : '';
+                const fk = flowTableFormulaKey(r?.formula);
+                if (rid || fk) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid, rid, fk];
                 if (pid) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid];
                 return f ? [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f] : [r?.kind ?? '', r?.label ?? '', r?.value ?? ''];
               }),
@@ -516,6 +520,8 @@ function normalizeFlowTable(raw) {
   if (!raw || typeof raw !== 'object') return undefined;
   const rawRows = Array.isArray(raw.rows) ? raw.rows : [];
   const rows = [];
+  const rawFormulas = [];
+  const rawIds = [];
   for (const r of rawRows) {
     if (rows.length >= MAX_FLOW_TABLE_ROWS) break;
     if (!r || typeof r !== 'object') continue;
@@ -530,9 +536,47 @@ function normalizeFlowTable(raw) {
       ...((kind === 'item' || kind === 'total') && typeof r.portfolioId === 'string' && r.portfolioId.trim()
         ? { portfolioId: r.portfolioId.trim().slice(0, 128) } : {}),
     });
+    rawFormulas.push(r.formula);
+    rawIds.push(r.id);
   }
   if (rows.length === 0) return undefined;
+  applyFlowTableFormulas(rows, rawIds, rawFormulas);
   return { rows, border: asBorder(raw.border) };
+}
+
+function applyFlowTableFormulas(rows, rawIds, rawFormulas) {
+  const seen = new Set();
+  for (let i = 0; i < rows.length; i++) {
+    const id = typeof rawIds[i] === 'string' ? rawIds[i].trim().slice(0, MAX_FLOW_TABLE_ROW_ID) : '';
+    if (id && !seen.has(id)) { seen.add(id); rows[i].id = id; }
+  }
+  const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const calcTotal = (i) => rows[i].kind === 'total' && isObj(rawFormulas[i]);
+  for (let i = 0; i < rows.length; i++) {
+    const k = rows[i].kind;
+    const ownsFormula = k === 'subtotal' || k === 'balance' || calcTotal(i);
+    if (!ownsFormula) continue;
+    const raw = isObj(rawFormulas[i]) ? rawFormulas[i] : {};
+    const f = {};
+    let n = 0;
+    for (let j = 0; j < rows.length; j++) {
+      if (j === i) continue;
+      const rj = rows[j];
+      if (!rj.id) continue;
+      if (!(rj.kind === 'item' || (rj.kind === 'total' && !calcTotal(j)))) continue;
+      const op = raw[rj.id];
+      if (op === '+' || op === '-') { f[rj.id] = op; n++; }
+    }
+    if (k === 'total') {
+      rows[i].formula = f;
+      delete rows[i].portfolioId;
+    } else if (n > 0) rows[i].formula = f;
+  }
+}
+
+function flowTableFormulaKey(f) {
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return '';
+  return JSON.stringify(Object.keys(f).map(k => [k, f[k]]));
 }
 
 function sameFlowTable(a, b) {
@@ -546,6 +590,7 @@ function sameFlowTable(a, b) {
     if (ar[i].kind !== br[i].kind || ar[i].label !== br[i].label || ar[i].value !== br[i].value) return false;
     if (ar[i].done !== br[i].done || ar[i].strike !== br[i].strike || ar[i].italic !== br[i].italic) return false;
     if (ar[i].portfolioId !== br[i].portfolioId) return false;
+    if (ar[i].id !== br[i].id || flowTableFormulaKey(ar[i].formula) !== flowTableFormulaKey(br[i].formula)) return false;
   }
   return true;
 }
@@ -612,32 +657,67 @@ function computeFlowTable(table, linkedValueOf) {
     const v = linkedValueOf ? linkedValueOf(r.portfolioId) : null;
     return typeof v === 'number' && Number.isFinite(v) ? v : null;
   };
-  let sumItemAll = 0, sumTotal = 0;
-  for (const r of rows) {
-    if (!r) continue;
-    const v = valueOf(r);
-    if (v === null) continue;
+  // 1) 기본 값 — 항목·계산식 없는 총액(직접 입력 또는 계좌 연결)
+  const isCalcTotal = (r) => r.kind === 'total' && !!r.formula && typeof r.formula === 'object' && !Array.isArray(r.formula);
+  const hasFormula = (r) => !!r.formula && typeof r.formula === 'object' && !Array.isArray(r.formula) && Object.keys(r.formula).length > 0;
+  const base = rows.map(r => (r && (r.kind === 'item' || (r.kind === 'total' && !isCalcTotal(r))) ? valueOf(r) : null));
+  const byId = new Map();
+  rows.forEach((r, i) => {
+    if (r && typeof r.id === 'string' && r.id && base[i] !== null && (r.kind === 'item' || (r.kind === 'total' && !isCalcTotal(r)))) byId.set(r.id, base[i]);
+  });
+  // ⚠️ 참조가 가리키는 값이 없으면(숫자 아님·연결 실패·삭제된 행) 그 항은 건너뛴다 — 0으로 단언하지 않는다.
+  const evalFormula = (f) => {
+    let v = 0;
+    for (const k of Object.keys(f || {})) {
+      const x = byId.get(k);
+      if (x === undefined) continue;
+      v += f[k] === '-' ? -x : x;
+    }
+    return v;
+  };
+  // 2) 계산 총액 — 기본 값만 참조하므로 순환이 없다.
+  const vals = rows.map((r, i) => (r && isCalcTotal(r) ? evalFormula(r.formula) : base[i]));
+
+  let sumItemAll = 0;
+  let sumTotal = 0;
+  rows.forEach((r, i) => {
+    if (!r) return;
+    const v = vals[i];
+    if (v === null || v === undefined) return;
     if (r.kind === 'item') sumItemAll += v;
     else if (r.kind === 'total') sumTotal += v;
-  }
-  let section = 0;
-  for (const r of rows) {
-    if (!r) continue;
-    if (r.kind === 'rule') { section = 0; out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false, linked: false }); continue; }
+  });
+
+  let section = 0;   // 직전 구분선 이후의 item 합
+  rows.forEach((r, i) => {
+    if (!r) return;
+    if (r.kind === 'rule') {
+      section = 0;
+      out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false, linked: false, custom: false });
+      return;
+    }
     const strike = r.strike === true;
     const italic = r.italic === true;
-    if (r.kind === 'subtotal') { out.push({ kind: 'subtotal', label: r.label, text: formatFlowNumber(section), computed: true, done: false, strike, italic, linked: false }); continue; }
-    if (r.kind === 'balance') { out.push({ kind: 'balance', label: r.label, text: formatFlowNumber(sumTotal - sumItemAll), computed: true, done: false, strike, italic, linked: false }); continue; }
+    if (r.kind === 'subtotal' || r.kind === 'balance') {
+      const custom = hasFormula(r);
+      const v = custom ? evalFormula(r.formula) : r.kind === 'subtotal' ? section : sumTotal - sumItemAll;
+      out.push({ kind: r.kind, label: r.label, text: formatFlowNumber(v), computed: true, done: false, strike, italic, linked: false, custom });
+      return;
+    }
+    if (isCalcTotal(r)) {
+      out.push({ kind: 'total', label: r.label, text: formatFlowNumber(vals[i]), computed: true, done: false, strike, italic, linked: false, custom: true });
+      return;
+    }
     const linked = isLinked(r);
-    const v = valueOf(r);
+    const v = vals[i];
     if (r.kind === 'item' && v !== null) section += v;
     out.push({
       kind: r.kind, label: r.label,
       text: v !== null ? formatFlowNumber(v) : linked ? '-' : asStr(r.value),
       computed: false,
-      done: r.kind === 'item' && r.done === true, strike, italic, linked,
+      done: r.kind === 'item' && r.done === true, strike, italic, linked, custom: false,
     });
-  }
+  });
   return out;
 }
 
@@ -1476,6 +1556,73 @@ console.log('\n■ 표 값 칸 계좌 연결 (사용자 요청 2026-10)');
   const fpMap = (rows) => [cleanMap({ id: 'm1', nodes: [{ ...mkNode({ id: 'n1' }), table: { rows, border: 'none' } }], edges: [] })];
   ok('#164 지문이 계좌 연결에 반응', flowFingerprint(fpMap([L('item', 'a', '1')])) !== flowFingerprint(fpMap([L('item', 'a', '1', 'a')])));
   ok('#164b 연결 없는 행의 지문은 종전 3칸 그대로', flowFingerprint(fpMap([L('item', 'a', '1')])).includes('["item","a","1"]'));
+}
+
+console.log('\n■ 표 계산식 — 총액·소계·잔액에 더하기/빼기 (사용자 요청 2026-10)');
+{
+  const X = (kind, label, value, o) => ({ kind, label, value, ...o });
+  // 사용자 화면 그대로: ISA 260(연결) − 27년 납입금 = 합계(잔액)
+  const pById = new Map([['isa', { id: 'isa' }]]);
+  const sById = new Map([['isa', { currentEval: 97977206 }]]);
+  const lv = (pid) => flowLinkedAmount(pid, pById, sById);
+  const shot = { border: 'none', rows: [
+    X('item', 'ISA 260', '', { id: 'a', portfolioId: 'isa' }),
+    X('item', '27년 납입금', '20000000', { id: 'b' }),
+    X('rule', ''),
+    X('balance', '합계', '', { formula: { a: '+', b: '-' } }),
+  ] };
+  eq('#170 기본 잔액은 종전대로 Σ총액 − Σ항목', computeFlowTable({ ...shot, rows: shot.rows.map(r => ({ ...r, formula: undefined })) }, lv)[3].text, '-117,977,206');
+  const c = computeFlowTable(shot, lv);
+  eq('#170b 고른 행 더하기·빼기(사용자 화면 재현)', c[3].text, '77,977,206');
+  eq('#170c 계산식 행은 custom', [c[3].custom, computeFlowTable({ ...shot, rows: shot.rows.slice(0, 3).concat([X('balance', 'b', '')]) }, lv)[3].custom].join(','), 'true,false');
+
+  const sub = { border: 'none', rows: [
+    X('item', 'x', '10', { id: 'x' }), X('item', 'y', '3', { id: 'y' }), X('total', 'T', '100', { id: 't' }),
+    X('subtotal', 's', '', { formula: { y: '+', x: '-' } }), X('subtotal', 's2', ''),
+  ] };
+  const cs = computeFlowTable(sub, lv);
+  eq('#171 소계 계산식(총액도 참조 가능)', cs[3].text, '-7');
+  eq('#171b 계산식 없는 소계는 기본(구역 항목 합)', cs[4].text, '13');
+
+  const calcT = { border: 'none', rows: [
+    X('item', 'a', '50', { id: 'a' }), X('item', 'b', '20', { id: 'b' }),
+    X('total', '총액', '999', { formula: { a: '+', b: '+' } }), X('balance', '잔액', ''),
+  ] };
+  const ct = computeFlowTable(calcT, lv);
+  eq('#172 총액 항목 계산 = 고른 행의 합(직접 입력값 무시)', ct[2].text, '70');
+  eq('#172b 계산 총액도 기본 잔액의 Σ총액에 들어간다', ct[3].text, '0');
+  eq('#172c 계산 총액은 계산 행으로 표시', [ct[2].computed, ct[2].custom].join(','), 'true,true');
+  eq('#172d 빈 계산식 총액은 0', computeFlowTable({ rows: [X('total', 'T', '5', { formula: {} })] })[0].text, '0');
+  eq('#172e 참조 대상 값이 없으면 그 항만 건너뛴다(0 단언 금지)',
+    computeFlowTable({ rows: [X('item', 'a', '약 3억', { id: 'a' }), X('item', 'b', '4', { id: 'b' }), X('balance', 'z', '', { formula: { a: '+', b: '+', gone: '-' } })] })[2].text, '4');
+
+  // 정규화
+  const n = normalizeFlowTable({ rows: [
+    X('item', 'a', '1', { id: ' a ' }), X('item', 'b', '1', { id: 'a' }), X('total', 'T', '1', { id: 't', formula: { a: '+' }, portfolioId: 'p' }),
+    X('total', 'U', '1', { id: 'u' }),
+    X('balance', 'z', '', { id: 'z', formula: { t: '+', a: '-', u: '+', z: '+', b: 'x', nope: '+' } }),
+    X('subtotal', 's', '', { formula: {} }), X('rule', '', '', { formula: { a: '+' } }), X('item', 'i', '1', { formula: { a: '+' } }),
+  ] });
+  const rr = n?.rows || [];
+  eq('#173 id trim·중복 제거', rr.map(r => r.id ?? '-').join(','), 'a,-,t,u,z,-,-,-');
+  eq('#173b 계산 총액은 계좌 연결을 버린다', 'portfolioId' in rr[2], false);
+  eq('#173c 계산식 참조는 항목·일반 총액만(계산 총액·자기 자신·없는 id·잘못된 연산자 제외), 행 순서 정렬',
+    JSON.stringify(rr[4].formula), JSON.stringify({ a: '-', u: '+' }));
+  eq('#173d 빈 계산식 소계는 기본(필드 생략)', 'formula' in rr[5], false);
+  eq('#173e 구분선·항목은 계산식을 갖지 않는다', ['formula' in rr[6], 'formula' in rr[7]].join(','), 'false,false');
+  eq('#173f 멱등(계산식 포함)', JSON.stringify(normalizeFlowTable(n)), JSON.stringify(n));
+  eq('#173g 계산식 총액은 비어 있어도 유지(항목 계산 모드)',
+    JSON.stringify(normalizeFlowTable({ rows: [X('total', 'T', '1', { formula: {} })] })?.rows?.[0]?.formula), '{}');
+  ok('#174 계산식만 달라도 다른 표',
+    !sameFlowTable({ border: 'none', rows: [X('balance', 'z', '', { formula: { a: '+' } })] }, { border: 'none', rows: [X('balance', 'z', '', { formula: { a: '-' } })] }));
+  ok('#174b 일반 총액과 빈 계산 총액은 다른 표',
+    !sameFlowTable({ border: 'none', rows: [X('total', 'T', '1')] }, { border: 'none', rows: [X('total', 'T', '1', { formula: {} })] }));
+  ok('#174c 행 id만 달라도 다른 표', !sameFlowTable({ border: 'none', rows: [X('item', 'a', '1')] }, { border: 'none', rows: [X('item', 'a', '1', { id: 'a' })] }));
+  const fpMap = (rows) => [cleanMap({ id: 'm1', nodes: [{ ...mkNode({ id: 'n1' }), table: { rows, border: 'none' } }], edges: [] })];
+  ok('#175 지문이 계산식에 반응',
+    flowFingerprint(fpMap([X('item', 'a', '1', { id: 'a' }), X('balance', 'z', '', { formula: { a: '+' } })]))
+      !== flowFingerprint(fpMap([X('item', 'a', '1', { id: 'a' }), X('balance', 'z', '', { formula: { a: '-' } })])));
+  ok('#175b 계산식·id 없는 표의 지문은 종전 그대로', flowFingerprint(fpMap([X('item', 'a', '1')])).includes('["item","a","1"]'));
 }
 
 console.log('\n■ removeNode / pruneOrphanEdges');
@@ -2500,8 +2647,19 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
   ok('#G182b FlowNodeEditor: 값 출처 선택은 항목·총액 행에만', /\{\(isItem \|\| r\.kind === 'total'\) \? \(\s*<select/.test(edNC));
   ok('#G182c FlowNodeEditor: 직접 입력·전체 합계·계좌 목록 선택지', /<option value="">직접 입력<\/option>/.test(edNC)
     && /<option value=\{FLOW_TABLE_LINK_ALL\}>전체 계좌 합계<\/option>/.test(edNC) && /accountOptions\.map\(o => \(/.test(edNC));
-  ok('#G182d FlowNodeEditor: 연결 해제는 직접 입력값을 지우지 않는다', /setRow\(i, \{ portfolioId: undefined \}, true\)/.test(edNC) && !/portfolioId: undefined, value/.test(edNC));
+  ok('#G182d FlowNodeEditor: 연결 해제는 직접 입력값을 지우지 않는다', /setRow\(i, \{ portfolioId: undefined, formula: undefined \}, true\)/.test(edNC) && !/portfolioId: undefined, value/.test(edNC));
   ok('#G182e FlowNodeEditor: 연결 행 값은 계산 결과를 읽기 전용으로', /r\.portfolioId && \(isItem \|\| r\.kind === 'total'\) \? \(\s*<div/.test(edNC));
+  ok('#G183 FlowNodeEditor: 총액 값 출처에 \'항목 계산\'이 있다(총액 행에만)',
+    /\{r\.kind === 'total' && <option value=\{CALC_SOURCE\}>항목 계산<\/option>\}/.test(edNC));
+  ok('#G183b FlowNodeEditor: 소계·잔액에 계산 버튼(기본/선택 계산)', /\{custom \? `선택 계산 \$\{formulaCount\(r\)\}` : '기본 계산'\}/.test(edNC));
+  ok('#G183c FlowNodeEditor: 계산식 패널에 더하기·빼기·제외', /btn\('-', '−'/.test(edNC) && /btn\(null, '제외'/.test(edNC) && /btn\('\+', '\+'/.test(edNC));
+  // ⚠️ 참조 후보 판정이 flowMap 정규화와 갈리면 고른 항이 저장 시 조용히 사라진다.
+  ok('#G183d FlowNodeEditor: 참조 후보 = 항목 + 계산식 없는 총액', /const canRefRow = \(r\) => r\?\.kind === 'item' \|\| \(r\?\.kind === 'total' && !isCalcTotalRow\(r\)\);/.test(edNC));
+  // ⚠️ id는 계산식을 쓸 때만 붙인다(모든 표에 붙이면 기존 흐름도가 배포만으로 '변경됨').
+  ok('#G183e FlowNodeEditor: 계산식 쓰기는 withIds를 거친다', (edNC.match(/withIds\(rows\)/g) || []).length >= 4);
+  ok('#G183f FlowNodeEditor: 행 종류를 바꾸면 계산식을 버린다(총액이 되며 계산 모드로 둔갑 방지)',
+    /setRow\(i, \{ kind: e\.target\.value, formula: undefined \}, true\)/.test(edNC));
+  ok('#G183g FlowNodeEditor: 소계·잔액은 고른 행이 없으면 기본 계산으로', /const keep = list\[i\]\.kind === 'total' \? f : \(Object\.keys\(f\)\.length \? f : undefined\);/.test(edNC));
   ok('#G179h 팝업의 실행 현황은 공유 함수로 센다',
     /const checks = flowTableCheckStats\(tbl\);/.test(edNC) && /실행 \{checks\.done\}\/\{checks\.total\}/.test(edNC));
 }
@@ -2876,6 +3034,38 @@ await (async () => {
           JSON.stringify([norm(normalizeFlowMaps(forcedL)), flowFingerprint(forcedL)]));
         eq('#137g 실모듈도 재구축에서 연결을 보존', real.normalizeFlowMaps(forcedL)[0]?.nodes?.[0]?.table?.rows?.[0]?.portfolioId, 'a');
         eq('#137h 예약 id 일치', real.FLOW_TABLE_LINK_ALL, FLOW_TABLE_LINK_ALL);
+      }
+      // (9) 계산식 — 손상값·순환 후보·중복 id·빈 계산식을 결정적으로 밟는다.
+      {
+        const X = (kind, label, value, o) => ({ kind, label, value, ...o });
+        const frows = [
+          X('item', 'a', '10', { id: ' a ' }), X('item', 'b', '7', { id: 'a' }), X('item', 'c', 'x', { id: 'c' }),
+          X('total', 'T', '100', { id: 't', formula: { a: '+', c: '-' }, portfolioId: 'p' }),
+          X('total', 'U', '40', { id: 'u' }),
+          X('balance', 'z', '', { id: 'z', formula: { t: '+', a: '-', u: '+', z: '+', c: 'x', nope: '+' } }),
+          X('subtotal', 's', '', { formula: {} }), X('subtotal', 's2', '', { formula: { u: '-', a: '+' } }),
+          X('rule', '', '', { formula: { a: '+' } }), X('item', 'i', '1', { formula: { a: '+' } }), X('balance', 'd', ''),
+        ];
+        eq('#138 normalizeFlowTable 계산식 정규화 일치',
+          JSON.stringify(real.normalizeFlowTable({ rows: frows })), JSON.stringify(normalizeFlowTable({ rows: frows })));
+        eq('#138b computeFlowTable 계산식 일치(정규화 전 raw)',
+          JSON.stringify(real.computeFlowTable({ rows: frows })), JSON.stringify(computeFlowTable({ rows: frows })));
+        eq('#138c computeFlowTable 계산식 일치(정규화 후)',
+          JSON.stringify(real.computeFlowTable(real.normalizeFlowTable({ rows: frows }))), JSON.stringify(computeFlowTable(normalizeFlowTable({ rows: frows }))));
+        eq('#138d flowTableFormulaKey 일치',
+          JSON.stringify([undefined, null, {}, { a: '+', b: '-' }, [1], 'x'].map(v => real.flowTableFormulaKey(v))),
+          JSON.stringify([undefined, null, {}, { a: '+', b: '-' }, [1], 'x'].map(v => flowTableFormulaKey(v))));
+        const nodeF = { id: 'n1', kind: 'rect', x: 0, y: 0, w: 180, h: 120, label: '', date: '', amountManual: null, memo: '', portfolioId: null, accountNameSnapshot: '', amountSource: 'none', table: { rows: frows, border: 'all' } };
+        const forcedF2 = [cleanMap({ id: 'm1', name: 123, nodes: [nodeF], edges: [] })];
+        eq('#138e 계산식 표의 재구축·지문 일치',
+          JSON.stringify([norm(real.normalizeFlowMaps(forcedF2)), real.flowFingerprint(forcedF2)]),
+          JSON.stringify([norm(normalizeFlowMaps(forcedF2)), flowFingerprint(forcedF2)]));
+        eq('#138f 실모듈도 재구축에서 계산식을 보존',
+          JSON.stringify(real.normalizeFlowMaps(forcedF2)[0]?.nodes?.[0]?.table?.rows?.[5]?.formula), JSON.stringify({ a: '-', u: '+' }));
+        eq('#138g sameFlowTable 계산식 비교 일치',
+          String(real.sameFlowTable({ border: 'none', rows: [X('total', 'T', '1')] }, { border: 'none', rows: [X('total', 'T', '1', { formula: {} })] })),
+          String(sameFlowTable({ border: 'none', rows: [X('total', 'T', '1')] }, { border: 'none', rows: [X('total', 'T', '1', { formula: {} })] })));
+        eq('#138h 행 id 상한 일치', real.MAX_FLOW_TABLE_ROW_ID, MAX_FLOW_TABLE_ROW_ID);
       }
     }
     eq('#133c layoutFlowLabels 무작위 400세트 일치', badLabel, 0);
