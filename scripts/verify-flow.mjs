@@ -2953,8 +2953,10 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
   ok('#G182e FlowNodeEditor: 연결 행 값은 계산 결과를 읽기 전용으로', /r\.portfolioId && \(isItem \|\| r\.kind === 'total'\) \? \(\s*<div/.test(edNC));
   ok('#G190 FlowCanvas: 구름선 테두리는 소속 도형(드래그 반영)에서 매 렌더 계산', /const b = flowGroupBounds\(g, nodeById\);/.test(canvasNC));
   ok('#G190b FlowCanvas: 구름선/선 종류 분기', /const d = cloud \? revisionCloudPath\(b\.x, b\.y, b\.w, b\.h\) :/.test(canvasNC));
-  // ⚠️ 그룹 안쪽 면이 포인터를 받으면 그 안의 빈 곳에서 팬·선택 해제가 죽는다.
-  ok('#G190c FlowCanvas: 그룹 면은 포인터를 받지 않는다', /<path d=\{d\} fill=\{color\} fillOpacity=\{0\.05\} stroke="none" pointerEvents="none" \/>/.test(canvasNC));
+  // ⚠️ 그룹 안쪽 면은 잡아 끌 수 있다(사용자 요구) — 단 구름선 그리기·그룹 이동 모드에서는 받지 않는다
+  //    (그 안에서 사각형을 그려야 한다). 화면 이동은 우클릭 드래그가 어디서나 대신한다.
+  ok('#G190c FlowCanvas: 그룹 면은 그리기·이동 모드에서만 포인터를 놓는다',
+    /pointerEvents=\{drawFrame \|\| moveMode \? 'none' : 'fill'\}/.test(canvasNC));
   ok('#G190d FlowCanvas: 그룹을 끌면 소속 도형이 함께 움직인다',
     /if \(gdrag && gdrag\.members\.has\(n\.id\)\) return \{ \.\.\.n, x: n\.x \+ gdrag\.dx, y: n\.y \+ gdrag\.dy \};/.test(canvasNC)
     && /onNodesChange\(nodes\.map\(n => \(g\.members\.has\(n\.id\) \? roundNode/.test(canvasNC));
@@ -2965,7 +2967,25 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
   ok('#G191b FlowBoard: 그룹 선택·삭제·속성 패널 배선',
     /else if \(selGroup\) deleteGroup\(selGroup\.id\);/.test(boardNC) && /<FlowGroupInspector/.test(boardNC) && /onPatch=\{patchGroupById\}/.test(boardNC));
   ok('#G191c FlowBoard: 마지막 그룹을 지우면 필드를 지운다(빈 배열 저장 금지)', /if \(list\.length\) next\.groups = list; else delete next\.groups;/.test(boardNC));
-  ok('#G191d FlowBoard: Esc는 그리기 모드부터 끈다', /if \(drawFrame\) setDrawFrame\(false\);\s*else if \(connectFrom\)/.test(boardNC));
+  ok('#G191d FlowBoard: Esc는 그리기·그룹 이동 모드부터 끈다', /if \(drawFrame\) setDrawFrame\(false\);\s*else if \(moveMode\) setMoveMode\(false\);\s*else if \(connectFrom\)/.test(boardNC));
+  // ── 그룹 이동(CAD MOVE) · 우클릭 화면 이동 (사용자 요청 2026-10)
+  ok('#G193 FlowCanvas: 우클릭·가운데 버튼 드래그 = 화면 이동(어느 모드에서나)',
+    /if \(e\.button === 1 \|\| e\.button === 2\) \{\s*e\.preventDefault\(\);\s*setPan\(/.test(canvasNC) && /onContextMenu=\{\(e\) => e\.preventDefault\(\)\}/.test(canvasNC));
+  // ⚠️ 도형·선·핸들 위에서도 우클릭 화면 이동이 되려면 그 핸들러들이 왼쪽 버튼이 아니면 **전파시켜야** 한다.
+  ok('#G193b FlowCanvas: 도형·선·핸들은 왼쪽 버튼만 받는다',
+    /const onNodePointerDown = \(e, n\) => \{\s*if \(e\.button !== 0\) return;/.test(canvasNC)
+    && /const startDrag = \(e, n, mode\) => \{[\s\S]{0,200}if \(e\.button !== 0\) return;/.test(canvasNC)
+    && /const startGroupDrag = \(e, g\) => \{\s*if \(e\.button !== 0\) return;/.test(canvasNC)
+    && (canvasNC.match(/if \(ev\.button !== 0\) return; ev\.stopPropagation\(\); onSelect\?\.\(`edge:/g) || []).length === 2);
+  ok('#G193c FlowCanvas: 그룹 이동 모드 — 배경 드래그는 선택 사각형, 가운데가 든 도형 선택',
+    /if \(moveMode\) \{[\s\S]{0,260}setBand\(\{ x1: p\.x, y1: p\.y, x2: p\.x, y2: p\.y \}\);/.test(canvasNC)
+    && /return cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2;/.test(canvasNC));
+  // ⚠️ 여러 도형 이동은 구름선 끌기와 **같은 gdrag 경로**(미리보기·격자 스냅·헛커밋 방지 공유).
+  ok('#G193d FlowCanvas: 선택 도형을 끌면 선택 전체가 함께 움직인다',
+    /const members = multi\.has\(n\.id\) \? new Set\(multi\) : new Set\(\[n\.id\]\);/.test(canvasNC) && /setGdrag\(\{ id: 'multi', ox: p\.x, oy: p\.y, dx: 0, dy: 0, members \}\);/.test(canvasNC));
+  ok('#G193e FlowCanvas: 모드를 끄면 다중 선택을 비운다', /useEffect\(\(\) => \{ if \(!moveMode\) \{ setMulti\(new Set\(\)\); setBand\(null\); \} \}, \[moveMode\]\);/.test(canvasNC));
+  ok('#G193f FlowBoard: 그룹 이동 버튼은 구름선 그리기·연결과 배타', /onClick=\{\(\) => \{ setConnectFrom\(null\); setDrawFrame\(false\); setMoveMode\(v => !v\); \}\}/.test(boardNC)
+    && /onClick=\{\(\) => \{ setConnectFrom\(null\); setMoveMode\(false\); setDrawFrame\(v => !v\); \}\}/.test(boardNC) && /moveMode=\{moveMode\}/.test(boardNC));
   ok('#G192 FlowGroupInspector: 선 색·구름선+7종·굵기·묶인 도형',
     /value=\{group\.stroke\}\s*fallback=\{DEFAULT_GROUP_STROKE\}/.test(inspNC) && /onClick=\{\(\) => patch\(\{ lineStyle: undefined \}\)\}/.test(inspNC)
     && /onClick=\{\(\) => patch\(\{ lineStyle: k \}\)\}/.test(inspNC) && /onChange=\{\(\) => toggleMember\(m\.id\)\}/.test(inspNC));

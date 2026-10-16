@@ -65,6 +65,7 @@ function FlowCanvasInner({
   snapEnabled = true,     // 도형 정렬 스냅(세션 로컬 토글)
   drawFrame = false,      // 구름선 그리기 모드 — 배경 드래그가 팬 대신 사각형 지정이 된다
   onDrawFrame,            // (rect | null) => void — 놓을 때 1회
+  moveMode = false,       // 그룹 이동 모드 — 배경 드래그 = 도형 여러 개 선택, 선택한 도형을 끌면 함께 이동
 }) {
   const svgRef = useRef(null);
   // 드래그/리사이즈 중 임시 상태 — 커밋 전까지 상위로 올리지 않는다
@@ -78,6 +79,11 @@ function FlowCanvasInner({
   const [gdrag, setGdrag] = useState(null);  // {id, ox, oy, dx, dy, members:Set}
   // 구름선 그리기(사각형 지정) 중 상태 — 캔버스 좌표
   const [draw, setDraw] = useState(null);    // {x1, y1, x2, y2}
+  // 그룹 이동 모드의 다중 선택(세션 로컬 — 저장하지 않는다)과 선택 사각형
+  const [multi, setMulti] = useState(() => new Set());
+  const [band, setBand] = useState(null);    // {x1, y1, x2, y2}
+  // 모드를 끄면 선택을 비운다(꺼진 뒤에도 강조가 남아 있으면 '아직 묶여 움직인다'로 오해한다).
+  useEffect(() => { if (!moveMode) { setMulti(new Set()); setBand(null); } }, [moveMode]);
 
   const nodes = map?.nodes || [];
   const edges = map?.edges || [];
@@ -174,6 +180,8 @@ function FlowCanvasInner({
   }, [edges, paths, liveNodes]);
 
   const startDrag = (e, n, mode) => {
+    // ⚠️ 왼쪽 버튼만 — 우클릭·가운데 버튼은 전파시켜 캔버스가 화면 이동으로 받는다(도형 위에서도 화면 이동).
+    if (e.button !== 0) return;
     if (readOnly) return;
     e.stopPropagation();
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* 일부 브라우저·비신뢰 이벤트 */ }
@@ -191,6 +199,7 @@ function FlowCanvasInner({
 
   /** 구름선 끌기 시작 — 소속 도형을 시작 시점에 고정한다(끄는 도중 소속이 바뀌지 않게). */
   const startGroupDrag = (e, g) => {
+    if (e.button !== 0) return;   // 우클릭은 화면 이동으로 넘긴다
     e.stopPropagation();
     onSelect?.(`group:${g.id}`);
     if (readOnly) return;
@@ -208,6 +217,11 @@ function FlowCanvasInner({
     if (draw) {
       const p = toCanvas(e.clientX, e.clientY);
       setDraw(d => (d ? { ...d, x2: p.x, y2: p.y } : d));
+      return;
+    }
+    if (band) {
+      const p = toCanvas(e.clientX, e.clientY);
+      setBand(d => (d ? { ...d, x2: p.x, y2: p.y } : d));
       return;
     }
     if (drag) {
@@ -240,6 +254,19 @@ function FlowCanvasInner({
       const w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
       // 너무 작으면(클릭만 함) 취소로 본다
       onDrawFrame?.(w >= 20 && h >= 20 ? { x, y, w, h } : null);
+      return;
+    }
+    if (band) {
+      const d = band;
+      setBand(null);
+      const x1 = Math.min(d.x1, d.x2), y1 = Math.min(d.y1, d.y2);
+      const x2 = Math.max(d.x1, d.x2), y2 = Math.max(d.y1, d.y2);
+      // 클릭만 했으면(사각형이 작으면) 선택을 비운다. 아니면 **가운데가 들어간** 도형을 선택(구름선과 같은 규칙).
+      if (x2 - x1 < 6 && y2 - y1 < 6) { setMulti(new Set()); return; }
+      setMulti(new Set(nodes.filter(n => {
+        const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+        return cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2;
+      }).map(n => n.id)));
       return;
     }
     if (gdrag) {
@@ -277,8 +304,21 @@ function FlowCanvasInner({
   };
 
   const onBgPointerDown = (e) => {
+    // 우클릭·가운데 버튼 드래그 = 화면 이동(어느 모드에서나, 도형 위에서도 — 도형 핸들러가 전파시킨다).
+    if (e.button === 1 || e.button === 2) {
+      e.preventDefault();
+      setPan({ ox: e.clientX, oy: e.clientY, base: { x: viewport.x, y: viewport.y } });
+      return;
+    }
     if (e.button !== 0) return;
     if (connectFrom) { onConnectFromChange?.(null); return; }
+    if (moveMode) {
+      // 그룹 이동 — 배경 드래그는 선택 사각형
+      const p = toCanvas(e.clientX, e.clientY);
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* 일부 브라우저 */ }
+      setBand({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+      return;
+    }
     if (drawFrame && !readOnly) {
       // 구름선 그리기 — 팬 대신 사각형 지정
       const p = toCanvas(e.clientX, e.clientY);
@@ -292,10 +332,23 @@ function FlowCanvasInner({
   };
 
   const onNodePointerDown = (e, n) => {
+    if (e.button !== 0) return;   // 우클릭·가운데 버튼은 캔버스의 화면 이동으로 넘긴다
     if (connectFrom) {
       e.stopPropagation();
       if (connectFrom !== n.id) onAddEdge?.(connectFrom, n.id);
       onConnectFromChange?.(null);
+      return;
+    }
+    if (moveMode && e.button === 0) {
+      // 그룹 이동 — 선택된 도형을 잡으면 선택 전체를, 아니면 그 도형 하나를 옮긴다(CAD MOVE).
+      // ⚠️ 구름선 끌기와 **같은 상태(gdrag)**를 쓴다 — 이동 미리보기·격자 스냅·헛커밋 방지가 한 경로다.
+      e.stopPropagation();
+      if (readOnly) return;
+      const members = multi.has(n.id) ? new Set(multi) : new Set([n.id]);
+      if (!multi.has(n.id)) setMulti(members);
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* 일부 브라우저 */ }
+      const p = toCanvas(e.clientX, e.clientY);
+      setGdrag({ id: 'multi', ox: p.x, oy: p.y, dx: 0, dy: 0, members });
       return;
     }
     startDrag(e, n, 'move');
@@ -331,7 +384,8 @@ function FlowCanvasInner({
     <svg
       ref={svgRef}
       className="w-full h-full block"
-      style={{ touchAction: 'none', background: FLOW_CANVAS_BG, cursor: drawFrame ? 'crosshair' : pan ? 'grabbing' : 'default' }}
+      style={{ touchAction: 'none', background: FLOW_CANVAS_BG, cursor: pan ? 'grabbing' : drawFrame || moveMode ? 'crosshair' : 'default' }}
+      onContextMenu={(e) => e.preventDefault()}
       onPointerDown={onBgPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
@@ -366,7 +420,18 @@ function FlowCanvasInner({
           const sw = cloud ? line.width + 0.5 : line.width;
           return (
             <g key={`grp:${g.id}`}>
-              <path d={d} fill={color} fillOpacity={0.05} stroke="none" pointerEvents="none" />
+              {/* 안쪽 면 — 클릭해 끌면 묶인 도형이 함께 움직인다(사용자 요구: 구름선 자체를 클릭해서 이동).
+                  ⚠️ 구름선 그리기·그룹 이동 모드에서는 포인터를 받지 않는다(그 안에서 사각형을 그려야 한다).
+                  화면 이동은 우클릭 드래그가 어디서나 되므로 안쪽에서도 막히지 않는다. */}
+              <path
+                d={d}
+                fill={color}
+                fillOpacity={0.05}
+                stroke="none"
+                pointerEvents={drawFrame || moveMode ? 'none' : 'fill'}
+                style={{ cursor: readOnly ? 'pointer' : 'move' }}
+                onPointerDown={(ev) => startGroupDrag(ev, g)}
+              />
               {gSel && <path d={d} fill="none" stroke="#818cf8" strokeWidth={sw + 7} strokeOpacity={0.35} strokeLinejoin="round" pointerEvents="none" />}
               {line.double && !cloud ? (
                 <>
@@ -398,6 +463,13 @@ function FlowCanvasInner({
             </g>
           );
         })}
+
+        {/* 그룹 이동 선택 사각형 */}
+        {band && (() => {
+          const x = Math.min(band.x1, band.x2), y = Math.min(band.y1, band.y2);
+          const w = Math.abs(band.x2 - band.x1), h = Math.abs(band.y2 - band.y1);
+          return <rect x={x} y={y} width={w} height={h} fill="#38bdf8" fillOpacity={0.08} stroke="#38bdf8" strokeWidth={1.2} strokeDasharray="5 4" pointerEvents="none" />;
+        })()}
 
         {/* 구름선 그리기 미리보기 */}
         {draw && (() => {
@@ -501,7 +573,7 @@ function FlowCanvasInner({
                 stroke="transparent"
                 strokeWidth={16}
                 style={{ cursor: readOnly ? 'default' : 'pointer' }}
-                onPointerDown={(ev) => { ev.stopPropagation(); onSelect?.(`edge:${e.id}`); }}
+                onPointerDown={(ev) => { if (ev.button !== 0) return; ev.stopPropagation(); onSelect?.(`edge:${e.id}`); }}
               />
             </g>
           );
@@ -534,7 +606,7 @@ function FlowCanvasInner({
                 style={{ cursor: 'pointer' }}
                 onPointerEnter={() => setHoverLabel({ id: e.id, x: pl.x, y: pl.y, text: e.label })}
                 onPointerLeave={() => setHoverLabel(h => (h && h.id === e.id ? null : h))}
-                onPointerDown={(ev) => { ev.stopPropagation(); onSelect?.(`edge:${e.id}`); }}
+                onPointerDown={(ev) => { if (ev.button !== 0) return; ev.stopPropagation(); onSelect?.(`edge:${e.id}`); }}
               >
                 {/* 네이티브 툴팁 — 아래 즉시 툴팁이 못 뜨는 경우(터치·보조기술)의 보조 경로 */}
                 <title>{e.label}</title>
@@ -600,7 +672,7 @@ function FlowCanvasInner({
                 style={{ cursor: readOnly ? 'default' : connectFrom ? 'crosshair' : 'move' }}
                 onPointerDown={(e) => onNodePointerDown(e, n)}
               >
-                <NodeShape n={n} fill={fillColor} stroke={isConnectSrc ? '#818cf8' : raw.stroke} selected={selected} dangling={v.dangling} />
+                <NodeShape n={n} fill={fillColor} stroke={isConnectSrc ? '#818cf8' : raw.stroke} selected={selected || multi.has(n.id)} dangling={v.dangling} />
               </g>
 
               {/* 내용 — foreignObject로 HTML 줄바꿈을 그대로 쓴다. pointerEvents none이라 도형이 포인터를 받는다. */}
@@ -685,7 +757,7 @@ function FlowCanvasInner({
                     stroke="#818cf8"
                     strokeWidth={2}
                     style={{ cursor: 'crosshair' }}
-                    onPointerDown={(e) => { e.stopPropagation(); onConnectFromChange?.(isConnectSrc ? null : n.id); }}
+                    onPointerDown={(e) => { if (e.button !== 0) return; e.stopPropagation(); onConnectFromChange?.(isConnectSrc ? null : n.id); }}
                   />
                   {/* 리사이즈 핸들 — 오른쪽 아래 */}
                   <rect

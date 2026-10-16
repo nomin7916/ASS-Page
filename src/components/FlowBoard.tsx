@@ -110,6 +110,8 @@ export default function FlowBoard({
   const [connectFrom, setConnectFrom] = useState(null);
   // 구름선 그리기 모드(세션 로컬) — 켜면 캔버스 배경 드래그가 묶을 영역 지정이 된다.
   const [drawFrame, setDrawFrame] = useState(false);
+  // 그룹 이동 모드(세션 로컬) — 드래그로 도형 여러 개를 고른 뒤 함께 옮긴다(CAD MOVE).
+  const [moveMode, setMoveMode] = useState(false);
   const [viewport, setViewport] = useState(() => ({ ...DEFAULT_FLOW_VIEWPORT }));
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState('');
@@ -732,6 +734,7 @@ export default function FlowBoard({
       if (e.key === 'Escape') {
         // 한 단계씩: 연결 취소 → 선택 해제 → 보드 닫기
         if (drawFrame) setDrawFrame(false);
+        else if (moveMode) setMoveMode(false);
         else if (connectFrom) setConnectFrom(null);
         else if (selectedId) setSelectedId(null);
         else closeBoard();
@@ -806,12 +809,20 @@ export default function FlowBoard({
               <Plus size={12} /> 원
             </button>
             <button
-              onClick={() => { setConnectFrom(null); setDrawFrame(v => !v); }}
+              onClick={() => { setConnectFrom(null); setMoveMode(false); setDrawFrame(v => !v); }}
               title={'구름선 — 도형 몇 개를 테두리로 묶어 그룹으로 표시합니다.\n누른 뒤 캔버스에서 묶을 도형들을 드래그로 감싸세요(도형 가운데가 들어가면 묶입니다).\n테두리는 묶인 도형을 따라 자동으로 늘고 줄어듭니다.'}
               className={`flex items-center gap-1 text-[11px] px-2 py-1 rounded border transition ${drawFrame ? 'border-indigo-500 text-indigo-200 bg-indigo-900/40' : 'border-gray-700 text-gray-300 hover:text-white hover:border-indigo-600'}`}
             >
               <svg width="14" height="10" viewBox="0 0 14 10" aria-hidden="true"><path d="M1 5 A2.2 2.2 0 0 1 4.5 2 A2.2 2.2 0 0 1 9.5 2 A2.2 2.2 0 0 1 13 5 A2.2 2.2 0 0 1 9.5 8 A2.2 2.2 0 0 1 4.5 8 A2.2 2.2 0 0 1 1 5 Z" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>
               구름선
+            </button>
+            <button
+              onClick={() => { setConnectFrom(null); setDrawFrame(false); setMoveMode(v => !v); }}
+              title={'그룹 이동 — 도형 여러 개를 한꺼번에 옮깁니다(CAD의 MOVE).\n켠 뒤 빈 곳에서 드래그로 도형들을 감싸 선택하고, 선택된 도형 하나를 잡아 끌면 함께 움직입니다.\n연결선과 구름선은 도형을 따라 그대로 유지됩니다. 우클릭 드래그는 언제나 화면 이동입니다.'}
+              className={`flex items-center gap-1 text-[11px] px-2 py-1 rounded border transition ${moveMode ? 'border-sky-500 text-sky-200 bg-sky-900/40' : 'border-gray-700 text-gray-300 hover:text-white hover:border-indigo-600'}`}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 V11 M1 6 H11 M6 1 L4.5 2.5 M6 1 L7.5 2.5 M6 11 L4.5 9.5 M6 11 L7.5 9.5 M1 6 L2.5 4.5 M1 6 L2.5 7.5 M11 6 L9.5 4.5 M11 6 L9.5 7.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /></svg>
+              그룹 이동
             </button>
           </>
         )}
@@ -896,6 +907,7 @@ export default function FlowBoard({
             snapEnabled={snapOn}
             drawFrame={drawFrame}
             onDrawFrame={onDrawFrame}
+            moveMode={moveMode}
           />
           {nodeCount === 0 && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -909,6 +921,11 @@ export default function FlowBoard({
           {connectFrom && (
             <div className="absolute top-2 left-1/2 -translate-x-1/2 text-[11px] px-2 py-1 rounded bg-indigo-900/80 border border-indigo-600 text-indigo-200 pointer-events-none">
               연결할 도형을 클릭하세요 (Esc 취소)
+            </div>
+          )}
+          {moveMode && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 text-[11px] px-2 py-1 rounded bg-sky-900/80 border border-sky-600 text-sky-200 pointer-events-none">
+              빈 곳에서 드래그로 도형들을 선택 → 선택된 도형을 끌어 이동 · 우클릭 드래그 = 화면 이동 (Esc 끝내기)
             </div>
           )}
           {drawFrame && (
