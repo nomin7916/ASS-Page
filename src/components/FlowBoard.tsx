@@ -2,12 +2,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, X, RotateCcw, Maximize2, Save, Pencil, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import FlowCanvas from './FlowCanvas';
-import FlowInspector from './FlowInspector';
+import FlowInspector, { FlowGroupInspector } from './FlowInspector';
 import FlowNodeEditor from './FlowNodeEditor';
 import { useFlowMapData } from '../hooks/useFlowMapData';
 import {
   makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView, flowLinkedAmount, makeFlowNodeRowResolver,
-  countDanglingNodes, MAX_FLOW_NODES, MAX_FLOW_EDGES, MAX_FLOW_MAPS, MAX_FLOW_MAP_NAME,
+  countDanglingNodes, MAX_FLOW_NODES, MAX_FLOW_EDGES, MAX_FLOW_MAPS, MAX_FLOW_MAP_NAME, MAX_FLOW_GROUPS,
   DEFAULT_FLOW_VIEWPORT, normalizeFlowViewport, sameFlowViewport, fitFlowViewport,
   addFlowMap, duplicateFlowMap, removeFlowMap, renameFlowMap, moveFlowMap, flowBundleEnabled,
 } from '../flowMap';
@@ -108,6 +108,8 @@ export default function FlowBoard({
   const [mapsLocal, setMapsLocal] = useState(maps);
   const [selectedId, setSelectedId] = useState(null);
   const [connectFrom, setConnectFrom] = useState(null);
+  // 구름선 그리기 모드(세션 로컬) — 켜면 캔버스 배경 드래그가 묶을 영역 지정이 된다.
+  const [drawFrame, setDrawFrame] = useState(false);
   const [viewport, setViewport] = useState(() => ({ ...DEFAULT_FLOW_VIEWPORT }));
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState('');
@@ -391,6 +393,59 @@ export default function FlowBoard({
   const onNodesChange = useCallback((nodes) => patchMap(cur => ({ ...cur, nodes })), [patchMap]);
 
   /**
+   * 구름선 그리기 완료 — 지정한 사각형 안에 **중심이 들어간** 도형을 묶는다.
+   * ⚠️ 테두리 좌표는 저장하지 않는다(소속 도형만). 그래서 그린 사각형과 실제 테두리가 다른 것이
+   *    정상이다 — 테두리는 묶인 도형을 감싸도록 다시 계산된다.
+   */
+  const onDrawFrame = useCallback((rect) => {
+    setDrawFrame(false);
+    if (!rect) return;
+    const cur = findMap(localRef.current, activeIdRef.current);
+    if (!cur) return;
+    if ((cur.groups || []).length >= MAX_FLOW_GROUPS) {
+      setNotice(`구름선은 시트당 최대 ${MAX_FLOW_GROUPS}개까지 만들 수 있습니다.`);
+      return;
+    }
+    const nodeIds = (cur.nodes || [])
+      .filter(n => {
+        const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+        return cx >= rect.x && cx <= rect.x + rect.w && cy >= rect.y && cy <= rect.y + rect.h;
+      })
+      .map(n => n.id);
+    if (!nodeIds.length) {
+      setNotice('구름선 안에 도형이 없습니다 — 묶을 도형들의 가운데가 들어가도록 감싸 주세요.');
+      return;
+    }
+    const g = { id: generateId(), label: '', nodeIds };
+    patchMap(m => ({ ...m, groups: [...(m.groups || []), g] }));
+    setSelectedId(`group:${g.id}`);
+  }, [patchMap]);
+
+  const patchGroupById = useCallback((id, o) => {
+    if (!id) return;
+    patchMap(cur => {
+      const list = cur.groups || [];
+      const idx = list.findIndex(g => g.id === id);
+      if (idx < 0) return cur;
+      const groups = list.slice();
+      groups[idx] = { ...groups[idx], ...o };
+      return { ...cur, groups };
+    });
+  }, [patchMap]);
+
+  // 테두리만 지운다(도형은 남는다) — 되돌리기 쉬운 표시라 확인창을 두지 않는다.
+  const deleteGroup = useCallback((id) => {
+    patchMap(cur => {
+      const list = (cur.groups || []).filter(g => g.id !== id);
+      if (list.length === (cur.groups || []).length) return cur;
+      const next = { ...cur };
+      if (list.length) next.groups = list; else delete next.groups;
+      return next;
+    });
+    setSelectedId(null);
+  }, [patchMap]);
+
+  /**
    * 연결선 합치기 토글 — 시트 단위 저장 필드다.
    * ⚠️ **켤 때는 `true`를 쓰지 말고 필드를 지운다**(생략 = 켜짐). `true`를 저장하면 정규화가
    *    그것을 생략형으로 되돌리려 매 로드 재구축 경로로 떨어지는데, 지문은 양쪽이 같아
@@ -434,6 +489,8 @@ export default function FlowBoard({
     ? map.nodes.find(n => n.id === selectedId) : null;
   const selEdge = map && String(selectedId || '').startsWith('edge:')
     ? map.edges.find(e => e.id === String(selectedId).slice(5)) : null;
+  const selGroup = map && String(selectedId || '').startsWith('group:')
+    ? (map.groups || []).find(g => g.id === String(selectedId).slice(6)) : null;
 
   // 선택된 선의 양 끝 도형 **이름**(라이브 파생 — 저장하지 않는다). 인스펙터가 화살촉 방향을
   // '자금 흐름: A → B'로 풀어 쓰는 데 쓴다. 선을 그은 순서를 사용자가 기억할 리 없어서,
@@ -674,12 +731,14 @@ export default function FlowBoard({
     if (!typing) {
       if (e.key === 'Escape') {
         // 한 단계씩: 연결 취소 → 선택 해제 → 보드 닫기
-        if (connectFrom) setConnectFrom(null);
+        if (drawFrame) setDrawFrame(false);
+        else if (connectFrom) setConnectFrom(null);
         else if (selectedId) setSelectedId(null);
         else closeBoard();
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && !readOnly) {
         if (selNode) deleteNode(selNode.id);
         else if (selEdge) deleteEdge(selEdge.id);
+        else if (selGroup) deleteGroup(selGroup.id);
       }
     } else if (e.key === 'Escape') {
       e.target.blur?.();
@@ -745,6 +804,14 @@ export default function FlowBoard({
             </button>
             <button onClick={() => addNode('ellipse')} className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white hover:border-indigo-600 transition">
               <Plus size={12} /> 원
+            </button>
+            <button
+              onClick={() => { setConnectFrom(null); setDrawFrame(v => !v); }}
+              title={'구름선 — 도형 몇 개를 테두리로 묶어 그룹으로 표시합니다.\n누른 뒤 캔버스에서 묶을 도형들을 드래그로 감싸세요(도형 가운데가 들어가면 묶입니다).\n테두리는 묶인 도형을 따라 자동으로 늘고 줄어듭니다.'}
+              className={`flex items-center gap-1 text-[11px] px-2 py-1 rounded border transition ${drawFrame ? 'border-indigo-500 text-indigo-200 bg-indigo-900/40' : 'border-gray-700 text-gray-300 hover:text-white hover:border-indigo-600'}`}
+            >
+              <svg width="14" height="10" viewBox="0 0 14 10" aria-hidden="true"><path d="M1 5 A2.2 2.2 0 0 1 4.5 2 A2.2 2.2 0 0 1 9.5 2 A2.2 2.2 0 0 1 13 5 A2.2 2.2 0 0 1 9.5 8 A2.2 2.2 0 0 1 4.5 8 A2.2 2.2 0 0 1 1 5 Z" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>
+              구름선
             </button>
           </>
         )}
@@ -827,6 +894,8 @@ export default function FlowBoard({
             onConnectFromChange={setConnectFrom}
             bundleEnabled={bundleOn}
             snapEnabled={snapOn}
+            drawFrame={drawFrame}
+            onDrawFrame={onDrawFrame}
           />
           {nodeCount === 0 && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -842,8 +911,23 @@ export default function FlowBoard({
               연결할 도형을 클릭하세요 (Esc 취소)
             </div>
           )}
+          {drawFrame && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 text-[11px] px-2 py-1 rounded bg-indigo-900/80 border border-indigo-600 text-indigo-200 pointer-events-none">
+              묶을 도형들을 빈 곳에서부터 드래그로 감싸세요 (Esc 취소)
+            </div>
+          )}
         </div>
 
+        {selGroup && (
+          <FlowGroupInspector
+            group={selGroup}
+            members={(map?.nodes || []).map(n => ({ id: n.id, name: viewOf(n).displayName || '(이름 없음)' }))}
+            onPatch={patchGroupById}
+            onDelete={deleteGroup}
+            onClose={() => setSelectedId(null)}
+            readOnly={readOnly}
+          />
+        )}
         {(selNode || selEdge) && (
           <FlowInspector
             node={selNode}

@@ -5,7 +5,7 @@ import { cleanNum } from '../utils';
 import {
   sanitizeHexColor, DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, normalizeFlowArrow, arrowHeads,
   flowLineRender, resolveFlowLineStyle, normalizeFlowLineWidth, normalizeFlowSide, FLOW_CANVAS_BG,
-  flowTableCheckStats,
+  flowTableCheckStats, DEFAULT_GROUP_STROKE, MAX_FLOW_GROUP_LABEL,
 } from '../flowMap';
 
 /**
@@ -669,6 +669,163 @@ export default function FlowInspector({
             </button>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 구름선 그룹 속성 패널 — 이름 · 선 색 · 선 종류(구름선 + 연결선과 같은 7종) · 굵기 · 묶인 도형.
+ * ⚠️ 이름 draft는 도형 인스펙터와 같은 규약 — **그룹 id에 묶어** 들고, 대상 변경·언마운트에서 그 id로
+ *    flush한다(다른 곳을 클릭해 패널이 사라지면 blur가 발화하지 않아 입력이 유실된다).
+ * ⚠️ 테두리 크기는 저장하지 않는다 — 묶인 도형을 바꾸면 테두리가 그 도형들을 감싸도록 다시 그려진다.
+ */
+/** 구름선 미리보기 — 가로로 이어진 볼록한 호(캔버스의 revisionCloudPath와 같은 모양의 한 변). */
+const CLOUD_PREVIEW_D = 'M 2 11' + Array.from({ length: 8 }, (_, i) => ` A 7.4 7.4 0 0 1 ${2 + (i + 1) * 12} 11`).join('');
+
+export function FlowGroupInspector({ group, members, onPatch, onDelete, onClose, readOnly }) {
+  const [label, setLabel] = useState(group?.label || '');
+  const ownerRef = useRef({ id: group?.id, base: group?.label || '' });
+  const labelRef = useRef(label);
+  labelRef.current = label;
+  const patchRef = useRef(onPatch);
+  patchRef.current = onPatch;
+  const roRef = useRef(readOnly);
+  roRef.current = readOnly;
+
+  const flushLabel = useCallback(() => {
+    const o = ownerRef.current;
+    if (!o?.id || roRef.current) return;
+    const v = labelRef.current.slice(0, MAX_FLOW_GROUP_LABEL);
+    if (v === o.base) return;
+    patchRef.current?.(o.id, { label: v });
+    ownerRef.current = { ...o, base: v };
+  }, []);
+
+  // 대상이 바뀌면 이전 그룹에 flush하고 새 그룹 값으로 시드한다(passive가 아니라 layout — blur보다 먼저).
+  useLayoutEffect(() => {
+    if (ownerRef.current?.id !== group?.id) {
+      flushLabel();
+      ownerRef.current = { id: group?.id, base: group?.label || '' };
+      setLabel(group?.label || '');
+    } else if (group && (group.label || '') !== ownerRef.current.base && labelRef.current === ownerRef.current.base) {
+      // 다른 경로(별도 창 등)에서 바뀐 값 채택 — 편집 중이 아닐 때만
+      ownerRef.current = { ...ownerRef.current, base: group.label || '' };
+      setLabel(group.label || '');
+    }
+  }, [group, flushLabel]);
+  useLayoutEffect(() => () => { flushLabel(); }, [flushLabel]);
+
+  if (!group) return null;
+  const cloud = !group.lineStyle;
+  const curStyle = cloud ? 'cloud' : group.lineStyle;
+  const curWidth = normalizeFlowLineWidth(group.lineWidth);
+  const color = sanitizeHexColor(group.stroke) || DEFAULT_GROUP_STROKE;
+  const ids = new Set(group.nodeIds || []);
+  const patch = (o) => { if (!readOnly) onPatch?.(group.id, o); };
+  const toggleMember = (id) => {
+    const next = ids.has(id) ? (group.nodeIds || []).filter(x => x !== id) : [...(group.nodeIds || []), id];
+    if (next.length === 0) return;   // 마지막 도형은 뺄 수 없다(그릴 테두리가 없어진다 — 지우려면 삭제)
+    patch({ nodeIds: next });
+  };
+
+  return (
+    <div className="w-64 shrink-0 h-full overflow-y-auto bg-[#0f1623] border-l border-gray-700 p-3">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-xs font-semibold text-gray-200">구름선 속성</div>
+        <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-300" title="패널 닫기"><X size={14} /></button>
+      </div>
+
+      <Field label="이름" hint="테두리 왼쪽 위에 표시됩니다(비워 두면 표시하지 않습니다).">
+        <input
+          className={inputCls}
+          value={label}
+          readOnly={readOnly}
+          maxLength={MAX_FLOW_GROUP_LABEL}
+          placeholder="예: 해외계좌 묶음"
+          onChange={e => setLabel(e.target.value)}
+          onBlur={flushLabel}
+          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+        />
+      </Field>
+
+      <Field label="선 색">
+        <ColorPicker
+          value={group.stroke}
+          fallback={DEFAULT_GROUP_STROKE}
+          disabled={readOnly}
+          onPick={(hex) => patch({ stroke: hex || undefined })}
+        />
+      </Field>
+
+      <Field label="선 종류">
+        <div className="grid grid-cols-2 gap-1">
+          <button
+            disabled={readOnly}
+            title="구름선"
+            onClick={() => patch({ lineStyle: undefined })}
+            className={`px-1.5 py-1 rounded border transition ${curStyle === 'cloud' ? 'border-indigo-500 ring-1 ring-indigo-500/50' : 'border-gray-700 hover:border-gray-500'}`}
+            style={{ background: FLOW_CANVAS_BG }}
+          >
+            <svg className="w-full block" height="14" viewBox="0 0 100 14" preserveAspectRatio="none" aria-hidden="true">
+              <path d={CLOUD_PREVIEW_D} fill="none" stroke={color} strokeWidth="1.6" />
+            </svg>
+            <span className={`block text-[9px] mt-0.5 ${curStyle === 'cloud' ? 'text-indigo-300' : 'text-gray-500'}`}>구름선</span>
+          </button>
+          {LINE_STYLE_CHOICES.map(({ k, t }) => (
+            <button
+              key={k}
+              disabled={readOnly}
+              title={t}
+              onClick={() => patch({ lineStyle: k })}
+              className={`px-1.5 py-1 rounded border transition ${curStyle === k ? 'border-indigo-500 ring-1 ring-indigo-500/50' : 'border-gray-700 hover:border-gray-500'}`}
+              style={{ background: FLOW_CANVAS_BG }}
+            >
+              <LinePreview style={k} width={curWidth} color={color} />
+              <span className={`block text-[9px] mt-0.5 ${curStyle === k ? 'text-indigo-300' : 'text-gray-500'}`}>{t}</span>
+            </button>
+          ))}
+        </div>
+      </Field>
+
+      <Field label="선 굵기">
+        <div className="grid grid-cols-3 gap-1">
+          {LINE_WIDTH_CHOICES.map(({ k, t }) => (
+            <button
+              key={k}
+              disabled={readOnly}
+              onClick={() => patch({ lineWidth: k === 'normal' ? undefined : k })}
+              className={`text-[10px] py-1 rounded border transition ${curWidth === k ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
+            >{t}</button>
+          ))}
+        </div>
+      </Field>
+
+      <Field label={`묶인 도형 ${ids.size}개`} hint="체크한 도형을 감싸도록 테두리가 자동으로 늘고 줄어듭니다. 테두리나 이름을 끌면 묶인 도형이 함께 움직입니다.">
+        <div className="max-h-56 overflow-y-auto rounded border border-gray-700/70 divide-y divide-gray-800">
+          {(members || []).map(m => (
+            <label key={m.id} className={`flex items-center gap-2 px-2 py-1 text-[11px] ${readOnly ? '' : 'cursor-pointer hover:bg-gray-800/60'}`}>
+              <input
+                type="checkbox"
+                checked={ids.has(m.id)}
+                disabled={readOnly || (ids.has(m.id) && ids.size === 1)}
+                onChange={() => toggleMember(m.id)}
+                className="accent-indigo-500"
+              />
+              <span className={`truncate ${ids.has(m.id) ? 'text-gray-100' : 'text-gray-500'}`}>{m.name}</span>
+            </label>
+          ))}
+        </div>
+      </Field>
+
+      {!readOnly && (
+        <button
+          onClick={() => onDelete?.(group.id)}
+          className="w-full flex items-center justify-center gap-1 text-[11px] py-1.5 rounded border border-red-800/60 text-red-300 hover:bg-red-900/30 transition"
+          title="테두리만 지웁니다. 안에 있던 도형은 그대로 남습니다."
+        >
+          <Trash2 size={12} /> 구름선 삭제 (도형은 남음)
+        </button>
       )}
     </div>
   );

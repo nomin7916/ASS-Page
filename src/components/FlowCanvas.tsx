@@ -3,9 +3,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   edgePath, anchorPoint, roundNode, snapToGrid, sanitizeHexColor, readableTextColor, arrowHeads,
   flowLineRender, buildFlowBundles, resolveNodeDrag, snapTolerance, layoutFlowLabels, flowLabelSize,
-  computeFlowTable, flowTableCheckStats,
+  computeFlowTable, flowTableCheckStats, flowGroupBounds, revisionCloudPath,
   MIN_NODE_W, MIN_NODE_H, FLOW_GRID, FLOW_MIN_SCALE, FLOW_MAX_SCALE,
   DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, FLOW_CANVAS_BG, FLOW_LABEL_DOT_R, FLOW_LABEL_FONT,
+  DEFAULT_GROUP_STROKE, FLOW_GROUP_PAD,
 } from '../flowMap';
 
 /**
@@ -62,6 +63,8 @@ function FlowCanvasInner({
   onConnectFromChange,
   bundleEnabled = true,   // 시트 단위 연결선 합치기(map.bundleEdges)
   snapEnabled = true,     // 도형 정렬 스냅(세션 로컬 토글)
+  drawFrame = false,      // 구름선 그리기 모드 — 배경 드래그가 팬 대신 사각형 지정이 된다
+  onDrawFrame,            // (rect | null) => void — 놓을 때 1회
 }) {
   const svgRef = useRef(null);
   // 드래그/리사이즈 중 임시 상태 — 커밋 전까지 상위로 올리지 않는다
@@ -71,9 +74,14 @@ function FlowCanvasInner({
   const [pan, setPan] = useState(null);     // {ox, oy, base:{x,y}}
   const [hoverId, setHoverId] = useState(null);
   const [hoverLabel, setHoverLabel] = useState(null); // 점으로 접힌 라벨의 즉시 툴팁
+  // 구름선 그룹 끌기 — 소속 도형 전부를 함께 옮긴다(테두리는 도형을 따라 다시 계산된다).
+  const [gdrag, setGdrag] = useState(null);  // {id, ox, oy, dx, dy, members:Set}
+  // 구름선 그리기(사각형 지정) 중 상태 — 캔버스 좌표
+  const [draw, setDraw] = useState(null);    // {x1, y1, x2, y2}
 
   const nodes = map?.nodes || [];
   const edges = map?.edges || [];
+  const groups = Array.isArray(map?.groups) ? map.groups : [];
 
   // 스냅 판정에 필요한 최신값 — pointermove 핸들러가 동기로 읽는다(클로저 대신 ref).
   const snapOnRef = useRef(snapEnabled);
@@ -104,6 +112,7 @@ function FlowCanvasInner({
 
   // 드래그 중인 노드만 오프셋을 얹어 보여준다(나머지 노드는 원본 참조 그대로 → 재조정 최소화)
   const liveNode = useCallback((n) => {
+    if (gdrag && gdrag.members.has(n.id)) return { ...n, x: n.x + gdrag.dx, y: n.y + gdrag.dy };
     if (!drag || drag.id !== n.id) return n;
     if (drag.mode === 'move') {
       // ⚠️ 미리보기는 **resolveNodeDrag가 낸 preview**다 — raw(base+d)로 되돌리면 정렬 스냅이
@@ -117,11 +126,11 @@ function FlowCanvasInner({
       w: Math.max(MIN_NODE_W, drag.base.w + drag.dx),
       h: Math.max(MIN_NODE_H, drag.base.h + drag.dy),
     };
-  }, [drag]);
+  }, [drag, gdrag]);
 
   // 드래그가 반영된 노드 목록. 번들·경로·라벨이 **전부 이 배열 하나**를 공유해야 드래그 중에도
   // 선·트렁크·라벨이 도형을 따라온다(각자 nodes를 읽으면 그 중 하나가 제자리에 남는다).
-  const liveNodes = useMemo(() => (drag ? nodes.map(liveNode) : nodes), [nodes, drag, liveNode]);
+  const liveNodes = useMemo(() => (drag || gdrag ? nodes.map(liveNode) : nodes), [nodes, drag, gdrag, liveNode]);
   const nodeIndex = useMemo(() => {
     const m = new Map();
     for (const n of liveNodes) if (n && n.id) m.set(n.id, n);
@@ -180,7 +189,27 @@ function FlowCanvasInner({
     onSelect?.(n.id);
   };
 
+  /** 구름선 끌기 시작 — 소속 도형을 시작 시점에 고정한다(끄는 도중 소속이 바뀌지 않게). */
+  const startGroupDrag = (e, g) => {
+    e.stopPropagation();
+    onSelect?.(`group:${g.id}`);
+    if (readOnly) return;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* 일부 브라우저 */ }
+    const p = toCanvas(e.clientX, e.clientY);
+    setGdrag({ id: g.id, ox: p.x, oy: p.y, dx: 0, dy: 0, members: new Set(g.nodeIds || []) });
+  };
+
   const onPointerMove = (e) => {
+    if (gdrag) {
+      const p = toCanvas(e.clientX, e.clientY);
+      setGdrag(d => (d ? { ...d, dx: p.x - d.ox, dy: p.y - d.oy } : d));
+      return;
+    }
+    if (draw) {
+      const p = toCanvas(e.clientX, e.clientY);
+      setDraw(d => (d ? { ...d, x2: p.x, y2: p.y } : d));
+      return;
+    }
     if (drag) {
       const p = toCanvas(e.clientX, e.clientY);
       // ⚠️ 수식 키는 업데이터 **밖**에서 읽는다(업데이터는 나중에 실행될 수 있다).
@@ -204,6 +233,25 @@ function FlowCanvasInner({
 
   const endDrag = () => {
     if (pan) setPan(null);
+    if (draw) {
+      const d = draw;
+      setDraw(null);
+      const x = Math.min(d.x1, d.x2), y = Math.min(d.y1, d.y2);
+      const w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
+      // 너무 작으면(클릭만 함) 취소로 본다
+      onDrawFrame?.(w >= 20 && h >= 20 ? { x, y, w, h } : null);
+      return;
+    }
+    if (gdrag) {
+      const g = gdrag;
+      setGdrag(null);
+      // 격자에 맞춰 옮긴다(도형 드래그와 같은 격자). 움직임이 없으면 커밋하지 않는다(헛저장 방지).
+      const sdx = snapToGrid(g.dx, FLOW_GRID);
+      const sdy = snapToGrid(g.dy, FLOW_GRID);
+      if (!sdx && !sdy) return;
+      onNodesChange(nodes.map(n => (g.members.has(n.id) ? roundNode({ ...n, x: n.x + sdx, y: n.y + sdy }) : n)));
+      return;
+    }
     if (!drag) return;
     const d = drag;
     setDrag(null);
@@ -231,6 +279,13 @@ function FlowCanvasInner({
   const onBgPointerDown = (e) => {
     if (e.button !== 0) return;
     if (connectFrom) { onConnectFromChange?.(null); return; }
+    if (drawFrame && !readOnly) {
+      // 구름선 그리기 — 팬 대신 사각형 지정
+      const p = toCanvas(e.clientX, e.clientY);
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* 일부 브라우저 */ }
+      setDraw({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+      return;
+    }
     onSelect?.(null);
     onBackgroundClick?.();
     setPan({ ox: e.clientX, oy: e.clientY, base: { x: viewport.x, y: viewport.y } });
@@ -276,7 +331,7 @@ function FlowCanvasInner({
     <svg
       ref={svgRef}
       className="w-full h-full block"
-      style={{ touchAction: 'none', background: FLOW_CANVAS_BG, cursor: pan ? 'grabbing' : 'default' }}
+      style={{ touchAction: 'none', background: FLOW_CANVAS_BG, cursor: drawFrame ? 'crosshair' : pan ? 'grabbing' : 'default' }}
       onPointerDown={onBgPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
@@ -295,6 +350,63 @@ function FlowCanvasInner({
 
       <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
         <rect x={-4000} y={-4000} width={12000} height={12000} fill="url(#flowGrid)" />
+
+        {/* 구름선 그룹 — 가장 아래 레이어(선·도형이 위). 테두리는 저장하지 않고 소속 도형(드래그 중이면
+            그 위치)을 감싸도록 매 렌더 계산한다 — 도형을 옮기면 테두리가 따라서 늘고 준다.
+            ⚠️ 안쪽 면은 포인터를 받지 않는다(pointerEvents none). 받으면 그룹 안 빈 곳에서 배경 팬과
+            선택 해제가 죽는다. 잡는 곳은 테두리 선(두꺼운 투명 히트)과 이름표뿐이다. */}
+        {groups.map(g => {
+          const b = flowGroupBounds(g, nodeById);
+          if (!b) return null;
+          const color = sanitizeHexColor(g.stroke) || DEFAULT_GROUP_STROKE;
+          const cloud = !g.lineStyle;
+          const line = flowLineRender({ lineStyle: g.lineStyle, lineWidth: g.lineWidth });
+          const d = cloud ? revisionCloudPath(b.x, b.y, b.w, b.h) : `M ${b.x} ${b.y} H ${b.x + b.w} V ${b.y + b.h} H ${b.x} Z`;
+          const gSel = selectedId === `group:${g.id}`;
+          const sw = cloud ? line.width + 0.5 : line.width;
+          return (
+            <g key={`grp:${g.id}`}>
+              <path d={d} fill={color} fillOpacity={0.05} stroke="none" pointerEvents="none" />
+              {gSel && <path d={d} fill="none" stroke="#818cf8" strokeWidth={sw + 7} strokeOpacity={0.35} strokeLinejoin="round" pointerEvents="none" />}
+              {line.double && !cloud ? (
+                <>
+                  <path d={d} fill="none" stroke={color} strokeWidth={line.width} pointerEvents="none" />
+                  <path d={d} fill="none" stroke={FLOW_CANVAS_BG} strokeWidth={line.innerWidth} pointerEvents="none" />
+                </>
+              ) : (
+                <path d={d} fill="none" stroke={color} strokeWidth={sw} strokeDasharray={cloud ? undefined : line.dash} strokeLinejoin="round" pointerEvents="none" />
+              )}
+              <path
+                d={d}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={14}
+                style={{ cursor: readOnly ? 'pointer' : 'move' }}
+                onPointerDown={(ev) => startGroupDrag(ev, g)}
+              />
+              {g.label && (
+                <text
+                  x={b.x + FLOW_GROUP_PAD - 4}
+                  y={b.y + FLOW_GROUP_PAD + 4}
+                  fill={color}
+                  fontSize={13}
+                  fontWeight={700}
+                  style={{ cursor: readOnly ? 'pointer' : 'move', userSelect: 'none' }}
+                  onPointerDown={(ev) => startGroupDrag(ev, g)}
+                >{g.label}</text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* 구름선 그리기 미리보기 */}
+        {draw && (() => {
+          const x = Math.min(draw.x1, draw.x2), y = Math.min(draw.y1, draw.y2);
+          const w = Math.abs(draw.x2 - draw.x1), h = Math.abs(draw.y2 - draw.y1);
+          return w > 0 && h > 0 ? (
+            <path d={revisionCloudPath(x, y, w, h)} fill="#818cf8" fillOpacity={0.06} stroke="#818cf8" strokeWidth={1.5} strokeDasharray="6 4" pointerEvents="none" />
+          ) : null;
+        })()}
 
         {/* 합쳐진 구간(트렁크) — 그룹당 **하나만** 그린다. 선마다 각자 그려 겹치게 하면 이중선이
             가운데를 배경색으로 덮어 지우개가 되고, 선택 후광·히트박스가 공유 구간을 덮어

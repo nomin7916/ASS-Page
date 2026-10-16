@@ -41,6 +41,8 @@ let idSeq = 0;
 const generateId = () => `gen${++idSeq}`;
 
 const MAX_FLOW_MAPS = 20, MAX_FLOW_NODES = 150, MAX_FLOW_EDGES = 300;
+const MAX_FLOW_GROUPS = 30, MAX_FLOW_GROUP_LABEL = 40, FLOW_GROUP_PAD = 22, FLOW_GROUP_LABEL_H = 18, FLOW_GROUP_CLOUD_ARC = 28;
+const DEFAULT_GROUP_STROKE = '#94a3b8';
 const MAX_FLOW_MAP_NAME = 40;
 const DEFAULT_NODE_W = 180, DEFAULT_NODE_H = 120, MIN_NODE_W = 60, MIN_NODE_H = 44;
 const FLOW_MIN_SCALE = 0.25, FLOW_MAX_SCALE = 2.5;
@@ -212,6 +214,12 @@ function flowFingerprint(maps) {
       i: m?.id ?? '', n: m?.name ?? '',
       vp: m?.viewport ? [m.viewport.x ?? 0, m.viewport.y ?? 0, m.viewport.scale ?? 1] : null,
       ...(m?.bundleEdges === false ? { nb: 1 } : {}),
+      ...(Array.isArray(m?.groups) && m.groups.length ? {
+        gr: m.groups.map((g) => [
+          g?.id ?? '', g?.label ?? '', Array.isArray(g?.nodeIds) ? g.nodeIds.join(',') : '',
+          g?.stroke ?? '', g?.lineStyle ?? '', g?.lineWidth ?? '',
+        ]),
+      } : {}),
       nd: (Array.isArray(m?.nodes) ? m.nodes : []).map(n => [
         n?.id ?? '', n?.kind ?? '', n?.x ?? 0, n?.y ?? 0, n?.w ?? 0, n?.h ?? 0,
         n?.label ?? '', n?.date ?? '', n?.amountManual ?? null, n?.memo ?? '',
@@ -315,6 +323,9 @@ function normalizeFlowMaps(raw) {
       });
     }
 
+    const gr = normalizeFlowGroups(m.groups, seenNodeIds);
+    if (gr.changed) mapChanged = true;
+
     const createdAt = isFiniteNum(m.createdAt) ? m.createdAt : (mapChanged = true, 1);
     const updatedAt = isFiniteNum(m.updatedAt) ? m.updatedAt : (mapChanged = true, createdAt);
 
@@ -332,6 +343,7 @@ function normalizeFlowMaps(raw) {
         id, name, nodes, edges, createdAt, updatedAt,
         ...(viewport ? { viewport } : {}),
         ...(bundleOff ? { bundleEdges: false } : {}),
+        ...(gr.groups.length ? { groups: gr.groups } : {}),
       });
     }
     else out.push(m);
@@ -343,7 +355,97 @@ function removeNode(map, nodeId) {
   const nodes = map.nodes.filter(n => n.id !== nodeId);
   if (nodes.length === map.nodes.length) return map;
   const edges = map.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
-  return { ...map, nodes, edges };
+  if (!Array.isArray(map.groups) || !map.groups.length) return { ...map, nodes, edges };
+  const groups = map.groups
+    .map(g => (g.nodeIds.includes(nodeId) ? { ...g, nodeIds: g.nodeIds.filter(x => x !== nodeId) } : g))
+    .filter(g => g.nodeIds.length > 0);
+  const out = { ...map, nodes, edges };
+  if (groups.length) out.groups = groups; else delete out.groups;
+  return out;
+}
+
+/**
+ * 구름선 그룹 정규화. 저장 필드만 화이트리스트로 다시 만든다.
+ * ⚠️ 시트에 없는 도형 id는 버리고, 소속 도형이 하나도 없으면 그룹 자체를 버린다(그릴 테두리가 없다).
+ * ⚠️ 기본값(구름선·보통 굵기·기본색)은 저장하지 않는다 — 생략이 곧 기본값(원본 참조 보존 계약).
+ */
+function normalizeFlowGroups(raw, nodeIds) {
+  if (raw === undefined || raw === null) return { groups: [], changed: raw === null };
+  if (!Array.isArray(raw)) return { groups: [], changed: true };
+  let changed = false;
+  const groups = [];
+  const seen = new Set();
+  for (const g of raw) {
+    if (groups.length >= MAX_FLOW_GROUPS) { changed = true; break; }
+    if (!g || typeof g !== 'object') { changed = true; continue; }
+    const id = asStr(g.id);
+    if (!id || seen.has(id)) { changed = true; continue; }
+    const rawIds = Array.isArray(g.nodeIds) ? g.nodeIds : [];
+    const ids = [];
+    for (const x of rawIds) if (typeof x === 'string' && nodeIds.has(x) && !ids.includes(x)) ids.push(x);
+    if (!Array.isArray(g.nodeIds) || ids.length !== g.nodeIds.length) changed = true;
+    if (ids.length === 0) { changed = true; continue; }
+    seen.add(id);
+    const label = asStr(g.label).slice(0, MAX_FLOW_GROUP_LABEL);
+    if (label !== g.label) changed = true;
+    const stroke = sanitizeHexColor(g.stroke);
+    if (g.stroke === undefined ? stroke !== '' : stroke !== g.stroke) changed = true;
+    const keepStyle = (FLOW_LINE_STYLES).includes(g.lineStyle) ? g.lineStyle : undefined;
+    if (keepStyle !== g.lineStyle) changed = true;
+    const w = normalizeFlowLineWidth(g.lineWidth);
+    const keepWidth = w === 'normal' ? undefined : w;
+    if (keepWidth !== g.lineWidth) changed = true;
+    groups.push({
+      id, label, nodeIds: ids,
+      ...(stroke ? { stroke } : {}),
+      ...(keepStyle ? { lineStyle: keepStyle } : {}),
+      ...(keepWidth ? { lineWidth: keepWidth } : {}),
+    });
+  }
+  return { groups, changed };
+}
+
+/**
+ * 그룹 테두리 사각형 — 소속 도형(드래그 중이면 그 위치)을 감싼다. 소속 도형이 하나도 없으면 null.
+ * ⚠️ 캔버스(그리기·끌기 판정)와 검증이 이 함수 하나를 쓴다.
+ */
+function flowGroupBounds(group, nodeOf) {
+  const ids = group && Array.isArray(group.nodeIds) ? group.nodeIds : [];
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const id of ids) {
+    const n = nodeOf(id);
+    if (!n || !isFiniteNum(n.x) || !isFiniteNum(n.y) || !isFiniteNum(n.w) || !isFiniteNum(n.h)) continue;
+    x1 = Math.min(x1, n.x); y1 = Math.min(y1, n.y);
+    x2 = Math.max(x2, n.x + n.w); y2 = Math.max(y2, n.y + n.h);
+  }
+  if (!Number.isFinite(x1)) return null;
+  const top = FLOW_GROUP_PAD + (group.label ? FLOW_GROUP_LABEL_H : 0);
+  return { x: x1 - FLOW_GROUP_PAD, y: y1 - top, w: x2 - x1 + FLOW_GROUP_PAD * 2, h: y2 - y1 + top + FLOW_GROUP_PAD };
+}
+
+/**
+ * CAD 구름선(revision cloud) 경로 — 사각형 둘레를 시계 방향으로 돌며 바깥으로 볼록한 호를 잇는다.
+ * 변마다 마디 수를 반올림해 모서리에서 정확히 끝나게 한다(모서리가 어긋나면 틈이 생긴다).
+ */
+function revisionCloudPath(x, y, w, h, arc = FLOW_GROUP_CLOUD_ARC) {
+  if (![x, y, w, h].every(isFiniteNum) || w <= 0 || h <= 0) return '';
+  const a = arc > 0 ? arc : FLOW_GROUP_CLOUD_ARC;
+  const pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]];
+  let d = `M ${x} ${y}`;
+  for (let k = 0; k < 4; k++) {
+    const [ax, ay] = pts[k];
+    const [bx, by] = pts[k + 1];
+    const len = Math.hypot(bx - ax, by - ay);
+    const n = Math.max(1, Math.round(len / a));
+    const step = len / n;
+    const r = Math.round(step * 0.62 * 100) / 100;
+    for (let i = 1; i <= n; i++) {
+      const px = Math.round((ax + ((bx - ax) * i) / n) * 100) / 100;
+      const py = Math.round((ay + ((by - ay) * i) / n) * 100) / 100;
+      d += ` A ${r} ${r} 0 0 1 ${px} ${py}`;
+    }
+  }
+  return d + ' Z';
 }
 
 function pruneOrphanEdges(map) {
@@ -412,6 +514,10 @@ function duplicateFlowMap(maps, id) {
   }
 
   const copy = { ...src, id: generateId(), name: copyNameOf(list, src.name), nodes, edges, createdAt: ts, updatedAt: ts };
+  const groups = (Array.isArray(src.groups) ? src.groups : [])
+    .map(g => ({ ...g, id: generateId(), nodeIds: (g.nodeIds || []).map(x => idMap.get(x)).filter(Boolean) }))
+    .filter(g => g.nodeIds.length > 0);
+  if (groups.length) copy.groups = groups; else delete copy.groups;
   const out = list.slice();
   out.splice(idx + 1, 0, copy);
   return out;
@@ -1767,6 +1873,59 @@ console.log('\n■ 도형 간 표 참조 — 이어진 도형의 총액·소계�
   eq('#185b 사본에서도 값이 그대로', makeFlowNodeRowResolver(copy?.nodes || []).tableOf(copy?.nodes?.[1]?.id)[1]?.text, '117,977,206');
 }
 
+console.log('\n■ 구름선 그룹 (사용자 요청 2026-10)');
+{
+  const n1 = mkNode({ id: 'a', x: 100, y: 100, w: 180, h: 120 });
+  const n2 = mkNode({ id: 'b', x: 400, y: 300, w: 180, h: 120 });
+  const byId = new Map([['a', n1], ['b', n2]]);
+  const nodeOf = (id) => byId.get(id);
+  eq('#190 테두리 = 소속 도형을 감싼 상자 + 여백', JSON.stringify(flowGroupBounds({ nodeIds: ['a', 'b'], label: '' }, nodeOf)),
+    JSON.stringify({ x: 100 - FLOW_GROUP_PAD, y: 100 - FLOW_GROUP_PAD, w: 480 + FLOW_GROUP_PAD * 2, h: 320 + FLOW_GROUP_PAD * 2 }));
+  eq('#190b 이름이 있으면 위쪽을 더 비운다', flowGroupBounds({ nodeIds: ['a'], label: '묶음' }, nodeOf).y, 100 - FLOW_GROUP_PAD - FLOW_GROUP_LABEL_H);
+  // 도형을 옮기면 테두리가 따라간다 — 좌표를 저장하지 않으므로 계산 결과가 곧 화면이다.
+  const moved = new Map([['a', { ...n1, x: 700 }], ['b', n2]]);
+  eq('#190c 도형 위치에 따라 테두리 크기가 바뀐다', flowGroupBounds({ nodeIds: ['a', 'b'], label: '' }, (id) => moved.get(id)).w, 880 - 400 + FLOW_GROUP_PAD * 2);
+  eq('#190d 소속 도형이 하나도 없으면 null', flowGroupBounds({ nodeIds: ['zz'], label: '' }, nodeOf), null);
+  const d = revisionCloudPath(0, 0, 112, 56, 28);
+  eq('#191 구름선 경로: 변마다 반올림한 마디 수(4+2+4+2)', (d.match(/ A /g) || []).length, 12);
+  ok('#191b 구름선은 모서리에서 정확히 닫힌다', d.startsWith('M 0 0') && / 0 0 Z$/.test(d) && d.includes(' 112 0 ') && d.includes(' 112 56 '));
+  eq('#191c 크기가 0 이하·손상이면 빈 경로', [revisionCloudPath(0, 0, 0, 10), revisionCloudPath(NaN, 0, 10, 10)].join('|'), '|');
+  // 정규화
+  const ids = new Set(['a', 'b']);
+  const r = normalizeFlowGroups([
+    { id: 'g1', label: '해외', nodeIds: ['a', 'zz', 'a', 'b'], stroke: '#ff0000', lineStyle: 'dash', lineWidth: 'normal' },
+    { id: 'g1', label: 'dup', nodeIds: ['a'] },
+    { id: 'g2', label: 7, nodeIds: ['zz'] },
+    { id: 'g3', label: 'x'.repeat(80), nodeIds: ['b'], lineStyle: 'cloud', stroke: 'bad' },
+    null,
+  ], ids);
+  eq('#192 소속은 존재하는 도형만·중복 제거, 소속 없는 그룹·중복 id는 버림', JSON.stringify(r.groups.map(g => [g.id, g.nodeIds.join(',')])), JSON.stringify([['g1', 'a,b'], ['g3', 'b']]));
+  eq('#192b 기본값(구름선·보통·기본색)과 손상값은 생략형', JSON.stringify([r.groups[0].lineWidth, r.groups[1].lineStyle, r.groups[1].stroke]), JSON.stringify([undefined, undefined, undefined]));
+  eq('#192c 이름 상한', r.groups[1].label.length, MAX_FLOW_GROUP_LABEL);
+  eq('#192d 고친 게 있으면 changed', r.changed, true);
+  const clean = normalizeFlowGroups(r.groups, ids);
+  eq('#192e 정규형이면 changed 아님(멱등)', [clean.changed, JSON.stringify(clean.groups) === JSON.stringify(r.groups)].join(','), 'false,true');
+  eq('#192f 필드가 없으면 변경 아님', normalizeFlowGroups(undefined, ids).changed, false);
+  // 시트 정규화·지문
+  const m = cleanMap({ id: 'm1', nodes: [n1, n2], edges: [] });
+  const withG = { ...m, groups: [{ id: 'g1', label: '묶음', nodeIds: ['a', 'b'] }] };
+  ok('#193 정규형 그룹을 든 시트는 원본 참조', (() => { const arr = [withG]; return normalizeFlowMaps(arr) === arr; })());
+  eq('#193b 재구축 경로에서도 그룹이 남는다', normalizeFlowMaps([{ ...withG, name: 7 }])[0]?.groups?.[0]?.id, 'g1');
+  ok('#193c 지문이 그룹에 반응', flowFingerprint([withG]) !== flowFingerprint([{ ...withG, groups: [{ id: 'g1', label: '묶음', nodeIds: ['a'] }] }]));
+  ok('#193d 그룹 없는 시트의 지문은 종전 그대로', !flowFingerprint([m]).includes('"gr"'));
+  ok('#193e 선 색·종류·굵기도 지문에 반응',
+    ['stroke', 'lineStyle', 'lineWidth'].every(k => flowFingerprint([withG]) !== flowFingerprint([{ ...withG, groups: [{ ...withG.groups[0], [k]: k === 'stroke' ? '#ff0000' : k === 'lineStyle' ? 'dash' : 'thick' }] }])));
+  // 도형 삭제 → 그룹에서 빠지고 비면 그룹도 사라진다
+  const r1 = removeNode(withG, 'a');
+  eq('#194 도형을 지우면 그룹에서 빠진다', r1.groups?.[0]?.nodeIds?.join(','), 'b');
+  eq('#194b 마지막 도형을 지우면 그룹도 사라진다', 'groups' in removeNode(r1, 'b'), false);
+  // 복제
+  const dup = duplicateFlowMap([withG], 'm1')[1];
+  const nids = new Set((dup?.nodes || []).map(n => n.id));
+  ok('#195 시트 복제는 그룹 id와 소속을 새 도형 id로 다시 잇는다',
+    dup?.groups?.length === 1 && dup.groups[0].id !== 'g1' && dup.groups[0].nodeIds.every(x => nids.has(x)) && dup.groups[0].nodeIds.length === 2);
+}
+
 console.log('\n■ removeNode / pruneOrphanEdges');
 {
   const m = cleanMap();
@@ -2271,9 +2430,10 @@ ok('#55c FlowCanvas: 줌 한계가 flowMap.ts 상수와 공유(저장 시 잘리
   /Math\.min\(FLOW_MAX_SCALE, Math\.max\(FLOW_MIN_SCALE/.test(canvasNC));
 {
   const picks = inspNC.match(/<ColorPicker/g) || [];
-  ok('#56 FlowInspector: 도형·연결선이 **같은** 색 선택기를 쓴다(팔레트 손복제 금지)', picks.length === 2);
+  ok('#56 FlowInspector: 도형·연결선·구름선이 **같은** 색 선택기를 쓴다(팔레트 손복제 금지)', picks.length === 3);
   ok('#56b FlowInspector: 도형 채우기 배선', /value=\{node\.fill\}[\s\S]{0,160}patch\(\{ fill: hex \|\| undefined \}\)/.test(inspNC));
   ok('#56c FlowInspector: 연결선 색 배선', /value=\{edge\.stroke\}[\s\S]{0,160}patchEdge\(\{ stroke: hex \|\| undefined \}\)/.test(inspNC));
+  ok('#56d FlowInspector: 구름선 색 배선(기본색은 필드를 지운다)', /value=\{group\.stroke\}[\s\S]{0,160}patch\(\{ stroke: hex \|\| undefined \}\)/.test(inspNC));
 }
 // ⚠️ 기본색 hex를 저장값으로 박으면 나중에 기본색을 바꿔도 그 도형만 옛 색에 남는다.
 ok('#56d FlowInspector: 기본색 되돌리기는 필드를 지운다(hex 박제 금지)', /onPick\(null\)/.test(inspNC));
@@ -2791,6 +2951,26 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
     && /<option value=\{FLOW_TABLE_LINK_ALL\}>전체 계좌 합계<\/option>/.test(edNC) && /accountOptions\.map\(o => \(/.test(edNC));
   ok('#G182d FlowNodeEditor: 연결 해제는 직접 입력값을 지우지 않는다', /setRow\(i, \{ portfolioId: undefined, formula: undefined, nodeRef: undefined \}, true\)/.test(edNC) && !/portfolioId: undefined, value/.test(edNC));
   ok('#G182e FlowNodeEditor: 연결 행 값은 계산 결과를 읽기 전용으로', /r\.portfolioId && \(isItem \|\| r\.kind === 'total'\) \? \(\s*<div/.test(edNC));
+  ok('#G190 FlowCanvas: 구름선 테두리는 소속 도형(드래그 반영)에서 매 렌더 계산', /const b = flowGroupBounds\(g, nodeById\);/.test(canvasNC));
+  ok('#G190b FlowCanvas: 구름선/선 종류 분기', /const d = cloud \? revisionCloudPath\(b\.x, b\.y, b\.w, b\.h\) :/.test(canvasNC));
+  // ⚠️ 그룹 안쪽 면이 포인터를 받으면 그 안의 빈 곳에서 팬·선택 해제가 죽는다.
+  ok('#G190c FlowCanvas: 그룹 면은 포인터를 받지 않는다', /<path d=\{d\} fill=\{color\} fillOpacity=\{0\.05\} stroke="none" pointerEvents="none" \/>/.test(canvasNC));
+  ok('#G190d FlowCanvas: 그룹을 끌면 소속 도형이 함께 움직인다',
+    /if \(gdrag && gdrag\.members\.has\(n\.id\)\) return \{ \.\.\.n, x: n\.x \+ gdrag\.dx, y: n\.y \+ gdrag\.dy \};/.test(canvasNC)
+    && /onNodesChange\(nodes\.map\(n => \(g\.members\.has\(n\.id\) \? roundNode/.test(canvasNC));
+  ok('#G190e FlowCanvas: 움직임 없는 그룹 끌기는 커밋하지 않는다', /if \(!sdx && !sdy\) return;/.test(canvasNC));
+  ok('#G190f FlowCanvas: 그리기 모드에서는 배경 드래그가 사각형 지정', /if \(drawFrame && !readOnly\) \{/.test(canvasNC) && /onDrawFrame\?\.\(w >= 20 && h >= 20 \? \{ x, y, w, h \} : null\);/.test(canvasNC));
+  ok('#G191 FlowBoard: 그린 사각형 안에 중심이 든 도형을 묶는다(좌표는 저장하지 않음)',
+    /return cx >= rect\.x && cx <= rect\.x \+ rect\.w && cy >= rect\.y && cy <= rect\.y \+ rect\.h;/.test(boardNC) && /const g = \{ id: generateId\(\), label: '', nodeIds \};/.test(boardNC));
+  ok('#G191b FlowBoard: 그룹 선택·삭제·속성 패널 배선',
+    /else if \(selGroup\) deleteGroup\(selGroup\.id\);/.test(boardNC) && /<FlowGroupInspector/.test(boardNC) && /onPatch=\{patchGroupById\}/.test(boardNC));
+  ok('#G191c FlowBoard: 마지막 그룹을 지우면 필드를 지운다(빈 배열 저장 금지)', /if \(list\.length\) next\.groups = list; else delete next\.groups;/.test(boardNC));
+  ok('#G191d FlowBoard: Esc는 그리기 모드부터 끈다', /if \(drawFrame\) setDrawFrame\(false\);\s*else if \(connectFrom\)/.test(boardNC));
+  ok('#G192 FlowGroupInspector: 선 색·구름선+7종·굵기·묶인 도형',
+    /value=\{group\.stroke\}\s*fallback=\{DEFAULT_GROUP_STROKE\}/.test(inspNC) && /onClick=\{\(\) => patch\(\{ lineStyle: undefined \}\)\}/.test(inspNC)
+    && /onClick=\{\(\) => patch\(\{ lineStyle: k \}\)\}/.test(inspNC) && /onChange=\{\(\) => toggleMember\(m\.id\)\}/.test(inspNC));
+  ok('#G192b FlowGroupInspector: 마지막 도형은 뺄 수 없다', /if \(next\.length === 0\) return;/.test(inspNC));
+  ok('#G192c FlowGroupInspector: 이름 draft는 그룹 id에 묶어 언마운트에서 flush', /useLayoutEffect\(\(\) => \(\) => \{ flushLabel\(\); \}, \[flushLabel\]\);/.test(inspNC));
   ok('#G184 FlowBoard: 도형 간 참조 해석기를 시트 단위로 한 번 만들어 캔버스·팝업이 공유',
     /makeFlowNodeRowResolver\(map\?\.nodes \|\| \[\], tableLinkValue\)/.test(boardNC) && /tableOfNode=\{nodeTables\.tableOf\}/.test(boardNC) && /nodeRefValueOf=\{nodeTables\.resolve\}/.test(boardNC));
   // ⚠️ 후보는 '선으로 이어진' 도형만(사용자 요구). 엣지 양방향 모두.
@@ -3248,6 +3428,43 @@ await (async () => {
         eq('#139f 참조를 든 표의 재구축·지문 일치',
           JSON.stringify([norm(real.normalizeFlowMaps(mapR)), real.flowFingerprint(mapR)]),
           JSON.stringify([norm(normalizeFlowMaps(mapR)), flowFingerprint(mapR)]));
+        // (11) 구름선 그룹
+        {
+          const gnodes = [N('a', []), N('b', [])].map((n, i) => ({ ...n, x: 100 + i * 300, y: 50 * i }));
+          const gIds = new Set(['a', 'b']);
+          const graw = [
+            { id: 'g1', label: '해외', nodeIds: ['a', 'zz', 'a', 'b'], stroke: '#ff0000', lineStyle: 'dash', lineWidth: 'normal' },
+            { id: 'g1', label: 'dup', nodeIds: ['a'] }, { id: 'g2', nodeIds: ['zz'] },
+            { id: 'g3', label: 'x'.repeat(80), nodeIds: ['b'], lineStyle: 'cloud', stroke: 'bad', lineWidth: 'thick' }, null, 'x',
+          ];
+          eq('#139i normalizeFlowGroups 일치', JSON.stringify(real.normalizeFlowGroups(graw, gIds)), JSON.stringify(normalizeFlowGroups(graw, gIds)));
+          eq('#139j normalizeFlowGroups 손상 입력 일치',
+            JSON.stringify([undefined, null, 'x', []].map(v => real.normalizeFlowGroups(v, gIds))),
+            JSON.stringify([undefined, null, 'x', []].map(v => normalizeFlowGroups(v, gIds))));
+          const gm = new Map(gnodes.map(n => [n.id, n]));
+          eq('#139k flowGroupBounds 일치',
+            JSON.stringify([{ nodeIds: ['a', 'b'], label: '' }, { nodeIds: ['a'], label: 'L' }, { nodeIds: ['zz'] }].map(g => real.flowGroupBounds(g, id => gm.get(id)))),
+            JSON.stringify([{ nodeIds: ['a', 'b'], label: '' }, { nodeIds: ['a'], label: 'L' }, { nodeIds: ['zz'] }].map(g => flowGroupBounds(g, id => gm.get(id)))));
+          eq('#139l revisionCloudPath 일치',
+            JSON.stringify([[0, 0, 112, 56, 28], [10.5, 3, 333, 101, 28], [0, 0, 5, 5, 28], [0, 0, 0, 5, 28], [0, 0, 50, 50, 0]].map(a => real.revisionCloudPath(...a))),
+            JSON.stringify([[0, 0, 112, 56, 28], [10.5, 3, 333, 101, 28], [0, 0, 5, 5, 28], [0, 0, 0, 5, 28], [0, 0, 50, 50, 0]].map(a => revisionCloudPath(...a))));
+          const gmap = [cleanMap({ id: 'm1', name: 123, nodes: gnodes, edges: [] })];
+          gmap[0].groups = graw;
+          eq('#139m 그룹을 든 시트의 재구축·지문 일치',
+            JSON.stringify([norm(real.normalizeFlowMaps(gmap)), real.flowFingerprint(gmap), real.normalizeFlowMaps(gmap)[0]?.groups]),
+            JSON.stringify([norm(normalizeFlowMaps(gmap)), flowFingerprint(gmap), normalizeFlowMaps(gmap)[0]?.groups]));
+          const gclean = real.normalizeFlowMaps(gmap);
+          ok('#139n 실모듈도 정규형 그룹 시트는 원본 참조', real.normalizeFlowMaps(gclean) === gclean);
+          const rmReal = real.removeNode(gclean[0], 'a');
+          eq('#139o removeNode 그룹 처리 일치', JSON.stringify([rmReal.groups, real.removeNode(rmReal, 'b').groups]),
+            JSON.stringify([removeNode(gclean[0], 'a').groups, removeNode(removeNode(gclean[0], 'a'), 'b').groups]));
+          const dupG = real.duplicateFlowMap(gclean, gclean[0].id)[1];
+          const dIds = new Set((dupG?.nodes || []).map(n => n.id));
+          ok('#139p 실모듈 복제도 그룹을 새 id로 다시 잇는다', dupG?.groups?.length === 2 && dupG.groups.every(g => !['g1', 'g3'].includes(g.id) && g.nodeIds.every(x => dIds.has(x))));
+          eq('#139q 그룹 상수 일치',
+            JSON.stringify([real.MAX_FLOW_GROUPS, real.MAX_FLOW_GROUP_LABEL, real.FLOW_GROUP_PAD, real.FLOW_GROUP_LABEL_H, real.FLOW_GROUP_CLOUD_ARC, real.DEFAULT_GROUP_STROKE]),
+            JSON.stringify([MAX_FLOW_GROUPS, MAX_FLOW_GROUP_LABEL, FLOW_GROUP_PAD, FLOW_GROUP_LABEL_H, FLOW_GROUP_CLOUD_ARC, DEFAULT_GROUP_STROKE]));
+        }
         eq('#139h sameFlowTable 참조 비교 일치',
           JSON.stringify([[undefined, { nodeId: 'x', rowId: 'y' }], [{ nodeId: 'x', rowId: 'y' }, { nodeId: 'x', rowId: 'z' }], [{ nodeId: 'x', rowId: 'y' }, { nodeId: 'x', rowId: 'y' }]]
             .map(([p, q]) => real.sameFlowTable({ border: 'none', rows: [X('item', 'a', '1', p ? { nodeRef: p } : {})] }, { border: 'none', rows: [X('item', 'a', '1', { nodeRef: q })] }))),

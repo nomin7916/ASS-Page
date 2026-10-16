@@ -217,6 +217,19 @@ export interface FlowEdge {
   arrow?: FlowArrow;
 }
 
+/**
+ * 구름선 그룹. `lineStyle` 생략 = 구름선(기본). 그 외에는 연결선과 같은 선 종류를 쓴다.
+ * `lineWidth`는 'normal'이면 생략, `stroke`는 기본색이면 생략(연결선과 같은 규약).
+ */
+export interface FlowGroup {
+  id: string;
+  label: string;
+  nodeIds: string[];
+  stroke?: string;
+  lineStyle?: FlowLineStyle;
+  lineWidth?: FlowLineWidth;
+}
+
 export interface FlowMap {
   id: string;
   name: string;
@@ -246,6 +259,12 @@ export interface FlowMap {
    *    시트의 지문이 달라져 사용자가 아무것도 안 고쳤는데 Drive 저장이 나간다.
    */
   bundleEdges?: boolean;
+  /**
+   * 구름선 그룹(사용자 요청 2026-10) — 도형 몇 개를 테두리로 묶어 표시한다.
+   * ⚠️ 테두리 **좌표를 저장하지 않는다** — 소속 도형(nodeIds)만 저장하고 테두리는 매 렌더 그 도형들을
+   *    감싸도록 계산한다(사용자 요구: 도형 위치에 따라 크기가 유연하게). 비어 있으면 필드 생략.
+   */
+  groups?: FlowGroup[];
 }
 
 export type FlowMaps = FlowMap[];
@@ -269,6 +288,18 @@ export type FlowMaps = FlowMap[];
 export const MAX_FLOW_MAPS = 20;
 export const MAX_FLOW_NODES = 150;
 export const MAX_FLOW_EDGES = 300;
+/** 구름선 그룹 상한(시트당). */
+export const MAX_FLOW_GROUPS = 30;
+/** 구름선 그룹 이름 길이 상한. */
+export const MAX_FLOW_GROUP_LABEL = 40;
+/** 그룹 테두리와 소속 도형 사이 여백(캔버스 px). */
+export const FLOW_GROUP_PAD = 22;
+/** 이름이 있을 때 위쪽에 더 비우는 높이(이름이 도형과 겹치지 않게). */
+export const FLOW_GROUP_LABEL_H = 18;
+/** 구름 한 마디의 목표 길이(캔버스 px). */
+export const FLOW_GROUP_CLOUD_ARC = 28;
+/** 그룹 테두리 기본색 */
+export const DEFAULT_GROUP_STROKE = '#94a3b8';
 
 export const DEFAULT_NODE_W = 180;
 export const DEFAULT_NODE_H = 120;
@@ -718,6 +749,13 @@ export function flowFingerprint(maps: unknown): string {
         //    달라져 사용자가 아무것도 안 고쳤는데 Drive 저장이 나간다(배포 churn). 반대로 아예
         //    빼면 '토글만 바꾼 세션'의 저장이 통째로 스킵돼 별도 창에서는 영구히 저장되지 않는다.
         ...(m?.bundleEdges === false ? { nb: 1 } : {}),
+        // ⚠️ 구름선 그룹은 **있을 때만** 키를 만든다(없는 시트의 지문은 종전 그대로 — 배포 churn 방지).
+        ...(Array.isArray(m?.groups) && m.groups.length ? {
+          gr: m.groups.map((g: any) => [
+            g?.id ?? '', g?.label ?? '', Array.isArray(g?.nodeIds) ? g.nodeIds.join(',') : '',
+            g?.stroke ?? '', g?.lineStyle ?? '', g?.lineWidth ?? '',
+          ]),
+        } : {}),
         nd: (Array.isArray(m?.nodes) ? m.nodes : []).map((n: any) => [
           n?.id ?? '', n?.kind ?? '', n?.x ?? 0, n?.y ?? 0, n?.w ?? 0, n?.h ?? 0,
           n?.label ?? '', n?.date ?? '', n?.amountManual ?? null, n?.memo ?? '',
@@ -858,6 +896,10 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
       });
     }
 
+    // ── 구름선 그룹 ── ⚠️ 이 위치(노드 정규화 뒤)여야 존재하는 도형 id로 소속을 거를 수 있다.
+    const gr = normalizeFlowGroups((m as any).groups, seenNodeIds);
+    if (gr.changed) mapChanged = true;
+
     const createdAt = isFiniteNum(m.createdAt) ? m.createdAt : (mapChanged = true, Date.now());
     const updatedAt = isFiniteNum(m.updatedAt) ? m.updatedAt : (mapChanged = true, createdAt);
 
@@ -886,6 +928,7 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
         id, name, nodes, edges, createdAt, updatedAt,
         ...(viewport ? { viewport } : {}),
         ...(bundleOff ? { bundleEdges: false } : {}),
+        ...(gr.groups.length ? { groups: gr.groups } : {}),
       });
     } else {
       out.push(m as FlowMap);
@@ -900,7 +943,98 @@ export function removeNode(map: FlowMap, nodeId: string): FlowMap {
   const nodes = map.nodes.filter(n => n.id !== nodeId);
   if (nodes.length === map.nodes.length) return map;
   const edges = map.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
-  return { ...map, nodes, edges };
+  // 그룹에서도 빼고, 비면 그룹을 없앤다(그릴 테두리가 없다).
+  if (!Array.isArray(map.groups) || !map.groups.length) return { ...map, nodes, edges };
+  const groups = map.groups
+    .map(g => (g.nodeIds.includes(nodeId) ? { ...g, nodeIds: g.nodeIds.filter(x => x !== nodeId) } : g))
+    .filter(g => g.nodeIds.length > 0);
+  const out: FlowMap = { ...map, nodes, edges };
+  if (groups.length) out.groups = groups; else delete out.groups;
+  return out;
+}
+
+/**
+ * 구름선 그룹 정규화. 저장 필드만 화이트리스트로 다시 만든다.
+ * ⚠️ 시트에 없는 도형 id는 버리고, 소속 도형이 하나도 없으면 그룹 자체를 버린다(그릴 테두리가 없다).
+ * ⚠️ 기본값(구름선·보통 굵기·기본색)은 저장하지 않는다 — 생략이 곧 기본값(원본 참조 보존 계약).
+ */
+export function normalizeFlowGroups(raw: unknown, nodeIds: Set<string>): { groups: FlowGroup[]; changed: boolean } {
+  if (raw === undefined || raw === null) return { groups: [], changed: raw === null };
+  if (!Array.isArray(raw)) return { groups: [], changed: true };
+  let changed = false;
+  const groups: FlowGroup[] = [];
+  const seen = new Set<string>();
+  for (const g of (raw as any[])) {
+    if (groups.length >= MAX_FLOW_GROUPS) { changed = true; break; }
+    if (!g || typeof g !== 'object') { changed = true; continue; }
+    const id = asStr(g.id);
+    if (!id || seen.has(id)) { changed = true; continue; }
+    const rawIds = Array.isArray(g.nodeIds) ? g.nodeIds : [];
+    const ids: string[] = [];
+    for (const x of rawIds) if (typeof x === 'string' && nodeIds.has(x) && !ids.includes(x)) ids.push(x);
+    if (!Array.isArray(g.nodeIds) || ids.length !== g.nodeIds.length) changed = true;
+    if (ids.length === 0) { changed = true; continue; }
+    seen.add(id);
+    const label = asStr(g.label).slice(0, MAX_FLOW_GROUP_LABEL);
+    if (label !== g.label) changed = true;
+    const stroke = sanitizeHexColor(g.stroke);
+    if (g.stroke === undefined ? stroke !== '' : stroke !== g.stroke) changed = true;
+    const keepStyle = (FLOW_LINE_STYLES as readonly string[]).includes(g.lineStyle) ? g.lineStyle : undefined;
+    if (keepStyle !== g.lineStyle) changed = true;
+    const w = normalizeFlowLineWidth(g.lineWidth);
+    const keepWidth = w === 'normal' ? undefined : w;
+    if (keepWidth !== g.lineWidth) changed = true;
+    groups.push({
+      id, label, nodeIds: ids,
+      ...(stroke ? { stroke } : {}),
+      ...(keepStyle ? { lineStyle: keepStyle } : {}),
+      ...(keepWidth ? { lineWidth: keepWidth } : {}),
+    });
+  }
+  return { groups, changed };
+}
+
+/**
+ * 그룹 테두리 사각형 — 소속 도형(드래그 중이면 그 위치)을 감싼다. 소속 도형이 하나도 없으면 null.
+ * ⚠️ 캔버스(그리기·끌기 판정)와 검증이 이 함수 하나를 쓴다.
+ */
+export function flowGroupBounds(group: any, nodeOf: (id: string) => any): { x: number; y: number; w: number; h: number } | null {
+  const ids = group && Array.isArray(group.nodeIds) ? group.nodeIds : [];
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const id of ids) {
+    const n = nodeOf(id);
+    if (!n || !isFiniteNum(n.x) || !isFiniteNum(n.y) || !isFiniteNum(n.w) || !isFiniteNum(n.h)) continue;
+    x1 = Math.min(x1, n.x); y1 = Math.min(y1, n.y);
+    x2 = Math.max(x2, n.x + n.w); y2 = Math.max(y2, n.y + n.h);
+  }
+  if (!Number.isFinite(x1)) return null;
+  const top = FLOW_GROUP_PAD + (group.label ? FLOW_GROUP_LABEL_H : 0);
+  return { x: x1 - FLOW_GROUP_PAD, y: y1 - top, w: x2 - x1 + FLOW_GROUP_PAD * 2, h: y2 - y1 + top + FLOW_GROUP_PAD };
+}
+
+/**
+ * CAD 구름선(revision cloud) 경로 — 사각형 둘레를 시계 방향으로 돌며 바깥으로 볼록한 호를 잇는다.
+ * 변마다 마디 수를 반올림해 모서리에서 정확히 끝나게 한다(모서리가 어긋나면 틈이 생긴다).
+ */
+export function revisionCloudPath(x: number, y: number, w: number, h: number, arc: number = FLOW_GROUP_CLOUD_ARC): string {
+  if (![x, y, w, h].every(isFiniteNum) || w <= 0 || h <= 0) return '';
+  const a = arc > 0 ? arc : FLOW_GROUP_CLOUD_ARC;
+  const pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]];
+  let d = `M ${x} ${y}`;
+  for (let k = 0; k < 4; k++) {
+    const [ax, ay] = pts[k];
+    const [bx, by] = pts[k + 1];
+    const len = Math.hypot(bx - ax, by - ay);
+    const n = Math.max(1, Math.round(len / a));
+    const step = len / n;
+    const r = Math.round(step * 0.62 * 100) / 100;
+    for (let i = 1; i <= n; i++) {
+      const px = Math.round((ax + ((bx - ax) * i) / n) * 100) / 100;
+      const py = Math.round((ay + ((by - ay) * i) / n) * 100) / 100;
+      d += ` A ${r} ${r} 0 0 1 ${px} ${py}`;
+    }
+  }
+  return d + ' Z';
 }
 
 /** 존재하지 않는 노드를 가리키는 엣지 제거. 변경 없으면 원본 참조 반환. */
@@ -995,6 +1129,11 @@ export function duplicateFlowMap(maps: unknown, id: string): FlowMaps {
   }
 
   const copy: FlowMap = { ...src, id: generateId(), name: copyNameOf(list, src.name), nodes, edges, createdAt: ts, updatedAt: ts };
+  // ⚠️ 구름선 그룹도 새 id + 새 도형 id로 다시 잇는다(안 그러면 다음 로드에서 사본의 그룹이 통째로 사라진다).
+  const groups = (Array.isArray(src.groups) ? src.groups : [])
+    .map(g => ({ ...g, id: generateId(), nodeIds: (g.nodeIds || []).map(x => idMap.get(x)).filter(Boolean) as string[] }))
+    .filter(g => g.nodeIds.length > 0);
+  if (groups.length) copy.groups = groups; else delete copy.groups;
   const out = list.slice();
   out.splice(idx + 1, 0, copy);
   return out;
