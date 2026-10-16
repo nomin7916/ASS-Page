@@ -11,10 +11,11 @@
 //     #21~#32 normalizeWatchView / sameWatchView — 보기 상태(기간·직접 선택 날짜·정렬) 저장값 정규화
 //     #33~#50 normalizeWatchSize / sameWatchSize / resizeWatchRect / watchSizeAfterResize — 팝업 크기 조절
 //     #51~#69 종목 하이라이트 — 팔레트 · 다음 색(칠할 때마다 다른 색) · 켜고 끄기 · 모두 해제
-//   파트①-b `src/watchlistChart.ts` **직접 import** (#80~#95)
+//   파트①-b `src/watchlistChart.ts` **직접 import** (#80~#96m)
 //     #80~#83 기간 구간·등락율 — 옛 팝업 본문(legacy*)과 무작위 대조(팝업 숫자가 한 글자도 안 바뀌었는가)
 //     #84~#92 종목 비교 차트 창 — 행·직전 종가·구간 수익률·날짜 라벨·주소·창 이름
 //     #93~#95 최근 분배금 — 네이버 ETF 이력 · 일반 주식 연간 요약 · 야후(직전 종가 대비 분배율)
+//     #96~#96m 차트 구간 선택 상태 전이 — 드래그 · 더블클릭 시작점 고정 → 끝점 클릭(수익률 차트와 같은 제스처)
 //   파트② 소스 텍스트 가드 (#G1~#G95)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
@@ -458,6 +459,43 @@ if (C) {
     eq('#95c 분배 이벤트가 없으면 none', pickYahooDividend({ chart: { result: [{ timestamp: [], indicators: { quote: [{ close: [] }] } }] } })?.status, 'none');
     eq('#95d 모양이 틀리면 null', pickYahooDividend({ chart: { result: [] } }), null);
   }
+
+  // ── 구간 선택 상태 전이(드래그 · 더블클릭 시작점 고정 → 끝점 클릭) ──
+  {
+    const { chartSelStep: ST, EMPTY_CHART_SEL: E0 } = C;
+    const run = (evs, s0 = E0) => evs.reduce((s, e) => ST(s, e), s0);
+    const js = (s) => JSON.stringify(s && { l: s.left, r: s.right, a: s.anchor, d: s.dragging });
+    const A = '2026-09-29', B = '2026-10-06', D = '2026-10-14';
+    eq('#96 드래그 = 시작~끝 확정', js(run([{ type: 'down', label: A }, { type: 'move', label: B, buttons: 1 }, { type: 'up' }])),
+      js({ left: A, right: B, anchor: '', dragging: false }));
+    eq('#96b 움직이지 않은 단순 클릭 = 해제', js(run([{ type: 'down', label: A }, { type: 'up' }])), js(E0));
+    // 더블클릭의 실제 이벤트 순서: down(1) → up(1) → down(2) → up(2) → dblclick
+    const anchored = run([{ type: 'down', label: A }, { type: 'up' }, { type: 'down', label: A, second: true }, { type: 'up', second: true }, { type: 'dbl', label: A }]);
+    eq('#96c 더블클릭 = 시작점 고정(끝점 대기)', js(anchored), js({ left: A, right: '', anchor: A, dragging: false }));
+    // ⚠️ 시작점 대기 중의 미리보기는 버튼 없이 따라온다 — 자가치유(buttons === 0)가 드래그 아닐 때 발동하면 이 기능이 죽는다.
+    eq('#96d 시작점 고정 후 버튼 없이 움직이면 끝점이 따라온다(미리보기 — 확정 아님)',
+      js(ST(anchored, { type: 'move', label: B, buttons: 0 })), js({ left: A, right: B, anchor: A, dragging: false }));
+    eq('#96e 끝점 클릭 = 확정(시작점 해제)', js(run([{ type: 'move', label: B, buttons: 0 }, { type: 'down', label: D }, { type: 'up' }], anchored)),
+      js({ left: A, right: D, anchor: '', dragging: false }));
+    eq('#96f 시작점 위를 누르면 시작점을 유지하고 계속 대기', js(run([{ type: 'down', label: A }, { type: 'up' }], anchored)),
+      js({ left: A, right: '', anchor: A, dragging: false }));
+    eq('#96g 시작점은 끝점 클릭으로 덮어쓰지 않는다(드래그로 끝점을 골라도 시작점 그대로)',
+      js(run([{ type: 'down', label: B }, { type: 'move', label: D, buttons: 1 }, { type: 'up' }], anchored)), js({ left: A, right: D, anchor: '', dragging: false }));
+    eq('#96h 드래그 중 버튼을 놓친 채 돌아오면(buttons 0) 그 자리에서 확정',
+      js(run([{ type: 'down', label: A }, { type: 'move', label: B, buttons: 1 }, { type: 'move', label: D, buttons: 0 }])),
+      js({ left: A, right: B, anchor: '', dragging: false }));
+    eq('#96i 플롯 밖 클릭 = 선택·시작점 해제', js(ST(anchored, { type: 'down', label: '' })), js(E0));
+    ok('#96j 더블클릭의 두 번째 클릭은 down·up 모두 무시(같은 참조)',
+      ST(anchored, { type: 'down', label: D, second: true }) === anchored && ST(anchored, { type: 'up', second: true }) === anchored);
+    const done = run([{ type: 'down', label: A }, { type: 'move', label: B, buttons: 1 }, { type: 'up' }]);
+    ok('#96k 바뀐 게 없으면 같은 참조(이동마다 렌더 방지)',
+      ST(done, { type: 'move', label: D, buttons: 0 }) === done && ST(done, { type: 'up' }) === done
+      && ST(E0, { type: 'clear' }) === E0 && ST(anchored, { type: 'dbl', label: '' }) === anchored
+      && ((m) => ST(m, { type: 'move', label: B }) === m)(ST(anchored, { type: 'move', label: B })));
+    eq('#96l Esc(clear) = 해제', js(ST(anchored, { type: 'clear' })), js(E0));
+    S('#96m 손상 입력에도 던지지 않는다', () => [ST(null, null), ST(undefined, { type: 'down', label: 3 }), ST('x', { type: 'move' })],
+      (v) => v.every((s) => s && typeof s.left === 'string'));
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -766,14 +804,36 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     const iDim = CW.indexOf('dim?.before && <ReferenceArea');
     ok('#G86 딤 3밴드는 선보다 뒤에 선언 · ifOverflow="hidden" · CHART_SELECTION 토큰',
       iLine > 0 && iDim > iLine
-      && (CW.match(/ifOverflow="hidden"/g) || []).length === 3
+      && (CW.match(/<ReferenceArea [^>]*ifOverflow="hidden"/g) || []).length === 3
       && /fill=\{CHART_SELECTION\.dimFill\}/.test(CW) && /stroke=\{CHART_SELECTION\.windowStroke\}/.test(CW));
   }
-  ok('#G87 드래그 선택은 ref 정본 + window mouseup/blur 마무리 + 버튼 놓침 자가치유',
-    /const selRef = useRef\(/.test(CW) && /window\.addEventListener\('mouseup', up\);/.test(CW)
-    && /window\.addEventListener\('blur', up\);/.test(CW) && /if \(ev && ev\.buttons === 0\) \{ finishDrag\(\); return; \}/.test(CW));
-  ok('#G87b 기간을 바꾸면 선택 구간을 지운다(낡은 구간 잔존 방지)',
-    /setSel\(\{ left: '', right: '' \}\);\s*\n\s*\}, \[view\.period, view\.customStart, view\.customEnd\]\);/.test(CW));
+  ok('#G87 구간 선택은 ref 정본 + 공용 상태 전이(chartSelStep) + window mouseup/blur 마무리',
+    /const selRef = useRef\(EMPTY_CHART_SEL\);/.test(CW)
+    && /const next = chartSelStep\(selRef\.current, ev\);\s*\n\s*if \(next === selRef\.current\) return;/.test(CW)
+    && /window\.addEventListener\('mouseup', up\);/.test(CW) && /window\.addEventListener\('blur', blur\);/.test(CW)
+    && /const up = \(e\) => step\(\{ type: 'up', second: isSecond\(e\) \}\);/.test(CW));
+  ok('#G87b 기간을 바꾸면 선택 구간·시작점을 지운다(낡은 구간 잔존 방지)',
+    /step\(\{ type: 'clear' \}\);\s*\n\s*\}, \[view\.period, view\.customStart, view\.customEnd\]\);/.test(CW));
+  // ── 더블클릭 시작점 고정(사용자 요청 2026-10 — 수익률 차트와 같은 제스처) ──
+  ok('#G87c 차트에 더블클릭·mouseup 배선(onDoubleClick은 툴팁이 있어야 바인딩된다)',
+    /onMouseUp=\{onUp\} onDoubleClick=\{onDouble\}/.test(CW) && /<RechartsTooltip content=\{\(\) => null\}/.test(CW)
+    && /const onDouble = \(e\) => step\(\{ type: 'dbl', label: e\?\.activeLabel \|\| '' \}\);/.test(CW));
+  ok('#G87d 더블클릭의 두 번째 클릭은 down·up 모두 무시(detail ≥ 2)',
+    /const isSecond = \(ev\) => !!ev && ev\.detail >= 2;/.test(CW)
+    && /const onDown = \(e, ev\) => step\(\{ type: 'down', label: e\?\.activeLabel \|\| '', second: isSecond\(ev\) \}\);/.test(CW)
+    && /const onUp = \(e, ev\) => step\(\{ type: 'up', second: isSecond\(ev\) \}\);/.test(CW));
+  ok('#G87e 이동은 버튼 상태를 넘겨 공용 전이에 맡긴다(자가치유·미리보기 판정은 chartSelStep)',
+    /step\(\{ type: 'move', label, buttons: ev \? ev\.buttons : undefined \}\);/.test(CW));
+  {
+    const iWin = CW.indexOf('{dim && <ReferenceArea x1={dim.start}');
+    const iAnc = CW.indexOf('x={sel.anchor}');
+    const anc = iAnc > 0 ? CW.slice(iAnc, CW.indexOf('/>', iAnc)) : '';
+    ok('#G87f 시작점 선 — 딤·선택창보다 뒤 · ifOverflow="hidden" · CHART_SELECTION 앵커 토큰',
+      iWin > 0 && iAnc > iWin && /ifOverflow="hidden"/.test(anc)
+      && /stroke=\{CHART_SELECTION\.anchorStroke\}/.test(anc) && /strokeDasharray=\{CHART_SELECTION\.anchorDash\}/.test(anc));
+  }
+  ok('#G87g 사용법 안내는 호버 중에도 보인다(드래그·더블클릭 둘 다 안내)',
+    /\{rows\.length > 1 && \(\s*\n\s*<span className="ml-auto/.test(CW) && CW.includes('더블클릭으로 시작점 고정 후 끝점 클릭'));
   ok('#G88 가격 표기는 팝업과 공유(fmtWatchPrice)', /const fmtPrice = fmtWatchPrice;/.test(P) && /fmtWatchPrice\(/.test(CW)
     && /export const fmtWatchPrice = /.test(QUOTE));
 

@@ -237,6 +237,49 @@ export function rangeRate(win: any, a: any, b: any): { rate: number | null; firs
   return windowRate(goodPairs(win).filter(([d]) => d >= from && d <= to));
 }
 
+// ── 차트 구간 선택 상태 전이(수익률 차트와 같은 제스처 — 사용자 요청 2026-10) ──
+// ① 드래그 = 구간 선택 ② **더블클릭 = 시작점 고정** → 마우스를 움직이면 버튼을 안 눌러도 끝점이 따라오며
+//    미리보기 → 클릭(또는 드래그)으로 끝점 확정. 시작점 위를 다시 누르면 시작점을 유지하고 계속 기다린다.
+// state = { dragging, left, right, anchor } — left/right = 선택 양 끝 날짜, anchor = 고정한 시작점(대기 중).
+// event = { type:'down'|'move'|'up'|'dbl'|'clear', label?, second?, buttons? }
+//   label = 그 지점의 날짜(플롯 밖이면 ''), second = 더블클릭의 두 번째 클릭(detail ≥ 2),
+//   buttons = 이동 중 눌린 버튼(0이면 창 밖에서 버튼을 놓고 돌아온 것).
+// ⚠️ 바뀐 게 없으면 **같은 참조**를 돌려준다 — 호출부가 참조 비교로 setState를 건너뛴다(이동마다 렌더 방지).
+// ⚠️ 더블클릭의 두 번째 클릭(second)은 down·up 모두 무시한다 — 안 그러면 한 제스처 안에서
+//    '시작점 고정 → 곧바로 선택 확정 → 해제'가 연달아 일어나 화면이 번쩍인다.
+// ⚠️ 버튼 놓침 자가치유(buttons === 0)는 **드래그 중일 때만** — 시작점 대기 중의 미리보기는 원래 버튼 없이
+//    따라오므로 buttons만 보면 그 기능이 통째로 죽는다.
+export const EMPTY_CHART_SEL = Object.freeze({ dragging: false, left: '', right: '', anchor: '' });
+
+export function chartSelStep(st: any, ev: any): { dragging: boolean; left: string; right: string; anchor: string } {
+  const s = st && typeof st === 'object' ? st : EMPTY_CHART_SEL;
+  const e = ev && typeof ev === 'object' ? ev : {};
+  const label = typeof e.label === 'string' ? e.label : '';
+  switch (e.type) {
+    case 'clear':
+      return s === EMPTY_CHART_SEL || (!s.dragging && !s.left && !s.right && !s.anchor) ? s : EMPTY_CHART_SEL;
+    case 'dbl':
+      return label ? { dragging: false, left: label, right: '', anchor: label } : s;
+    case 'down':
+      if (e.second) return s;
+      if (!label) return chartSelStep(s, { type: 'clear' });          // 플롯 밖(축 띠 등) 클릭 = 해제
+      if (s.anchor) return { ...s, dragging: true, right: label };      // 시작점은 덮어쓰지 않는다 — 끝점 후보
+      return { dragging: true, left: label, right: '', anchor: '' };
+    case 'move':
+      if (!(s.dragging || s.anchor)) return s;
+      if (s.dragging && e.buttons === 0) return chartSelStep(s, { type: 'up' });
+      if (!label || label === s.right) return s;
+      return { ...s, right: label };
+    case 'up':
+      if (e.second || !s.dragging) return s;
+      if (s.left && s.right && s.left !== s.right) return { dragging: false, left: s.left, right: s.right, anchor: '' };
+      if (s.anchor) return { dragging: false, left: s.anchor, right: '', anchor: s.anchor };   // 시작점 위 클릭 = 계속 대기
+      return EMPTY_CHART_SEL;                                                                  // 단순 클릭 = 해제
+    default:
+      return s;
+  }
+}
+
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
 /** 'YYYY-MM-DD' → 'YY/MM/DD (요일)'. ⚠️ 요일은 UTC로 잰다(`new Date('YYYY-MM-DD')`는 뷰어 타임존에 따라 하루 밀린다). */
 export function chartDateLabel(d: any): string {

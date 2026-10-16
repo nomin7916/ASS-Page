@@ -11,6 +11,7 @@ import {
   CHART_PERIODS, CHART_CUSTOM_PERIOD, CHART_SERIES_COLORS, MAX_CHART_COMPS,
   periodCutoff, watchPeriodWindow, windowRate, buildChartRows, closeOnOrBefore, rangeRate, chartDateLabel,
   normalizeChartCode, normalizeChartComps, normalizeChartView, stockDetailUrl, stockChartUrl,
+  EMPTY_CHART_SEL, chartSelStep,
 } from '../watchlistChart';
 
 /**
@@ -58,8 +59,8 @@ function StockChartPage() {
   const [input, setInput] = useState('');
   const [inputMsg, setInputMsg] = useState('');
   const [hover, setHover] = useState('');
-  const [sel, setSel] = useState({ left: '', right: '' });
-  const selRef = useRef({ dragging: false, left: '', right: '' });
+  const [sel, setSel] = useState(EMPTY_CHART_SEL);
+  const selRef = useRef(EMPTY_CHART_SEL);
   const dailyFromRef = useRef({});                     // code:market → 받은 이력의 시작일
   const dailySeqRef = useRef({});                      // code:market → 조회 세대(늦게 온 응답 폐기)
   const today = todayKST();
@@ -142,40 +143,40 @@ function StockChartPage() {
   const firstDate = rows[0]?.date || '';
   const lastDate = rows[rows.length - 1]?.date || '';
 
-  // ── 드래그 구간 선택(ref가 정본 — mousemove 커밋 전에 mouseup이 와도 선택이 사라지지 않게) ──
-  const finishDrag = useCallback(() => {
-    const s = selRef.current;
-    if (!s.dragging) return;
-    s.dragging = false;
-    if (s.left && s.right && s.left !== s.right) setSel({ left: s.left, right: s.right });
-    else { s.left = ''; s.right = ''; setSel({ left: '', right: '' }); }
+  // ── 구간 선택(드래그 · 더블클릭 시작점 고정 → 끝점 클릭) — 상태 전이는 watchlistChart.chartSelStep이 정본 ──
+  // ⚠️ ref가 정본이다 — mousemove 커밋 전에 mouseup이 와도 선택이 사라지지 않게(수익률 차트와 같은 규약).
+  //    React state(sel)는 딤·시작점 선을 그리기 위한 거울일 뿐이다.
+  const step = useCallback((ev) => {
+    const next = chartSelStep(selRef.current, ev);
+    if (next === selRef.current) return;   // 바뀐 게 없으면 렌더하지 않는다
+    selRef.current = next;
+    setSel(next);
   }, []);
+  // 더블클릭의 두 번째 클릭(detail ≥ 2)은 down·up 모두 무시한다(시작점 고정 직후 번쩍임 방지).
+  const isSecond = (ev) => !!ev && ev.detail >= 2;
   useEffect(() => {
-    const up = () => finishDrag();
-    const key = (e) => { if (e.key === 'Escape') { selRef.current = { dragging: false, left: '', right: '' }; setSel({ left: '', right: '' }); } };
+    // 차트 밖에서 버튼을 놓아도 드래그를 마무리하고, 창을 떠나면(alt-tab) 그 자리에서 확정한다.
+    const up = (e) => step({ type: 'up', second: isSecond(e) });
+    const blur = () => step({ type: 'up' });
+    const key = (e) => { if (e.key === 'Escape') step({ type: 'clear' }); };
     window.addEventListener('mouseup', up);
-    window.addEventListener('blur', up);
+    window.addEventListener('blur', blur);
     window.addEventListener('keydown', key);
-    return () => { window.removeEventListener('mouseup', up); window.removeEventListener('blur', up); window.removeEventListener('keydown', key); };
-  }, [finishDrag]);
-  // 기간을 바꾸면 선택 구간을 지운다(수익률 차트의 '조회기간 변경 = 해제' 규약 — 낡은 구간이 남지 않게).
+    return () => { window.removeEventListener('mouseup', up); window.removeEventListener('blur', blur); window.removeEventListener('keydown', key); };
+  }, [step]);
+  // 기간을 바꾸면 선택 구간·시작점을 지운다(수익률 차트의 '조회기간 변경 = 해제' 규약 — 낡은 구간이 남지 않게).
   useEffect(() => {
-    selRef.current = { dragging: false, left: '', right: '' };
-    setSel({ left: '', right: '' });
+    step({ type: 'clear' });
   }, [view.period, view.customStart, view.customEnd]);
-  const onDown = (e) => {
-    const label = e?.activeLabel;
-    if (!label) { selRef.current = { dragging: false, left: '', right: '' }; setSel({ left: '', right: '' }); return; }
-    selRef.current = { dragging: true, left: label, right: '' };
-    setSel({ left: label, right: '' });
-  };
+  const onDown = (e, ev) => step({ type: 'down', label: e?.activeLabel || '', second: isSecond(ev) });
+  const onUp = (e, ev) => step({ type: 'up', second: isSecond(ev) });
+  // recharts는 플롯 밖 더블클릭에 null을 넘긴다 → activeLabel 가드는 chartSelStep('dbl')이 진다.
+  const onDouble = (e) => step({ type: 'dbl', label: e?.activeLabel || '' });
   const onMove = (e, ev) => {
     const label = e?.activeLabel || '';
     if (label !== hover) setHover(label);
-    const s = selRef.current;
-    if (!s.dragging) return;
-    if (ev && ev.buttons === 0) { finishDrag(); return; }   // 창 밖에서 버튼을 놓고 돌아온 경우 자가치유
-    if (label && label !== s.right) { s.right = label; setSel({ left: s.left, right: label }); }
+    // 드래그 중이면 끝점이 따라오고, 시작점을 고정한 뒤에는 버튼을 안 눌러도 따라온다(미리보기).
+    step({ type: 'move', label, buttons: ev ? ev.buttons : undefined });
   };
 
   // ── 종목 추가·삭제·시장 보정 ──
@@ -199,8 +200,12 @@ function StockChartPage() {
   const selFrom = dim ? dim.start : '';
   const selTo = dim ? dim.end : '';
   const infoTitle = dim
-    ? `선택 구간 ${chartDateLabel(selFrom)} ~ ${chartDateLabel(selTo)}`
-    : hover
+    ? (sel.anchor
+      ? `선택 중 ${chartDateLabel(selFrom)} ~ ${chartDateLabel(selTo)} — 클릭하면 확정`
+      : `선택 구간 ${chartDateLabel(selFrom)} ~ ${chartDateLabel(selTo)}`)
+    : sel.anchor
+      ? `시작점 ${chartDateLabel(sel.anchor)} 고정 — 마우스를 옮겨 끝점을 클릭하세요`
+      : hover
       ? chartDateLabel(hover)
       : firstDate ? `조회기간 ${chartDateLabel(firstDate)} ~ ${chartDateLabel(lastDate)}` : '조회기간';
 
@@ -384,13 +389,20 @@ function StockChartPage() {
             </span>
           );
         })}
-        {!dim && !hover && rows.length > 1 && (
-          <span className="text-[10px] text-gray-600">차트를 드래그하면 그 구간의 수익률을 봅니다 · Esc로 해제</span>
+        {/* 사용법 안내는 **항상** 보인다 — 호버 중에만 사라지면 마우스를 차트에 올린 사용자는 영영 못 본다. */}
+        {rows.length > 1 && (
+          <span className="ml-auto text-[10px] text-gray-500 whitespace-nowrap">
+            {sel.anchor
+              ? '끝점을 클릭하면 확정 · Esc로 취소'
+              : dim
+                ? '차트를 한 번 클릭하거나 Esc로 해제'
+                : '구간 수익률: 차트를 드래그하거나, 더블클릭으로 시작점 고정 후 끝점 클릭'}
+          </span>
         )}
       </div>
 
       {/* 차트 */}
-      <div className="flex-1 min-h-[300px] px-2 py-3 select-none">
+      <div className="flex-1 min-h-[300px] px-2 py-3 select-none cursor-crosshair">
         {rows.length < 2 ? (
           <div className="h-full flex items-center justify-center text-sm text-gray-500">
             {Object.values(status).includes('loading') || !(main.code in dailyMap)
@@ -401,7 +413,8 @@ function StockChartPage() {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-            <ComposedChart data={rows} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={finishDrag} onMouseLeave={() => setHover('')}>
+            {/* onDoubleClick은 <RechartsTooltip>이 있어야 바인딩된다(recharts tooltipEvents) — 툴팁을 빼지 말 것. */}
+            <ComposedChart data={rows} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onDoubleClick={onDouble} onMouseLeave={() => setHover('')}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
               <XAxis dataKey="date" tickFormatter={chartDateLabel} stroke="#9ca3af" tick={{ fontSize: 10 }} minTickGap={40} />
               {mode === 'pct' ? (
@@ -428,6 +441,18 @@ function StockChartPage() {
               {dim?.before && <ReferenceArea x1={dim.before.from} x2={dim.before.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
               {dim?.after && <ReferenceArea x1={dim.after.from} x2={dim.after.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
               {dim && <ReferenceArea x1={dim.start} x2={dim.end} fill={CHART_SELECTION.windowFill} fillOpacity={CHART_SELECTION.windowOpacity} stroke={CHART_SELECTION.windowStroke} strokeWidth={CHART_SELECTION.windowStrokeWidth} ifOverflow="hidden" />}
+              {/* 더블클릭으로 고정한 시작점 — 딤·선택창보다 **뒤**에 그려야 위에 보인다.
+                  ifOverflow="hidden" 필수(첫 날짜에 찍으면 기본값 discard가 선을 통째로 버린다 — 수익률 차트와 같은 근거). */}
+              {sel.anchor && (
+                <ReferenceLine
+                  x={sel.anchor}
+                  stroke={CHART_SELECTION.anchorStroke}
+                  strokeWidth={CHART_SELECTION.anchorStrokeWidth}
+                  strokeDasharray={CHART_SELECTION.anchorDash}
+                  ifOverflow="hidden"
+                  label={{ value: '시작', position: 'insideTopLeft', fill: CHART_SELECTION.anchorStroke, fontSize: 10 }}
+                />
+              )}
             </ComposedChart>
           </ResponsiveContainer>
         )}
