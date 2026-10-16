@@ -57,6 +57,7 @@ function FlowCanvasInner({
   hideAmounts,
   formatAmount,
   tableLinkValue,
+  tableOfNode,        // (nodeId) => 계산된 표 — 도형 간 참조를 해석한다(보드가 시트 단위로 만든다)
   connectFrom,        // 연결 시작 노드 id (null이면 비활성)
   onConnectFromChange,
   bundleEnabled = true,   // 시트 단위 연결선 합치기(map.bundleEdges)
@@ -464,7 +465,7 @@ function FlowCanvasInner({
           // ⚠️ 렌더 스코프 선언 — 다른 최상위 블록의 지역 변수를 JSX가 참조하면 런타임
           //    ReferenceError로 화면이 통째로 오류 페이지가 되는데 @ts-nocheck + esbuild라
           //    빌드도 undefcheck도 잡지 못한다(initTradeRest 프로덕션 장애와 동일).
-          const tableRows = raw.table ? computeFlowTable(raw.table, tableLinkValue) : [];
+          const tableRows = raw.table ? (tableOfNode ? tableOfNode(raw.id) : computeFlowTable(raw.table, tableLinkValue)) : [];
           const border = raw.table?.border || 'none';
           // 계좌 연결 행은 실제 계좌 잔액이므로 '금액 숨기기'를 따른다. 소계·잔액도 그 값에서
           // 파생되므로 함께 가린다(직접 입력만 있는 표는 종전 그대로 보인다).

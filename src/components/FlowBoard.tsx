@@ -1,12 +1,12 @@
 // @ts-nocheck
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, X, RotateCcw, Maximize2, Save, Pencil, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import FlowCanvas from './FlowCanvas';
 import FlowInspector from './FlowInspector';
 import FlowNodeEditor from './FlowNodeEditor';
 import { useFlowMapData } from '../hooks/useFlowMapData';
 import {
-  makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView, flowLinkedAmount,
+  makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView, flowLinkedAmount, makeFlowNodeRowResolver,
   countDanglingNodes, MAX_FLOW_NODES, MAX_FLOW_EDGES, MAX_FLOW_MAPS, MAX_FLOW_MAP_NAME,
   DEFAULT_FLOW_VIEWPORT, normalizeFlowViewport, sameFlowViewport, fitFlowViewport,
   addFlowMap, duplicateFlowMap, removeFlowMap, renameFlowMap, moveFlowMap, flowBundleEnabled,
@@ -360,6 +360,13 @@ export default function FlowBoard({
     [portfolioById, summaryById],
   );
 
+  // 도형 간 표 참조(다른 도형의 총액·소계·잔액). 시트 단위로 한 번 만들어 캔버스·팝업이 공유한다
+  // — 각자 계산하면 순환 판정·메모가 갈려 같은 행이 두 화면에서 다른 숫자가 된다.
+  const nodeTables = useMemo(
+    () => makeFlowNodeRowResolver(map?.nodes || [], tableLinkValue),
+    [map?.nodes, tableLinkValue],
+  );
+
   // ⚠️ 항상 원화. `portfolioSummaries[].currentEval`은 해외계좌도 **원화로 환산된 값**이라
   //    accountType==='overseas'일 때 '$'를 붙이면 원화 금액에 달러 기호가 붙어 약 1,390배로
   //    오표시된다(USD로 보이려면 별도 USD 소스가 필요한데 그건 이 뷰의 소스가 아니다).
@@ -450,6 +457,48 @@ export default function FlowBoard({
       return { ...cur, nodes };
     });
   }, [patchMap]);
+
+  /**
+   * 참조 대상 행에 id가 없으면 붙인다(계산식 id와 같은 규약 — 참조를 걸 때만 생긴다).
+   * id를 동기적으로 돌려줘야 하므로 렌더 시점 map에서 읽고, 쓰기는 패치로 한다.
+   */
+  const ensureNodeRowId = useCallback((nodeId, idx) => {
+    const n = (map?.nodes || []).find(x => x.id === nodeId);
+    const rows = n?.table?.rows;
+    const r = Array.isArray(rows) ? rows[idx] : null;
+    if (!r) return null;
+    if (r.id) return r.id;
+    if (readOnly) return null;
+    const used = new Set(rows.map(x => x?.id).filter(Boolean));
+    let id;
+    do { id = 'r' + Math.random().toString(36).slice(2, 9); } while (used.has(id));
+    patchNodeById(nodeId, { table: { ...n.table, rows: rows.map((x, k) => (k === idx ? { ...x, id } : x)) } });
+    return id;
+  }, [map, patchNodeById, readOnly]);
+
+  // 팝업에서 고를 수 있는 '선으로 이어진 도형'의 총액·소계·잔액 행
+  const editorRefOptions = useMemo(() => {
+    if (!editorNode || !map) return [];
+    const ids = [];
+    for (const e of map.edges || []) {
+      const other = e.from === editorNode.id ? e.to : e.to === editorNode.id ? e.from : null;
+      if (other && other !== editorNode.id && !ids.includes(other)) ids.push(other);
+    }
+    const out = [];
+    for (const id of ids) {
+      const n = map.nodes.find(x => x.id === id);
+      const rows = n?.table?.rows;
+      if (!Array.isArray(rows)) continue;
+      const comp = nodeTables.tableOf(id);
+      const picks = [];
+      rows.forEach((r, idx) => {
+        if (!r || !(r.kind === 'total' || r.kind === 'subtotal' || r.kind === 'balance')) return;
+        picks.push({ idx, id: r.id || '', kind: r.kind, label: r.label || '', text: comp[idx]?.text || '' });
+      });
+      if (picks.length) out.push({ nodeId: id, name: viewOf(n).displayName || '(이름 없음)', rows: picks });
+    }
+    return out;
+  }, [editorNode, map, nodeTables, viewOf]);
 
   const patchEdgeById = useCallback((id, o) => {
     if (!id) return;
@@ -773,6 +822,7 @@ export default function FlowBoard({
             hideAmounts={hideAmounts}
             formatAmount={formatAmount}
             tableLinkValue={tableLinkValue}
+            tableOfNode={nodeTables.tableOf}
             connectFrom={connectFrom}
             onConnectFromChange={setConnectFrom}
             bundleEnabled={bundleOn}
@@ -896,6 +946,9 @@ export default function FlowBoard({
           onPosCommit={setEditorPos}
           accountOptions={accountOptions}
           linkValueOf={tableLinkValue}
+          nodeRefValueOf={nodeTables.resolve}
+          refOptions={editorRefOptions}
+          ensureNodeRowId={ensureNodeRowId}
         />
       )}
     </div>

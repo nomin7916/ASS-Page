@@ -70,6 +70,7 @@ const fmtToggleCls = (on) =>
 export default function FlowNodeEditor({
   node, title, onPatch, onClose, readOnly, initialTab = 'memo', initialPos = null, onPosCommit,
   accountOptions = [], linkValueOf,
+  nodeRefValueOf, refOptions = [], ensureNodeRowId,
 }) {
   const [tab, setTab] = useState(initialTab);
   // null = 가운데. 끄는 동안은 여기만 바뀌고, 놓을 때 onPosCommit으로 보드에 알린다.
@@ -171,7 +172,15 @@ export default function FlowNodeEditor({
 
   const rows = tbl?.rows || [];
   // ⚠️ 도형 안 표와 **같은 해석 함수**(보드의 tableLinkValue)로 계산한다 — 갈리면 팝업과 도형의 숫자가 다르다.
-  const computed = computeFlowTable(tbl, linkValueOf);
+  const computed = computeFlowTable(tbl, linkValueOf, nodeRefValueOf);
+  /** 도형 참조 → 드롭다운 값. 대상 행에 id가 없으면 인덱스 형태(고르는 순간 id를 붙인다). */
+  const refValueOf = (nodeId, pick) => (pick.id ? `nref:${nodeId}#${pick.id}` : `nidx:${nodeId}#${pick.idx}`);
+  const refNameOf = (nr) => {
+    if (!nr) return '';
+    const g = refOptions.find(o => o.nodeId === nr.nodeId);
+    const pick = g?.rows.find(x => x.id === nr.rowId);
+    return g && pick ? `${g.name} · ${pick.label || ROW_KINDS.find(k => k.k === pick.kind)?.t}` : '';
+  };
   const accountNameOf = (pid) => {
     if (pid === FLOW_TABLE_LINK_ALL) return '전체 계좌 합계';
     const o = accountOptions.find(a => a.id === pid);
@@ -226,14 +235,30 @@ export default function FlowNodeEditor({
     if (!r) return;
     if (pid === CALC_SOURCE) {
       // 총액 '항목 계산' — 계좌 연결과 공존하지 않는다. 직접 입력값은 남겨 둔다(되돌리면 되살아난다).
-      applyRows(withIds(rows).map((x, k) => (k === i ? { ...x, portfolioId: undefined, formula: x.formula || {} } : x)));
+      applyRows(withIds(rows).map((x, k) => (k === i ? { ...x, portfolioId: undefined, nodeRef: undefined, formula: x.formula || {} } : x)));
       setCalcOpen(i);
       return;
     }
-    if (!pid) { setRow(i, { portfolioId: undefined, formula: undefined }, true); return; }
+    if (pid.startsWith('nref:') || pid.startsWith('nidx:')) {
+      // 선으로 이어진 도형의 총액·소계·잔액 참조
+      const [nodeId, tail] = pid.slice(5).split('#');
+      const rowId = pid.startsWith('nref:') ? tail : ensureNodeRowId?.(nodeId, Number(tail));
+      if (!nodeId || !rowId) return;
+      const name = refNameOf({ nodeId, rowId }) || (() => {
+        const g = refOptions.find(o => o.nodeId === nodeId);
+        const pick = g?.rows.find(x => String(x.idx) === tail);
+        return g && pick ? `${g.name} · ${pick.label || ROW_KINDS.find(k => k.k === pick.kind)?.t}` : '';
+      })();
+      setRow(i, {
+        nodeRef: { nodeId, rowId }, portfolioId: undefined, formula: undefined,
+        ...(!r.label.trim() && name ? { label: name } : {}),
+      }, true);
+      return;
+    }
+    if (!pid) { setRow(i, { portfolioId: undefined, formula: undefined, nodeRef: undefined }, true); return; }
     // 이름이 비어 있으면 계좌명으로 채운다(사용자가 적은 이름은 건드리지 않는다).
     const name = accountNameOf(pid);
-    setRow(i, { portfolioId: pid, formula: undefined, ...(!r.label.trim() && name ? { label: name } : {}) }, true);
+    setRow(i, { portfolioId: pid, formula: undefined, nodeRef: undefined, ...(!r.label.trim() && name ? { label: name } : {}) }, true);
   };
   const checks = flowTableCheckStats(tbl);
 
@@ -396,7 +421,8 @@ export default function FlowNodeEditor({
                 <span className="text-gray-600">소계 = 바로 위 구분선 이후 항목의 합 · 잔액 = 총액 합 − 항목 합</span><br />
                 <span className="text-gray-600">항목 이름 오른쪽 체크 = 실행 표시 · S = 취소선 · I = 기울임</span><br />
                 <span className="text-gray-600">항목·총액의 금액은 직접 입력하거나 계좌(또는 전체 계좌 합계)를 연결할 수 있습니다</span><br />
-                <span className="text-gray-600">총액·소계·잔액은 다른 행을 골라 더하거나 뺄 수 있습니다(값 칸 왼쪽 버튼)</span>
+                <span className="text-gray-600">총액·소계·잔액은 다른 행을 골라 더하거나 뺄 수 있습니다(값 칸 왼쪽 버튼)</span><br />
+                <span className="text-gray-600">선으로 이어진 도형의 총액·소계·잔액도 값 출처에서 고를 수 있습니다</span>
               </div>
             ) : rows.map((r, i) => {
               const auto = r.kind === 'subtotal' || r.kind === 'balance';
@@ -409,6 +435,9 @@ export default function FlowNodeEditor({
               const ownsFormula = auto || calcTotal;
               const custom = !!computed[i]?.custom;
               const panelOpen = calcOpen === i && ownsFormula;
+              const nr = (isItem || r.kind === 'total') && r.nodeRef?.nodeId ? r.nodeRef : null;
+              const nrValue = nr ? `nref:${nr.nodeId}#${nr.rowId}` : '';
+              const nrListed = nr ? refOptions.some(g => g.nodeId === nr.nodeId && g.rows.some(x => x.id === nr.rowId)) : false;
               return (
                 <React.Fragment key={i}>
                 <div className="flex items-center gap-1 mb-1">
@@ -462,10 +491,10 @@ export default function FlowNodeEditor({
                   {(isItem || r.kind === 'total') ? (
                     <select
                       disabled={readOnly}
-                      value={calcTotal ? CALC_SOURCE : (r.portfolioId || '')}
+                      value={calcTotal ? CALC_SOURCE : nr ? nrValue : (r.portfolioId || '')}
                       onChange={e => setLink(i, e.target.value)}
                       title={r.portfolioId ? `계좌 연결: ${accountNameOf(r.portfolioId) || '(연결 끊김)'} — 현재 평가액이 자동으로 들어갑니다` : '금액을 직접 입력합니다. 계좌를 고르면 그 계좌의 현재 평가액이 들어갑니다.'}
-                      className={`w-[96px] shrink-0 bg-gray-800 border rounded px-1 py-1 text-[10px] outline-none focus:border-indigo-500 ${calcTotal ? 'border-violet-700 text-violet-200' : r.portfolioId ? 'border-sky-700 text-sky-200' : 'border-gray-700 text-gray-400'}`}
+                      className={`w-[96px] shrink-0 bg-gray-800 border rounded px-1 py-1 text-[10px] outline-none focus:border-indigo-500 ${calcTotal ? 'border-violet-700 text-violet-200' : nr ? 'border-teal-600 text-teal-200' : r.portfolioId ? 'border-sky-700 text-sky-200' : 'border-gray-700 text-gray-400'}`}
                     >
                       <option value="">직접 입력</option>
                       {r.kind === 'total' && <option value={CALC_SOURCE}>항목 계산</option>}
@@ -476,6 +505,17 @@ export default function FlowNodeEditor({
                       {r.portfolioId && r.portfolioId !== FLOW_TABLE_LINK_ALL && !accountOptions.some(o => o.id === r.portfolioId) && (
                         <option value={r.portfolioId}>(연결 끊김)</option>
                       )}
+                      {/* 선으로 이어진 도형의 총액·소계·잔액(사용자 요청 2026-10) */}
+                      {refOptions.map(g => (
+                        <optgroup key={g.nodeId} label={`이어진 도형 · ${g.name}`}>
+                          {g.rows.map(x => (
+                            <option key={x.idx} value={refValueOf(g.nodeId, x)}>
+                              {(x.label || ROW_KINDS.find(k => k.k === x.kind)?.t)}{x.text ? ` (${x.text})` : ''}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                      {nr && !nrListed && <option value={nrValue}>(도형 연결 끊김)</option>}
                     </select>
                   ) : auto ? (
                     <button
@@ -492,6 +532,11 @@ export default function FlowNodeEditor({
                       className={`w-[110px] shrink-0 px-2 py-1 text-xs text-right italic bg-gray-800/40 border rounded truncate ${custom ? 'text-violet-200 border-violet-800/70' : 'text-emerald-300/90 border-gray-700/60'}`}
                       title={custom ? '고른 행을 더하고 뺀 값입니다 — 클릭하면 계산식을 엽니다' : '기본 계산 값입니다 — 클릭하면 더하고 뺄 행을 고를 수 있습니다'}
                     >{computed[i]?.text || '0'}</button>
+                  ) : nr ? (
+                    <div
+                      className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-teal-200 bg-gray-800/40 border border-teal-800/70 rounded truncate"
+                      title={computed[i]?.text === '-' ? '이어진 도형의 값을 구하지 못했습니다(도형·행 삭제, 또는 서로를 참조하는 순환). 합계에서 제외됩니다.' : `${refNameOf(nr) || '이어진 도형'} 값(자동)`}
+                    >{computed[i]?.text || '-'}</div>
                   ) : r.portfolioId && (isItem || r.kind === 'total') ? (
                     <div
                       className="w-[110px] shrink-0 px-2 py-1 text-xs text-right text-sky-300 bg-gray-800/40 border border-sky-800/60 rounded truncate"

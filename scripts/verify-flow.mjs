@@ -225,6 +225,8 @@ function flowFingerprint(maps) {
                 const pid = typeof r?.portfolioId === 'string' && r.portfolioId ? r.portfolioId : '';
                 const rid = typeof r?.id === 'string' ? r.id : '';
                 const fk = flowTableFormulaKey(r?.formula);
+                const nr = flowNodeRefKey(r?.nodeRef);
+                if (nr) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid, rid, fk, nr];
                 if (rid || fk) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid, rid, fk];
                 if (pid) return [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f, pid];
                 return f ? [r?.kind ?? '', r?.label ?? '', r?.value ?? '', f] : [r?.kind ?? '', r?.label ?? '', r?.value ?? ''];
@@ -388,10 +390,18 @@ function duplicateFlowMap(maps, id) {
   const ts = Date.now();
 
   const idMap = new Map();
-  const nodes = (Array.isArray(src.nodes) ? src.nodes : []).map(n => {
+  const nodes0 = (Array.isArray(src.nodes) ? src.nodes : []).map(n => {
     const nid = generateId();
     idMap.set(n.id, nid);
     return { ...n, id: nid };
+  });
+  // ⚠️ 표의 도형 참조도 새 id로 다시 잇는다 — 안 그러면 사본의 참조가 원본 시트 도형을 가리켜
+  //    (이 시트에는 없어) 전부 '-'가 된다. 시트 밖을 가리키던 참조는 그대로 둔다.
+  const nodes = nodes0.map(n => {
+    const rows = n.table && Array.isArray(n.table.rows) ? n.table.rows : null;
+    if (!rows || !rows.some(r => r && r.nodeRef && idMap.has(r.nodeRef.nodeId))) return n;
+    return { ...n, table: { ...n.table, rows: rows.map(r => (r && r.nodeRef && idMap.has(r.nodeRef.nodeId)
+      ? { ...r, nodeRef: { ...r.nodeRef, nodeId: idMap.get(r.nodeRef.nodeId) } } : r)) } };
   });
   const edges = [];
   for (const e of Array.isArray(src.edges) ? src.edges : []) {
@@ -536,6 +546,13 @@ function normalizeFlowTable(raw) {
       ...((kind === 'item' || kind === 'total') && typeof r.portfolioId === 'string' && r.portfolioId.trim()
         ? { portfolioId: r.portfolioId.trim().slice(0, 128) } : {}),
     });
+    const nr = r.nodeRef;
+    if ((kind === 'item' || kind === 'total') && nr && typeof nr === 'object'
+      && typeof nr.nodeId === 'string' && nr.nodeId.trim() && typeof nr.rowId === 'string' && nr.rowId.trim()) {
+      const cur = rows[rows.length - 1];
+      cur.nodeRef = { nodeId: nr.nodeId.trim().slice(0, 128), rowId: nr.rowId.trim().slice(0, MAX_FLOW_TABLE_ROW_ID) };
+      delete cur.portfolioId;   // 도형 참조가 계좌 연결보다 우선(둘 다면 어느 값인지 모호하다)
+    }
     rawFormulas.push(r.formula);
     rawIds.push(r.id);
   }
@@ -570,8 +587,16 @@ function applyFlowTableFormulas(rows, rawIds, rawFormulas) {
     if (k === 'total') {
       rows[i].formula = f;
       delete rows[i].portfolioId;
+      delete rows[i].nodeRef;
     } else if (n > 0) rows[i].formula = f;
   }
+}
+
+/** 도형 참조 비교·지문 키. 없으면 ''. */
+function flowNodeRefKey(nr) {
+  const x = nr;
+  if (!x || typeof x !== 'object' || typeof x.nodeId !== 'string' || typeof x.rowId !== 'string') return '';
+  return x.nodeId + '#' + x.rowId;
 }
 
 function flowTableFormulaKey(f) {
@@ -591,6 +616,7 @@ function sameFlowTable(a, b) {
     if (ar[i].done !== br[i].done || ar[i].strike !== br[i].strike || ar[i].italic !== br[i].italic) return false;
     if (ar[i].portfolioId !== br[i].portfolioId) return false;
     if (ar[i].id !== br[i].id || flowTableFormulaKey(ar[i].formula) !== flowTableFormulaKey(br[i].formula)) return false;
+    if (flowNodeRefKey(ar[i].nodeRef) !== flowNodeRefKey(br[i].nodeRef)) return false;
   }
   return true;
 }
@@ -648,11 +674,16 @@ function flowLinkedAmount(pid, portfolioById, summaryById) {
   return evalOf(pid);
 }
 
-function computeFlowTable(table, linkedValueOf) {
+function computeFlowTable(table, linkedValueOf, nodeRefValueOf) {
   const rows = table && Array.isArray(table.rows) ? table.rows : [];
   const out = [];
-  const isLinked = (r) => (r.kind === 'item' || r.kind === 'total') && typeof r.portfolioId === 'string' && !!r.portfolioId;
+  const hasNodeRef = (r) => (r.kind === 'item' || r.kind === 'total') && !!flowNodeRefKey(r.nodeRef);
+  const isLinked = (r) => hasNodeRef(r) || ((r.kind === 'item' || r.kind === 'total') && typeof r.portfolioId === 'string' && !!r.portfolioId);
   const valueOf = (r) => {
+    if (hasNodeRef(r)) {
+      const v = nodeRefValueOf ? nodeRefValueOf(r.nodeRef.nodeId, r.nodeRef.rowId) : null;
+      return typeof v === 'number' && Number.isFinite(v) ? v : null;
+    }
     if (!isLinked(r)) return parseFlowNumber(r.value);
     const v = linkedValueOf ? linkedValueOf(r.portfolioId) : null;
     return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -693,19 +724,20 @@ function computeFlowTable(table, linkedValueOf) {
     if (!r) return;
     if (r.kind === 'rule') {
       section = 0;
-      out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false, linked: false, custom: false });
+      out.push({ kind: 'rule', label: '', text: '', computed: false, done: false, strike: false, italic: false, linked: false, custom: false, id: '', value: null });
       return;
     }
     const strike = r.strike === true;
     const italic = r.italic === true;
+    const rid = typeof r.id === 'string' ? r.id : '';
     if (r.kind === 'subtotal' || r.kind === 'balance') {
       const custom = hasFormula(r);
       const v = custom ? evalFormula(r.formula) : r.kind === 'subtotal' ? section : sumTotal - sumItemAll;
-      out.push({ kind: r.kind, label: r.label, text: formatFlowNumber(v), computed: true, done: false, strike, italic, linked: false, custom });
+      out.push({ kind: r.kind, label: r.label, text: formatFlowNumber(v), computed: true, done: false, strike, italic, linked: false, custom, id: rid, value: v });
       return;
     }
     if (isCalcTotal(r)) {
-      out.push({ kind: 'total', label: r.label, text: formatFlowNumber(vals[i]), computed: true, done: false, strike, italic, linked: false, custom: true });
+      out.push({ kind: 'total', label: r.label, text: formatFlowNumber(vals[i]), computed: true, done: false, strike, italic, linked: false, custom: true, id: rid, value: vals[i] });
       return;
     }
     const linked = isLinked(r);
@@ -715,10 +747,68 @@ function computeFlowTable(table, linkedValueOf) {
       kind: r.kind, label: r.label,
       text: v !== null ? formatFlowNumber(v) : linked ? '-' : asStr(r.value),
       computed: false,
-      done: r.kind === 'item' && r.done === true, strike, italic, linked, custom: false,
+      done: r.kind === 'item' && r.done === true, strike, italic, linked, custom: false, id: rid, value: v,
     });
   });
   return out;
+}
+
+/**
+ * 도형 간 표 참조 해석기 — 한 시트의 도형들로 만든다.
+ * ⚠️ 순환(A가 B의 행을, B가 A의 행을 참조 / 자기 자신 참조)은 **정적으로 미리 찾아** 그 도형으로 들어가는
+ *    참조를 전부 null로 만든다. 계산 도중 방문 표시로 끊으면 어느 도형을 먼저 그렸느냐에 따라 값이
+ *    달라진다(같은 데이터가 화면마다 다른 숫자). 정적 판정이면 순환에 걸린 쪽은 언제나 '-'다.
+ * 참조 가능한 행 = 총액·소계·잔액(사용자 요구: "연결된 합계, 소계, 총액").
+ */
+function makeFlowNodeRowResolver(nodes, linkedValueOf) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const byId = new Map();
+  for (const n of list) if (n && typeof n.id === 'string') byId.set(n.id, n);
+  // 의존 그래프 → 순환에 걸린 도형
+  const deps = new Map();
+  for (const [id, n] of byId) {
+    const rows = n.table && Array.isArray(n.table.rows) ? n.table.rows : [];
+    const d = [];
+    for (const r of rows) {
+      const k = flowNodeRefKey(r && r.nodeRef);
+      if (k && (r.kind === 'item' || r.kind === 'total')) d.push(r.nodeRef.nodeId);
+    }
+    deps.set(id, d);
+  }
+  const cyclic = new Set();
+  const state = new Map();   // 1 = 방문 중, 2 = 완료
+  const stack = [];
+  const dfs = (id) => {
+    state.set(id, 1);
+    stack.push(id);
+    for (const t of deps.get(id) || []) {
+      if (!byId.has(t)) continue;
+      const st = state.get(t);
+      if (st === 1) {
+        for (let k = stack.length - 1; k >= 0; k--) { cyclic.add(stack[k]); if (stack[k] === t) break; }
+      } else if (!st) dfs(t);
+    }
+    stack.pop();
+    state.set(id, 2);
+  };
+  for (const id of byId.keys()) if (!state.get(id)) dfs(id);
+
+  const memo = new Map();
+  const resolve = (nodeId, rowId) => {
+    if (cyclic.has(nodeId)) return null;
+    const rows = tableOf(nodeId);
+    const r = rows.find(x => x.id === rowId);
+    if (!r || !(r.kind === 'total' || r.kind === 'subtotal' || r.kind === 'balance')) return null;
+    return r.value;
+  };
+  const tableOf = (nodeId) => {
+    if (memo.has(nodeId)) return memo.get(nodeId);
+    const n = byId.get(nodeId);
+    const out = n && n.table ? computeFlowTable(n.table, linkedValueOf, resolve) : [];
+    memo.set(nodeId, out);
+    return out;
+  };
+  return { resolve, tableOf, cyclic };
 }
 
 function flowTableFromText(text) {
@@ -1623,6 +1713,57 @@ console.log('\n■ 표 계산식 — 총액·소계·잔액에 더하기/빼기 
     flowFingerprint(fpMap([X('item', 'a', '1', { id: 'a' }), X('balance', 'z', '', { formula: { a: '+' } })]))
       !== flowFingerprint(fpMap([X('item', 'a', '1', { id: 'a' }), X('balance', 'z', '', { formula: { a: '-' } })])));
   ok('#175b 계산식·id 없는 표의 지문은 종전 그대로', flowFingerprint(fpMap([X('item', 'a', '1')])).includes('["item","a","1"]'));
+}
+
+console.log('\n■ 도형 간 표 참조 — 이어진 도형의 총액·소계·잔액 (사용자 요청 2026-10)');
+{
+  const X = (kind, label, value, o) => ({ kind, label, value, ...o });
+  const N = (id, rows) => ({ ...mkNode({ id }), table: { border: 'none', rows } });
+  // 사용자 화면: ISA 도형의 소계 '합계'(ISA 260 + 27년 납입금 = 117,977,206) → 연금저축 600의 '27년 ISA 입금'
+  const isa = N('isa', [X('item', 'ISA 260', '97977206', { id: 'a' }), X('item', '27년 납입금', '20000000', { id: 'b' }), X('rule', ''), X('subtotal', '합계', '', { id: 's', formula: { a: '+', b: '+' } })]);
+  const pen = N('pen', [
+    X('item', '현재 잔액', '67000000', { id: 'c' }),
+    X('item', '27년 ISA 입금', '120000000', { nodeRef: { nodeId: 'isa', rowId: 's' } }),
+    X('item', '27년도 입금', '18000000', { id: 'e' }),
+    X('rule', ''), X('balance', '27년 총 계좌 평가액', ''),
+  ]);
+  const R1 = makeFlowNodeRowResolver([isa, pen]);
+  const t = R1.tableOf('pen');
+  eq('#180 이어진 도형의 소계 값을 가져온다(직접 입력값 무시)', t[1].text, '117,977,206');
+  eq('#180b 가져온 값이 기본 잔액 계산에 들어간다', t[4].text, '-202,977,206');
+  eq('#180c 참조 행은 linked', t[1].linked, true);
+  eq('#180d 계산 결과에 숫자 값과 id가 실린다', JSON.stringify([R1.tableOf('isa')[3].value, R1.tableOf('isa')[3].id]), JSON.stringify([117977206, 's']));
+  eq('#181 참조 가능 = 총액·소계·잔액만(항목 참조는 null)', R1.resolve('isa', 'a'), null);
+  eq('#181b 없는 도형·행은 null', [R1.resolve('nope', 's'), R1.resolve('isa', 'zz')].join(','), ',');
+  // 순환: A의 총액이 B의 잔액을, B의 총액이 A의 잔액을 참조
+  const cA = N('A', [X('total', 'T', '', { nodeRef: { nodeId: 'B', rowId: 'b1' } }), X('balance', 'z', '', { id: 'a1' })]);
+  const cB = N('B', [X('total', 'T', '', { nodeRef: { nodeId: 'A', rowId: 'a1' } }), X('balance', 'z', '', { id: 'b1' })]);
+  const cC = N('C', [X('total', 'T', '', { nodeRef: { nodeId: 'A', rowId: 'a1' } })]);
+  const R2 = makeFlowNodeRowResolver([cA, cB, cC]);
+  eq('#182 순환에 걸린 도형은 둘 다 -', [R2.tableOf('A')[0].text, R2.tableOf('B')[0].text].join(','), '-,-');
+  eq('#182b 그리는 순서와 무관하다', [makeFlowNodeRowResolver([cB, cA]).tableOf('B')[0].text, makeFlowNodeRowResolver([cA, cB]).tableOf('B')[0].text].join(','), '-,-');
+  eq('#182c 순환 도형을 참조하는 도형도 -', R2.tableOf('C')[0].text, '-');
+  eq('#182d 자기 자신 참조도 순환', makeFlowNodeRowResolver([N('S', [X('item', 'i', '', { nodeRef: { nodeId: 'S', rowId: 's1' } }), X('balance', 'b', '', { id: 's1' })])]).tableOf('S')[0].text, '-');
+  // 정규화
+  const n = normalizeFlowTable({ rows: [
+    X('item', 'a', '1', { nodeRef: { nodeId: ' isa ', rowId: ' s ' }, portfolioId: 'p' }),
+    X('subtotal', 's', '', { nodeRef: { nodeId: 'isa', rowId: 's' } }),
+    X('item', 'b', '1', { nodeRef: { nodeId: 'isa' } }),
+    X('total', 'T', '1', { nodeRef: { nodeId: 'isa', rowId: 's' }, formula: {} }),
+  ] });
+  eq('#183 참조 정규화(trim, 계좌 연결 버림)', JSON.stringify(n?.rows?.[0]), JSON.stringify({ kind: 'item', label: 'a', value: '1', nodeRef: { nodeId: 'isa', rowId: 's' } }));
+  eq('#183b 소계·불완전 참조·계산 총액은 참조를 갖지 않는다', (n?.rows || []).slice(1).map(r => ('nodeRef' in r ? 1 : 0)).join(''), '000');
+  eq('#183c 멱등(참조 포함)', JSON.stringify(normalizeFlowTable(n)), JSON.stringify(n));
+  ok('#184 참조만 달라도 다른 표', !sameFlowTable({ border: 'none', rows: [X('item', 'a', '1')] }, { border: 'none', rows: [X('item', 'a', '1', { nodeRef: { nodeId: 'x', rowId: 'y' } })] }));
+  const fpMap = (rows) => [cleanMap({ id: 'm1', nodes: [{ ...mkNode({ id: 'n1' }), table: { rows, border: 'none' } }], edges: [] })];
+  ok('#184b 지문이 참조에 반응', flowFingerprint(fpMap([X('item', 'a', '1', { nodeRef: { nodeId: 'x', rowId: 'y' } })])) !== flowFingerprint(fpMap([X('item', 'a', '1', { nodeRef: { nodeId: 'x', rowId: 'z' } })])));
+  // 시트 복제는 참조를 새 도형 id로 다시 잇는다
+  const m0 = cleanMap({ id: 'm1', nodes: [isa, pen], edges: [] });
+  const dup = duplicateFlowMap([m0], 'm1');
+  const copy = dup[1];
+  const newIsa = copy?.nodes?.[0]?.id;
+  eq('#185 복제 시 참조가 사본의 도형을 가리킨다', copy?.nodes?.[1]?.table?.rows?.[1]?.nodeRef?.nodeId === newIsa && newIsa !== 'isa', true);
+  eq('#185b 사본에서도 값이 그대로', makeFlowNodeRowResolver(copy?.nodes || []).tableOf(copy?.nodes?.[1]?.id)[1]?.text, '117,977,206');
 }
 
 console.log('\n■ removeNode / pruneOrphanEdges');
@@ -2563,7 +2704,7 @@ const edNC = stripComments(editor);
   ok('#G173c FlowNodeEditor: 도달하지 않는 Escape 핸들러를 되살리지 않았다(처리는 보드가 한다)',
     !/e\.key === 'Escape'/.test(edNC));
   ok('#G174 FlowNodeEditor: 계산은 flowMap 공유 함수가 한다(팝업이 합을 다시 구하지 않는다)',
-    /const computed = computeFlowTable\(tbl, linkValueOf\);/.test(edNC));
+    /const computed = computeFlowTable\(tbl, linkValueOf, nodeRefValueOf\);/.test(edNC));
   ok('#G174b FlowNodeEditor: 자동 계산 행은 값 입력을 막고 계산 결과를 보여 준다',
     /const auto = r\.kind === 'subtotal' \|\| r\.kind === 'balance';/.test(edNC) && /\{computed\[i\]\?\.text \|\| '0'\}/.test(edNC));
   ok('#G174c FlowNodeEditor: 붙여넣기도 공유 파서를 쓴다', /flowTableFromText\(pasteText\)/.test(edNC));
@@ -2573,7 +2714,7 @@ const edNC = stripComments(editor);
 {
   // ⚠️ 도형 안 표도 같은 계산을 써야 팝업이 보여 준 값과 화면이 갈리지 않는다.
   ok('#G175 FlowCanvas: 표를 flowMap 공유 함수로 계산',
-    /const tableRows = raw\.table \? computeFlowTable\(raw\.table, tableLinkValue\) : \[\];/.test(canvasNC));
+    /const tableRows = raw\.table \? \(tableOfNode \? tableOfNode\(raw\.id\) : computeFlowTable\(raw\.table, tableLinkValue\)\) : \[\];/.test(canvasNC));
   ok('#G175b FlowCanvas: 표를 실제로 렌더한다', /\{tableRows\.map\(\(r, i\) => \(/.test(canvasNC));
   ok('#G175c FlowCanvas: 선 표시가 저장값을 따른다',
     /const border = raw\.table\?\.border \|\| 'none';/.test(canvasNC) && /border !== 'none'/.test(canvasNC));
@@ -2647,8 +2788,18 @@ console.log('\n■ 소스 텍스트 가드 — 팝업 이동 · 키 처리 · �
   ok('#G182b FlowNodeEditor: 값 출처 선택은 항목·총액 행에만', /\{\(isItem \|\| r\.kind === 'total'\) \? \(\s*<select/.test(edNC));
   ok('#G182c FlowNodeEditor: 직접 입력·전체 합계·계좌 목록 선택지', /<option value="">직접 입력<\/option>/.test(edNC)
     && /<option value=\{FLOW_TABLE_LINK_ALL\}>전체 계좌 합계<\/option>/.test(edNC) && /accountOptions\.map\(o => \(/.test(edNC));
-  ok('#G182d FlowNodeEditor: 연결 해제는 직접 입력값을 지우지 않는다', /setRow\(i, \{ portfolioId: undefined, formula: undefined \}, true\)/.test(edNC) && !/portfolioId: undefined, value/.test(edNC));
+  ok('#G182d FlowNodeEditor: 연결 해제는 직접 입력값을 지우지 않는다', /setRow\(i, \{ portfolioId: undefined, formula: undefined, nodeRef: undefined \}, true\)/.test(edNC) && !/portfolioId: undefined, value/.test(edNC));
   ok('#G182e FlowNodeEditor: 연결 행 값은 계산 결과를 읽기 전용으로', /r\.portfolioId && \(isItem \|\| r\.kind === 'total'\) \? \(\s*<div/.test(edNC));
+  ok('#G184 FlowBoard: 도형 간 참조 해석기를 시트 단위로 한 번 만들어 캔버스·팝업이 공유',
+    /makeFlowNodeRowResolver\(map\?\.nodes \|\| \[\], tableLinkValue\)/.test(boardNC) && /tableOfNode=\{nodeTables\.tableOf\}/.test(boardNC) && /nodeRefValueOf=\{nodeTables\.resolve\}/.test(boardNC));
+  // ⚠️ 후보는 '선으로 이어진' 도형만(사용자 요구). 엣지 양방향 모두.
+  ok('#G184b FlowBoard: 참조 후보 = 선으로 이어진 도형의 총액·소계·잔액',
+    /const other = e\.from === editorNode\.id \? e\.to : e\.to === editorNode\.id \? e\.from : null;/.test(boardNC)
+    && /r\.kind === 'total' \|\| r\.kind === 'subtotal' \|\| r\.kind === 'balance'/.test(boardNC));
+  ok('#G184c FlowBoard: 참조 대상 행 id는 고를 때만 붙이고 읽기 전용이면 붙이지 않는다',
+    /const ensureNodeRowId = useCallback/.test(boardNC) && /if \(readOnly\) return null;/.test(boardNC) && /refOptions=\{editorRefOptions\}/.test(boardNC));
+  ok('#G184d FlowNodeEditor: 값 출처에 이어진 도형 묶음', /<optgroup key=\{g\.nodeId\} label=\{`이어진 도형 · \$\{g\.name\}`\}>/.test(edNC));
+  ok('#G184e FlowNodeEditor: 참조를 고르면 계좌 연결·계산식을 버린다', /nodeRef: \{ nodeId, rowId \}, portfolioId: undefined, formula: undefined,/.test(edNC));
   ok('#G183 FlowNodeEditor: 총액 값 출처에 \'항목 계산\'이 있다(총액 행에만)',
     /\{r\.kind === 'total' && <option value=\{CALC_SOURCE\}>항목 계산<\/option>\}/.test(edNC));
   ok('#G183b FlowNodeEditor: 소계·잔액에 계산 버튼(기본/선택 계산)', /\{custom \? `선택 계산 \$\{formulaCount\(r\)\}` : '기본 계산'\}/.test(edNC));
@@ -3066,6 +3217,45 @@ await (async () => {
           String(real.sameFlowTable({ border: 'none', rows: [X('total', 'T', '1')] }, { border: 'none', rows: [X('total', 'T', '1', { formula: {} })] })),
           String(sameFlowTable({ border: 'none', rows: [X('total', 'T', '1')] }, { border: 'none', rows: [X('total', 'T', '1', { formula: {} })] })));
         eq('#138h 행 id 상한 일치', real.MAX_FLOW_TABLE_ROW_ID, MAX_FLOW_TABLE_ROW_ID);
+      }
+      // (10) 도형 간 참조 — 순환·삭제·불완전 참조·복제를 결정적으로 밟는다.
+      {
+        const X = (kind, label, value, o) => ({ kind, label, value, ...o });
+        const N = (id, rows) => ({ id, kind: 'rect', x: 0, y: 0, w: 180, h: 120, label: '', date: '', amountManual: null, memo: '', portfolioId: null, accountNameSnapshot: '', amountSource: 'none', table: { border: 'none', rows } });
+        const nodesR = [
+          N('isa', [X('item', 'a', '97', { id: 'a' }), X('item', 'b', '20', { id: 'b' }), X('subtotal', 's', '', { id: 's', formula: { a: '+', b: '-' } }), X('total', 'tt', '', { id: 't2', portfolioId: 'p1' })]),
+          N('pen', [X('item', 'c', '67', { id: 'c' }), X('item', 'r', '1', { nodeRef: { nodeId: 'isa', rowId: 's' } }), X('total', 't', '', { nodeRef: { nodeId: 'isa', rowId: 't2' } }), X('balance', 'z', '', { id: 'z' })]),
+          N('A', [X('total', 'T', '', { nodeRef: { nodeId: 'B', rowId: 'b1' } }), X('balance', 'z', '', { id: 'a1' })]),
+          N('B', [X('total', 'T', '', { nodeRef: { nodeId: 'A', rowId: 'a1' } }), X('balance', 'z', '', { id: 'b1' })]),
+          N('C', [X('item', 'i', '', { nodeRef: { nodeId: 'A', rowId: 'a1' } }), X('item', 'j', '', { nodeRef: { nodeId: 'pen', rowId: 'z' } }), X('item', 'k', '', { nodeRef: { nodeId: 'gone', rowId: 'q' } })]),
+        ];
+        const lvx = (pid) => (pid === 'p1' ? 500 : null);
+        const rr = real.makeFlowNodeRowResolver(nodesR, lvx);
+        const mr = makeFlowNodeRowResolver(nodesR, lvx);
+        eq('#139 makeFlowNodeRowResolver 표 계산 일치',
+          JSON.stringify(nodesR.map(n => rr.tableOf(n.id))), JSON.stringify(nodesR.map(n => mr.tableOf(n.id))));
+        eq('#139b 순환 판정 일치', JSON.stringify([...rr.cyclic].sort()), JSON.stringify([...mr.cyclic].sort()));
+        eq('#139c resolve 일치',
+          JSON.stringify([['isa', 's'], ['isa', 'a'], ['pen', 'z'], ['A', 'a1'], ['gone', 'x']].map(([n, r]) => rr.resolve(n, r))),
+          JSON.stringify([['isa', 's'], ['isa', 'a'], ['pen', 'z'], ['A', 'a1'], ['gone', 'x']].map(([n, r]) => mr.resolve(n, r))));
+        const nrows = [X('item', 'a', '1', { nodeRef: { nodeId: ' x ', rowId: ' y ' }, portfolioId: 'p' }), X('subtotal', 's', '', { nodeRef: { nodeId: 'x', rowId: 'y' } }), X('item', 'b', '1', { nodeRef: { nodeId: 'x' } }), X('total', 'T', '1', { nodeRef: { nodeId: 'x', rowId: 'y' }, formula: {} }), X('total', 'U', '1', { nodeRef: 'bad' })];
+        eq('#139d normalizeFlowTable 참조 정규화 일치', JSON.stringify(real.normalizeFlowTable({ rows: nrows })), JSON.stringify(normalizeFlowTable({ rows: nrows })));
+        eq('#139e flowNodeRefKey 일치',
+          JSON.stringify([undefined, null, { nodeId: 'a', rowId: 'b' }, { nodeId: 'a' }, 'x'].map(v => real.flowNodeRefKey(v))),
+          JSON.stringify([undefined, null, { nodeId: 'a', rowId: 'b' }, { nodeId: 'a' }, 'x'].map(v => flowNodeRefKey(v))));
+        const mapR = [cleanMap({ id: 'm1', name: 123, nodes: nodesR, edges: [] })];
+        eq('#139f 참조를 든 표의 재구축·지문 일치',
+          JSON.stringify([norm(real.normalizeFlowMaps(mapR)), real.flowFingerprint(mapR)]),
+          JSON.stringify([norm(normalizeFlowMaps(mapR)), flowFingerprint(mapR)]));
+        eq('#139h sameFlowTable 참조 비교 일치',
+          JSON.stringify([[undefined, { nodeId: 'x', rowId: 'y' }], [{ nodeId: 'x', rowId: 'y' }, { nodeId: 'x', rowId: 'z' }], [{ nodeId: 'x', rowId: 'y' }, { nodeId: 'x', rowId: 'y' }]]
+            .map(([p, q]) => real.sameFlowTable({ border: 'none', rows: [X('item', 'a', '1', p ? { nodeRef: p } : {})] }, { border: 'none', rows: [X('item', 'a', '1', { nodeRef: q })] }))),
+          JSON.stringify([false, false, true]));
+        const dupR = real.duplicateFlowMap([cleanMap({ id: 'm1', nodes: nodesR, edges: [] })], 'm1')[1];
+        const ids = new Set((dupR?.nodes || []).map(n => n.id));
+        eq('#139g 실모듈 복제도 시트 안 참조를 새 id로 다시 잇는다(시트 밖 참조는 그대로)',
+          JSON.stringify((dupR?.nodes || []).flatMap(n => n.table.rows).filter(r => r.nodeRef).map(r => (ids.has(r.nodeRef.nodeId) ? 'in' : r.nodeRef.nodeId))),
+          JSON.stringify(['in', 'in', 'in', 'in', 'in', 'in', 'gone']));
       }
     }
     eq('#133c layoutFlowLabels 무작위 400세트 일치', badLabel, 0);
