@@ -157,13 +157,52 @@ export const normalizeNotes = (list: any): NoteDraft[] =>
   (Array.isArray(list) ? list : []).filter(n => checkNote(n) === null)
     .map(n => ({ date: n.date, text: String(n.text).trim(), impact: n.impact, source: String(n.source || '').trim() }));
 
+// ── 상태 변경 기록(9-B) — 벨 알림 대신. 창을 열 때 자산군별 지금 상태를 직전 기록과 비교해 바뀐 것만 남긴다 ──
+//   상태 표기 = 'wait' | 'watch' | 'buy' (경고 중이면 뒤에 ':warn'). 같은 날 같은 자산군은 1건(그날 처음 상태 → 지금 상태).
+export const HISTORY_MAX = 200;
+export interface StateEvent { date: string; key: string; label: string; from: string | null; to: string; rationale: string }
+const STATE_RE = /^(wait|watch|buy)(:warn)?$/;
+export const stateToken = (state: string, warning: unknown) => `${state}${warning ? ':warn' : ''}`;
+export function normalizeHistory(list: any): StateEvent[] {
+  return (Array.isArray(list) ? list : [])
+    .filter(e => e && isRealDate(String(e.date || '')) && typeof e.key === 'string' && STATE_RE.test(String(e.to || '')) && (e.from == null || STATE_RE.test(String(e.from))))
+    .map(e => ({ date: e.date, key: e.key, label: String(e.label || e.key), from: e.from == null ? null : String(e.from), to: String(e.to), rationale: String(e.rationale || '') }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    .slice(-HISTORY_MAX);
+}
+// signals: [{ key, label, state, warning, rationale }] — 바뀐 게 없으면 같은 배열을 그대로 돌려준다(changed=false)
+export function appendStateChanges(history: StateEvent[], signals: any[], today: string): { history: StateEvent[]; changed: boolean } {
+  if (!isRealDate(today) || !Array.isArray(signals)) return { history, changed: false };
+  let next = history.slice();
+  let changed = false;
+  for (const sg of signals) {
+    if (!sg || typeof sg.key !== 'string') continue;
+    const now = stateToken(sg.state, sg.warning);
+    if (!STATE_RE.test(now)) continue;
+    let lastIdx = -1;
+    for (let i = next.length - 1; i >= 0; i--) if (next[i].key === sg.key) { lastIdx = i; break; }
+    const last = lastIdx >= 0 ? next[lastIdx] : null;
+    if (last && last.to === now) continue;
+    if (last && last.date === today) {                       // 같은 날 두 번째 변화 — 그날 1건으로 합친다
+      if (last.from === now) next.splice(lastIdx, 1);        // 그날 처음 상태로 돌아왔다 → 그날 기록 없음
+      else next[lastIdx] = { ...last, to: now, rationale: String(sg.rationale || '') };
+    } else {
+      next.push({ date: today, key: sg.key, label: String(sg.label || sg.key), from: last ? last.to : null, to: now, rationale: String(sg.rationale || '') });
+    }
+    changed = true;
+  }
+  if (!changed) return { history, changed: false };
+  if (next.length > HISTORY_MAX) next = next.slice(-HISTORY_MAX);  // 오래된 것부터 버린다
+  return { history: next, changed: true };
+}
+
 // ── 파일 ──
-export interface RateSettingsFile { rules: any; manual: Record<string, ManualValue>; brazilNotes: NoteDraft[]; updatedAt: string }
-export function buildSettingsFile(defaults: any, rules: any, manual: ManualInputs, notes: any, nowIso: string): RateSettingsFile {
-  return { rules: diffRules(defaults, rules), manual: manualToSave(manual), brazilNotes: normalizeNotes(notes), updatedAt: nowIso };
+export interface RateSettingsFile { rules: any; manual: Record<string, ManualValue>; brazilNotes: NoteDraft[]; history: StateEvent[]; updatedAt: string }
+export function buildSettingsFile(defaults: any, rules: any, manual: ManualInputs, notes: any, nowIso: string, history: any = []): RateSettingsFile {
+  return { rules: diffRules(defaults, rules), manual: manualToSave(manual), brazilNotes: normalizeNotes(notes), history: normalizeHistory(history), updatedAt: nowIso };
 }
 // 파일이 없거나(null) 손상이면 기본값 그대로
-export function applySettingsFile(file: any, defaults: any, manualDefaults: ManualInputs): { rules: any; manual: ManualInputs; notes: NoteDraft[] } {
+export function applySettingsFile(file: any, defaults: any, manualDefaults: ManualInputs): { rules: any; manual: ManualInputs; notes: NoteDraft[]; history: StateEvent[] } {
   const f = file && typeof file === 'object' ? file : {};
-  return { rules: mergeRules(defaults, f.rules), manual: mergeManual(manualDefaults, f.manual), notes: normalizeNotes(f.brazilNotes) };
+  return { rules: mergeRules(defaults, f.rules), manual: mergeManual(manualDefaults, f.manual), notes: normalizeNotes(f.brazilNotes), history: normalizeHistory(f.history) };
 }

@@ -3454,7 +3454,7 @@ export default function App() {
             const token = driveTokenRef.current;
             const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
             const merged = applySettingsFile(d.data, RATE_RULES, MANUAL_INPUTS);
-            const file = buildSettingsFile(RATE_RULES, merged.rules, merged.manual, merged.notes, new Date().toISOString());
+            const file = buildSettingsFile(RATE_RULES, merged.rules, merged.manual, merged.notes, new Date().toISOString(), merged.history);
             await saveDriveFile(token, folderId, DRIVE_FILES.RATE_SETTINGS, file);
             reply({ type: 'rate:settingsSaved', reqId: d.reqId, ok: true, data: file });
           } catch (err) {

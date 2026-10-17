@@ -17,6 +17,13 @@ src/
 ├── api.ts               # 외부 API 호출
 ├── watchlistQuote.ts    # 관심종목 코드→시장 판정(detectMarket)·시세/이력/최근 분배금 조회(api.ts 재사용)
 ├── watchlistChart.ts    # 관심종목 기간 구간·등락율·비교 차트 행·분배금 파서 (⚠️ import 0 — verify:watchlist 직접 import)
+├── rateMetrics.ts       # 금리 지표 계산: 현재값·1개월 변화·52주 위치·3년 백분위·꺾임 (⚠️ import 0)
+├── rateSignals.ts       # 금리 판정: RATE_RULES(기준치 단일 소스) + 자산군 7개 evaluate* (⚠️ import 0)
+├── rateAssets.ts        # 자산군별 종목 목록·MANUAL_INPUTS(주당 장부가/순자산)·배당률 계산 (⚠️ import 0)
+├── rateSettings.ts      # ⑥ 설정 병합·범위 검사·상태 변경 기록(history) — rate_monitor_settings.json 모양 (⚠️ import 0)
+├── rateBacktest.ts      # 과거 신호 검증: 날짜별 재판정·신호 추출(20거래일)·3/6/12개월 성과 (⚠️ import 0)
+├── rateGlossary.ts      # 금리 창 용어 풀이(지표 33 · 자산군 7)
+├── brazilNotes.ts       # 브라질 정치 메모 기본값(빈 배열) + readBrazilNotes 읽기 함수
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
@@ -65,8 +72,25 @@ src/
     ├── FlowWindow.tsx            # 흐름도 별도 브라우저 창(/?flowWindow=1) — postMessage 브릿지
     ├── BacktestPage.tsx          # 리밸런싱 백테스트 페이지(z=1090, body 포털) — overlay/page 겸용
     ├── BacktestWindow.tsx        # 백테스트 별도 브라우저 창(/?backtestWindow=1) — postMessage 브릿지
+    ├── RateWindow.tsx            # 금리 모니터링 별도 창(/?rateWindow=1) — ②보드 ③판정 ④차트 ⑤종목 ⑥설정, App 미마운트
+    ├── RateSettingsPanel.tsx     # 금리 창 ⑥ 설정 패널(기준치·수동값·브라질 메모) — 저장은 앱 탭이 Drive에
     └── AdminPage.tsx             # 관리자 페이지
 ```
+
+## 금리 모니터링 (`/?rateWindow=1`, ⚠️ 회귀 주의)
+
+- **데이터 흐름**: 창은 App을 마운트하지 않는다. 현재값 `/api/indicators`·과거치 `/api/history`·종목 시세(watchlistQuote)를
+  **창이 직접** 받아 창 메모리에만 둔다(브라우저 저장소·Drive·stockHistoryMap 금지) → `rateMetrics`(지표) → `rateSignals`(판정).
+- **권한·쓰기**: 창 ↔ 앱 탭 postMessage(`rate:ping`·`rate:settingsLoad`·`rate:settingsSave`). 권한(rateEnabled·관리자)과
+  저장 가능 여부의 정본은 앱 탭이다. 관리자 접속(impersonation) 중에는 저장하지 않는다. 앱 탭이 닫히면 설정 수정이 잠긴다.
+- **판정 기준치**: `rateSignals.RATE_RULES` 한 곳(함수 안에 숫자 금지). 화면 ⑥에서 바꾼 값은 `rateSettings.mergeRules`로 덮고
+  `evaluateRateSignals(…, rules)`가 쓴다. 과거 검증은 `evaluateOne(…, { rateOnly: true })` — 종목·수동값·메모 조건은 빼고 막지 않는다.
+- **저장 파일**: 사용자 Index_Data 폴더의 `rate_monitor_settings.json`(DRIVE_FILES.RATE_SETTINGS) — `{ rules(바꾼 칸만), manual,
+  brazilNotes, history(최근 200건), updatedAt }`. 앱 탭이 기본값 위에 **다시 병합·검증한 뒤** `saveDriveFile`로만 쓴다.
+  ⚠️ `saveVersionedBackup` 금지(백업 상한 정리가 기존 백업을 영구 삭제한다).
+- **벨 알림 금지**: 상태 변화는 `notify()`가 아니라 ③ 아래 '상태 변경 기록'(history)에 남긴다 — 알림 최소화 정책상 시세·판정 계층은
+  벨에 남기지 않는다(창을 열 때마다 알림이 쌓이면 진짜 오류가 묻힌다). 저장 실패만 설정 패널 안 빨간 글씨.
+- 검증: `verify:rate-metrics`·`verify:rate-signals`·`verify:rate-assets`·`verify:rate-settings`(전부 src 직접 import).
 
 ## 상세 문서 위치 (⚠️ 자동 로드 금지 — 이 절이 생긴 이유: 2026-10-18 CLAUDE.md가 916KB까지 커져 모든 세션이 시작과 동시에 작업 기억 한계에 걸려 압축만 반복했다)
 

@@ -11,10 +11,12 @@ import {
 } from '../rateMetrics';
 import { changeOverDays, roseWithinDays } from '../rateMetrics';
 import { readBrazilNotes } from '../brazilNotes';
-import { applySettingsFile } from '../rateSettings';
+import { applySettingsFile, appendStateChanges, manualToSave } from '../rateSettings';
 import RateSettingsPanel from './RateSettingsPanel';
 import { computeBrlBond, BRL_BOND_FACE, BRL_BOND_COUPON, BRL_BOND_YEARS } from '../brlBond';
-import { evaluateRateSignals, SIGNAL_STATE_LABEL, RATE_RULES } from '../rateSignals';
+import { evaluateRateSignals, evaluateOne, SIGNAL_STATE_LABEL, RATE_RULES } from '../rateSignals';
+import { RATE_BT_ASSETS, BT_HORIZONS, historyStates, extractSignals, performanceAfter, changeAfter, summarizeSignals, pointsOf } from '../rateBacktest';
+import { RATE_GLOSSARY_INDICATORS, RATE_GLOSSARY_ASSETS } from '../rateGlossary';
 import { fetchWatchQuote, fetchWatchDaily, fetchUsDividendEvents } from '../watchlistQuote';
 import {
   RATE_ASSET_GROUPS, RATE_ANCHOR_TICKERS, MANUAL_INPUTS, buildRateAssetRow, orderRateAssetRows, DIV_CYCLE_LABEL, DIV_CHANGE_LABEL,
@@ -292,8 +294,10 @@ export default function RateWindow() {
     return () => { alive = false; };
   }, [access, linked, settingsState, request]);
 
+  const effRef = useRef(null);
+  // 설정 패널의 저장에는 상태 변경 기록(history)이 없다 — 지금 기록을 함께 실어 보내야 파일에서 지워지지 않는다
   const saveSettings = useCallback(async (data) => {
-    const d = await request({ type: 'rate:settingsSave', data });
+    const d = await request({ type: 'rate:settingsSave', data: { ...data, history: data?.history ?? effRef.current?.history ?? [] } });
     if (d?.ok) { setSettingsFile(d.data); setSettingsSeq(n => n + 1); }
     return d;
   }, [request]);
@@ -301,6 +305,7 @@ export default function RateWindow() {
   // 코드 기본값 위에 저장된 설정을 덮은 값 — ③ 판정·⑤ 표가 이것을 쓴다(파일이 없으면 기본값 그대로)
   const eff = useMemo(() => applySettingsFile(settingsFile, RATE_RULES, MANUAL_INPUTS), [settingsFile]);
   const effRules = eff.rules;
+  effRef.current = eff;
 
   useEffect(() => {
     const tick = () => {
@@ -443,6 +448,93 @@ export default function RateWindow() {
     notes: brazilNotes, today,
   }), [seriesByKey, brazilNotes, today, effRules]);
   const signals = useMemo(() => evaluateRateSignals(metrics, assetRows, brazilExtras, effRules), [metrics, assetRows, brazilExtras, effRules]);
+
+  // ── 상태 변경 기록(9-B) — 벨 알림 대신. 창을 열고 자료가 다 모이면 한 번, 바뀐 자산군만 기록해 설정 파일에 저장 ──
+  const historyDoneRef = useRef(false);
+  const anchorsReady = RATE_ANCHOR_TICKERS.every(tk => assetData[tk]?.status === 'ok' || assetData[tk]?.status === 'fail');
+  const histReady = !loading && Object.keys(hist).length > 0;
+  useEffect(() => {
+    if (historyDoneRef.current || settingsState !== 'ready' || !canWrite || !linked || !anchorsReady || !histReady || !today) return;
+    historyDoneRef.current = true;
+    const { history, changed } = appendStateChanges(eff.history, signals, today);
+    if (changed) saveSettings({ rules: effRules, manual: manualToSave(eff.manual), brazilNotes: eff.notes, history });
+  }, [settingsState, canWrite, linked, anchorsReady, histReady, today, eff, signals, effRules, saveSettings]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const stateText = (tok) => (tok == null ? '첫 기록' : `${tok.endsWith(':warn') ? '경고 · ' : ''}${SIGNAL_STATE_LABEL[tok.replace(':warn', '')] || tok}`);
+
+  // ── 과거 신호 검증(9-B) — 금리 지표 조건만(종목·수동값·정치 메모 제외)으로 날짜별 판정을 다시 계산 ──
+  const evalRateOnly = useCallback((key, all, extras) => evaluateOne(key, all, extras, effRules, { rateOnly: true }), [effRules]);
+  const btSignals = useMemo(() => {
+    const out = {};
+    for (const def of RATE_BT_ASSETS) out[def.key] = extractSignals(historyStates(def, seriesByKey, evalRateOnly));
+    return out;
+  }, [seriesByKey, evalRateOnly]);
+  const [btOpen, setBtOpen] = useState(false);
+  const [btPrices, setBtPrices] = useState({});      // 대표 종목 → { status, pts, divs } (창 메모리 전용)
+  const btRequestedRef = useRef(new Set());
+  useEffect(() => {
+    if (!btOpen) return;
+    for (const def of RATE_BT_ASSETS) {
+      const sigs = btSignals[def.key] || [];
+      if (!def.rep || !sigs.length || btRequestedRef.current.has(def.rep)) continue;
+      const tk = def.rep;
+      btRequestedRef.current.add(tk);
+      setBtPrices(prev => ({ ...prev, [tk]: { status: 'loading' } }));
+      const from = shiftIsoDays(sigs[0].date, -10);
+      (async () => {
+        const daily = await fetchWatchDaily('us', tk, from);
+        const divs = await fetchUsDividendEvents(tk, '10y');
+        setBtPrices(prev => ({ ...prev, [tk]: { status: daily ? 'ok' : 'fail', pts: daily || [], divs: divs?.status === 'ok' ? divs.events : [] } }));
+      })().catch(() => setBtPrices(prev => ({ ...prev, [tk]: { status: 'fail', pts: [], divs: [] } })));
+    }
+  }, [btOpen, btSignals]);
+  const btTable = useMemo(() => {
+    if (!btOpen) return null;
+    const rows = [], summary = [];
+    for (const def of RATE_BT_ASSETS) {
+      const sigs = btSignals[def.key] || [];
+      const twelve = [];
+      for (const sg of sigs) {
+        const cells = BT_HORIZONS.map(mo => {
+          if (def.rep) {
+            const pr = btPrices[def.rep];
+            if (!pr || pr.status === 'loading') return { text: '…' };
+            const r = performanceAfter(pr.pts, pr.divs, sg.date, mo, today);
+            if (!r) return { text: '-' };
+            if (r.pending) return { text: '진행 중' };
+            if (mo === 12) twelve.push(r.total);
+            return { text: `주가 ${r.price >= 0 ? '+' : ''}${r.price.toFixed(1)}% · 총 ${r.total >= 0 ? '+' : ''}${r.total.toFixed(1)}%`, v: r.total };
+          }
+          // 대표 종목 없음 — 브라질은 헤알·원 변화와 10년 금리 변화, 한국 채권은 10년 금리 변화
+          const fxKey = def.key === 'brBond' ? 'brlkrw' : null, rateKey = def.key === 'brBond' ? 'br10y' : 'kr10y';
+          const rr = changeAfter(pointsOf(seriesByKey[rateKey]), sg.date, mo, today, 'pp');
+          const fx = fxKey ? changeAfter(pointsOf(seriesByKey[fxKey]), sg.date, mo, today, 'pct') : null;
+          if (!rr || rr.pending || (fx && fx.pending)) return { text: rr?.pending || fx?.pending ? '진행 중' : '-' };
+          if (mo === 12) twelve.push(fx && !fx.pending ? fx.value : null);
+          return { text: `${fx && !fx.pending ? `헤알·원 ${fx.value >= 0 ? '+' : ''}${fx.value.toFixed(1)}% · ` : ''}10년 ${rr.value >= 0 ? '+' : ''}${rr.value.toFixed(2)}%p`, v: fx && !fx.pending ? fx.value : null };
+        });
+        rows.push({ def, sg, cells });
+      }
+      summary.push({ def, ...summarizeSignals(twelve), unit: def.rep ? '12개월 총수익' : def.key === 'brBond' ? '12개월 헤알·원' : null });
+    }
+    rows.sort((a, b) => (a.sg.date < b.sg.date ? 1 : -1));
+    return { rows, summary };
+  }, [btOpen, btSignals, btPrices, seriesByKey, today]);
+  // 차트 세로 점선 — 그 차트에 해당하는 자산군의 과거 '매수 적기' 신호일(마우스를 올리면 이름)
+  const signalLines = (keys, yAxisId, fromDate) => keys.flatMap(k => {
+    const def = RATE_BT_ASSETS.find(d => d.key === k);
+    return (btSignals[k] || []).filter(sg => !fromDate || sg.date >= fromDate).map(sg => (
+      <ReferenceLine key={`sig-${k}-${sg.date}`} x={sg.date} {...(yAxisId ? { yAxisId } : {})} ifOverflow="hidden"
+        shape={(p) => (
+          <g>
+            <title>{`${def.label} 매수 적기 신호 (${sg.date})`}</title>
+            <line x1={p.x1} y1={p.y1} x2={p.x2} y2={p.y2} stroke={def.color} strokeDasharray="3 3" strokeOpacity={0.85} />
+            <line x1={p.x1} y1={p.y1} x2={p.x2} y2={p.y2} stroke="transparent" strokeWidth={8} />
+          </g>
+        )} />
+    ));
+  });
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
   const brBondPrice = brlBondPriceAt(metrics.br10y?.current);
   const brBondKrw = brBondPrice != null && Number.isFinite(metrics.brlkrw?.current) ? brBondPrice * metrics.brlkrw.current : null;
   const [openSignal, setOpenSignal] = useState(null);
@@ -613,6 +705,81 @@ export default function RateWindow() {
                 </tbody>
               </table>
             </div>
+
+            {/* 상태 변경 기록 — 벨 알림 대신(알림 최소화 정책). 창을 열 때 바뀐 자산군만 남는다 */}
+            <div className={`mt-2 rounded border ${t.border} px-2`}>
+              <button onClick={() => setHistoryOpen(o => !o)} className="w-full flex items-baseline gap-2 py-1.5 text-left">
+                <span className="text-[12px] font-bold">{historyOpen ? '▾' : '▸'} 상태 변경 기록</span>
+                <span className={`text-[10px] ${t.sub}`}>최근 20건 · 전체 {eff.history.length}건(최대 200)</span>
+              </button>
+              {historyOpen && (
+                <div className="pb-2 text-[11px] flex flex-col gap-0.5">
+                  {eff.history.length === 0 && <div className={t.sub}>아직 기록이 없습니다 — 창을 열 때 상태가 바뀐 자산군이 기록됩니다</div>}
+                  {eff.history.slice(-20).reverse().map((e, i) => (
+                    <div key={`${e.date}-${e.key}-${i}`} className="flex flex-wrap gap-x-2">
+                      <span className={`tabular-nums ${t.sub}`}>{e.date}</span>
+                      <span className="font-bold">{e.label}</span>
+                      <span className={e.to.endsWith(':warn') ? 'text-red-400' : ''}>{stateText(e.from)} → {stateText(e.to)}</span>
+                      <span className={t.sub}>{e.rationale}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* 과거 신호 검증 — 펼칠 때만 대표 종목 종가·배당을 받아 성과를 계산한다 */}
+          <section className={`rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
+            <button onClick={() => setBtOpen(o => !o)} className="w-full flex flex-wrap items-baseline gap-2 text-left">
+              <span className="text-[13px] font-bold">{btOpen ? '▾' : '▸'} 과거 신호 검증</span>
+              <span className={`text-[10px] ${t.sub}`}>'매수 적기'에 새로 들어간 날 · 같은 자산군은 20거래일 간격</span>
+            </button>
+            {btOpen && btTable && (
+              <div className="mt-2 flex flex-col gap-2">
+                <div className="text-[11px] text-amber-400">과거 성과는 미래를 보장하지 않습니다. 신호 수가 적으면 우연일 수 있습니다.</div>
+                <div className={`text-[11px] ${t.sub}`}>
+                  금리 지표 조건만으로 다시 계산했습니다(종목 배당률·주당 장부가/순자산·정치 메모 조건은 빼고 계산). 지금 받아 둔 과거치 범위 안에서만 계산하며, 차트 기간을 10년으로 늘리면 더 길게 봅니다.
+                  총수익 = 주가 변화 + 그 기간 배당 합계(재투자 없음).
+                </div>
+                <div className="flex flex-col gap-0.5 text-[11px]">
+                  {btTable.summary.map(sm => (
+                    <div key={sm.def.key}>
+                      <span className="font-bold" style={{ color: sm.def.color }}>{sm.def.label}</span>
+                      <span className={t.sub}> — 신호 {sm.count}건{sm.unit ? ` · ${sm.unit} 평균 ${sm.avg == null ? '-' : `${sm.avg >= 0 ? '+' : ''}${sm.avg.toFixed(1)}%`} · 플러스 ${sm.winRate == null ? '-' : `${sm.winRate.toFixed(0)}%`}(끝난 ${sm.done}건)` : ' · 대표 종목 없음(10년 금리 변화만)'}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px] border-collapse">
+                    <thead>
+                      <tr className={`text-[11px] ${t.sub} border-b ${t.border}`}>
+                        <th className="text-left font-normal py-1 pr-2">신호일</th>
+                        <th className="text-left font-normal py-1 pr-2">자산군</th>
+                        <th className="text-left font-normal py-1 pr-2">그날 핵심 지표</th>
+                        {BT_HORIZONS.map(mo => <th key={mo} className="text-right font-normal py-1 pr-2">{mo}개월</th>)}
+                        <th className="text-left font-normal py-1">비고</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {btTable.rows.length === 0 && (
+                        <tr><td colSpan={4 + BT_HORIZONS.length} className={`py-2 ${t.sub}`}>받아 둔 과거치 안에서 '매수 적기' 신호가 없습니다</td></tr>
+                      )}
+                      {btTable.rows.map(({ def, sg, cells }) => (
+                        <tr key={`${def.key}-${sg.date}`} className={`border-b ${t.border}`}>
+                          <td className="py-1 pr-2 tabular-nums whitespace-nowrap">{sg.date}</td>
+                          <td className="py-1 pr-2 whitespace-nowrap" style={{ color: def.color }}>{def.label}{def.rep ? <span className={`ml-1 text-[10px] ${t.sub}`}>{def.rep}</span> : null}</td>
+                          <td className="py-1 pr-2 whitespace-nowrap tabular-nums">{def.core.map(k => `${RATE_DEFS[k]?.label || k} ${fmtVal(sg.core[k], RATE_DEFS[k]?.unit ?? '%')}`).join(' · ')}</td>
+                          {cells.map((c, i) => (
+                            <td key={i} className={`py-1 pr-2 text-right whitespace-nowrap tabular-nums ${c.v == null ? t.sub : c.v >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{c.text}</td>
+                          ))}
+                          <td className={`py-1 text-[11px] ${t.sub}`}>{def.keys.some(k => SHORT_DATA_KEYS.includes(k)) ? '자료 3년' : ''}{def.rep && btPrices[def.rep]?.status === 'fail' ? ' 종가를 받지 못함' : ''}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* ④ 금리 차트 */}
@@ -642,6 +809,7 @@ export default function RateWindow() {
                   {['fedRate', 'us2y', 'us10y', 'us30y'].map(k => (
                     <Line key={k} isAnimationActive={false} type="monotone" dataKey={k} name={RATE_DEFS[k].label} stroke={COLORS[k]} dot={false} strokeWidth={1.5} connectNulls />
                   ))}
+                  {signalLines(['longBond', 'equityReit'], null, fromChart)}
                 </ComposedChart>
               </ChartBox>
 
@@ -674,6 +842,7 @@ export default function RateWindow() {
                   {hs.low52 != null && <ReferenceLine yAxisId="right" y={hs.low52} stroke={COLORS.hySpread} strokeOpacity={0.6} strokeDasharray="4 4" ifOverflow="extendDomain" />}
                   <Line yAxisId="left" isAnimationActive={false} type="monotone" dataKey="hyYield" name={RATE_DEFS.hyYield.label} stroke={COLORS.hyYield} dot={false} strokeWidth={1.5} connectNulls />
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="hySpread" name={RATE_DEFS.hySpread.label} stroke={COLORS.hySpread} dot={false} strokeWidth={1.5} connectNulls />
+                  {signalLines(['highYield', 'bdc'], 'left', fromChart)}
                 </ComposedChart>
               </ChartBox>
 
@@ -687,6 +856,7 @@ export default function RateWindow() {
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <Line yAxisId="left" isAnimationActive={false} type="monotone" dataKey="mbsSpread" name={RATE_DEFS.mbsSpread.label} stroke={COLORS.mbsSpread} dot={false} strokeWidth={1.5} connectNulls />
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="move" name={RATE_DEFS.move.label} stroke={COLORS.move} dot={false} strokeWidth={1.5} connectNulls />
+                  {signalLines(['mortgageReit'], 'left', fromChart)}
                 </ComposedChart>
               </ChartBox>
 
@@ -702,6 +872,7 @@ export default function RateWindow() {
                     <Line key={k} yAxisId="left" isAnimationActive={false} type="monotone" dataKey={k} name={RATE_DEFS[k].label} stroke={COLORS[k]} dot={false} strokeWidth={1.5} connectNulls />
                   ))}
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="brlkrw" name={RATE_DEFS.brlkrw.label} stroke={COLORS.brlkrw} strokeDasharray="4 3" dot={false} strokeWidth={1.2} connectNulls />
+                  {signalLines(['brBond'], 'left', fromChart)}
                 </ComposedChart>
               </ChartBox>
 
@@ -716,6 +887,7 @@ export default function RateWindow() {
                     <Line key={k} isAnimationActive={false} type="monotone" dataKey={k} name={RATE_DEFS[k].label} stroke={COLORS[k]} dot={false} strokeWidth={1.5} connectNulls />
                   ))}
                   <Line isAnimationActive={false} type="monotone" dataKey="us10y" name={RATE_DEFS.us10y.label} stroke={t.axis} strokeDasharray="4 3" dot={false} strokeWidth={1.2} connectNulls />
+                  {signalLines(['krBond'], null, fromChart)}
                 </ComposedChart>
               </ChartBox>
             </div>
@@ -810,7 +982,7 @@ export default function RateWindow() {
         </main>
 
         {/* ⑥ 설정 — 기준치·수동값·브라질 메모(앱 탭이 Drive에 저장) */}
-        <section className={`mx-4 mb-16 rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
+        <section className={`mx-4 mb-3 rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
           <div className="flex flex-wrap items-baseline gap-2 mb-1">
             <h2 className="text-[13px] font-bold">설정</h2>
             <span className={`text-[10px] ${t.sub}`}>저장하면 ③ 판정과 ⑤ 표가 바로 다시 계산됩니다</span>
@@ -832,6 +1004,21 @@ export default function RateWindow() {
                 onSave={saveSettings}
               />
             )}
+        </section>
+
+        {/* 용어 풀이 — 지표 33개 · 자산군 7개 */}
+        <section className={`mx-4 mb-16 rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
+          <button onClick={() => setGlossaryOpen(o => !o)} className="w-full text-left">
+            <span className="text-[13px] font-bold">{glossaryOpen ? '▾' : '▸'} 용어 풀이</span>
+          </button>
+          {glossaryOpen && (
+            <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2 text-[11px]">
+              <div className="sm:col-span-2 font-bold mt-1">자산군</div>
+              {RATE_GLOSSARY_ASSETS.map(g => <div key={g.key}><span className="font-bold">{g.label}</span> <span className={t.sub}>— {g.text}</span></div>)}
+              <div className="sm:col-span-2 font-bold mt-2">지표</div>
+              {RATE_GLOSSARY_INDICATORS.map(g => <div key={g.key}><span className="font-bold">{g.label}</span> <span className={t.sub}>— {g.text}</span></div>)}
+            </div>
+          )}
         </section>
 
         {/* ⑥ 하단 고정 문구 */}

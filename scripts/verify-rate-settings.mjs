@@ -72,6 +72,24 @@ if (X && S && AS) {
   })(), [{ withholdingPct: 10, tlt: { pctMin: 80 } }, ['AGNC', 'MAIN'], 1, '2026-10-18T00:00:00.000Z']);
   eq('#16b 손상 파일은 기본값으로', JSON.stringify(applySettingsFile({ rules: 'x', manual: 5, brazilNotes: 'y' }, RATE_RULES, MANUAL_INPUTS).rules) === before, true);
 
+  console.log('\n── 파트②-b 상태 변경 기록(9-B) ──');
+  const { appendStateChanges, normalizeHistory, HISTORY_MAX } = X;
+  const sg = (key, state, warning = null) => ({ key, label: key, state, warning, rationale: `${key} 근거` });
+  const r1 = appendStateChanges([], [sg('a', 'wait'), sg('b', 'watch')], '2026-10-01');
+  eq('#20 첫 기록 — 이전 없음(null)', r1.history.map(e => [e.date, e.key, e.from, e.to]), [['2026-10-01', 'a', null, 'wait'], ['2026-10-01', 'b', null, 'watch']]);
+  const r2 = appendStateChanges(r1.history, [sg('a', 'wait'), sg('b', 'watch')], '2026-10-02');
+  ok('#21 바뀐 게 없으면 같은 배열(저장 안 함)', r2.changed === false && r2.history === r1.history);
+  const r3 = appendStateChanges(r1.history, [sg('a', 'buy'), sg('b', 'watch', '신용 불안')], '2026-10-03');
+  eq('#22 바뀐 것만 추가 · 경고 진입도 기록', r3.history.slice(2).map(e => [e.key, e.from, e.to]), [['a', 'wait', 'buy'], ['b', 'watch', 'watch:warn']]);
+  const r4 = appendStateChanges(r3.history, [sg('a', 'watch'), sg('b', 'watch')], '2026-10-03');
+  eq('#23 같은 날 같은 자산군은 1건 — 그날 처음 상태 → 지금 / 처음 상태로 돌아오면 그날 기록 없음', r4.history.slice(2).map(e => [e.key, e.from, e.to]), [['a', 'wait', 'watch']]);
+  let big = [];
+  for (let i = 0; i < 250; i++) big = appendStateChanges(big, [sg('a', i % 2 ? 'buy' : 'wait')], `2025-${String(1 + Math.floor(i / 28)).padStart(2, '0')}-${String(1 + (i % 28)).padStart(2, '0')}`).history;
+  ok('#24 최근 200건까지만 — 오래된 것부터 버린다', big.length === HISTORY_MAX && big[0].date > '2025-01-28' && big[big.length - 1].date === '2025-09-26');
+  eq('#25 손상 기록은 버린다', normalizeHistory([{ date: '2026-10-01', key: 'a', to: 'buy' }, { date: 'x', key: 'a', to: 'buy' }, { date: '2026-10-02', key: 'a', to: 'oops' }]).length, 1);
+  ok('#26 저장 파일에 history가 실린다', buildSettingsFile(RATE_RULES, RATE_RULES, MANUAL_INPUTS, [], '2026-10-18T00:00:00Z', r3.history).history.length === 4
+    && applySettingsFile({ history: r3.history }, RATE_RULES, MANUAL_INPUTS).history.length === 4);
+
   console.log('\n── 파트③ 판정에 반영 ──');
   const met = (o) => ({ current: 1, change1m: 0, high52: 9, position52: 10, pct3y: 10, turnedDown: false, ...o });
   const all = { us10y: met({ pct3y: 65 }) };
@@ -91,7 +109,7 @@ console.log('\n── 파트④ 배선 가드 ──');
   ok('#G2 순수 모듈은 import 0건', !/^\s*import\s/m.test(RS));
   const h = (APP.match(/if \(d\.type === 'rate:settingsSave'\) \{[\s\S]*?\n {6}\}/) || [''])[0];
   ok('#G3 앱 탭이 saveDriveFile로 사용자 폴더에 저장한다(버전 백업 없음)', /await saveDriveFile\(token, folderId, DRIVE_FILES\.RATE_SETTINGS, file\);/.test(h) && !/saveVersionedBackup/.test(h));
-  ok('#G4 창이 보낸 값을 앱 탭에서 다시 병합·검증한다', /const merged = applySettingsFile\(d\.data, RATE_RULES, MANUAL_INPUTS\);/.test(h) && /buildSettingsFile\(RATE_RULES, merged\.rules, merged\.manual, merged\.notes,/.test(h));
+  ok('#G4 창이 보낸 값을 앱 탭에서 다시 병합·검증한다(상태 변경 기록 포함)', /const merged = applySettingsFile\(d\.data, RATE_RULES, MANUAL_INPUTS\);/.test(h) && /buildSettingsFile\(RATE_RULES, merged\.rules, merged\.manual, merged\.notes, new Date\(\)\.toISOString\(\), merged\.history\);/.test(h));
   ok('#G5 관리자 접속 중·권한 없음·토큰 없음이면 저장하지 않는다', /const canWrite = !!rateAccessRef\.current && !!driveTokenRef\.current && !adminViewingAsRef\.current;/.test(APP) && /if \(!canWrite\) return reply\(\{ type: 'rate:settingsSaved'/.test(h));
   ok('#G6 입양된 창만 설정을 읽고 쓴다', /if \(rateWinRef\.current !== e\.source\) return;\s+\/\/ 입양된 창만/.test(APP));
   ok('#G7 불러오기는 loadDriveFile(파일 없으면 기본값)', /await loadDriveFile\(token, folderId, DRIVE_FILES\.RATE_SETTINGS\)/.test(APP) && /applySettingsFile\(settingsFile, RATE_RULES, MANUAL_INPUTS\)/.test(RW));

@@ -27,6 +27,9 @@ export const RATE_RULES = {
 // 판정에 실제로 쓰는 기준치 — 기본은 RATE_RULES. evaluateRateSignals(…, rules)가 설정 화면의 값(rateSettings.mergeRules)으로
 // 잠시 바꿔 끼운다(동기 실행이라 다른 호출과 섞이지 않는다). 개별 eval 함수를 직접 부르면 기본값이다.
 let R: typeof RATE_RULES = RATE_RULES;
+// 과거 신호 검증(9-B) — 금리 지표 조건만 쓴다. 종목·수동값·정치 메모 조건은 '제외'(pending)로 두고 막지 않는다.
+let RATE_ONLY = false;
+const EXCLUDED = '과거 검증에서 제외';
 
 export type SignalState = 'wait' | 'watch' | 'buy';
 export const SIGNAL_STATE_LABEL: Record<SignalState, string> = { wait: '대기', watch: '매수 관심', buy: '매수 적기' };
@@ -123,7 +126,7 @@ export function evalMortgageReit(all: Record<string, MetricsLike>, assets?: Asse
   const c3 = num(v.current) && v.turnedDown;
   const ag = A(assets, 'AGNC');
   const pb = ag ? ag.pb : null;
-  const pbInput = !ag || !ag.manualSet; // 주당 장부가(수동값)가 비어 있다 → '입력 필요'(n/m 제외)
+  const pbInput = RATE_ONLY || !ag || !ag.manualSet; // 주당 장부가(수동값)가 비어 있다 → '입력 필요'(n/m 제외)
   const c4 = num(pb) && pb <= r.pbMax + 1e-9;
   const pbHot = num(pb) && pb >= r.pbWarn - 1e-9;
   const conditions: SignalCondition[] = [
@@ -152,11 +155,12 @@ export function evalEquityReit(all: Record<string, MetricsLike>, assets?: Assets
   const c2 = num(a.current) && a.turnedDown;
   const o = A(assets, 'O');
   const oy = o ? o.yield12 : null;
-  const c3 = num(oy) && oy >= r.oYieldMin - 1e-9;
+  const c3 = RATE_ONLY || (num(oy) && oy >= r.oYieldMin - 1e-9);
+  const oLabel = `리얼티인컴(O) 12개월 배당률 ${r.oYieldMin.toFixed(1)}% 이상`;
   const conditions: SignalCondition[] = [
     { label: `10년 금리가 최근 3년 중 ${r.pctMin} 이상`, met: !!c1, detail: `3년 ${rank(a.pct3y)}` },
     { label: '10년 금리가 최근 20일 최고에서 꺾여 내려옴', met: !!c2, detail: a.turnedDown ? '꺾임' : '꺾임 없음' },
-    { label: `리얼티인컴(O) 12개월 배당률 ${r.oYieldMin.toFixed(1)}% 이상`, met: !!c3, detail: pct(oy) },
+    RATE_ONLY ? pending(oLabel, EXCLUDED) : { label: oLabel, met: !!c3, detail: pct(oy) },
   ];
   const state: SignalState = c1 && c2 && c3 ? 'buy' : c1 ? 'watch' : 'wait';
   return finish({
@@ -174,11 +178,12 @@ export function evalBdc(all: Record<string, MetricsLike>, assets?: Assets): Asse
   const c2 = num(s.change1m) && s.change1m < r.hyChangeMaxPp && num(s.pct3y) && s.pct3y < r.hyPctMax;
   const mn = A(assets, 'MAIN');
   const dd = mn ? mn.drawdown52 : null, pn = mn ? mn.pnav : null;
-  const c3 = (num(dd) && dd <= r.mainDrawdownMax + 1e-9) || (num(pn) && pn <= r.mainPnavMax + 1e-9);
+  const c3 = RATE_ONLY || (num(dd) && dd <= r.mainDrawdownMax + 1e-9) || (num(pn) && pn <= r.mainPnavMax + 1e-9);
+  const mainLabel = `MAIN 52주 최고 대비 ${r.mainDrawdownMax}% 이하 또는 주가 ÷ 순자산 ${r.mainPnavMax} 이하`;
   const conditions: SignalCondition[] = [
     { label: `기준금리가 최근 3년 중 ${r.fedPctMin} 이상`, met: !!c1, detail: `${pct(f.current)} · 3년 ${rank(f.pct3y)}` },
     { label: `하이일드 스프레드 1개월 +${r.hyChangeMaxPp.toFixed(1)}%p 미만 · 3년 ${r.hyPctMax} 미만`, met: !!c2, detail: `1개월 ${pp(s.change1m)} · 3년 ${rank(s.pct3y)}` },
-    { label: `MAIN 52주 최고 대비 ${r.mainDrawdownMax}% 이하 또는 주가 ÷ 순자산 ${r.mainPnavMax} 이하`, met: !!c3,
+    RATE_ONLY ? pending(mainLabel, EXCLUDED) : { label: mainLabel, met: !!c3,
       detail: `52주 최고 대비 ${num(dd) ? `${dd.toFixed(1)}%` : '자료 없음'} · 순자산 배율 ${num(pn) ? `${ratio(pn)}배` : !mn || !mn.manualSet ? '순자산 입력 필요' : '자료 없음'}` },
   ];
   return finish({
@@ -228,7 +233,7 @@ export function evalBrazilBond(all: Record<string, MetricsLike>, extras?: Brazil
   const from = today ? new Date(Date.UTC(+today.slice(0, 4), +today.slice(5, 7) - 1, +today.slice(8, 10)) - r.noteDays * 86400000).toISOString().slice(0, 10) : '';
   const notes = Array.isArray(x.notes) ? x.notes : [];
   const recentBad = notes.filter(n => n && n.impact === '불리' && (!from || (n.date >= from && n.date <= today)));
-  const c6 = recentBad.length === 0;
+  const c6 = RATE_ONLY || recentBad.length === 0;
   const conditions: SignalCondition[] = [
     { label: `브라질 10년 금리가 최근 3년 중 ${r.pctMin} 이상`, met: !!c1, detail: `${pct(t10.current)} · 3년 ${rank(t10.pct3y)}` },
     { label: `실질금리(10년 − 기대물가) ${r.realMinPp.toFixed(1)}%p 이상`, met: !!c2, detail: pp(realNow) },
@@ -236,9 +241,11 @@ export function evalBrazilBond(all: Record<string, MetricsLike>, extras?: Brazil
     { label: `Selic이 최근 3년 중 ${r.selicPctMin} 이상이고 ${r.selicCalmDays}일간 인상 없음`, met: !!c4,
       detail: `3년 ${rank(se.pct3y)} · ${x.selicRose60d === true ? '최근 인상 있음' : x.selicRose60d === false ? '인상 없음' : '자료 없음'}` },
     { label: `헤알·원이 52주 범위 ${r.brlkrwPosMax}% 이하(헤알이 쌈)`, met: !!c5, detail: `연중 위치 ${rank(fx.position52)}%` },
-    { label: `정치 메모 최근 ${r.noteDays}일에 '불리' 없음`, met: c6, detail: notes.length ? `불리 ${recentBad.length}건` : '등록된 메모 없음' },
+    RATE_ONLY ? pending(`정치 메모 최근 ${r.noteDays}일에 '불리' 없음`, EXCLUDED)
+      : { label: `정치 메모 최근 ${r.noteDays}일에 '불리' 없음`, met: c6, detail: notes.length ? `불리 ${recentBad.length}건` : '등록된 메모 없음' },
   ];
-  const score = conditions.filter(c => c.met).length;
+  // 점수 = 충족 개수. 과거 검증(RATE_ONLY)에서 빠진 ⑥은 충족으로 친다(막지 않는다 — 금리 조건 5개가 다 맞아야 적기)
+  const score = conditions.filter(c => c.met).length + (RATE_ONLY ? 1 : 0);
   const fxPrev = num(fx.current) && num(fx.change1m) ? fx.current - fx.change1m : null;
   const fx1mPct = num(fxPrev) && fxPrev > 0 ? (fx.current / fxPrev - 1) * 100 : null;
   const warns: string[] = [];
@@ -254,6 +261,27 @@ export function evalBrazilBond(all: Record<string, MetricsLike>, extras?: Brazil
     rationale: `10년 ${pct(t10.current)} · 실질 ${pp(realNow)} · Selic ${pct(se.current)} · 점수 ${score}/6`,
     yields,
   });
+}
+
+// 자산군 하나만(과거 신호 검증용) — opts.rateOnly면 종목·수동값·정치 메모 조건을 빼고(막지 않고) 판정한다
+export const RATE_SIGNAL_KEYS = ['longBond', 'highYield', 'mortgageReit', 'equityReit', 'bdc', 'krBond', 'brBond'];
+export function evaluateOne(key: string, all: Record<string, MetricsLike> | null | undefined, extras?: BrazilExtras | null, rules?: typeof RATE_RULES | null, opts?: { rateOnly?: boolean } | null): AssetSignal | null {
+  const m = all || {};
+  const prevR = R, prevO = RATE_ONLY;
+  R = rules || RATE_RULES;
+  RATE_ONLY = !!opts?.rateOnly;
+  try {
+    switch (key) {
+      case 'longBond': return evalLongBond(m);
+      case 'highYield': return evalHighYield(m);
+      case 'mortgageReit': return evalMortgageReit(m);
+      case 'equityReit': return evalEquityReit(m);
+      case 'bdc': return evalBdc(m);
+      case 'krBond': return evalKrBond(m);
+      case 'brBond': return evalBrazilBond(m, extras);
+      default: return null;
+    }
+  } finally { R = prevR; RATE_ONLY = prevO; }
 }
 
 // 7개 자산군 — 충족 비율 내림차순(같으면 정의 순서)

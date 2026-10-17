@@ -1,0 +1,48 @@
+// 금리 모니터링 용어 풀이(9-B) — 화면 맨 아래 접기 패널. import 0건(검증이 키 개수를 센다).
+// 지표 키는 indicatorCoverage.INDICATOR_COVERAGE_KEYS(33개)와 같아야 한다(verify:rate-signals #G15).
+
+export const RATE_GLOSSARY_INDICATORS: Array<{ key: string; label: string; text: string }> = [
+  { key: 'fedRate', label: '미국 기준금리', text: '미국 중앙은행(연준)이 정하는 정책금리. 모든 달러 금리의 출발점입니다.' },
+  { key: 'us3m', label: '미국 3개월', text: '3개월짜리 미국 국채 금리. 기준금리를 거의 그대로 따라갑니다.' },
+  { key: 'us2y', label: '미국 2년', text: '앞으로 2년 동안 기준금리가 어떻게 움직일지에 대한 시장의 예상이 담깁니다.' },
+  { key: 'us10y', label: '미국 10년', text: '세계 금리의 기준. 주택담보대출·회사채 금리가 이 값을 따라 움직입니다.' },
+  { key: 'us30y', label: '미국 30년', text: '아주 긴 기간의 물가·재정 걱정이 반영되는 금리입니다.' },
+  { key: 't10y2y', label: '10년−2년', text: '장기 금리에서 단기 금리를 뺀 값. 0 아래(역전)면 경기 둔화 신호로 읽습니다.' },
+  { key: 't10y3m', label: '10년−3개월', text: '연준이 가장 주목하는 금리차. 역전이 길어지면 경기 침체가 자주 뒤따랐습니다.' },
+  { key: 'hyYield', label: '하이일드 금리', text: '신용등급이 낮은 회사들이 돈을 빌릴 때 내는 평균 금리입니다.' },
+  { key: 'hySpread', label: '하이일드 스프레드', text: '하이일드 금리 − 국채 금리. 부도 걱정이 커질수록 벌어집니다.' },
+  { key: 'mort30', label: '30년 모기지', text: '미국 30년 고정 주택담보대출 금리(매주 목요일 발표).' },
+  { key: 'mbsSpread', label: 'MBS 스프레드', text: '모기지 금리 − 10년 국채 금리. 커지면 주택담보증권이 싸졌다는 뜻입니다.' },
+  { key: 'move', label: 'MOVE', text: '미국 국채 금리가 얼마나 크게 출렁일지 시장이 예상하는 지수(채권판 VIX).' },
+  { key: 'krBase', label: '한국 기준금리', text: '한국은행이 정하는 정책금리.' },
+  { key: 'kr3y', label: '국고채 3년', text: '3년짜리 한국 국채 금리. 기준금리 전망을 빠르게 반영합니다.' },
+  { key: 'kr10y', label: '한국 10년', text: '10년짜리 한국 국채 금리. 국내 장기 금리의 기준입니다.' },
+  { key: 'krUs10y', label: '한미 10년 금리차', text: '한국 10년 − 미국 10년. 음수면 미국 금리가 더 높아 원화 약세 압력이 됩니다.' },
+  { key: 'brSelic', label: '브라질 기준금리(Selic)', text: '브라질 중앙은행이 정하는 정책금리 목표.' },
+  { key: 'brIpca', label: '브라질 물가', text: '최근 12개월 브라질 소비자물가 상승률(IPCA).' },
+  { key: 'brExp12', label: '브라질 기대물가', text: '시장 전문가들이 예상하는 1년 뒤 물가상승률(중앙은행 설문 중앙값).' },
+  { key: 'br10y', label: '브라질 10년', text: '10년짜리 브라질 국채 금리.' },
+  { key: 'brReal', label: '브라질 실질금리', text: '10년 금리 − 기대물가. 물가를 뺀 진짜 이자입니다.' },
+  { key: 'brlusd', label: '헤알·달러', text: '1달러가 몇 헤알인지. 오르면 헤알이 약해진 것입니다.' },
+  { key: 'brlkrw', label: '헤알·원', text: '1헤알이 몇 원인지. 낮을수록 원화로 헤알 자산을 사기 유리합니다.' },
+  { key: 'usdkrw', label: '원·달러 환율', text: '1달러가 몇 원인지. 오르면 원화가 약해진 것입니다.' },
+  { key: 'dxy', label: '달러 지수(DXY)', text: '유로·엔 등 주요 6개 통화 대비 달러의 힘.' },
+  { key: 'vix', label: 'VIX', text: '미국 주식시장이 앞으로 한 달 얼마나 출렁일지 예상하는 공포 지수.' },
+  { key: 'goldIntl', label: '국제 금', text: '국제 금 선물 가격(달러, 1온스).' },
+  { key: 'goldKr', label: '국내 금', text: '국내 금 현물 가격(원, 1그램).' },
+  { key: 'btc', label: '비트코인', text: '비트코인 달러 가격.' },
+  { key: 'eth', label: '이더리움', text: '이더리움 달러 가격.' },
+  { key: 'kospi', label: 'KOSPI', text: '한국 유가증권시장 대표 주가지수.' },
+  { key: 'sp500', label: 'S&P500', text: '미국 대형주 500개로 만든 대표 주가지수.' },
+  { key: 'nasdaq', label: 'Nasdaq100', text: '미국 나스닥 시장 대형 비금융 기업 100개 지수.' },
+];
+
+export const RATE_GLOSSARY_ASSETS: Array<{ key: string; label: string; text: string }> = [
+  { key: 'longBond', label: '미국 장기채', text: '만기가 20~30년인 미국 국채(예: TLT). 금리가 내리면 값이 크게 오릅니다.' },
+  { key: 'highYield', label: '하이일드 ETF', text: '신용등급이 낮은 회사채를 모은 펀드(예: HYG). 이자는 높지만 경기가 나빠지면 손실이 큽니다.' },
+  { key: 'mortgageReit', label: '모기지 리츠', text: '주택담보대출 증권에 투자해 이자 차익을 배당으로 나눠 주는 회사(예: AGNC). 금리 변동에 민감합니다.' },
+  { key: 'equityReit', label: '실물 리츠', text: '건물·창고·데이터센터를 가지고 임대료를 배당으로 나눠 주는 회사(예: 리얼티인컴 O).' },
+  { key: 'bdc', label: 'BDC', text: '은행 대신 중소기업에 돈을 빌려주고 이자를 배당으로 나눠 주는 상장 회사(예: MAIN).' },
+  { key: 'krBond', label: '한국 채권(비교용)', text: '한국 국고채. 미국 자산과 금리 수준을 비교하기 위한 참고 줄입니다.' },
+  { key: 'brBond', label: '브라질 국채', text: '헤알화로 발행된 브라질 국채. 이자가 높지만 헤알 환율 변동을 함께 떠안습니다.' },
+];

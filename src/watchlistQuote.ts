@@ -237,12 +237,13 @@ export async function fetchWatchDividend(market: WatchMarket, code: string): Pro
 // 미국 종목 배당 이력 전체(최근 2년, 날짜 오름차순) — 금리 모니터링 ⑤가 12개월 합계·1년 전 회차 비교에 쓴다.
 // fetchWatchDividend(최근 1회분)는 그대로 둔다. 결과는 호출한 창 메모리에만 둔다(저장 금지).
 //   { status:'ok', events } / { status:'none' } / null(모든 경로 실패)
-export async function fetchUsDividendEvents(code: string): Promise<any> {
+// range — 기본 '2y'(⑤ 표). 과거 신호 검증은 '10y'로 더 길게 받는다.
+export async function fetchUsDividendEvents(code: string, range = '2y'): Promise<any> {
   const t = (code || '').trim().toUpperCase();
   if (!t) return null;
   const base = t.includes('.') ? t.split('.')[0] : t;
   try {
-    return await firstPicked(`https://query1.finance.yahoo.com/v8/finance/chart/${base}?events=div&interval=1d&range=2y`, pickYahooDividendEvents, 10000);
+    return await firstPicked(`https://query1.finance.yahoo.com/v8/finance/chart/${base}?events=div&interval=1d&range=${encodeURIComponent(range)}`, pickYahooDividendEvents, 10000);
   } catch {
     return null;
   }

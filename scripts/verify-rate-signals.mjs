@@ -131,6 +131,69 @@ if (S) {
   ok('#21 원천징수율 15%', RATE_RULES.withholdingPct === 15);
 }
 
+let B = null, RM = null;
+if (S) {
+  try { B = await import(pathToFileURL(join(ROOT, 'src/rateBacktest.ts')).href); RM = await import(pathToFileURL(join(ROOT, 'src/rateMetrics.ts')).href); }
+  catch (e) { fail++; console.log(`  ✗ rateBacktest/rateMetrics를 불러오지 못했습니다 — ${e && (e.code || e.message)}`); }
+}
+if (S && B && RM) {
+  console.log('\n── 파트②-b 과거 신호 검증(9-B) ──');
+  const { evaluateOne } = S;
+  const { metricsAt, pointsOf, extractSignals, performanceAfter, changeAfter, summarizeSignals, addMonthsIso, historyStates, RATE_BT_ASSETS, BT_MIN_GAP } = B;
+  const m = (o = {}) => ({ current: 1, change1m: 0, high52: 9, position52: 10, pct3y: 10, turnedDown: false, ...o });
+  // 금리 지표만 — 종목·수동값·메모 조건은 빼고(막지 않고) 판정한다
+  eq('#40 실물 리츠 rateOnly — O 배당률 없이 ①②면 적기 / 평소엔 관심', [evaluateOne('equityReit', { us10y: m({ pct3y: 72, turnedDown: true }) }, null, null, { rateOnly: true }).state,
+    evaluateOne('equityReit', { us10y: m({ pct3y: 72, turnedDown: true }) }).state], ['buy', 'watch']);
+  eq('#41 BDC rateOnly — MAIN 조건 없이 ①②면 적기', evaluateOne('bdc', { fedRate: m({ pct3y: 60 }), hySpread: m({ change1m: 0, pct3y: 50 }) }, null, null, { rateOnly: true }).state, 'buy');
+  const brAll = { br10y: m({ current: 13.9, pct3y: 80 }), brReal: m({ current: 9 }), brExp12: m({ current: 4.5 }), brSelic: m({ current: 15, pct3y: 85 }), brlkrw: m({ current: 250, change1m: 0, position52: 20 }) };
+  const brEx = { exp12Change3m: 0, selicRose60d: false, notes: [{ date: '2026-10-01', impact: '불리' }], today: '2026-10-16' };
+  eq('#41b 브라질 rateOnly — 정치 메모는 빼고 금리 조건 5개로 적기', [evaluateOne('brBond', brAll, brEx, null, { rateOnly: true }).state, evaluateOne('brBond', brAll, brEx).state], ['buy', 'buy']);
+  evaluateOne('equityReit', { us10y: m({ pct3y: 72, turnedDown: true }) }, null, null, { rateOnly: true });
+  ok('#41c rateOnly는 호출이 끝나면 풀린다(개별 판정 함수는 다시 평소대로)', S.evalEquityReit({ us10y: m({ pct3y: 72, turnedDown: true }) }).state === 'watch');
+  // metricsAt — rateMetrics.computeRateMetrics와 같은 값(드리프트 가드)
+  const ser = {}; let v = 4; let seed = 7;
+  for (let d = Date.UTC(2022, 0, 3); d <= Date.UTC(2026, 9, 16); d += 86400000) { seed = (seed * 16807) % 2147483647; v += (seed / 2147483647 - 0.5) * 0.06; if (new Date(d).getUTCDay() % 6) ser[new Date(d).toISOString().slice(0, 10)] = Math.round(v * 1000) / 1000; }
+  const pts = pointsOf(ser);
+  const bser = { '2025-10-16': 9, '2025-10-17': 5, '2026-06-01': 4, '2026-10-16': 4.5 };
+  const bpts = pointsOf(bser), bm = metricsAt(bpts, bpts.length - 1), bc = RM.computeRateMetrics(bser);
+  ok('#42b 경계 — 정확히 365일 전 값은 52주에서 빠지고 3년에는 들어간다(computeRateMetrics와 같음)', bm.high52 === 5 && bm.high52 === bc.high52 && Math.abs(bm.pct3y - bc.pct3y) < 1e-9);
+  const idxs = [100, 500, 900, pts.length - 1];
+  ok('#42 metricsAt(그날까지) = computeRateMetrics(그날까지 자른 기록)', idxs.every(i => {
+    const cut = Object.fromEntries(pts.slice(0, i + 1));
+    const a = metricsAt(pts, i), b = RM.computeRateMetrics(cut);
+    return ['current', 'change1m', 'high52', 'low52', 'position52', 'pct3y', 'high20', 'turnedDown'].every(k => (a[k] == null && b[k] == null) || Math.abs(Number(a[k]) - Number(b[k])) < 1e-9);
+  }));
+  // 신호 추출 — 새로 '적기'에 들어간 날만, 직전 신호와 20거래일 이상
+  const st = (arr) => arr.map((s, i) => ({ date: `D${String(i).padStart(3, '0')}`, state: s }));
+  const seq = st(['wait', 'buy', 'buy', 'wait', 'buy', ...Array(18).fill('wait'), 'buy', 'wait', 'buy']);
+  eq('#43 새 진입만 · 20거래일 간격(1일째 신호 뒤 4일째는 버리고 23일째·25일째 중 23일째)', extractSignals(seq).map(x => x.index), [1, 23]);
+  eq('#43b 간격을 바꾸면 결과도 바뀐다', extractSignals(seq, 2).map(x => x.index), [1, 4, 23, 25]);
+  eq('#43d 간격 1이어도 이어지는 적기(2일째)는 새 진입이 아니다', extractSignals(seq, 1).map(x => x.index), [1, 4, 23, 25]);
+  ok('#43c 기본 간격 20', BT_MIN_GAP === 20);
+  eq('#44 N개월 뒤 날짜(말일 보정)', [addMonthsIso('2026-01-31', 1), addMonthsIso('2025-11-15', 3), addMonthsIso('2024-02-29', 12)], ['2026-02-28', '2026-02-15', '2025-02-28']);
+  const prices = [['2025-01-02', 100], ['2025-04-02', 110], ['2025-07-02', 90], ['2026-01-02', 120], ['2026-01-05', 121]];
+  const divs = [{ exDate: '2024-12-15', amount: 50 }, { exDate: '2025-01-02', amount: 50 }, { exDate: '2025-02-01', amount: 2 }, { exDate: '2025-05-01', amount: 2 }, { exDate: '2026-03-01', amount: 5 }];  // 신호일 이전·당일 배당은 넣지 않는다
+  const p3 = performanceAfter(prices, divs, '2025-01-02', 3, '2026-10-16');
+  ok('#45 3개월 성과 — 주가 +10% · 총수익(배당 2) +12%', !p3.pending && Math.abs(p3.price - 10) < 1e-9 && Math.abs(p3.total - 12) < 1e-9);
+  const p12 = performanceAfter(prices, divs, '2025-01-02', 12, '2026-10-16');
+  ok('#45b 12개월 — 그날 또는 직전 종가(2026-01-02) · 기간 안 배당만(2+2)', !p12.pending && Math.abs(p12.total - ((120 + 4) / 100 - 1) * 100) < 1e-9);
+  eq('#45c 기간이 아직 안 지났으면 진행 중', [performanceAfter(prices, divs, '2025-07-02', 12, '2026-01-05'), performanceAfter(prices, divs, '2026-01-02', 3, '2026-10-16')], [{ pending: true }, { pending: true }]);
+  eq('#45d 신호일 이전 종가가 없으면 null', performanceAfter(prices, divs, '2024-01-01', 3, '2026-10-16'), null);
+  const fx = [['2025-01-02', 250], ['2025-04-02', 240]];
+  ok('#46 지표 변화 — 헤알·원 % · 10년 %p', Math.abs(changeAfter(fx, '2025-01-02', 3, '2026-10-16', 'pct').value - (-4)) < 1e-9 && Math.abs(changeAfter(fx, '2025-01-02', 3, '2026-10-16', 'pp').value - (-10)) < 1e-9);
+  eq('#47 요약 — 신호 수 · 끝난 것만 평균 · 플러스 비율', summarizeSignals([10, -5, null, 25]), { count: 4, done: 3, avg: 10, winRate: (2 / 3) * 100 });
+  // historyStates — 날짜별로 그날까지의 지표로 판정(미래 값을 쓰지 않는다)
+  const def = RATE_BT_ASSETS.find(d => d.key === 'equityReit');
+  const hs = historyStates(def, { us10y: ser }, (key, all, extras) => evaluateOne(key, all, extras, null, { rateOnly: true }));
+  ok('#48 첫 1년은 건너뛰고 기준 지표 날짜마다 상태 1개', hs.length > 0 && hs[0].date >= '2023-01-03' && hs.every((h, i) => i === 0 || h.date > hs[i - 1].date));
+  ok('#48b 그날 판정 = 그날까지 자른 기록으로 다시 판정한 값', [50, 300, hs.length - 1].every(i => {
+    const d = hs[i].date;
+    const cut = Object.fromEntries(pts.filter(([x]) => x <= d));
+    return evaluateOne('equityReit', { us10y: RM.computeRateMetrics(cut) }, null, null, { rateOnly: true }).state === hs[i].state;
+  }));
+  eq('#49 대표 종목 — 장기채 TLT · 하이일드 HYG · 모기지 AGNC · 실물 O · BDC MAIN · 한국·브라질 없음', RATE_BT_ASSETS.map(d => d.rep), ['TLT', 'HYG', 'AGNC', 'O', 'MAIN', null, null]);
+}
+
 console.log('\n── 파트③ 배선 가드 ──');
 {
   const src = (rel) => readFileSync(join(ROOT, rel), 'utf8');
@@ -148,6 +211,17 @@ console.log('\n── 파트③ 배선 가드 ──');
     && /readBrazilNotes\(eff\.notes\)/.test(RW) && !/BRAZIL_NOTES/.test(RW.replace(/\/\/.*$/gm, '')));
   ok('#G10 brlBond.ts는 그대로 쓰고 이론 가격은 이분법으로 맞춘다', /computeBrlBond\(\{ price: p, face: BRL_BOND_FACE, couponRate: BRL_BOND_COUPON, years: BRL_BOND_YEARS \}\)\?\.ytmAnnual/.test(RW));
   ok('#G11 정치 메모는 처음에 빈 배열(지어내지 않는다)', /export const BRAZIL_NOTES: BrazilNote\[\] = \[\];/.test(src('src/brazilNotes.ts')));
+  const RW2 = RW.replace(/\/\/.*$/gm, '');
+  ok('#G12 상태 변경 기록 — 벨 알림 없이 설정 파일에 저장 · 패널', /appendStateChanges\(eff\.history, signals, today\)/.test(RW) && /상태 변경 기록/.test(RW) && !/notify\(/.test(RW2)
+    && /history: data\?\.history \?\? effRef\.current\?\.history \?\? \[\]/.test(RW));
+  ok('#G13 과거 검증은 펼칠 때만 종가·배당을 받고 고정 문구를 둔다', /if \(!btOpen\) return;/.test(RW) && /if \(!btOpen\) return null;/.test(RW)
+    && /과거 성과는 미래를 보장하지 않습니다\. 신호 수가 적으면 우연일 수 있습니다\./.test(RW) && /fetchUsDividendEvents\(tk, '10y'\)/.test(RW) && /evaluateOne\(key, all, extras, effRules, \{ rateOnly: true \}\)/.test(RW));
+  ok('#G14 차트 신호 점선 — 마우스를 올리면 이름', /<title>\{`\$\{def\.label\} 매수 적기 신호/.test(RW) && (RW.match(/\{signalLines\(\[/g) || []).length === 5);
+  const GL = src('src/rateGlossary.ts'), COV = src('src/indicatorCoverage.ts');
+  const covKeys = [...((COV.match(/INDICATOR_HISTORY_KEYS = \[([^\]]+)\]/) || [])[1] || '').matchAll(/'(\w+)'/g), ...((COV.match(/MARKET_INDEX_KEYS = \[([^\]]+)\]/) || [])[1] || '').matchAll(/'(\w+)'/g)].map(x => x[1]);
+  const glKeys = [...(GL.split('RATE_GLOSSARY_ASSETS')[0]).matchAll(/key: '(\w+)'/g)].map(x => x[1]);
+  ok('#G15 용어 풀이 — 지표 33개(커버리지 키와 같은 집합) · 자산군 7개', covKeys.length === 33 && glKeys.length === 33 && covKeys.every(k => glKeys.includes(k))
+    && [...(GL.split('RATE_GLOSSARY_ASSETS')[1] || '').matchAll(/key: '(\w+)'/g)].length === 7);
   ok('#G7 6단계 자리표시 문구가 남지 않았다', !/6단계에서 추가/.test(RS));
   ok('#G5 행을 누르면 조건 목록을 펼친다', /setOpenSignal\(/.test(RW) && /c\.pending \? '…' : c\.met \? '○' : '×'/.test(RW));
 }
