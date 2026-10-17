@@ -11,18 +11,20 @@ const INDICATOR_COLORS = {
   us2y: '#a1a1aa', us30y: '#71717a', us3m: '#d4d4d8', t10y2y: '#2dd4bf', t10y3m: '#14b8a6',
   hyYield: '#f472b6', hySpread: '#e879f9', mort30: '#fbbf24', mbsSpread: '#fb923c', move: '#a78bfa',
   kr3y: '#a3a3a3', krBase: '#f43f5e', krUs10y: '#22d3ee',
+  brSelic: '#22c55e', brIpca: '#eab308', brExp12: '#facc15', br10y: '#4ade80', brlusd: '#10b981', brlkrw: '#34d399', brReal: '#86efac',
 };
 
 // Yahoo Finance / FRED 자동수집 가능한 키
-const STOOQ_SUPPORTED = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y'];
+const STOOQ_SUPPORTED = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y', 'brSelic', 'brIpca', 'brExp12', 'br10y', 'brlusd', 'brlkrw', 'brReal'];
 // 차트에 표시 가능한 키
-const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y'];
+const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y', 'brSelic', 'brIpca', 'brExp12', 'br10y', 'brlusd', 'brlkrw', 'brReal'];
 // 주간 지표 관측일 표기 — '10월 9일 값' (ISO 날짜를 문자열로 잘라 시간대 영향 없음)
 const asOfLabel = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? `${+iso.slice(5, 7)}월 ${+iso.slice(8, 10)}일 값` : '');
 const lastHistDate = (h) => (h && typeof h === 'object' ? Object.keys(h).sort().pop() || null : null);
 // 장단기 금리차 — 단위 %p, 전일 대비도 %p 차이(api/indicators fetchFred diff)
 // 한미 10년 금리차도 %p, 한국 기준금리의 전일 대비는 '직전 변경폭(%p)'이다(api/indicators fetchEcosBaseRate)
-const SPREAD_KEYS = ['t10y2y', 't10y3m', 'hySpread', 'mbsSpread', 'krUs10y', 'krBase'];
+// 브라질 기준금리·물가·기대물가의 전일 대비도 '직전 관측 대비 차이(%p)', 실질금리는 %p
+const SPREAD_KEYS = ['t10y2y', 't10y3m', 'hySpread', 'mbsSpread', 'krUs10y', 'krBase', 'brSelic', 'brIpca', 'brExp12', 'brReal'];
 
 // 수집 source 이름 → 실제 출처 URL 매핑
 const SOURCE_URLS: Record<string, Record<string, string>> = {
@@ -47,6 +49,13 @@ const SOURCE_URLS: Record<string, Record<string, string>> = {
   kr3y:    { 'Naver채권': 'https://m.stock.naver.com/marketindex/bond', Yahoo: 'https://finance.yahoo.com/quote/%5EKR3YT%3DRR/' },
   krBase:  { ECOS: 'https://ecos.bok.or.kr/' },
   krUs10y: { calc: 'https://m.stock.naver.com/marketindex/bond' },
+  brSelic: { BCB: 'https://www.bcb.gov.br/controleinflacao/taxaselic' },
+  brIpca:  { BCB: 'https://www3.bcb.gov.br/sgspub/' },
+  brExp12: { BCB: 'https://www.bcb.gov.br/publicacoes/focus' },
+  br10y:   { 'Naver채권': 'https://m.stock.naver.com/marketindex/bond' },
+  brlusd:  { Yahoo: 'https://finance.yahoo.com/quote/BRL=X/' },
+  brlkrw:  { calc: 'https://finance.yahoo.com/quote/BRL=X/' },
+  brReal:  { calc: 'https://www.bcb.gov.br/publicacoes/focus' },
   usdkrw:  { Yahoo: 'https://finance.yahoo.com/quote/KRW=X/', 'Naver환율': 'https://m.stock.naver.com/marketindex/exchange/FX_USDKRW' },
   dxy:     { Yahoo: 'https://finance.yahoo.com/quote/DX-Y.NYB/' },
   vix:     { Yahoo: 'https://finance.yahoo.com/quote/%5EVIX/' },
@@ -77,6 +86,13 @@ const DEFAULT_URLS: Record<string, string> = {
   kr3y:    'https://m.stock.naver.com/marketindex/bond',
   krBase:  'https://ecos.bok.or.kr/',
   krUs10y: 'https://m.stock.naver.com/marketindex/bond',
+  brSelic: 'https://www.bcb.gov.br/controleinflacao/taxaselic',
+  brIpca:  'https://www3.bcb.gov.br/sgspub/',
+  brExp12: 'https://www.bcb.gov.br/publicacoes/focus',
+  br10y:   'https://m.stock.naver.com/marketindex/bond',
+  brlusd:  'https://finance.yahoo.com/quote/BRL=X/',
+  brlkrw:  'https://finance.yahoo.com/quote/BRL=X/',
+  brReal:  'https://www.bcb.gov.br/publicacoes/focus',
   usdkrw:  'https://finance.yahoo.com/quote/KRW=X/',
   dxy:     'https://finance.yahoo.com/quote/DX-Y.NYB/',
   vix:     'https://finance.yahoo.com/quote/%5EVIX/',
@@ -249,6 +265,46 @@ export default function MarketIndicators({
       label: '한미 10년 금리차', key: 'krUs10y',
       val: marketIndicators.krUs10y, chg: marketIndicators.krUs10yChg,
       fmt: (v) => (v > 0 ? '+' : '') + v?.toFixed(2) + '%p', color: 'text-cyan-300',
+    },
+    // 브라질 7종(2026-10 8-A) — 물가·기대물가는 월간·영업일 발표라 관측일을 '○월 ○일 값'으로 함께 표시한다
+    {
+      label: '브라질 기준금리', key: 'brSelic',
+      val: marketIndicators.brSelic, chg: marketIndicators.brSelicChg,
+      fmt: (v) => v?.toFixed(2) + '%', color: 'text-green-300',
+      sep: true,
+    },
+    {
+      label: '브라질 물가', key: 'brIpca',
+      val: marketIndicators.brIpca, chg: marketIndicators.brIpcaChg,
+      fmt: (v) => v?.toFixed(2) + '%', color: 'text-yellow-300',
+      asOf: marketIndicators.brIpcaDate || lastHistDate(indicatorHistoryMap?.brIpca),
+    },
+    {
+      label: '브라질 기대물가', key: 'brExp12',
+      val: marketIndicators.brExp12, chg: marketIndicators.brExp12Chg,
+      fmt: (v) => v?.toFixed(2) + '%', color: 'text-yellow-200',
+      asOf: marketIndicators.brExp12Date || lastHistDate(indicatorHistoryMap?.brExp12),
+    },
+    {
+      label: '브라질 10년', key: 'br10y',
+      val: marketIndicators.br10y, chg: marketIndicators.br10yChg,
+      fmt: (v) => v?.toFixed(3) + '%', color: 'text-green-200',
+      emptyText: '자료 없음',
+    },
+    {
+      label: '헤알·달러', key: 'brlusd',
+      val: marketIndicators.brlusd, chg: marketIndicators.brlusdChg,
+      fmt: (v) => v?.toFixed(4), color: 'text-emerald-300',
+    },
+    {
+      label: '헤알·원', key: 'brlkrw',
+      val: marketIndicators.brlkrw, chg: marketIndicators.brlkrwChg,
+      fmt: (v) => v?.toFixed(2), color: 'text-emerald-200',
+    },
+    {
+      label: '브라질 실질금리', key: 'brReal',
+      val: marketIndicators.brReal, chg: marketIndicators.brRealChg,
+      fmt: (v) => (v > 0 ? '+' : '') + v?.toFixed(2) + '%p', color: 'text-lime-300',
     },
     {
       label: '미국 기준금리', key: 'fedRate',
@@ -520,6 +576,13 @@ export default function MarketIndicators({
                 { label: '국고채 3년', key: 'kr3y',   val: marketIndicators.kr3y,   histKey: 'kr3y', marketIndexKey: null },
                 { label: '한국 기준금리', key: 'krBase', val: marketIndicators.krBase, histKey: 'krBase', marketIndexKey: null },
                 { label: '한미 10년 금리차', key: 'krUs10y', val: marketIndicators.krUs10y, histKey: 'krUs10y', marketIndexKey: null },
+                { label: '브라질 기준금리', key: 'brSelic', val: marketIndicators.brSelic, histKey: 'brSelic', marketIndexKey: null },
+                { label: '브라질 물가', key: 'brIpca', val: marketIndicators.brIpca, histKey: 'brIpca', marketIndexKey: null },
+                { label: '브라질 기대물가', key: 'brExp12', val: marketIndicators.brExp12, histKey: 'brExp12', marketIndexKey: null },
+                { label: '브라질 10년', key: 'br10y', val: marketIndicators.br10y, histKey: 'br10y', marketIndexKey: null },
+                { label: '헤알·달러', key: 'brlusd', val: marketIndicators.brlusd, histKey: 'brlusd', marketIndexKey: null },
+                { label: '헤알·원', key: 'brlkrw', val: marketIndicators.brlkrw, histKey: 'brlkrw', marketIndexKey: null },
+                { label: '브라질 실질금리', key: 'brReal', val: marketIndicators.brReal, histKey: 'brReal', marketIndexKey: null },
                 { label: '기준금리',  key: 'fedRate', val: marketIndicators.fedRate,     histKey: 'fedRate', marketIndexKey: null },
                 { label: 'USDKRW',   key: 'usdkrw',  val: marketIndicators.usdkrw,     histKey: 'usdkrw', marketIndexKey: null },
                 { label: 'DXY',      key: 'dxy',      val: marketIndicators.dxy,        histKey: 'dxy', marketIndexKey: null },

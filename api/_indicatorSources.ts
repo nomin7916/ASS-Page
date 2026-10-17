@@ -77,6 +77,57 @@ export function computeKrUsSpread(kr10y: Record<string, number>, us10y: Record<s
   return out;
 }
 
+// 두 시계열을 첫째 것의 날짜로 맞춘다 — 그날 둘째 값이 없으면 **직전** 값을 쓴다(브라질 지표 2026-10 8-A).
+function alignOnOrBefore(a: Record<string, number>, b: Record<string, number>, fn: (x: number, y: number) => number): Record<string, number> {
+  const bk = keysOf(b);
+  const out: Record<string, number> = {};
+  let i = 0, cur: number | null = null;
+  for (const d of keysOf(a)) {
+    while (i < bk.length && bk[i] <= d) { cur = b[bk[i]]; i++; }
+    const x = a[d];
+    if (cur == null || !Number.isFinite(cur) || !Number.isFinite(x)) continue;
+    const v = fn(x, cur);
+    if (Number.isFinite(v)) out[d] = Math.round(v * 10000) / 10000;
+  }
+  return out;
+}
+// 헤알·원(1헤알당 원) = 원/달러(usdkrw) ÷ 헤알/달러(brlusd) — usdkrw 날짜 기준
+export const computeBrlKrw = (usdkrw: Record<string, number>, brlusd: Record<string, number>) =>
+  alignOnOrBefore(usdkrw, brlusd, (u, b) => (b > 0 ? u / b : NaN));
+// 브라질 실질금리(%p) = 브라질 10년 − 12개월 기대 인플레이션 — 10년물 날짜 기준. 음수 정상(SIGNED의 brReal)
+export const computeBrReal = (br10y: Record<string, number>, exp12: Record<string, number>) =>
+  alignOnOrBefore(br10y, exp12, (r, e) => r - e);
+
+// 브라질 중앙은행 SGS(api.bcb.gov.br/dados/serie/bcdata.sgs.{n}/dados) — [{ data:'dd/MM/yyyy', valor:'14.00' }]
+//   432 = Selic 목표(일별, 1999-03-05~ · 다음 Copom 날짜까지 미리 채워져 온다 → maxIso 이후는 버린다)
+//   13522 = IPCA 12개월 누적(월별, 1980-12-01~ · 날짜는 그 달 1일)
+//   ⚠️ 일별 시리즈는 한 번에 최대 10년만 조회된다(그 이상은 오류 객체).
+export function parseBcbSgs(json: any, maxIso = '9999-12-31'): Record<string, number> | null {
+  if (!Array.isArray(json)) return null;
+  const out: Record<string, number> = {};
+  for (const r of json) {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(r?.data ?? ''));
+    const v = parseFloat(String(r?.valor ?? ''));
+    if (!m || !Number.isFinite(v)) continue;
+    const iso = `${m[3]}-${m[2]}-${m[1]}`;
+    if (iso <= maxIso) out[iso] = v;
+  }
+  return out;
+}
+
+// BCB Olinda 'Expectativas de Mercado' ExpectativasMercadoInflacao12Meses — { value:[{ Data:'2026-10-09', Mediana:4.4772 }] }
+//   IPCA · Suavizada='S' · baseCalculo=0 의 중앙값(영업일마다 갱신, 2001-12-12~). 오류 응답은 null.
+export function parseOlindaExpect(json: any): Record<string, number> | null {
+  if (!Array.isArray(json?.value)) return null;
+  const out: Record<string, number> = {};
+  for (const r of json.value) {
+    const d = String(r?.Data ?? '').slice(0, 10);
+    const v = Number(r?.Mediana);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(v)) out[d] = v;
+  }
+  return out;
+}
+
 // 한국은행 ECOS StatisticSearch 응답 → { 'YYYY-MM-DD': 값 }. 오류 응답(RESULT)·모양이 틀리면 null(= 조회 실패).
 //   기준금리 = 통계표 722Y001(1.3.1. 한국은행 기준금리 및 여수신금리) · 항목 0101000(한국은행 기준금리) · 주기 D(일),
 //   단위 연% · 일별 자료 첫날 1999-05-06(ECOS StatisticItemList로 확인, 2026-10).

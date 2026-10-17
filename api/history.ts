@@ -11,6 +11,7 @@ import { fetchKisDailyRange } from './_kisDaily.js';
 import {
   parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread,
   computeKrUsSpread, parseEcosRows, parseNaverBondPrices,
+  computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect,
 } from './_indicatorSources.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
@@ -107,6 +108,7 @@ const YAHOO_SYMBOLS: Record<string, string> = {
   btc:      'BTC-USD',
   eth:      'ETH-USD',
   move:     '^MOVE',     // 금리 변동성 지수(2026-10) — Yahoo 2002-11-12~
+  brlusd:   'BRL=X',     // 헤알/달러(1달러당 헤알, 2026-10 8-A) — Yahoo 2003-12-01~
   // 지수 3종(2026-10) — 시장지표 패널의 KOSPI·S&P500·Nasdaq100도 다른 지표와 같은 커버리지 보충(머리·공백·꼬리)을
   // 타야 한다. 옛 경로는 클라이언트가 외부 CORS 프록시로 Yahoo를 직접 불러 '시작일~오늘' 전량만 받았다.
   kospi:    '^KS11',
@@ -302,6 +304,41 @@ async function fetchNaverBondDaily(reutersCode: string, d1: string, d2: string, 
     if (lo && days.sort()[0] < lo) break; // 시작일보다 앞까지 받았다
   }
   return out;
+}
+
+// BCB SGS 과거치 — 일별 시리즈는 한 번에 최대 10년이라 10년 단위로 나눠 받는다(월별도 같은 방식으로 안전하게).
+//   오늘 이후 날짜(Selic은 다음 Copom 날짜까지 미리 채워진다)는 parseBcbSgs가 버린다.
+async function fetchBcbSgsHistory(series: number, d1: string, d2: string, deadlineAt: number): Promise<Record<string, number>> {
+  const today = new Date().toISOString().slice(0, 10);
+  const toBr = (y: string) => `${y.slice(6, 8)}/${y.slice(4, 6)}/${y.slice(0, 4)}`;
+  const out: Record<string, number> = {};
+  let from = d1;
+  while (from <= d2) {
+    const remaining = deadlineAt - Date.now();
+    if (remaining < 1500) break;
+    const to0 = `${+from.slice(0, 4) + 9}${from.slice(4, 8)}`;
+    const to = to0 < d2 ? to0 : d2;
+    try {
+      const res = await fetch(`https://api.bcb.gov.br/dados/serie/bcdata.sgs.${series}/dados?formato=json&dataInicial=${toBr(from)}&dataFinal=${toBr(to)}`,
+        { signal: AbortSignal.timeout(Math.min(12000, remaining)) });
+      if (res.ok) Object.assign(out, parseBcbSgs(await res.json(), today) || {});
+    } catch { /* 다음 구간 */ }
+    from = shiftYmd(to, 1);
+  }
+  return out;
+}
+
+// BCB Olinda 12개월 기대 인플레이션(IPCA 중앙값 · 평활 S · 전체 응답자) 과거치
+async function fetchBcbExpectHistory(d1: string, d2: string, timeoutMs: number): Promise<Record<string, number>> {
+  const iso = (y: string) => `${y.slice(0, 4)}-${y.slice(4, 6)}-${y.slice(6, 8)}`;
+  const q = (s: string) => encodeURIComponent(s);
+  const filter = `Indicador eq 'IPCA' and Suavizada eq 'S' and baseCalculo eq 0 and Data ge '${iso(d1)}' and Data le '${iso(d2)}'`;
+  try {
+    const res = await fetch('https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativasMercadoInflacao12Meses'
+      + `?$top=20000&$filter=${q(filter)}&$orderby=${q('Data asc')}&$format=json&$select=${q('Data,Mediana')}`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return {};
+    return parseOlindaExpect(await res.json()) || {};
+  } catch { return {}; }
 }
 
 // { date: price } → "Date,Close\n..." CSV 변환 (기존 parseIndexCSV 호환)
@@ -863,6 +900,47 @@ export default async function handler(request: Request): Promise<Response> {
     const data = await fetchNaverBondDaily('KR3YT=RR', d1, d2, Date.now() + 12000);
     if (Object.keys(data).length === 0) return new Response('kr3y 수집 실패', { status: 502 });
     return csvResponse(data, recent);
+  }
+
+  // 브라질 지표(2026-10 8-A) — BCB 공개 API(키 불필요) · 네이버 채권 · Yahoo
+  if (key === 'brSelic' || key === 'brIpca') {
+    const data = await fetchBcbSgsHistory(key === 'brSelic' ? 432 : 13522, d1, d2, Date.now() + Math.min(16000, budgetLeft()));
+    if (Object.keys(data).length === 0) return new Response(`${key} 수집 실패`, { status: 502 });
+    return csvResponse(data, recent);
+  }
+  if (key === 'brExp12') {
+    const data = await fetchBcbExpectHistory(d1, d2, Math.min(15000, budgetLeft()));
+    if (Object.keys(data).length === 0) return new Response('brExp12 수집 실패', { status: 502 });
+    return csvResponse(data, recent);
+  }
+  if (key === 'br10y') {
+    const data = await fetchNaverBondDaily('BR10YT=RR', d1, d2, Date.now() + 12000);
+    if (Object.keys(data).length === 0) return new Response('br10y 수집 실패', { status: 502 });
+    return csvResponse(data, recent);
+  }
+  if (key === 'brlkrw') {
+    const [krw, brl] = await Promise.all([fetchYahooHistory('KRW=X', d1, d2), fetchYahooHistory('BRL=X', shiftYmd(d1, -14), d2)]);
+    const data = computeBrlKrw(krw, brl);
+    if (Object.keys(data).length === 0) return new Response('brlkrw 수집 실패', { status: 502 });
+    return csvResponse(data, recent);
+  }
+  // brReal(%p) = br10y − brExp12 — 음수 정상 → JSON 응답(mbsSpread·krUs10y와 같은 규약)
+  if (key === 'brReal') {
+    const [r10, exp] = await Promise.all([
+      fetchNaverBondDaily('BR10YT=RR', d1, d2, Date.now() + 12000),
+      fetchBcbExpectHistory(shiftYmd(d1, -30), d2, Math.min(15000, budgetLeft())),
+    ]);
+    const data = computeBrReal(r10, exp);
+    if (Object.keys(data).length === 0) return new Response('brReal 수집 실패', { status: 502 });
+    return new Response(JSON.stringify(data), {
+      headers: {
+        'Content-Type':                'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control':               recent
+          ? 's-maxage=3600, stale-while-revalidate=600'
+          : 's-maxage=86400, stale-while-revalidate=43200',
+      },
+    });
   }
 
   // krBase(한국은행 기준금리): ECOS 722Y001 / 0101000 / 일별(_indicatorSources.parseEcosRows 주석). 인증키가 없으면 502.

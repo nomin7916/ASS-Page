@@ -48,4 +48,5 @@ export const CHART_NAME_TO_POINT_KEY = {
   '미국 2년': 'us2yPoint', '미국 30년': 'us30yPoint', '미국 3개월': 'us3mPoint', '10년−2년': 't10y2yPoint', '10년−3개월': 't10y3mPoint',
   '하이일드 금리': 'hyYieldPoint', '하이일드 스프레드': 'hySpreadPoint', '30년 모기지': 'mort30Point', 'MBS 스프레드': 'mbsSpreadPoint', 'MOVE': 'movePoint',
   '국고채 3년': 'kr3yPoint', '한국 기준금리': 'krBasePoint', '한미 10년 금리차': 'krUs10yPoint',
+  '브라질 기준금리': 'brSelicPoint', '브라질 물가': 'brIpcaPoint', '브라질 기대물가': 'brExp12Point', '브라질 10년': 'br10yPoint', '헤알·달러': 'brlusdPoint', '헤알·원': 'brlkrwPoint', '브라질 실질금리': 'brRealPoint',
 };

@@ -48,6 +48,8 @@ export function useMarketData({
     hyYield: null, hyYieldChg: null, hySpread: null, hySpreadChg: null, mort30: null, mort30Chg: null, mort30Date: null,
     mbsSpread: null, mbsSpreadChg: null, move: null, moveChg: null,
     kr3y: null, kr3yChg: null, krBase: null, krBaseChg: null, krBaseNeedKey: false, krUs10y: null, krUs10yChg: null,
+    brSelic: null, brSelicChg: null, brIpca: null, brIpcaChg: null, brIpcaDate: null, brExp12: null, brExp12Chg: null, brExp12Date: null,
+    br10y: null, br10yChg: null, brlusd: null, brlusdChg: null, brlkrw: null, brlkrwChg: null, brReal: null, brRealChg: null,
     vix: null, vixChg: null,
     btc: null, btcChg: null,
     eth: null, ethChg: null,
@@ -434,6 +436,14 @@ export function useMarketData({
     kr3y:      'naver:KR3YT=RR',
     krBase:    'ecos:722Y001/0101000',
     krUs10y:   'calc:KR10Y-DGS10',
+    // 브라질 7종(2026-10 8-A)
+    brSelic:   'bcb:sgs432',
+    brIpca:    'bcb:sgs13522',
+    brExp12:   'bcb:olinda-ipca12m',
+    br10y:     'naver:BR10YT=RR',
+    brlusd:    'yahoo:BRL=X',
+    brlkrw:    'calc:KRW=X/BRL=X',
+    brReal:    'calc:BR10Y-EXP12',
     goldKr:   null,
     vix:      'yahoo:^VIX',
     btc:      'yahoo:BTC-USD',
@@ -450,6 +460,7 @@ export function useMarketData({
     us2y: '미국 2년', us30y: '미국 30년', us3m: '미국 3개월', t10y2y: '10년−2년', t10y3m: '10년−3개월',
     hyYield: '하이일드 금리', hySpread: '하이일드 스프레드', mort30: '30년 모기지', mbsSpread: 'MBS 스프레드', move: 'MOVE',
     kr3y: '국고채 3년', krBase: '한국 기준금리', krUs10y: '한미 10년 금리차',
+    brSelic: '브라질 기준금리', brIpca: '브라질 물가', brExp12: '브라질 기대물가', br10y: '브라질 10년', brlusd: '헤알·달러', brlkrw: '헤알·원', brReal: '브라질 실질금리',
     btc: 'Bitcoin', eth: 'Ethereum',
     kospi: 'KOSPI', sp500: 'S&P500', nasdaq: 'Nasdaq100',
   };
@@ -627,7 +638,7 @@ export function useMarketData({
       const keys = ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
                     'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',
                     'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m',
-                    'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y'];
+                    'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y', 'brSelic', 'brIpca', 'brExp12', 'br10y', 'brlusd', 'brlkrw', 'brReal'];
 
       setMarketIndicators(prev => {
         const merged = { ...prev };
@@ -669,7 +680,7 @@ export function useMarketData({
       ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
        'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',
        'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m',
-       'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y']
+       'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y', 'brSelic', 'brIpca', 'brExp12', 'br10y', 'brlusd', 'brlkrw', 'brReal']
         .forEach(k => { statusMap[k] = { status: 'fail', source: 'API 오류', updatedAt: now }; });
       const clientKeys = Object.keys(fetchersMap);
       retryFailedIndicators(clientKeys, { ...statusMap });

@@ -164,6 +164,34 @@ async function fetchEcosBaseRate() {
   return { price: last.v, change: prevDiff ? Math.round((last.v - prevDiff.v) * 10000) / 10000 : 0, source: 'ECOS', date };
 }
 
+// 브라질 중앙은행 SGS 최신값(키 불필요) — 오늘 이후 날짜는 버리고 마지막 값 + 직전 관측 대비 차이(%p)
+//   432 = Selic 목표(일별, 다음 Copom 날짜까지 미리 채워져 온다) · 13522 = IPCA 12개월(월별, 날짜는 그 달 1일)
+async function fetchBcbSgsLatest(series: number, lookbackDays: number) {
+  const ddmmyyyy = (d: Date) => { const s = d.toISOString().slice(0, 10); return `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}`; };
+  const today = new Date().toISOString().slice(0, 10);
+  const data = await safeJson(`https://api.bcb.gov.br/dados/serie/bcdata.sgs.${series}/dados?formato=json&dataInicial=${ddmmyyyy(new Date(Date.now() - lookbackDays * 86400000))}&dataFinal=${ddmmyyyy(new Date())}`);
+  if (!Array.isArray(data)) return { price: null, change: null, source: 'BCB' };
+  const pts = data.map((r: any) => {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(r?.data ?? ''));
+    return m ? { d: `${m[3]}-${m[2]}-${m[1]}`, v: parseFloat(String(r?.valor)) } : null;
+  }).filter((x: any) => x && Number.isFinite(x.v) && x.d <= today).sort((a: any, b: any) => (a.d < b.d ? -1 : 1));
+  if (!pts.length) return { price: null, change: null, source: 'BCB' };
+  const last = pts[pts.length - 1];
+  const prev = series === 432 ? [...pts].reverse().find((x: any) => x.v !== last.v) : pts[pts.length - 2];
+  return { price: last.v, change: prev ? Math.round((last.v - prev.v) * 10000) / 10000 : 0, source: 'BCB', date: last.d };
+}
+
+// BCB Olinda 12개월 후 기대 인플레이션(IPCA 중앙값, 평활 S, 전체 응답자) — 마지막 값 + 직전 관측 대비 차이(%p)
+async function fetchBcbExpect12() {
+  const q = (s: string) => encodeURIComponent(s);
+  const data = await safeJson('https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativasMercadoInflacao12Meses'
+    + `?$top=5&$filter=${q("Indicador eq 'IPCA' and Suavizada eq 'S' and baseCalculo eq 0")}&$orderby=${q('Data desc')}&$format=json&$select=${q('Data,Mediana')}`);
+  const rows = Array.isArray(data?.value) ? data.value.filter((r: any) => Number.isFinite(Number(r?.Mediana))) : [];
+  if (!rows.length) return { price: null, change: null, source: 'BCB' };
+  const last = Number(rows[0].Mediana), prev = rows[1] ? Number(rows[1].Mediana) : null;
+  return { price: last, change: prev != null ? Math.round((last - prev) * 10000) / 10000 : null, source: 'BCB', date: String(rows[0].Data).slice(0, 10) };
+}
+
 // Yahoo Finance v8 chart API (서버사이드 직접 호출)
 async function fetchYahoo(symbol: string) {
   const data = await safeJson(
@@ -235,6 +263,7 @@ export default async function handler(req: Request): Promise<Response> {
     us10yFred, us10yYahoo, us10yNaver, fedRate,
     kr10yNaver, kr10yYahoo,
     kr3yNaver, kr3yYahoo, krBase,
+    brSelic, brIpca, brExp12, br10yNaver, br10yYahoo, brlusd,
     kospi,
     sp500Yahoo, sp500Naver,
     nasdaqYahoo, nasdaqNaver,
@@ -256,6 +285,12 @@ export default async function handler(req: Request): Promise<Response> {
     fetchNaverBond('KR3YT=RR', 'Naver채권'),                          // 국고채 3년 (Naver primary)
     fetchYahoo('^KR3YT=RR'),                                           // 국고채 3년 (Yahoo fallback)
     fetchEcosBaseRate(),                                               // 한국은행 기준금리 (ECOS)
+    fetchBcbSgsLatest(432, 60),                                        // 브라질 Selic 목표 (BCB SGS 432, 일별)
+    fetchBcbSgsLatest(13522, 400),                                     // 브라질 IPCA 12개월 (BCB SGS 13522, 월별)
+    fetchBcbExpect12(),                                                // 브라질 12개월 기대 인플레이션 (BCB Olinda)
+    fetchNaverBond('BR10YT=RR', 'Naver채권'),                         // 브라질 10년 (Naver primary)
+    fetchYahoo('^BR10YT=RR'),                                          // 브라질 10년 (Yahoo fallback — 2026-10 실측 '없는 심볼', 빈 값)
+    fetchYahoo('BRL=X'),                                               // 헤알/달러 (1달러당 헤알)
     fetchNaver('/api/index/KOSPI/basic',                'Naver'),      // KOSPI
     fetchYahoo('^GSPC'),                                               // S&P500 (Yahoo primary)
     fetchNaver('/api/index/SPI@SPX/basic',              'Naver'),      // S&P500 (Naver fallback)
@@ -308,6 +343,18 @@ export default async function handler(req: Request): Promise<Response> {
   const krUs10y = kr10y?.price != null && us10y?.price != null
     ? { price: Math.round((kr10y.price - us10y.price) * 10000) / 10000, change: null, source: 'calc' }
     : { price: null, change: null, source: 'calc' };
+  // 브라질 — br10y는 Naver → Yahoo, 둘 다 실패면 빈 값(다른 사이트를 긁지 않는다)
+  const br10y = ok(br10yNaver)?.price ? ok(br10yNaver) : ok(br10yYahoo)?.price ? ok(br10yYahoo) : { price: null, change: null, source: 'Naver채권' };
+  const bu = ok(brlusd), ex = ok(brExp12);
+  // 헤알·원 = 원/달러 ÷ 헤알/달러 · 전일 대비(%) = (1 + 원/달러%) ÷ (1 + 헤알/달러%) − 1
+  const brlkrw = usdkrw?.price && bu?.price
+    ? { price: Math.round((usdkrw.price / bu.price) * 10000) / 10000,
+        change: usdkrw.change != null && bu.change != null ? ((1 + usdkrw.change / 100) / (1 + bu.change / 100) - 1) * 100 : null, source: 'calc' }
+    : { price: null, change: null, source: 'calc' };
+  // 브라질 실질금리(%p) = 10년 − 12개월 기대 인플레이션(각자 최신값). 음수 정상
+  const brReal = br10y?.price != null && ex?.price != null
+    ? { price: Math.round((br10y.price - ex.price) * 10000) / 10000, change: null, source: 'calc' }
+    : { price: null, change: null, source: 'calc' };
   // 국내금: Naver front-api(M04020000) → HTML 기준가 순으로 fallback
   const goldKr = ok(goldKrMetal)?.price ? ok(goldKrMetal) : ok(goldKrHtml)?.price ? ok(goldKrHtml) : null;
 
@@ -342,6 +389,13 @@ export default async function handler(req: Request): Promise<Response> {
     kr3y,
     krBase:  ok(krBase),
     krUs10y,
+    brSelic: ok(brSelic),
+    brIpca:  ok(brIpca),
+    brExp12: ex,
+    br10y,
+    brlusd:  bu,
+    brlkrw,
+    brReal,
     usdkrw,
     goldKr,
     kospi:   ok(kospi),

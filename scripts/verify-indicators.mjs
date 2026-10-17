@@ -111,14 +111,18 @@ if (C) {
   eq('#10 소스 최초일 이전은 요구하지 않는다(BTC)', seg(daily('2014-09-17', '2026-10-16'), '2004-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.btc), []);
   eq('#10b floor 표 — btc/eth/fedRate', [INDICATOR_SOURCE_FLOOR.btc, INDICATOR_SOURCE_FLOOR.eth, INDICATOR_SOURCE_FLOOR.fedRate], ['2014-09-17', '2017-11-09', '1982-09-27']);
   // 패널 13개 항목 전부 — 키 목록은 순수 모듈이 단일 소스, floor는 13개 전부 ISO 날짜
-  // 2026-10 미국 금리 5종 → 18, 하이일드·모기지·MOVE 5종 → 23, 한국 금리 3종 → 지표 23 + 지수 3 = 26
-  eq('#10c 커버리지 키 = 지표 23 + 지수 3 (26개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 26);
+  // 2026-10 미국 금리 5종 → 18, 하이일드·모기지·MOVE 5종 → 23, 한국 금리 3종 → 26, 브라질 7종 → 지표 30 + 지수 3 = 33
+  eq('#10c 커버리지 키 = 지표 30 + 지수 3 (33개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 33);
   eq('#10d 지수 키 3종', C.MARKET_INDEX_KEYS, ['kospi', 'sp500', 'nasdaq']);
-  ok('#10e 26개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
+  ok('#10e 33개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
   eq('#10f 지수 floor 이전은 요구하지 않는다(KOSPI 1997-07-01)', seg(daily('1997-07-01', '2026-10-16', 100), '1980-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.kospi), []);
   // ── 미국 금리 5종(2026-10) · 장단기 금리차는 0·음수가 정상값 ──
   ok('#10g 미국 금리 5종이 커버리지 키에 있다', ['us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)));
-  eq('#10h 부호 있는 지표 = 장단기 금리차 2종 + MBS 스프레드 + 한미 10년 금리차', C.SIGNED_INDICATOR_KEYS, ['t10y2y', 't10y3m', 'mbsSpread', 'krUs10y']);
+  eq('#10h 부호 있는 지표 = 장단기 금리차 2종 + MBS 스프레드 + 한미 10년 금리차', C.SIGNED_INDICATOR_KEYS, ['t10y2y', 't10y3m', 'mbsSpread', 'krUs10y', 'brReal']);
+  const BR = ['brSelic', 'brIpca', 'brExp12', 'br10y', 'brlusd', 'brlkrw', 'brReal'];
+  ok('#10g6 브라질 7종이 커버리지 키에 있다 · 실질금리만 부호 있음', BR.every(k => C.INDICATOR_HISTORY_KEYS.includes(k)) && C.isSignedIndicator('brReal') && !C.isSignedIndicator('brSelic'));
+  eq('#10g7 실측 첫 날짜 — Selic 1999-03-05 · IPCA 1980-12-01 · 기대물가 2001-12-12 · 10년 2023-10-17 · 헤알 2003-12-01', BR.map(k => INDICATOR_SOURCE_FLOOR[k]),
+    ['1999-03-05', '1980-12-01', '2001-12-12', '2023-10-17', '2003-12-01', '2003-12-01', '2023-10-17']);
   ok('#10g4 한국 금리 3종이 커버리지 키에 있다', ['kr3y', 'krBase', 'krUs10y'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)) && C.isSignedIndicator('krUs10y') && !C.isSignedIndicator('kr3y'));
   eq('#10g5 실측 첫 날짜 — 국고채 3년·한미 금리차 2023-10-18(네이버 약 3년) · 기준금리 1999-05-06(ECOS)', ['kr3y', 'krBase', 'krUs10y'].map(k => INDICATOR_SOURCE_FLOOR[k]), ['2023-10-18', '1999-05-06', '2023-10-18']);
   ok('#10g2 하이일드·모기지·MOVE 5종이 커버리지 키에 있다', ['hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)));
@@ -168,7 +172,14 @@ if (C) {
 console.log('\n── 파트② 소스 병합 (api/_indicatorSources.ts 직접 import) ──');
 const I = await load('api/_indicatorSources.ts');
 if (I) {
-  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices } = I;
+  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect } = I;
+  eq('#37 헤알·원 = 원/달러 ÷ 헤알/달러(그날 또는 직전 헤알) · 소수 4자리', computeBrlKrw({ '2026-10-15': 1400, '2026-10-16': 1410 }, { '2026-10-15': 5.6 }), { '2026-10-15': 250, '2026-10-16': 251.7857 });
+  eq('#37b 헤알 값이 0·없으면 만들지 않는다', [computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-15': 0 }), computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-16': 5 })], [{}, {}]);
+  eq('#38 브라질 실질금리 = 10년 − 기대물가(그날 또는 직전 기대치) · 음수 보존', computeBrReal({ '2026-10-08': 13.9, '2026-10-12': 4.4 }, { '2026-10-08': 4.5, '2026-10-09': 4.48 }), { '2026-10-08': 9.4, '2026-10-12': -0.08 });
+  eq('#39 BCB SGS — dd/MM/yyyy → ISO · 오늘 이후(다음 Copom 날짜) 버림', parseBcbSgs([{ data: '05/03/1999', valor: '45.00' }, { data: '04/11/2026', valor: '13.75' }, { data: 'x', valor: '1' }], '2026-10-18'), { '1999-03-05': 45 });
+  eq('#39b BCB 오류 객체(10년 초과 조회 등)는 null', parseBcbSgs({ error: 'janela' }), null);
+  eq('#40 Olinda 기대 인플레이션 중앙값', parseOlindaExpect({ value: [{ Data: '2026-10-09', Mediana: 4.4772 }, { Data: 'bad', Mediana: 1 }] }), { '2026-10-09': 4.4772 });
+  eq('#40b Olinda 오류 응답은 null', parseOlindaExpect({ codigo: 400 }), null);
   eq('#34 한미 10년 금리차 = 한국 − 미국(그날 또는 직전 미국 값) · 음수 보존 · 소수 4자리',
     computeKrUsSpread({ '2026-10-13': 3.0, '2026-10-14': 3.1, '2026-10-15': 4.2 }, { '2026-10-13': 4.1, '2026-10-15': 4.2 }),
     { '2026-10-13': -1.1, '2026-10-14': -1, '2026-10-15': 0 });
@@ -248,7 +259,12 @@ const panelKeys = [...new Set([...MI.matchAll(/label:\s*'[^']+',\s*key:\s*'(\w+)
 const covKeys = (COV.match(/INDICATOR_HISTORY_KEYS = \[([^\]]+)\]/) || [])[1];
 const idxKeys = (COV.match(/MARKET_INDEX_KEYS = \[([^\]]+)\]/) || [])[1];
 const covSet = new Set([...(covKeys || '').matchAll(/'(\w+)'/g), ...(idxKeys || '').matchAll(/'(\w+)'/g)].map(m => m[1]));
-ok('#G17 패널의 모든 항목(26)이 커버리지 키 목록에 있다', panelKeys.length === 26 && panelKeys.every(k => covSet.has(k)));
+ok('#G17 패널의 모든 항목(33)이 커버리지 키 목록에 있다', panelKeys.length === 33 && panelKeys.every(k => covSet.has(k)));
+ok('#G17e 서버: 브라질 7종 — SGS 432·13522 · Olinda · 네이버 BR10YT → Yahoo · BRL=X · 계산 2종', /fetchBcbSgsLatest\(432, 60\)/.test(IND) && /fetchBcbSgsLatest\(13522, 400\)/.test(IND)
+  && /fetchNaverBond\('BR10YT=RR', 'Naver채권'\)/.test(IND) && /fetchYahoo\('BRL=X'\)/.test(IND) && /usdkrw\.price \/ bu\.price/.test(IND) && /br10y\.price - ex\.price/.test(IND)
+  && /key === 'brSelic' \? 432 : 13522/.test(H) && /fetchNaverBondDaily\('BR10YT=RR'/.test(H) && /brlusd:\s*'BRL=X'/.test(H)
+  && /const data = computeBrlKrw\(krw, brl\);/.test(H) && /const data = computeBrReal\(r10, exp\);/.test(H));
+ok('#G17f 패널: 물가·기대물가는 관측일 표시 · 10년은 비면 자료 없음', /asOf: marketIndicators\.brIpcaDate/.test(MI) && /asOf: marketIndicators\.brExp12Date/.test(MI) && /emptyText: '자료 없음'/.test(MI));
 ok('#G17c 서버: 한국 금리 3종 — 국고채 3년 네이버→Yahoo · 기준금리 ECOS(722Y001/0101000, 키 없으면 needKey) · 한미 금리차 계산', /fetchNaverBond\('KR3YT=RR', 'Naver채권'\)/.test(IND)
   && /fetchYahoo\('\^KR3YT=RR'\)/.test(IND) && /if \(!ECOS_KEY\) return \{ price: null, change: null, source: 'ECOS', needKey: true \};/.test(IND)
   && /722Y001\/D\/\$\{ymdOf\(start\)\}\/\$\{ymdOf\(end\)\}\/0101000/.test(IND) && /krBase:\s*ok\(krBase\)/.test(IND) && /kr10y\.price - us10y\.price/.test(IND)
