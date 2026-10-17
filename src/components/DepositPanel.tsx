@@ -190,8 +190,11 @@ export default function DepositPanel({
               automatic minimum size(min-height:auto)마저 0으로 계산돼 높이가 헤더 줄까지 찌부러진다.
               해외 분기는 `min-h`가 있어 원래부터 무사했고 국내 분기만 무너졌다.
               PC(xl↑)는 main axis가 가로라 height가 그대로 살아나므로 이 min-h는 PC 레이아웃을 바꾸지 않는다.
-              `flex-1`을 건드리면 PC의 가로 균등 분배가 달라지므로 그쪽은 손대지 않는다. */}
-          <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[552px]' : 'h-[392px] min-h-[392px]'} flex flex-col overflow-hidden`}>
+              `flex-1`을 건드리면 PC의 가로 균등 분배가 달라지므로 그쪽은 손대지 않는다.
+              ⚠️ 해외 분기도 `h-[552px]` **고정**이다(사용자 보고 2026-10) — 옛 `h-full min-h-[552px]`는 부모 높이가
+              indefinite라 h-full이 먹지 않아 사실상 '최소 552px'였고, 행이 늘면 카드가 투자요약·평가액 추이 카드
+              (552px)보다 길어졌다. 고정 높이 + 아래 `flex-1 overflow-y-auto`라야 행이 늘어도 카드 안에서 스크롤된다. */}
+          <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-[552px] min-h-[552px]' : 'h-[392px] min-h-[392px]'} flex flex-col overflow-hidden`}>
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 입금 내역</span>
               <div className="flex items-center gap-2">
@@ -265,7 +268,7 @@ export default function DepositPanel({
           </div>
 
           {/* 출금 내역 */}
-          <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[552px]' : 'h-[392px] min-h-[392px]'} flex flex-col overflow-hidden`}>
+          <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-[552px] min-h-[552px]' : 'h-[392px] min-h-[392px]'} flex flex-col overflow-hidden`}>
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 출금 내역</span>
               <div className="flex items-center gap-2">

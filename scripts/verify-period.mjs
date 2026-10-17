@@ -381,7 +381,11 @@ ok('#G12 개별 카드 높이 보정', /'h-\[552px\]' : 'h-\[392px\]'/.test(hist
     !!hm &&
     new RegExp(`'h-full min-h-\\[${ov}px\\]' : 'h-\\[${kr}px\\]'`).test(read('src/components/PortfolioStatsPanel.tsx')) &&
     (read('src/components/DepositPanel.tsx')
-      .match(new RegExp(`'h-full min-h-\\[${ov}px\\]' : 'h-\\[${kr}px\\] min-h-\\[${kr}px\\]'`, 'g')) || []).length === 2);
+      .match(new RegExp(`'h-\\[${ov}px\\] min-h-\\[${ov}px\\]' : 'h-\\[${kr}px\\] min-h-\\[${kr}px\\]'`, 'g')) || []).length === 2);
+  // ⚠️ 입출금 카드의 해외 분기는 '최소'가 아니라 **고정** 높이다(사용자 보고 2026-10) — `h-full`은 부모 높이가
+  //    indefinite라 먹지 않아 사실상 min-h만 남고, 행이 늘면 카드가 투자요약(552px)보다 길어졌다.
+  ok('#G12c 입출금 카드 해외 분기가 h-full(내용에 따라 늘어남)로 되돌아가지 않았다',
+    !/isOverseas \? 'h-full/.test(read('src/components/DepositPanel.tsx')));
 }
 
 // #G13 fail-safe: 화이트리스트가 아니면 원본 반환 (선언 + 두 호출부 모두)
