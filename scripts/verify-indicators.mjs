@@ -9,7 +9,8 @@
 //
 //   파트① src/indicatorCoverage.ts **직접 import** (#1~#20) — 미러 금지
 //   파트② api/_indicatorSources.ts **직접 import** (#21~#32)
-//   파트③ 소스 텍스트 가드 (#G1~#G16) — 배선(서버 라우트·훅 트리거·저장 경로)
+//   파트③ 소스 텍스트 가드 (#G1~#G21) — 배선(서버 라우트·훅 트리거·저장 경로)
+//   ⚠️ 2026-10 확장: 패널 13개 항목 **전부**(지수 KOSPI·S&P500·Nasdaq100 포함)가 같은 보충 경로를 탄다(#10c·#G17~#G21).
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다. 실패 시 먼저 정규식이 낡았는지 확인할 것.
 
 import { readFileSync } from 'node:fs';
@@ -109,6 +110,11 @@ if (C) {
   // 소스 최초일(floor) — BTC는 2014-09-17 이전을 줄 수 없다 → 그 앞을 부족으로 보지 않는다
   eq('#10 소스 최초일 이전은 요구하지 않는다(BTC)', seg(daily('2014-09-17', '2026-10-16'), '2004-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.btc), []);
   eq('#10b floor 표 — btc/eth/fedRate', [INDICATOR_SOURCE_FLOOR.btc, INDICATOR_SOURCE_FLOOR.eth, INDICATOR_SOURCE_FLOOR.fedRate], ['2014-09-17', '2017-11-09', '1982-09-27']);
+  // 패널 13개 항목 전부 — 키 목록은 순수 모듈이 단일 소스, floor는 13개 전부 ISO 날짜
+  eq('#10c 커버리지 키 = 지표 10 + 지수 3 (13개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 13);
+  eq('#10d 지수 키 3종', C.MARKET_INDEX_KEYS, ['kospi', 'sp500', 'nasdaq']);
+  ok('#10e 13개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
+  eq('#10f 지수 floor 이전은 요구하지 않는다(KOSPI 1997-07-01)', seg(daily('1997-07-01', '2026-10-16', 100), '1980-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.kospi), []);
 
   // 손상값은 날짜로 치지 않는다
   eq('#11 손상 키·0·NaN 값 무시', seg({ bad: 1, '2025-01-01': 0, '2025-01-02': NaN, ...daily('2004-01-05', '2026-10-16') }, '2004-01-01', '', TODAY), []);
@@ -191,6 +197,24 @@ ok('#G13 훅: Drive 로드 뒤 1회 · 조회기간 변경 · 새로고침 3개 
 ok('#G14 훅: MARKET 파일을 직접 쓰지 않는다(App 자동 저장 게이트 경유)', !/saveDriveFile\(/.test(M));
 ok('#G15 훅: 국내금은 조회 시작일까지 페이지를 이어 받는다', /&stop=\$\{stop\}/.test(M) && /if \(!\(json\.next > page\)\) break;/.test(M));
 ok('#G16 순수 모듈은 import 0건', !/^\s*import\s/m.test(COV) && !/^\s*import\s/m.test(SRCS));
+
+// ── 2026-10: 지수 3종도 같은 보충 경로 ──
+const MI = stripComments(src('src/components/MarketIndicators.tsx'));
+// 패널은 같은 13개를 두 곳(표시 목록·검증 표)에서 나열한다 — 중복을 걷어 '어떤 항목이 있는가'만 센다
+const panelKeys = [...new Set([...MI.matchAll(/label:\s*'[^']+',\s*key:\s*'(\w+)'/g)].map(m => m[1]))];
+const covKeys = (COV.match(/INDICATOR_HISTORY_KEYS = \[([^\]]+)\]/) || [])[1];
+const idxKeys = (COV.match(/MARKET_INDEX_KEYS = \[([^\]]+)\]/) || [])[1];
+const covSet = new Set([...(covKeys || '').matchAll(/'(\w+)'/g), ...(idxKeys || '').matchAll(/'(\w+)'/g)].map(m => m[1]));
+ok('#G17 패널의 모든 항목(13)이 커버리지 키 목록에 있다', panelKeys.length === 13 && panelKeys.every(k => covSet.has(k)));
+ok('#G18 서버: 지수 3종 Yahoo 라우트(kospi/sp500/nasdaq) — 임의 구간 조회 가능', /kospi:\s*'\^KS11'/.test(H) && /sp500:\s*'\^GSPC'/.test(H) && /nasdaq:\s*'\^NDX'/.test(H));
+ok('#G19 훅: 커버리지 키는 순수 모듈 목록 그대로(13개) — 손나열 금지', /const AUTO_INDICATOR_KEYS = INDICATOR_COVERAGE_KEYS;/.test(M)
+  && !/AUTO_INDICATOR_KEYS = \['us10y'/.test(M));
+ok('#G20 훅: 지수는 marketIndices를 읽고 marketIndices에 병합(상태 표 갱신 포함)', /const hist = MARKET_INDEX_KEYS\.includes\(key\) \? marketIndicesRef\.current\?\.\[key\] : indicatorHistoryMapRef\.current\?\.\[key\];/.test(M)
+  && /if \(MARKET_INDEX_KEYS\.includes\(key\)\) \{[\s\S]{0,700}setMarketIndices\(prev => \{[\s\S]{0,200}mergeIndicatorHistory\(prev\?\.\[key\], parsedData\)/.test(M)
+  && /setIndexFetchStatus\(p => \(\{ \.\.\.p, \[key\]: buildIndexStatus\(mergedIdx, 'Yahoo\(server\)'\) \}\)\);/.test(M)
+  && /kospi:\s*'yahoo:\^KS11'/.test(M));
+ok('#G21 훅: 옛 지수 머리 확장 effect 삭제(두 경로 중복 수집 방지) · 전체 수집 버튼도 13개', !/indexAutoExpandedRef/.test(M)
+  && /for \(const key of INDICATOR_COVERAGE_KEYS\) \{/.test(M));
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:indicators — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

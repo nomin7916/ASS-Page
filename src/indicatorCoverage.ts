@@ -12,14 +12,29 @@ export const INDICATOR_TAIL_STALE_DAYS = 4;   // 주말·하루 늦게 나오는
 export const INDICATOR_TAIL_OVERLAP_DAYS = 5; // 꼬리 재조회는 며칠 겹쳐서 받는다(장중 잠정값 보정)
 export const MAX_GAP_SEGMENTS = 4;            // 한 번에 채우는 내부 공백 수 상한(큰 것부터)
 
+// 커버리지 보충 대상 = 시장지표 패널의 13개 항목 전부(사용자 확정 2026-10 "기준금리 이외의 모든 항목도 똑같이").
+// ⚠️ 두 목록이 단일 소스다 — 훅(useMarketData)과 검증(verify:indicators)이 이 배열을 직접 읽는다.
+//   indicatorHistoryMap에 사는 지표 10종 / marketIndices에 사는 지수 3종(저장 위치가 달라 병합 대상만 갈린다).
+export const INDICATOR_HISTORY_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'goldKr'];
+export const MARKET_INDEX_KEYS = ['kospi', 'sp500', 'nasdaq'];
+export const INDICATOR_COVERAGE_KEYS = [...INDICATOR_HISTORY_KEYS, ...MARKET_INDEX_KEYS];
+
 // 소스가 원리적으로 그보다 과거 값을 줄 수 없는 날짜 — 그 앞을 '부족'으로 보면 매 세션 헛조회가 난다.
+// ⚠️ 13개 키 전부 있어야 한다(#10c) — 빠진 지표는 2004년 이전 조회에서 매 세션 머리 구간을 헛조회한다.
 export const INDICATOR_SOURCE_FLOOR: Record<string, string> = {
+  us10y: '1962-01-02',    // FRED DGS10 최초일
+  fedRate: '1982-09-27',  // FRED DFEDTAR 최초일
+  kr10y: '2000-10-02',    // FRED IRLTLT01KRM156N(월별) 최초월 — 네이버 일별은 그보다 늦다
+  goldIntl: '2000-08-30', // Yahoo GC=F 최초일
+  usdkrw: '1981-04-13',   // FRED DEXKOUS 최초일(Yahoo KRW=X는 2003-12~)
+  dxy: '1971-01-04',      // Yahoo DX-Y.NYB 최초일
+  vix: '1990-01-02',
   btc: '2014-09-17',      // Yahoo BTC-USD 최초일
   eth: '2017-11-09',      // Yahoo ETH-USD 최초일
-  goldIntl: '2000-08-30', // Yahoo GC=F 최초일
-  vix: '1990-01-02',
-  fedRate: '1982-09-27',  // FRED DFEDTAR 최초일
   goldKr: '2008-01-02',   // 네이버 국내 금시세 일별(근사) — 그 이전은 조회하지 않는다
+  kospi: '1997-07-01',    // Yahoo ^KS11 최초일
+  sp500: '1927-12-30',    // Yahoo ^GSPC 최초일
+  nasdaq: '1985-10-01',   // Yahoo ^NDX 최초일
 };
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;

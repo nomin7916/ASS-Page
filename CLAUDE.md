@@ -5654,6 +5654,15 @@ App의 `handleSingleStockRefresh`). 목표 금액이 현재가에서 파생되�
 - **기준금리 = DFEDTAR(~2008-12-15) + DFEDTARU(2008-12-16~) 이음**(`joinFedRate`). US10Y는 FRED 뒤 최신 꼬리를
   네이버로, KR10Y는 네이버 앞쪽을 FRED 월별로, USDKRW는 Yahoo 앞쪽을 FRED DEXKOUS로 보충한다(`fillBefore`/`fillAfter` —
   겹치는 날은 주 소스가 이긴다). 네이버 채권 이력은 최신→과거 청크로 이어 받고 진전이 없으면 멈춘다.
+- **⚠️ 대상은 시장지표 패널의 13개 항목 전부**(사용자 확정 2026-10-17 "기준금리 이외의 모든 항목도 똑같이") — 지표 10종
+  (`INDICATOR_HISTORY_KEYS`, `indicatorHistoryMap`에 산다) + **지수 3종**(`MARKET_INDEX_KEYS` = KOSPI·S&P500·Nasdaq100,
+  `marketIndices`에 산다). 키 목록의 단일 소스는 `src/indicatorCoverage.ts`이고 훅은 `INDICATOR_COVERAGE_KEYS`를 그대로
+  쓴다(손나열 금지 — `#G17`이 패널 항목 13개가 전부 목록에 있는지 잰다). 지수는 서버 라우트 `/api/history?key=kospi|sp500|nasdaq`
+  (`YAHOO_SYMBOLS` ^KS11·^GSPC·^NDX)를 새로 타고, `fetchIndicatorHistory`의 지수 분기가 `marketIndices`에 병합 + `indexFetchStatus`
+  갱신. ⚠️ 옛 '지수 머리 확장' effect(`indexAutoExpandedRef` — 시작일부터 **전량** 재수집)는 **삭제**됐다(`#G21`) — 커버리지가
+  머리·내부 공백·최신 꼬리를 전부 맡으므로 둘을 함께 두면 조회기간 변경마다 같은 지수를 두 번 받는다. 앱 시작 시 `loadIndices`
+  (클라이언트 Yahoo 전량 수집)는 Drive 없이도 지수가 보이게 하는 종전 경로라 그대로 둔다(그 뒤 커버리지는 부족분만 받는다).
+  `INDICATOR_SOURCE_FLOOR`는 **13개 키 전부**(`#10e`) — 빠지면 1980년대 조회에서 매 세션 머리 구간을 헛조회한다.
 - **원인 ② 자동 수집이 '없음/최신일 경과'만 봤다** → `src/indicatorCoverage.ts indicatorMissingSegments`(import 0건)가
   머리(조회 시작~보유 최초일)·내부 공백(45일 초과)·꼬리(최신일~오늘, 4일 초과) 구간을 계산하고, 훅
   `useMarketData.ensureIndicatorCoverage`가 **그 구간만** 받아 `mergeIndicatorHistory`로 병합한다(전량 재조회 아님).
@@ -5668,7 +5677,8 @@ App의 `handleSingleStockRefresh`). 목표 금액이 현재가에서 파생되�
 - 응답 캐시: 종료일이 최근 2일 이내면 1h, 과거 구간만이면 24h(`isRecentRangeEnd`).
 - **알려진 한계**: MARKET 파일은 저장마다 통째로 올라간다(기존 동작 — 지표가 22년치로 늘면 파일이 1~2MB가 될 수 있다).
   소스 자체에 없는 기간(예: 국내금·BTC 초창기)은 비어 있는 것이 정상이다.
-- 검증: `npm run verify:indicators` (직접 import #1~#32 + 배선 가드 #G1~#G16).
+- 검증: `npm run verify:indicators` (직접 import #1~#32(+#10c~#10f) + 배선 가드 #G1~#G21). 지수 확장분은 **변이 6종 + 음성 대조 1종**
+  (지수 키 손나열 복귀 · 서버 라우트 삭제 · 지수 분기 삭제 · floor 누락 · 옛 머리 확장 effect 부활 · 패널 항목 누락)으로 검출을 실증했다.
 
 ### 종목코드 입력 → 이름·종가(·분배금)를 **그 자리에서** 확보 (⚠️ 회귀 주의)
 

@@ -102,6 +102,11 @@ const YAHOO_SYMBOLS: Record<string, string> = {
   vix:      '^VIX',
   btc:      'BTC-USD',
   eth:      'ETH-USD',
+  // 지수 3종(2026-10) — 시장지표 패널의 KOSPI·S&P500·Nasdaq100도 다른 지표와 같은 커버리지 보충(머리·공백·꼬리)을
+  // 타야 한다. 옛 경로는 클라이언트가 외부 CORS 프록시로 Yahoo를 직접 불러 '시작일~오늘' 전량만 받았다.
+  kospi:    '^KS11',
+  sp500:    '^GSPC',
+  nasdaq:   '^NDX',
 };
 
 // YYYYMMDD → Unix timestamp (초)
@@ -270,7 +275,7 @@ function toCSV(data: Record<string, number>): string {
   return lines.join('\n');
 }
 
-// 순수 과거 지표 히스토리(us10y/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth) → 24h 캐시
+// 순수 과거 지표 히스토리(us10y/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth + 지수 kospi/sp500/nasdaq) → 24h 캐시
 // ⚠️ 종료일이 최근(어제·오늘)인 요청은 1h만 캐시한다 — 24h로 두면 '새로고침' 꼬리 수집이 하루 내내 같은
 //    (오늘 값이 빠진) 응답을 돌려받는다. 과거 구간만 담은 요청은 값이 바뀌지 않으므로 24h 그대로.
 function csvResponse(data: Record<string, number>, recent = false): Response {

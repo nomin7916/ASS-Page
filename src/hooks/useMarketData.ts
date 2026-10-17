@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { fetchIndexData } from '../api';
 import { buildIndexStatus, parseIndexCSV } from '../utils';
 import { getTodayKST } from './useMarketCalendar';
-import { indicatorMissingSegments, mergeIndicatorHistory, INDICATOR_SOURCE_FLOOR } from '../indicatorCoverage';
+import { indicatorMissingSegments, mergeIndicatorHistory, INDICATOR_SOURCE_FLOOR, INDICATOR_COVERAGE_KEYS, MARKET_INDEX_KEYS } from '../indicatorCoverage';
 
 export const defaultCompStocks = [
   { id: 1, code: '', name: '비교종목1', active: false, loading: false, color: '#10b981' },
@@ -417,12 +417,17 @@ export function useMarketData({
     vix:      'yahoo:^VIX',
     btc:      'yahoo:BTC-USD',
     eth:      'yahoo:ETH-USD',
+    // 지수 3종 — 저장 위치는 marketIndices(아래 fetchIndicatorHistory의 지수 분기)
+    kospi:    'yahoo:^KS11',
+    sp500:    'yahoo:^GSPC',
+    nasdaq:   'yahoo:^NDX',
   };
 
   const INDICATOR_LABELS = {
     us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold', goldKr: '국내금',
     usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리', vix: 'VIX',
     btc: 'Bitcoin', eth: 'Ethereum',
+    kospi: 'KOSPI', sp500: 'S&P500', nasdaq: 'Nasdaq100',
   };
 
   // stooq에서 과거 데이터 CSV 가져오기
@@ -499,6 +504,22 @@ export function useMarketData({
       return null;
     }
 
+    // 지수(KOSPI/S&P500/Nasdaq)는 indicatorHistoryMap이 아니라 marketIndices에 산다 — 차트·패널·Drive MARKET 저장이
+    // 그 상태를 읽는다. 다른 지표와 같은 서버 경로로 받되 병합 대상만 갈린다(상태 표도 함께 갱신).
+    if (MARKET_INDEX_KEYS.includes(key)) {
+      // 업데이터 안에서 다른 setState를 부르지 않는다(StrictMode 이중 호출) — 상태 표는 ref 기준 병합 결과로 따로 갱신
+      const prevIdx = marketIndicesRef.current?.[key];
+      const mergedIdx = mergeIndicatorHistory(prevIdx, parsedData);
+      if (mergedIdx !== prevIdx) {
+        setMarketIndices(prev => {
+          const merged = mergeIndicatorHistory(prev?.[key], parsedData);
+          return merged === prev?.[key] ? prev : { ...prev, [key]: merged };
+        });
+        setIndexFetchStatus(p => ({ ...p, [key]: buildIndexStatus(mergedIdx, 'Yahoo(server)') }));
+      }
+      return parsedData;
+    }
+
     setIndicatorHistoryMap(prev => {
       const merged = mergeIndicatorHistory(prev[key], parsedData);
       return merged === prev[key] ? prev : { ...prev, [key]: merged };
@@ -508,8 +529,7 @@ export function useMarketData({
 
   // 지표 전체 일괄 수집 (Yahoo Finance / FRED / Naver)
   const fetchAllIndicatorHistory = async () => {
-    const keys = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'goldKr', 'vix', 'btc', 'eth'];
-    for (const key of keys) {
+    for (const key of INDICATOR_COVERAGE_KEYS) {
       await fetchIndicatorHistory(key, appliedRangeRef.current?.start, appliedRangeRef.current?.end);
     }
   };
@@ -665,7 +685,8 @@ export function useMarketData({
   // 받은 값은 indicatorHistoryMap에 병합 → App 자동 저장이 Drive MARKET 파일(portfolio_market.json)에 남긴다.
   // ⚠️ 구간 키(지표:시작:끝) 단위로 세션당 1회 — 소스가 그보다 과거 값을 주지 못해도 매번 헛조회하지 않는다.
   //    새로고침(forceTail)만 최신 꼬리를 다시 받는다.
-  const AUTO_INDICATOR_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'goldKr'];
+  // ⚠️ 13개 전부(지표 10 + 지수 3) — 사용자 확정 2026-10 "기준금리 이외의 모든 항목도 똑같이". 지수는 marketIndices를 읽는다.
+  const AUTO_INDICATOR_KEYS = INDICATOR_COVERAGE_KEYS;
   const coverageGuardRef = useRef(new Set());
   const coverageReadyRef = useRef(false);
   const coverageRunningRef = useRef(false);
@@ -681,7 +702,7 @@ export function useMarketData({
       const start = appliedRangeRef.current?.start || '';
       const end = appliedRangeRef.current?.end || '';
       await Promise.all(AUTO_INDICATOR_KEYS.map(async (key) => {
-        const hist = indicatorHistoryMapRef.current?.[key];
+        const hist = MARKET_INDEX_KEYS.includes(key) ? marketIndicesRef.current?.[key] : indicatorHistoryMapRef.current?.[key];
         const segs = indicatorMissingSegments(hist, start, end, today, INDICATOR_SOURCE_FLOOR[key]);
         // 조회 시작일이 없고 데이터도 없으면 종전처럼 기본 기간(최근 3년)을 한 번 받는다
         if (segs.length === 0 && !start && (!hist || Object.keys(hist).length === 0)) {
@@ -767,24 +788,8 @@ export function useMarketData({
     loadIndices();
   }, []);
 
-  // 조회기간이 보유 지수 데이터보다 앞으로 확장되면 자동 백필 (compStocks 커버리지 확장 패턴과 동일).
-  // 보유 데이터의 최초일이 조회기간 시작일보다 늦으면 시작일부터 전체 재수집 → 저장은 App 자동저장 effect가 처리.
-  const indexAutoExpandedRef = useRef(new Set());
-  useEffect(() => {
-    const start = appliedRange?.start;
-    if (!start) return;
-    (['kospi', 'sp500', 'nasdaq'] as const).forEach((key) => {
-      const hist = marketIndicesRef.current?.[key];
-      if (!hist || Object.keys(hist).length === 0) return; // 데이터 없음 → loadIndices가 처리
-      const earliest = Object.keys(hist).sort()[0];
-      if (earliest <= start) return; // 이미 커버
-      const guardKey = `${key}:${start}`;
-      if (indexAutoExpandedRef.current.has(guardKey)) return; // 중복 트리거 방지
-      indexAutoExpandedRef.current.add(guardKey);
-      fetchSingleIndexHistory(key, start);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedRange?.start]);
+  // (옛 '지수 머리 확장' effect는 삭제 — 지수 3종도 ensureIndicatorCoverage가 머리·내부 공백·최신 꼬리를 전부 맡는다.
+  //  둘을 함께 두면 조회기간 변경마다 같은 지수를 두 경로로 두 번 받았다.)
 
   return {
     // 상태
