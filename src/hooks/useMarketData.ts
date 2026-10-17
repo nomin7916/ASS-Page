@@ -1,8 +1,9 @@
 // @ts-nocheck
 import { useState, useEffect, useRef } from 'react';
-import { DRIVE_FILES, saveDriveFile } from '../driveStorage';
 import { fetchIndexData } from '../api';
 import { buildIndexStatus, parseIndexCSV } from '../utils';
+import { getTodayKST } from './useMarketCalendar';
+import { indicatorMissingSegments, mergeIndicatorHistory, INDICATOR_SOURCE_FLOOR } from '../indicatorCoverage';
 
 export const defaultCompStocks = [
   { id: 1, code: '', name: '비교종목1', active: false, loading: false, color: '#10b981' },
@@ -428,37 +429,41 @@ export function useMarketData({
   const fetchIndicatorHistory = async (key, startDate, endDate) => {
     const symbol = STOOQ_SYMBOLS[key];
     if (!symbol) {
-      // 국내금(goldKr): 네이버 fchart에서 장기 데이터 크롤링
+      // 국내금(goldKr): 네이버 금일별시세 페이지 커서 수집 — startDate(조회 시작일)에 닿을 때까지 이어 받는다.
+      // startDate가 없으면 종전처럼 최근 20페이지만(빠른 갱신).
       if (key === 'goldKr') {
         setIndicatorHistoryLoading(prev => ({ ...prev, goldKr: true }));
+        const stop = startDate ? String(startDate).replace(/-/g, '') : '';
         let goldData = null;
         try {
-          const res = await fetch('/api/history?key=goldKr', { signal: AbortSignal.timeout(30000) });
-          if (res.ok) {
+          const acc = {};
+          let page = 1;
+          for (let calls = 0; calls < 12; calls++) {
+            const url = `/api/history?key=goldKr&page=${page}&pages=${stop ? 40 : 20}${stop ? `&stop=${stop}` : ''}`;
+            const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+            if (!res.ok) break;
             const json = await res.json();
-            if (json && typeof json === 'object' && Object.keys(json).length > 10) {
-              goldData = json;
-            }
+            // 구버전 서버(페이지 모드 미지원)는 날짜 맵을 그대로 준다 → 그대로 쓰고 끝낸다
+            const isPaged = json && typeof json === 'object' && json.data && typeof json.data === 'object';
+            Object.assign(acc, isPaged ? json.data : (json || {}));
+            if (!isPaged || json.done || !stop) break;
+            const earliest = Object.keys(acc).sort()[0];
+            if (earliest && earliest.replace(/-/g, '') <= stop) break;
+            if (!(json.next > page)) break;
+            page = json.next;
           }
+          if (Object.keys(acc).length > 0) goldData = acc;
         } catch (e) { /* 수집 실패 */ }
         setIndicatorHistoryLoading(prev => ({ ...prev, goldKr: false }));
         if (!goldData || Object.keys(goldData).length === 0) {
           return null;
         }
-        const mergedGoldKr = { ...(indicatorHistoryMapRef.current.goldKr || {}), ...goldData };
-        setIndicatorHistoryMap(prev => ({ ...prev, goldKr: mergedGoldKr }));
-        // Drive 백업 저장
-        if (driveTokenRef.current) {
-          try {
-            const folderId = await ensureDriveFolder(driveTokenRef.current);
-            const mergedIhm = { ...indicatorHistoryMapRef.current, goldKr: mergedGoldKr };
-            await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.MARKET, {
-              marketIndices: marketIndicesRef.current,
-              marketIndicators: marketIndicatorsRef.current,
-              indicatorHistoryMap: mergedIhm,
-            });
-          } catch (e) { /* Drive 저장 실패는 무시 */ }
-        }
+        // ⚠️ 여기서 MARKET 파일을 직접 쓰지 않는다 — 옛 코드는 ref 값으로 MARKET을 통째로 덮어써, Drive 로드
+        //    전·실패 세션이면 빈 지수·지표로 저장본을 덮을 수 있었다. 저장은 App 자동 저장(stateAppliedRef 게이트)이 맡는다.
+        setIndicatorHistoryMap(prev => {
+          const merged = mergeIndicatorHistory(prev.goldKr, goldData);
+          return merged === prev.goldKr ? prev : { ...prev, goldKr: merged };
+        });
         return goldData;
       }
       return null;
@@ -473,7 +478,7 @@ export function useMarketData({
 
     let parsedData = null;
     try {
-      const res = await fetch(`/api/history?key=${key}&start=${d1}&end=${d2}`, { signal: AbortSignal.timeout(20000) });
+      const res = await fetch(`/api/history?key=${key}&start=${d1}&end=${d2}`, { signal: AbortSignal.timeout(25000) });
       if (res.ok) {
         const contentType = res.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
@@ -494,7 +499,10 @@ export function useMarketData({
       return null;
     }
 
-    setIndicatorHistoryMap(prev => ({ ...prev, [key]: { ...(prev[key] || {}), ...parsedData } }));
+    setIndicatorHistoryMap(prev => {
+      const merged = mergeIndicatorHistory(prev[key], parsedData);
+      return merged === prev[key] ? prev : { ...prev, [key]: merged };
+    });
     return parsedData;
   };
 
@@ -616,6 +624,8 @@ export function useMarketData({
       setIndicatorFetchStatus(statusMap);
       setIndicatorLoading(false);
       indicatorInFlightRef.current = false;
+      // 사용자가 누른 새로고침은 과거 이력의 부족분·최신 꼬리까지 함께 채운다(Drive 로드 뒤에만)
+      if (fresh && coverageReadyRef.current) ensureIndicatorCoverage({ forceTail: true });
     }
   };
 
@@ -649,48 +659,74 @@ export function useMarketData({
   useEffect(() => { marketIndicatorsRef.current = marketIndicators; }, [marketIndicators]);
   useEffect(() => { indicatorHistoryMapRef.current = indicatorHistoryMap; }, [indicatorHistoryMap]);
 
-  // 국내금 장기 데이터 자동 크롤링: Drive 저장 완료 후 데이터 부족/오래된 경우 자동 수집
+  // ── 시장지표 커버리지 보충 — 조회기간 안에서 비어 있는 구간(앞쪽·중간 공백·최신 꼬리)만 서버에서 받아 병합 ──
+  // 발단(2026-10): 조회기간 2004~인데 VIX 등이 2015년 이후만 있었다. 옛 자동 수집은 "데이터 없음/최신일 3일 경과"만
+  //   봐서 이미 일부 있는 지표의 앞쪽 공백을 영영 채우지 않았다(사용자가 파이썬으로 받아 JSON을 직접 올려야 했다).
+  // 받은 값은 indicatorHistoryMap에 병합 → App 자동 저장이 Drive MARKET 파일(portfolio_market.json)에 남긴다.
+  // ⚠️ 구간 키(지표:시작:끝) 단위로 세션당 1회 — 소스가 그보다 과거 값을 주지 못해도 매번 헛조회하지 않는다.
+  //    새로고침(forceTail)만 최신 꼬리를 다시 받는다.
+  const AUTO_INDICATOR_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'goldKr'];
+  const coverageGuardRef = useRef(new Set());
+  const coverageReadyRef = useRef(false);
+  const coverageRunningRef = useRef(false);
+  const coveragePendingRef = useRef(null);
+  const ensureIndicatorCoverage = async (opts: { forceTail?: boolean } = {}) => {
+    if (coverageRunningRef.current) {
+      coveragePendingRef.current = { forceTail: !!(opts.forceTail || coveragePendingRef.current?.forceTail) };
+      return;
+    }
+    coverageRunningRef.current = true;
+    try {
+      const today = getTodayKST();
+      const start = appliedRangeRef.current?.start || '';
+      const end = appliedRangeRef.current?.end || '';
+      await Promise.all(AUTO_INDICATOR_KEYS.map(async (key) => {
+        const hist = indicatorHistoryMapRef.current?.[key];
+        const segs = indicatorMissingSegments(hist, start, end, today, INDICATOR_SOURCE_FLOOR[key]);
+        // 조회 시작일이 없고 데이터도 없으면 종전처럼 기본 기간(최근 3년)을 한 번 받는다
+        if (segs.length === 0 && !start && (!hist || Object.keys(hist).length === 0)) {
+          const g = `${key}:init`;
+          if (coverageGuardRef.current.has(g)) return;
+          coverageGuardRef.current.add(g);
+          await fetchIndicatorHistory(key, null, null);
+          return;
+        }
+        for (const seg of segs) {
+          const g = `${key}:${seg.from}:${seg.to}`;
+          const forced = opts.forceTail && seg.kind === 'tail';
+          if (!forced && coverageGuardRef.current.has(g)) continue;
+          coverageGuardRef.current.add(g);
+          await fetchIndicatorHistory(key, seg.from, seg.to);
+        }
+      }));
+    } finally {
+      coverageRunningRef.current = false;
+      const pending = coveragePendingRef.current;
+      if (pending) {
+        coveragePendingRef.current = null;
+        ensureIndicatorCoverage(pending);
+      }
+    }
+  };
+
+  // Drive 로드 완료(저장 상태 'saved' 최초 관측) 뒤 1회 — 저장본 위에서 부족분만 받는다
   useEffect(() => {
-    if (goldKrAutoCrawledRef.current) return;
+    if (coverageReadyRef.current) return;
     if (driveStatus !== 'saved') return;
     if (!driveTokenRef.current) return;
-    const goldKrData = indicatorHistoryMap.goldKr || {};
-    const goldKrCount = Object.keys(goldKrData).length;
-    const latestDate = goldKrCount > 0 ? Object.keys(goldKrData).sort().pop() : null;
-    const daysSinceLatest = latestDate
-      ? Math.floor((Date.now() - new Date(latestDate).getTime()) / (1000 * 60 * 60 * 24))
-      : Infinity;
-    if (goldKrCount < 200 || daysSinceLatest > 3) {
-      goldKrAutoCrawledRef.current = true;
-      fetchIndicatorHistory('goldKr', null, null);
-    }
+    coverageReadyRef.current = true;
+    goldKrAutoCrawledRef.current = true;
+    stooqAutoCrawledRef.current = true;
+    ensureIndicatorCoverage();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveStatus]);
 
-  // 지표 자동 크롤링: Drive 저장 완료 후 데이터 없거나 3일 이상 오래된 경우 자동 수집
+  // 조회기간이 바뀌면(특히 앞쪽으로 확장) 새 구간의 부족분을 받는다 — Drive 로드 전에는 기다린다
   useEffect(() => {
-    if (stooqAutoCrawledRef.current) return;
-    if (driveStatus !== 'saved') return;
-    if (!driveTokenRef.current) return;
-    const STOOQ_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth'];
-    const staleKeys = STOOQ_KEYS.filter(key => {
-      const hist = indicatorHistoryMap[key] || {};
-      const count = Object.keys(hist).length;
-      if (count === 0) return true;
-      const latestDate = Object.keys(hist).sort().pop();
-      const daysSince = Math.floor((Date.now() - new Date(latestDate).getTime()) / (1000 * 60 * 60 * 24));
-      return daysSince > 3;
-    });
-    if (staleKeys.length > 0) {
-      stooqAutoCrawledRef.current = true;
-      (async () => {
-        for (const key of staleKeys) {
-          await fetchIndicatorHistory(key, null, null);
-        }
-      })();
-    }
+    if (!coverageReadyRef.current) return;
+    ensureIndicatorCoverage();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [driveStatus]);
+  }, [appliedRange?.start, appliedRange?.end]);
 
   // 앱 시작 시 KOSPI / S&P500 / Nasdaq 히스토리 로드
   useEffect(() => {
@@ -778,5 +814,6 @@ export function useMarketData({
     handleIndicatorUpload,
     fetchMarketIndicators,
     fetchSingleIndexHistory,
+    ensureIndicatorCoverage,
   };
 }

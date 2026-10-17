@@ -7,6 +7,7 @@ const FRED_KEY = process.env.FRED_API_KEY ?? '';
 
 import { getKisToken } from './_kisToken.js';
 import { fetchKisDailyRange } from './_kisDaily.js';
+import { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd } from './_indicatorSources.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
@@ -146,23 +147,27 @@ async function fetchYahooHistory(symbol: string, d1: string, d2: string): Promis
   }
 }
 
-// FRED API로 과거 일별 데이터 수집 (us10y, usdkrw 등)
-async function fetchFredHistory(seriesId: string, d1: string, d2: string): Promise<Record<string, number>> {
+// FRED 과거 일별 데이터 수집 — ① API(키 있을 때) → ② fredgraph.csv(키 불필요) 폴백.
+// ⚠️ limit는 반드시 최대(100000)로 — 옛 값 2000 + sort_order=asc 조합은 조회 시작일부터 2000건만 돌려줘
+//    장기 조회에서 **최근 구간이 통째로 잘렸다**(기준금리 DFEDTARU는 주말 포함 일별이라 2000건 ≈ 5.5년 →
+//    2004년부터 조회하면 2014년 이후가 없음 = "현재 기준금리가 반영되지 않음"의 원인).
+// ⚠️ 키가 없거나 API가 실패해도 fredgraph.csv는 키 없이 같은 시계열을 준다(파이썬 pandas_datareader와 같은 경로).
+const toIsoDate = (d: string) => `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+
+async function fetchFredApiHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000): Promise<Record<string, number>> {
   if (!FRED_KEY) return {};
-  const toDate = (d: string) => `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
   const params: Record<string, string> = {
     series_id:  seriesId,
     api_key:    FRED_KEY,
     file_type:  'json',
     sort_order: 'asc',
-    limit:      '2000',
+    limit:      '100000',
   };
-  if (d1) params.observation_start = toDate(d1);
-  if (d2) params.observation_end   = toDate(d2);
-
+  if (d1) params.observation_start = toIsoDate(d1);
+  if (d2) params.observation_end   = toIsoDate(d2);
   try {
     const url = `https://api.stlouisfed.org/fred/series/observations?${new URLSearchParams(params)}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return {};
     const data: any = await res.json();
     const record: Record<string, number> = {};
@@ -177,47 +182,83 @@ async function fetchFredHistory(seriesId: string, d1: string, d2: string): Promi
   }
 }
 
-// Naver m.stock 채권 prices API (일별 데이터 — FRED 월별보다 정밀)
-async function fetchNaverBondHistory(reutersCode: string, d1: string, d2: string): Promise<Record<string, number>> {
-  // d1/d2: YYYYMMDD → YYYYMMDDHHMMSS
-  const toNaverDt = (d: string, end = false) =>
-    `${d.slice(0,4)}${d.slice(4,6)}${d.slice(6,8)}${end ? '235959' : '000000'}`;
-
-  const defStart = new Date(Date.now() - 3 * 365.25 * 24 * 3600 * 1000)
-    .toISOString().split('T')[0].replace(/-/g, '');
-  const defEnd = new Date().toISOString().split('T')[0].replace(/-/g, '');
-
-  const start = toNaverDt(d1 || defStart, false);
-  const end   = toNaverDt(d2 || defEnd,   true);
-
-  const url = `https://m.stock.naver.com/api/marketIndex/bond/prices`
-    + `?category=bond&reutersCode=${encodeURIComponent(reutersCode)}`
-    + `&startDateTime=${start}&endDateTime=${end}&timeframe=day`;
-
+async function fetchFredGraphHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000): Promise<Record<string, number>> {
+  let url = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(seriesId)}`;
+  if (d1) url += `&cosd=${toIsoDate(d1)}`;
+  if (d2) url += `&coed=${toIsoDate(d2)}`;
   try {
     const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
-        'Referer':    'https://m.stock.naver.com/',
-        'Accept':     'application/json',
-      },
-      signal: AbortSignal.timeout(12000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return {};
-    const data: any = await res.json();
-    if (!data?.isSuccess || !Array.isArray(data?.result)) return {};
-
-    const record: Record<string, number> = {};
-    for (const item of data.result as any[]) {
-      if (!item.localTradedAt || !item.closePrice) continue;
-      const date  = String(item.localTradedAt).split('T')[0]; // "YYYY-MM-DD"
-      const price = parseFloat(String(item.closePrice));
-      if (!isNaN(price) && price > 0) record[date] = price;
-    }
-    return record;
+    return parseFredGraphCsv(await res.text());
   } catch {
     return {};
   }
+}
+
+async function fetchFredHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000): Promise<Record<string, number>> {
+  const api = await fetchFredApiHistory(seriesId, d1, d2, timeoutMs);
+  if (Object.keys(api).length > 0) return api;
+  return fetchFredGraphHistory(seriesId, d1, d2, timeoutMs);
+}
+
+// 조각 병합용 — 한 소스의 최초일·최신일
+const firstKey = (r: Record<string, number>) => Object.keys(r).sort()[0] ?? '';
+const lastKey  = (r: Record<string, number>) => Object.keys(r).sort().pop() ?? '';
+const ymd = (iso: string) => iso.replace(/-/g, '');
+const shiftYmd = (d: string, days: number) => {
+  const t = Date.UTC(+d.slice(0,4), +d.slice(4,6) - 1, +d.slice(6,8)) + days * 86400000;
+  return new Date(t).toISOString().slice(0, 10).replace(/-/g, '');
+};
+
+// Naver m.stock 채권 prices API (일별 데이터 — FRED 월별보다 정밀)
+// 한 번에 돌려주는 건수에 상한이 있을 수 있어 **최신→과거 순으로 청크를 이어 받는다**(진전이 없으면 멈춤).
+async function fetchNaverBondHistory(reutersCode: string, d1: string, d2: string, deadlineAt = Date.now() + 15000): Promise<Record<string, number>> {
+  const toNaverDt = (d: string, end = false) => `${d.slice(0, 8)}${end ? '235959' : '000000'}`;
+  const defStart = new Date(Date.now() - 3 * 365.25 * 24 * 3600 * 1000)
+    .toISOString().split('T')[0].replace(/-/g, '');
+  const defEnd = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const limitStart = (d1 || defStart).slice(0, 8);
+  let chunkEnd = (d2 || defEnd).slice(0, 8);
+  const record: Record<string, number> = {};
+
+  for (let iter = 0; iter < 15; iter++) {
+    const remaining = deadlineAt - Date.now();
+    if (remaining < 1500) break;
+    const url = `https://m.stock.naver.com/api/marketIndex/bond/prices`
+      + `?category=bond&reutersCode=${encodeURIComponent(reutersCode)}`
+      + `&startDateTime=${toNaverDt(limitStart)}&endDateTime=${toNaverDt(chunkEnd, true)}&timeframe=day`;
+    let earliest = '';
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+          'Referer':    'https://m.stock.naver.com/',
+          'Accept':     'application/json',
+        },
+        signal: AbortSignal.timeout(Math.min(12000, remaining)),
+      });
+      if (!res.ok) break;
+      const data: any = await res.json();
+      if (!data?.isSuccess || !Array.isArray(data?.result)) break;
+      for (const item of data.result as any[]) {
+        if (!item.localTradedAt || !item.closePrice) continue;
+        const date  = String(item.localTradedAt).split('T')[0]; // "YYYY-MM-DD"
+        const price = parseFloat(String(item.closePrice));
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date) && !isNaN(price) && price > 0) {
+          record[date] = price;
+          const k = ymd(date);
+          if (!earliest || k < earliest) earliest = k;
+        }
+      }
+    } catch { break; }
+    // 진전 없음(빈 응답·같은 구간 반복) 또는 시작일 도달 → 종료
+    if (!earliest || earliest <= limitStart || earliest >= chunkEnd) break;
+    chunkEnd = shiftYmd(earliest, -1);
+  }
+  return record;
 }
 
 // { date: price } → "Date,Close\n..." CSV 변환 (기존 parseIndexCSV 호환)
@@ -230,12 +271,16 @@ function toCSV(data: Record<string, number>): string {
 }
 
 // 순수 과거 지표 히스토리(us10y/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth) → 24h 캐시
-function csvResponse(data: Record<string, number>): Response {
+// ⚠️ 종료일이 최근(어제·오늘)인 요청은 1h만 캐시한다 — 24h로 두면 '새로고침' 꼬리 수집이 하루 내내 같은
+//    (오늘 값이 빠진) 응답을 돌려받는다. 과거 구간만 담은 요청은 값이 바뀌지 않으므로 24h 그대로.
+function csvResponse(data: Record<string, number>, recent = false): Response {
   return new Response(toCSV(data), {
     headers: {
       'Content-Type':                'text/plain; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
-      'Cache-Control':               's-maxage=86400, stale-while-revalidate=43200',
+      'Cache-Control':               recent
+        ? 's-maxage=3600, stale-while-revalidate=600'
+        : 's-maxage=86400, stale-while-revalidate=43200',
     },
   });
 }
@@ -605,6 +650,42 @@ export default async function handler(request: Request): Promise<Response> {
       }
     };
 
+    // ── 페이지 커서 모드(?page=N&pages=M[&stop=YYYYMMDD]) — 조회기간 앞쪽(과거)을 채우는 장기 수집용 ──
+    // 한 요청이 Edge 응답 제한(25s)을 넘지 않게 최대 40페이지만 받고 다음 커서를 돌려준다. 클라이언트가
+    // stop(조회 시작일)에 닿거나 done이 될 때까지 이어 부른다. 범위 밖 페이지는 네이버가 빈 표나 마지막
+    // 페이지를 반복해서 주므로 '새 날짜가 하나도 없는 페이지' = 끝으로 본다.
+    const pageParam = searchParams.get('page');
+    if (pageParam) {
+      const from  = Math.max(1, parseInt(pageParam, 10) || 1);
+      const count = Math.min(40, Math.max(1, parseInt(searchParams.get('pages') ?? '20', 10) || 20));
+      const stop  = (searchParams.get('stop') ?? '').replace(/-/g, '');
+      const t0 = Date.now();
+      const data: Record<string, number> = {};
+      let next = from;
+      let done = false;
+      for (let p = from; p < from + count && !done; p += 5) {
+        if (Date.now() - t0 > 18000) break;
+        const batch = Array.from({ length: Math.min(5, from + count - p) }, (_, i) => p + i);
+        const results = await Promise.allSettled(batch.map(n => parsePage(n)));
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          const page = r.status === 'fulfilled' ? r.value : {};
+          const fresh = Object.keys(page).filter(d => !(d in data));
+          if (fresh.length === 0) { done = true; break; }
+          Object.assign(data, page);
+          next = batch[i] + 1;
+          if (stop && fresh.some(d => d.replace(/-/g, '') <= stop)) { done = true; break; }
+        }
+      }
+      return new Response(JSON.stringify({ data, next, done }), {
+        headers: {
+          'Content-Type':                'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control':               from === 1 ? 's-maxage=3600, stale-while-revalidate=600' : 's-maxage=21600, stale-while-revalidate=3600',
+        },
+      });
+    }
+
     // 100→20페이지: 한 페이지 약 10~15건이므로 200건 이상 확보 가능
     // 5페이지씩 순차 배치 처리 — 동시 요청 폭주 방지
     const pageNums = Array.from({ length: 20 }, (_, i) => i + 1);
@@ -635,45 +716,72 @@ export default async function handler(request: Request): Promise<Response> {
   const d1 = start || defStart;
   const d2 = end   || defEnd;
 
-  // us10y: FRED DGS10 → Naver daily → Yahoo ^TNX (3단계 fallback)
+  const recent = isRecentRangeEnd(d2, new Date().toISOString().slice(0, 10).replace(/-/g, ''));
+  const t0 = Date.now();
+  const budgetLeft = () => 18000 - (Date.now() - t0);   // Edge 응답 시작 제한(25s) 안에 끝낸다
+
+  // us10y: FRED DGS10(1962~, 하루 늦게 발표) → 최신 꼬리는 Naver 일별로 보충 · 실패 시 Naver → Yahoo ^TNX
   if (key === 'us10y') {
     let data = await fetchFredHistory('DGS10', d1, d2);
-    if (Object.keys(data).length < 10) {
+    if (Object.keys(data).length >= 10) {
+      const last = lastKey(data);
+      if (last && ymd(last) < d2 && budgetLeft() > 3000) {
+        const tail = await fetchNaverBondHistory('US10YT=RR', shiftYmd(ymd(last), 1), d2, Date.now() + Math.min(8000, budgetLeft()));
+        data = fillAfter(data, tail);
+      }
+    } else {
       data = await fetchNaverBondHistory('US10YT=RR', d1, d2);
-    }
-    if (Object.keys(data).length < 10) {
-      data = await fetchYahooHistory('^TNX', d1, d2);
+      if (Object.keys(data).length < 10) data = await fetchYahooHistory('^TNX', d1, d2);
     }
     if (Object.keys(data).length === 0) return new Response('us10y 수집 실패', { status: 502 });
-    return csvResponse(data);
+    return csvResponse(data, recent);
   }
 
-  // fedRate: FRED DFEDTARU (연준 기준금리 상단 — 계단식 히스토리)
+  // fedRate: FRED DFEDTARU(상단, 2008-12-16~) + DFEDTAR(단일 목표, ~2008-12-15)
+  // ⚠️ DFEDTARU만 쓰면 2008-12 이전 조회기간이 통째로 빈다(첫 화면의 2004~2008 구간).
   if (key === 'fedRate') {
-    const data = await fetchFredHistory('DFEDTARU', d1, d2);
+    const legacyEnd = '20081215';
+    const [upper, legacy] = await Promise.all([
+      d2 >= '20081216' ? fetchFredHistory('DFEDTARU', d1 > '20081216' ? d1 : '20081216', d2) : Promise.resolve({}),
+      d1 <= legacyEnd ? fetchFredHistory('DFEDTAR', d1, d2 < legacyEnd ? d2 : legacyEnd) : Promise.resolve({}),
+    ]);
+    const data = joinFedRate(legacy, upper);
     if (Object.keys(data).length === 0) return new Response('fedRate 수집 실패', { status: 502 });
-    return csvResponse(data);
+    return csvResponse(data, recent);
   }
 
-  // kr10y: Naver 일별 primary → FRED IRLTLT01KRM156N 월별 fallback
+  // kr10y: Naver 일별 primary → 앞쪽(네이버가 못 준 과거)은 FRED 월별(IRLTLT01KRM156N)로 보충
   if (key === 'kr10y') {
-    let data = await fetchNaverBondHistory('KR10YT=RR', d1, d2);
+    let data = await fetchNaverBondHistory('KR10YT=RR', d1, d2, Date.now() + 12000);
+    const first = firstKey(data);
     if (Object.keys(data).length < 10) {
       data = await fetchFredHistory('IRLTLT01KRM156N', d1, d2);
+    } else if (first && ymd(first) > shiftYmd(d1, 7) && budgetLeft() > 3000) {
+      const head = await fetchFredHistory('IRLTLT01KRM156N', d1, shiftYmd(ymd(first), -1), Math.min(8000, budgetLeft()));
+      data = fillBefore(data, head);
     }
     if (Object.keys(data).length === 0) return new Response('kr10y 수집 실패', { status: 502 });
-    return csvResponse(data);
+    return csvResponse(data, recent);
   }
 
-  // Yahoo Finance 지원 지표 (kr10y 포함)
+  // Yahoo Finance 지원 지표
   const yahooSymbol = YAHOO_SYMBOLS[key];
   if (!yahooSymbol) {
     return new Response(`Unknown indicator key: ${key}`, { status: 400 });
   }
 
-  const data = await fetchYahooHistory(yahooSymbol, d1, d2);
+  let data = await fetchYahooHistory(yahooSymbol, d1, d2);
+  // usdkrw: Yahoo KRW=X는 2003-12부터 — 그 앞(또는 Yahoo 실패 시 전체)은 FRED 일별 환율 DEXKOUS로 보충
+  if (key === 'usdkrw' && budgetLeft() > 3000) {
+    const first = firstKey(data);
+    if (!first) data = await fetchFredHistory('DEXKOUS', d1, d2, Math.min(8000, budgetLeft()));
+    else if (ymd(first) > shiftYmd(d1, 7)) {
+      const head = await fetchFredHistory('DEXKOUS', d1, shiftYmd(ymd(first), -1), Math.min(8000, budgetLeft()));
+      data = fillBefore(data, head);
+    }
+  }
   if (Object.keys(data).length === 0) {
     return new Response(`${key} 데이터 수집 실패 (Yahoo Finance)`, { status: 502 });
   }
-  return csvResponse(data);
+  return csvResponse(data, recent);
 }

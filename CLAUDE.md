@@ -5640,6 +5640,35 @@ App의 `handleSingleStockRefresh`). 목표 금액이 현재가에서 파생되�
   `src/backtest.ts`의 순수 함수 본문과 **항상 1:1 동기화**할 것. #23~#42가 PDF 전체를 숫자로 재현하므로
   산식을 바꾸면 여기서 잡힌다.
 
+### 시장지표 과거 데이터 = 조회기간 부족분 자동 보충 → Drive MARKET 저장 (2026-10, ⚠️ 회귀 주의)
+
+발단(사용자 보고 2026-10-17): 조회기간이 2004~인데 시장지표가 일부 기간만 있고(VIX 2015~ 등) 미국 기준금리
+최신값이 차트에 없어, 사용자가 파이썬으로 받은 JSON을 직접 올려야 했다. 앱이 그 일을 스스로 한다
+(브라우저는 파이썬을 못 돌리므로 같은 소스 — Yahoo·FRED·네이버 — 를 서버 함수 `/api/history`가 받는다).
+
+- **⚠️ 원인 ① FRED `limit=2000` + 오름차순** — 장기 조회에서 **최근 구간이 잘렸다**(기준금리 DFEDTARU는 주말 포함
+  일별이라 2000건 ≈ 5.5년). `limit:'100000'`(최대)로 되돌리지 말 것(`verify:indicators #G1`).
+- **FRED 키가 없거나 실패하면 `fredgraph.csv`(키 불필요)로 폴백** — 히스토리(`api/history.ts`)·실시간(`api/indicators.ts`) 둘 다.
+  파서는 `api/_indicatorSources.ts parseFredGraphCsv`(import 0건 순수 모듈).
+- **기준금리 = DFEDTAR(~2008-12-15) + DFEDTARU(2008-12-16~) 이음**(`joinFedRate`). US10Y는 FRED 뒤 최신 꼬리를
+  네이버로, KR10Y는 네이버 앞쪽을 FRED 월별로, USDKRW는 Yahoo 앞쪽을 FRED DEXKOUS로 보충한다(`fillBefore`/`fillAfter` —
+  겹치는 날은 주 소스가 이긴다). 네이버 채권 이력은 최신→과거 청크로 이어 받고 진전이 없으면 멈춘다.
+- **원인 ② 자동 수집이 '없음/최신일 경과'만 봤다** → `src/indicatorCoverage.ts indicatorMissingSegments`(import 0건)가
+  머리(조회 시작~보유 최초일)·내부 공백(45일 초과)·꼬리(최신일~오늘, 4일 초과) 구간을 계산하고, 훅
+  `useMarketData.ensureIndicatorCoverage`가 **그 구간만** 받아 `mergeIndicatorHistory`로 병합한다(전량 재조회 아님).
+  트리거 3개: Drive 로드 완료('saved' 최초 관측) 1회 · 조회기간 변경 · 시장지표 새로고침(최신 꼬리만 강제).
+  ⚠️ 구간 키(지표:시작:끝) 단위 **세션 가드** — 소스가 더 과거를 못 줘도 매번 헛조회하지 않는다.
+  소스 최초일(`INDICATOR_SOURCE_FLOOR` — BTC 2014-09-17 등) 이전은 요구하지 않는다.
+- **국내금**은 `/api/history?key=goldKr&page=N&pages=M&stop=YYYYMMDD` 커서 모드(요청당 최대 40페이지, `{data,next,done}`)로
+  조회 시작일까지 이어 받는다. 파라미터 없는 옛 호출은 종전대로 20페이지 날짜 맵.
+- **저장**: 받은 값은 `indicatorHistoryMap`에 병합 → App 자동 저장이 Drive `portfolio_market.json`에 남긴다.
+  ⚠️ 훅에서 MARKET 파일을 **직접 쓰지 말 것**(옛 국내금 경로가 ref 값으로 MARKET을 통째로 덮어 로드 전·실패 세션에서
+  빈 지수로 저장본을 덮을 수 있었다 — 삭제됨, `#G14`). 바뀐 게 없으면 같은 참조라 헛 저장이 없다.
+- 응답 캐시: 종료일이 최근 2일 이내면 1h, 과거 구간만이면 24h(`isRecentRangeEnd`).
+- **알려진 한계**: MARKET 파일은 저장마다 통째로 올라간다(기존 동작 — 지표가 22년치로 늘면 파일이 1~2MB가 될 수 있다).
+  소스 자체에 없는 기간(예: 국내금·BTC 초창기)은 비어 있는 것이 정상이다.
+- 검증: `npm run verify:indicators` (직접 import #1~#32 + 배선 가드 #G1~#G16).
+
 ### 종목코드 입력 → 이름·종가(·분배금)를 **그 자리에서** 확보 (⚠️ 회귀 주의)
 
 코드를 넣는 화면은 3곳(포트폴리오 테이블 · 비교종목 칩 · 백테스트 종목)인데, 과거엔 **테이블만**

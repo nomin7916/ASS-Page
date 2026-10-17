@@ -3,6 +3,8 @@
 // [최적화] timeout 9000→6000ms(느린 응답 CPU 점유 단축), SWR 60→600s(캐시 만료 후 백그라운드 갱신 확대)
 export const config = { runtime: 'edge' };
 
+import { parseFredGraphCsv } from './_indicatorSources.js';
+
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
 
 async function safeJson(url: string, init?: RequestInit) {
@@ -15,20 +17,38 @@ async function safeJson(url: string, init?: RequestInit) {
   }
 }
 
-// FRED API (미연준 공식): DGS10(US10Y), DFEDTARU(기준금리 상단)
+// FRED (미연준 공식): DGS10(US10Y), DFEDTARU(기준금리 상단)
+// ① API(키 있을 때) → ② fredgraph.csv(키 불필요) 폴백. 키가 없는 배포에서 기준금리가 통째로 '-'가 되거나
+//    재시도 경로(tradingeconomics 스크래핑 — 차단되기 쉽다)에만 의존하던 것을 막는다.
 async function fetchFred(seriesId: string) {
-  if (!FRED_KEY) return { price: null, change: null, source: 'FRED' };
-  const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5`;
-  const data = await safeJson(url);
-  const obs: { value: string }[] = (data?.observations ?? []).filter((o: any) => o.value !== '.');
-  if (!obs.length) return { price: null, change: null, source: 'FRED' };
-  const price = parseFloat(obs[0].value);
-  const prev  = obs.length > 1 ? parseFloat(obs[1].value) : null;
-  return {
-    price:  isNaN(price) ? null : price,
-    change: prev && !isNaN(prev) ? ((price - prev) / Math.abs(prev)) * 100 : null,
-    source: 'FRED',
+  const fromLatest = (vals: number[]) => {
+    const price = vals[0];
+    const prev  = vals.length > 1 ? vals[1] : null;
+    return {
+      price:  Number.isFinite(price) ? price : null,
+      change: prev && Number.isFinite(prev) ? ((price - prev) / Math.abs(prev)) * 100 : null,
+      source: 'FRED',
+    };
   };
+  if (FRED_KEY) {
+    const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5`;
+    const data = await safeJson(url);
+    const obs = (data?.observations ?? []).filter((o: any) => o.value !== '.').map((o: any) => parseFloat(o.value)).filter((v: number) => Number.isFinite(v));
+    if (obs.length) return fromLatest(obs);
+  }
+  try {
+    const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
+    const res = await fetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(seriesId)}&cosd=${since}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (res.ok) {
+      const rec = parseFredGraphCsv(await res.text());
+      const vals = Object.keys(rec).sort().reverse().map(d => rec[d]);
+      if (vals.length) return fromLatest(vals);
+    }
+  } catch { /* 폴백 실패 */ }
+  return { price: null, change: null, source: 'FRED' };
 }
 
 // Naver m.stock front-api (국내금 M04020000 실시간 현재가 — fetchNaverBond와 동일 패턴)
