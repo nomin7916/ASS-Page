@@ -25,7 +25,7 @@ const m = (o = {}) => ({ current: 1, change1m: 0, high52: 9, position52: 10, pct
 const a = (o = {}) => ({ price: 20, yield12: null, yieldPost: null, drawdown52: null, pb: null, pnav: null, manualSet: false, ...o });
 
 if (S) {
-  const { evalLongBond, evalHighYield, evalMortgageReit, evalEquityReit, evalBdc, evalKrBond, evaluateRateSignals, RATE_RULES } = S;
+  const { evalLongBond, evalHighYield, evalMortgageReit, evalEquityReit, evalBdc, evalKrBond, evalBrazilBond, evaluateRateSignals, RATE_RULES } = S;
   const st = (r) => [r.state, `${r.met}/${r.total}`];
   console.log('\n── 파트① 자산군별 판정 ──');
 
@@ -97,12 +97,36 @@ if (S) {
   eq('#31 한국 채권 수익률 — 3년·10년, 세후 = × (1 − 15.4%)', evalKrBond({ kr3y: m({ current: 3 }), kr10y: m({ current: 3.5 }) }).yields.map(y => [y.label, y.pre, +y.post.toFixed(4)]), [['3년', 3, 2.538], ['10년', 3.5, 2.961]]);
   ok('#32 한국 채권 설명 한 줄', evalKrBond({}).note === '미국 자산과 비교하기 위한 참고 줄입니다' && RATE_RULES.krInterestTaxPct === 15.4);
 
+  // 브라질 국채 — 종합 점수 6점(0~2 대기 · 3~4 관심 · 5~6 적기) + 경고 2종
+  const TODAY = '2026-10-16';
+  const brGood = { br10y: m({ current: 13.9, pct3y: 80 }), brReal: m({ current: 9.4 }), brExp12: m({ current: 4.5, change1m: 0 }),
+    brSelic: m({ current: 15, pct3y: 85 }), brlkrw: m({ current: 250, change1m: -2, position52: 20 }) };
+  const exGood = { exp12Change3m: -0.1, selicRose60d: false, notes: [], today: TODAY };
+  const brBad = { br10y: m({ current: 11, pct3y: 20 }), brReal: m({ current: 3 }), brExp12: m({ current: 5, change1m: 0.1 }),
+    brSelic: m({ current: 10, pct3y: 20 }), brlkrw: m({ current: 280, change1m: 3, position52: 90 }) };
+  const exBad = { exp12Change3m: 0.6, selicRose60d: true, notes: [{ date: '2026-09-01', impact: '불리' }], today: TODAY };
+  const bs = (all, ex) => { const r = evalBrazilBond(all, ex); return [r.state, `${r.met}/${r.total}`]; };
+  eq('#33 브라질 0점 → 대기', bs(brBad, exBad), ['wait', '0/6']);
+  eq('#34 브라질 3점(①②③) → 매수 관심', bs({ ...brBad, br10y: brGood.br10y, brReal: brGood.brReal }, { ...exBad, exp12Change3m: 0.2 }), ['watch', '3/6']);
+  eq('#35 브라질 6점 → 매수 적기', bs(brGood, exGood), ['buy', '6/6']);
+  eq('#35b 브라질 5점(메모 불리 1건) → 매수 적기', bs(brGood, { ...exGood, notes: [{ date: '2026-08-01', impact: '불리' }] }), ['buy', '5/6']);
+  eq('#35c 90일보다 오래된 불리 메모는 세지 않는다', bs(brGood, { ...exGood, notes: [{ date: '2026-06-01', impact: '불리' }] }), ['buy', '6/6']);
+  eq('#35d Selic이 최근 60일 안에 올랐으면 ④ 불충족', bs(brGood, { ...exGood, selicRose60d: true }), ['buy', '5/6']);
+  eq('#35e Selic 인상 여부 자료가 없으면 ④ 불충족(인상 없음으로 단언하지 않는다)', bs(brGood, { ...exGood, selicRose60d: null }), ['buy', '5/6']);
+  ok('#36 경고 — 기대물가 1개월 +0.5%p 이상', /기대물가 1개월/.test(evalBrazilBond({ ...brGood, brExp12: m({ current: 5, change1m: 0.6 }) }, exGood).warning || ''));
+  ok('#37 경고 — 헤알·원 1개월 −8% 이상 급락', /헤알·원 1개월 -9\.8%/.test(evalBrazilBond({ ...brGood, brlkrw: m({ current: 230, change1m: -25, position52: 20 }) }, exGood).warning || ''));
+  ok('#37b 평소에는 경고 없음', evalBrazilBond(brGood, exGood).warning === null);
+  const by = evalBrazilBond(brGood, exGood);
+  eq('#38 수익률 — 명목(10년)·실질, 세후는 만들지 않는다', by.yields.map(y => [y.label, y.pre, y.post]), [['명목(10년)', 13.9, null], ['실질', 9.4, null]]);
+  ok('#38b 세금·환율 안내 문구(세율을 지어내지 않는다)', /환율 변동은 포함되지 않음/.test(by.note) && /조세협약/.test(by.note) && /최신 규정 확인 필요/.test(by.note));
+  ok('#38c 실질금리 자료가 없으면 10년 − 기대물가로 계산', evalBrazilBond({ ...brGood, brReal: undefined }, exGood).conditions[1].met === true);
+
   console.log('\n── 파트② 공통 규칙 ──');
   const none = evaluateRateSignals({});
-  eq('#19 자료가 없으면 전부 대기(충족으로 치지 않는다)', none.map(r => r.state), ['wait', 'wait', 'wait', 'wait', 'wait', 'wait']);
+  eq('#19 자료가 없으면 전부 대기(충족으로 치지 않는다)', none.map(r => r.state), ['wait', 'wait', 'wait', 'wait', 'wait', 'wait', 'wait']);
   ok('#19b 자료 없음은 근거에 그대로 드러낸다', none.some(r => /자료 없음/.test(r.rationale)));
   const sorted = evaluateRateSignals({ us10y: m({ pct3y: 72, turnedDown: true }), fedRate: m({ pct3y: 60 }), hySpread: m({ change1m: 0, pct3y: 50 }) });
-  eq('#20 충족 비율 내림차순(같으면 정의 순서)', sorted.map(r => r.key), ['longBond', 'equityReit', 'bdc', 'highYield', 'mortgageReit', 'krBond']);
+  eq('#20 충족 비율 내림차순(같으면 정의 순서)', sorted.map(r => r.key), ['longBond', 'equityReit', 'bdc', 'brBond', 'highYield', 'mortgageReit', 'krBond']); // 브라질은 메모 '불리' 없음(⑥)만으로 1/6
   ok('#20b 대표 종목 행을 넘기면 판정에 반영된다', evaluateRateSignals({ us10y: m({ pct3y: 72, turnedDown: true }) }, { O: a({ yield12: 6.5 }) }).find(r => r.key === 'equityReit').state === 'buy');
   ok('#21 원천징수율 15%', RATE_RULES.withholdingPct === 15);
 }
@@ -114,11 +138,15 @@ console.log('\n── 파트③ 배선 가드 ──');
   const RW = src('src/components/RateWindow.tsx');
   const code = RS.replace(/\/\/.*$/gm, '');
   ok('#G1 순수 모듈은 import 0건', !/^\s*import\s/m.test(RS));
-  ok('#G2 문턱값은 RATE_RULES 한 곳 — 판정 함수가 RATE_RULES를 읽는다', /export const RATE_RULES = \{/.test(RS) && (code.match(/= RATE_RULES\.\w+;/g) || []).length === 6);
-  ok('#G3 창은 판정을 rateSignals에서만 가져온다', /from '\.\.\/rateSignals'/.test(RW) && /evaluateRateSignals\(metrics, assetRows\)/.test(RW));
+  ok('#G2 문턱값은 RATE_RULES 한 곳 — 판정 함수가 RATE_RULES를 읽는다', /export const RATE_RULES = \{/.test(RS) && (code.match(/= RATE_RULES\.\w+;/g) || []).length === 7);
+  ok('#G3 창은 판정을 rateSignals에서만 가져온다', /from '\.\.\/rateSignals'/.test(RW) && /evaluateRateSignals\(metrics, assetRows, brazilExtras\)/.test(RW));
   ok('#G4 지시형 문구 없음(주석 제외)', !/사세요|매수하세요|파세요/.test(code + RW.replace(/\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')));
   ok('#G6 새 기준치도 RATE_RULES에 있다', /pbMax: 0\.9, pbWarn: 1\.1/.test(RS) && /oYieldMin: 6\.0/.test(RS) && /mainDrawdownMax: -15, mainPnavMax: 1\.5/.test(RS));
-  ok('#G8 한국 채권 기준치 · 6번째 자산군', /krBond: \{ pctMin: 70 \}/.test(RS) && /evalBdc\(m, assets\), evalKrBond\(m\)\]/.test(RS));
+  ok('#G8 한국 채권 기준치 · 6번째 자산군', /krBond: \{ pctMin: 70 \}/.test(RS) && /evalBdc\(m, assets\), evalKrBond\(m\)/.test(RS));
+  ok('#G9 브라질 기준치·7번째 자산군 · 메모는 readBrazilNotes 하나로 읽는다', /brBond: \{/.test(RS) && /evalKrBond\(m\), evalBrazilBond\(m, brazil\)\]/.test(RS)
+    && /readBrazilNotes\(\)/.test(RW) && !/BRAZIL_NOTES/.test(RW.replace(/\/\/.*$/gm, '')));
+  ok('#G10 brlBond.ts는 그대로 쓰고 이론 가격은 이분법으로 맞춘다', /computeBrlBond\(\{ price: p, face: BRL_BOND_FACE, couponRate: BRL_BOND_COUPON, years: BRL_BOND_YEARS \}\)\?\.ytmAnnual/.test(RW));
+  ok('#G11 정치 메모는 처음에 빈 배열(지어내지 않는다)', /export const BRAZIL_NOTES: BrazilNote\[\] = \[\];/.test(src('src/brazilNotes.ts')));
   ok('#G7 6단계 자리표시 문구가 남지 않았다', !/6단계에서 추가/.test(RS));
   ok('#G5 행을 누르면 조건 목록을 펼친다', /setOpenSignal\(/.test(RW) && /c\.pending \? '…' : c\.met \? '○' : '×'/.test(RW));
 }

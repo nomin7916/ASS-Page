@@ -158,3 +158,23 @@ export function buildRateChartRows(seriesByKey: Record<string, Series>, keys: st
     return row;
   });
 }
+
+// N일 변화 = 현재 − (기준일 − N일)의 그날 또는 직전 관측값. 자료가 없으면 null (8-B 브라질 ③ 기대물가 3개월 변화)
+export function changeOverDays(series: Series | null | undefined, days: number): number | null {
+  const pts = seriesPoints(series);
+  if (!pts.length) return null;
+  const [asOf, current] = pts[pts.length - 1];
+  const ago = valueOnOrBefore(pts, shiftIsoDays(asOf, -days));
+  return ago == null ? null : current - ago;
+}
+
+// 최근 N일 안에 직전 관측보다 오른 적이 있는가(8-B 브라질 ④ Selic 인상 여부). 자료가 없으면 null
+export function roseWithinDays(series: Series | null | undefined, days: number): boolean | null {
+  const pts = seriesPoints(series);
+  if (pts.length < 2) return null;
+  const from = shiftIsoDays(pts[pts.length - 1][0], -days);
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i][0] > from && pts[i][1] > pts[i - 1][1] + EPS) return true;
+  }
+  return false;
+}

@@ -16,6 +16,12 @@ export const RATE_RULES = {
   reit: { pctMin: 70, oYieldMin: 6.0 },
   bdc: { fedPctMin: 50, hyChangeMaxPp: 1.0, hyPctMax: 70, mainDrawdownMax: -15, mainPnavMax: 1.5 },
   krBond: { pctMin: 70 },
+  // 브라질 국채(8-B) — 6개 조건 점수: 0~2 대기 · 3~4 매수 관심 · 5~6 매수 적기
+  brBond: {
+    pctMin: 70, realMinPp: 5.0, exp3mMaxRisePp: 0.2, selicPctMin: 70, selicCalmDays: 60,
+    brlkrwPosMax: 30, noteDays: 90, watchScore: 3, buyScore: 5,
+    warnExp1mPp: 0.5, warnBrlkrw1mPct: -8,
+  },
 };
 
 export type SignalState = 'wait' | 'watch' | 'buy';
@@ -28,7 +34,7 @@ interface MetricsLike {
   position52: number | null; pct3y: number | null; turnedDown: boolean;
 }
 export interface SignalCondition { label: string; met: boolean; detail: string; pending?: boolean }
-export interface SignalYield { label: string; pre: number; post: number }
+export interface SignalYield { label: string; pre: number; post: number | null }
 export interface AssetSignal {
   key: string; label: string; sample: string;
   state: SignalState; warning: string | null; note: string | null;
@@ -199,10 +205,57 @@ export function evalKrBond(all: Record<string, MetricsLike>): AssetSignal {
   });
 }
 
-// 6개 자산군 — 충족 비율 내림차순(같으면 정의 순서)
-export function evaluateRateSignals(all: Record<string, MetricsLike> | null | undefined, assets?: Assets): AssetSignal[] {
+// ⑦ 브라질 국채 — 종합 점수(6점). 금리 지표 외의 입력은 extras로 받는다(창이 계산해 넘긴다):
+//   exp12Change3m(기대물가 3개월 변화 %p) · selicRose60d(최근 60일 Selic 인상 여부) · notes(정치 메모) · today
+//   세후 수익률은 만들지 않는다(조세협약 해석이 필요 — 세율을 지어내지 않는다).
+export interface BrazilExtras { exp12Change3m?: number | null; selicRose60d?: boolean | null; notes?: Array<{ date: string; impact: string }>; today?: string }
+export function evalBrazilBond(all: Record<string, MetricsLike>, extras?: BrazilExtras | null): AssetSignal {
+  const r = RATE_RULES.brBond;
+  const x = extras || {};
+  const t10 = M(all, 'br10y'), real = M(all, 'brReal'), ex = M(all, 'brExp12'), se = M(all, 'brSelic'), fx = M(all, 'brlkrw');
+  const realNow = num(real.current) ? real.current : num(t10.current) && num(ex.current) ? t10.current - ex.current : null;
+  const c1 = num(t10.pct3y) && t10.pct3y >= r.pctMin;
+  const c2 = num(realNow) && realNow >= r.realMinPp - 1e-9;
+  const e3 = num(x.exp12Change3m) ? x.exp12Change3m : null;
+  const c3 = num(e3) && e3 <= r.exp3mMaxRisePp + 1e-9;
+  const c4 = num(se.pct3y) && se.pct3y >= r.selicPctMin && x.selicRose60d === false;
+  const c5 = num(fx.position52) && fx.position52 <= r.brlkrwPosMax + 1e-9;
+  const today = typeof x.today === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x.today) ? x.today : '';
+  const from = today ? new Date(Date.UTC(+today.slice(0, 4), +today.slice(5, 7) - 1, +today.slice(8, 10)) - r.noteDays * 86400000).toISOString().slice(0, 10) : '';
+  const notes = Array.isArray(x.notes) ? x.notes : [];
+  const recentBad = notes.filter(n => n && n.impact === '불리' && (!from || (n.date >= from && n.date <= today)));
+  const c6 = recentBad.length === 0;
+  const conditions: SignalCondition[] = [
+    { label: `브라질 10년 금리가 최근 3년 중 ${r.pctMin} 이상`, met: !!c1, detail: `${pct(t10.current)} · 3년 ${rank(t10.pct3y)}` },
+    { label: `실질금리(10년 − 기대물가) ${r.realMinPp.toFixed(1)}%p 이상`, met: !!c2, detail: pp(realNow) },
+    { label: `기대물가가 3개월 전보다 낮거나 +${r.exp3mMaxRisePp}%p 이내`, met: !!c3, detail: `3개월 ${pp(e3)}` },
+    { label: `Selic이 최근 3년 중 ${r.selicPctMin} 이상이고 ${r.selicCalmDays}일간 인상 없음`, met: !!c4,
+      detail: `3년 ${rank(se.pct3y)} · ${x.selicRose60d === true ? '최근 인상 있음' : x.selicRose60d === false ? '인상 없음' : '자료 없음'}` },
+    { label: `헤알·원이 52주 범위 ${r.brlkrwPosMax}% 이하(헤알이 쌈)`, met: !!c5, detail: `연중 위치 ${rank(fx.position52)}%` },
+    { label: `정치 메모 최근 ${r.noteDays}일에 '불리' 없음`, met: c6, detail: notes.length ? `불리 ${recentBad.length}건` : '등록된 메모 없음' },
+  ];
+  const score = conditions.filter(c => c.met).length;
+  const fxPrev = num(fx.current) && num(fx.change1m) ? fx.current - fx.change1m : null;
+  const fx1mPct = num(fxPrev) && fxPrev > 0 ? (fx.current / fxPrev - 1) * 100 : null;
+  const warns: string[] = [];
+  if (num(ex.change1m) && ex.change1m >= r.warnExp1mPp - 1e-9) warns.push(`기대물가 1개월 ${pp(ex.change1m)}`);
+  if (num(fx1mPct) && fx1mPct <= r.warnBrlkrw1mPct + 1e-9) warns.push(`헤알·원 1개월 ${fx1mPct.toFixed(1)}%`);
+  const yields: SignalYield[] = [];
+  if (num(t10.current)) yields.push({ label: '명목(10년)', pre: t10.current, post: null });
+  if (num(realNow)) yields.push({ label: '실질', pre: realNow, post: null });
+  return finish({
+    key: 'brBond', label: '브라질 국채', sample: 'NTN-F', state: score >= r.buyScore ? 'buy' : score >= r.watchScore ? 'watch' : 'wait',
+    warning: warns.length ? warns.join(' · ') : null,
+    note: '헤알 환율 변동은 포함되지 않음 · 한·브라질 조세협약상 국채 이자 국내 과세 여부는 최신 규정 확인 필요', conditions,
+    rationale: `10년 ${pct(t10.current)} · 실질 ${pp(realNow)} · Selic ${pct(se.current)} · 점수 ${score}/6`,
+    yields,
+  });
+}
+
+// 7개 자산군 — 충족 비율 내림차순(같으면 정의 순서)
+export function evaluateRateSignals(all: Record<string, MetricsLike> | null | undefined, assets?: Assets, brazil?: BrazilExtras | null): AssetSignal[] {
   const m = all || {};
-  const list = [evalLongBond(m), evalHighYield(m, assets), evalMortgageReit(m, assets), evalEquityReit(m, assets), evalBdc(m, assets), evalKrBond(m)];
+  const list = [evalLongBond(m), evalHighYield(m, assets), evalMortgageReit(m, assets), evalEquityReit(m, assets), evalBdc(m, assets), evalKrBond(m), evalBrazilBond(m, brazil)];
   return list.map((s, i) => [s, i] as const)
     .sort((x, y) => y[0].ratio - x[0].ratio || x[1] - y[1])
     .map(([s]) => s);

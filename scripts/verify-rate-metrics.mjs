@@ -22,7 +22,7 @@ catch (e) {
 }
 
 if (M) {
-  const { computeRateMetrics: calc, parseHistoryText, mergeSeries, withLive, buildRateChartRows, percentileOf, bandOf, seriesPoints } = M;
+  const { computeRateMetrics: calc, parseHistoryText, mergeSeries, withLive, buildRateChartRows, percentileOf, bandOf, seriesPoints, changeOverDays, roseWithinDays } = M;
   console.log('\n── 파트① 계산 ──');
 
   // 기본: 2026-01-01 ~ 2026-10-16 사이 몇 개 관측
@@ -71,6 +71,11 @@ if (M) {
   eq('#24 현재값 — 기록 최신일 이후 날짜면 끝에 붙인다', withLive({ '2026-10-15': 4.1 }, 4.2, '2026-10-16'), { '2026-10-15': 4.1, '2026-10-16': 4.2 });
   eq('#25 현재값 — 기록보다 이른 날짜면 무시', withLive({ '2026-10-15': 4.1 }, 4.0, '2026-10-14'), { '2026-10-15': 4.1 });
   eq('#26 현재값 — 음수 금리차도 붙인다 / 값 없음은 무시', [withLive({}, -0.3, '2026-10-16'), withLive({ a: 1 }, null, '2026-10-16')], [{ '2026-10-16': -0.3 }, { a: 1 }]);
+  const sx = { '2026-07-01': 4.0, '2026-07-20': 4.3, '2026-09-01': 4.6, '2026-10-16': 4.5 };
+  near('#28 N일 변화 = 현재 − (기준일 − N일)의 그날 또는 직전 값', changeOverDays(sx, 90), 4.5 - 4.0);
+  eq('#28b 그보다 오래된 자료가 없으면 null', changeOverDays({ '2026-10-16': 1 }, 90), null);
+  eq('#29 최근 60일 안의 인상 여부 — 9/1 인상 있음 / 30일로 좁히면 없음', [roseWithinDays(sx, 60), roseWithinDays(sx, 30)], [true, false]);
+  eq('#29b 관측 2개 미만이면 null(모름)', roseWithinDays({ '2026-10-16': 15 }, 60), null);
   eq('#27 차트 행 — 날짜 합집합 · 빈 값 null · 시작일 이후만',
     buildRateChartRows({ a: { '2026-10-01': 1, '2026-10-03': 3 }, b: { '2026-10-02': -2 } }, ['a', 'b'], '2026-10-02'),
     [{ date: '2026-10-02', a: null, b: -2 }, { date: '2026-10-03', a: 3, b: null }]);

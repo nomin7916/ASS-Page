@@ -9,6 +9,9 @@ import { BG, BORDER } from '../design';
 import {
   computeRateMetrics, parseHistoryText, mergeSeries, withLive, buildRateChartRows, shiftIsoDays,
 } from '../rateMetrics';
+import { changeOverDays, roseWithinDays } from '../rateMetrics';
+import { readBrazilNotes } from '../brazilNotes';
+import { computeBrlBond, BRL_BOND_FACE, BRL_BOND_COUPON, BRL_BOND_YEARS } from '../brlBond';
 import { evaluateRateSignals, SIGNAL_STATE_LABEL, RATE_RULES } from '../rateSignals';
 import { fetchWatchQuote, fetchWatchDaily, fetchUsDividendEvents } from '../watchlistQuote';
 import {
@@ -44,7 +47,7 @@ const BG_OPTIONS = [
   { key: 'white', label: '백색' },
 ];
 
-// 사용 키 16개 — unit: '%'(금리) · '%p'(금리차·스프레드) · ''(MOVE)
+// 사용 키 22개 — unit: '%'(금리) · '%p'(금리차·스프레드) · ''(MOVE)
 const RATE_DEFS = {
   fedRate:   { label: '기준금리',        unit: '%',  hint: '연준이 정한 정책금리(상단)' },
   us3m:      { label: '미국 3개월',      unit: '%',  hint: '기준금리를 바로 따라가는 단기 금리' },
@@ -62,16 +65,24 @@ const RATE_DEFS = {
   kr3y:      { label: '국고채 3년',      unit: '%',  hint: '국내 단기 국채 금리 — 기준금리 기대를 따라간다' },
   kr10y:     { label: '한국 10년',       unit: '%',  hint: '국내 장기 금리의 기준' },
   krUs10y:   { label: '한미 10년 금리차', unit: '%p', hint: '음수면 미국 금리가 더 높음 — 원화 약세 압력' },
+  // 브라질(8-B) — 물가는 월간, 기대물가는 영업일 발표라 카드에 '○월 ○일 값'
+  brSelic:   { label: '브라질 Selic',    unit: '%',  hint: '브라질 중앙은행 기준금리 목표' },
+  brIpca:    { label: '물가(12개월)',    unit: '%',  hint: '최근 12개월 물가상승률(IPCA, 월간 발표)', weekly: true },
+  brExp12:   { label: '기대물가(12개월 후)', unit: '%', hint: '시장 전문가들이 예상하는 1년 뒤 물가', weekly: true },
+  br10y:     { label: '브라질 10년',     unit: '%',  hint: '브라질 국채 10년 금리' },
+  brReal:    { label: '실질금리',        unit: '%p', hint: '물가를 뺀 진짜 이자(10년 − 기대물가)' },
+  brlkrw:    { label: '헤알·원',         unit: '',   hint: '1헤알이 몇 원인지 — 낮을수록 원화로 사기 유리' },
 };
 const RATE_KEYS = Object.keys(RATE_DEFS);
 // 자료가 짧은 지표 — FRED ICE BofA 2종은 2023-10-17부터만 제공된다(3년 백분위 옆에 '자료 3년' 표시)
-const SHORT_DATA_KEYS = ['hyYield', 'hySpread'];
+const SHORT_DATA_KEYS = ['hyYield', 'hySpread', 'br10y', 'brReal']; // 브라질 10년(네이버)은 2023-10-17부터
 
 const BOARD_ROWS = [
   { title: '미국 금리', keys: ['fedRate', 'us3m', 'us2y', 'us10y', 'us30y'] },
   { title: '금리차', keys: ['t10y2y', 't10y3m'] },
   { title: '신용·모기지', keys: ['hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'] },
   { title: '한국', keys: ['krBase', 'kr3y', 'kr10y', 'krUs10y'] },
+  { title: '브라질', keys: ['brSelic', 'brIpca', 'brExp12', 'br10y', 'brReal', 'brlkrw'] },
 ];
 
 const PERIODS = [
@@ -87,9 +98,27 @@ const COLORS = {
   hyYield: '#f472b6', hySpread: '#38bdf8',
   mbsSpread: '#fb923c', move: '#a78bfa',
   krBase: '#f472b6', kr3y: '#38bdf8', kr10y: '#fbbf24',
+  br10y: '#4ade80', brSelic: '#f472b6', brIpca: '#fbbf24', brExp12: '#38bdf8', brlkrw: '#a78bfa',
 };
 // ③ 상태 색 — 대기 회색 · 관심 하늘 · 적기 녹색 · 경고 빨강
 const SIGNAL_COLOR = { wait: '#9ca3af', watch: '#38bdf8', buy: '#4ade80', warn: '#f87171' };
+// 지금 브라질 10년 금리를 만기수익률로 보는 '액면 1,000헤알 · 표면 10% · 10년' 채권의 이론 가격(헤알).
+// computeBrlBond(계산기, 무수정)의 YTM이 그 금리와 같아지는 가격을 이분법으로 찾는다. 못 구하면 null(화면은 줄 생략).
+function brlBondPriceAt(ytmPct) {
+  if (!Number.isFinite(ytmPct) || ytmPct <= 0) return null;
+  const ytmOf = (p) => computeBrlBond({ price: p, face: BRL_BOND_FACE, couponRate: BRL_BOND_COUPON, years: BRL_BOND_YEARS })?.ytmAnnual;
+  let lo = 1, hi = BRL_BOND_FACE * 1.99;
+  const yl = ytmOf(lo), yh = ytmOf(hi);
+  if (yl == null || yh == null || ytmPct > yl || ytmPct < yh) return null;
+  for (let i = 0; i < 80; i++) {
+    const mid = (lo + hi) / 2;
+    const y = ytmOf(mid);
+    if (y == null) return null;
+    if (y > ytmPct) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
 const ASSET_CONCURRENCY = 4; // ⑤ 종목 조회 동시 요청 수 상한
 const yahooQuoteUrl = (t) => `https://finance.yahoo.com/quote/${encodeURIComponent(t)}`;
 const fmtPctCell = (v) => (v == null || !Number.isFinite(v) ? '-' : `${v.toFixed(2)}%`);
@@ -355,7 +384,16 @@ export default function RateWindow() {
   const failedTickers = useMemo(() => Object.keys(assetData).filter(tk => assetData[tk]?.status === 'fail'), [assetData]);
 
   // ③ 판정 — 충족 비율 내림차순으로 이미 정렬돼 온다(대표 종목 행을 함께 넘긴다)
-  const signals = useMemo(() => evaluateRateSignals(metrics, assetRows), [metrics, assetRows]);
+  // 브라질 국채 판정의 추가 입력 — 기대물가 3개월 변화 · 최근 60일 Selic 인상 · 정치 메모(readBrazilNotes 하나로만 읽는다)
+  const brazilNotes = useMemo(() => readBrazilNotes(), []);
+  const brazilExtras = useMemo(() => ({
+    exp12Change3m: changeOverDays(seriesByKey.brExp12, 90),
+    selicRose60d: roseWithinDays(seriesByKey.brSelic, RATE_RULES.brBond.selicCalmDays),
+    notes: brazilNotes, today,
+  }), [seriesByKey, brazilNotes, today]);
+  const signals = useMemo(() => evaluateRateSignals(metrics, assetRows, brazilExtras), [metrics, assetRows, brazilExtras]);
+  const brBondPrice = brlBondPriceAt(metrics.br10y?.current);
+  const brBondKrw = brBondPrice != null && Number.isFinite(metrics.brlkrw?.current) ? brBondPrice * metrics.brlkrw.current : null;
   const [openSignal, setOpenSignal] = useState(null);
 
   const fromChart = today ? shiftIsoDays(today, -(PERIODS.find(p => p.key === period)?.years || 1) * 365) : '';
@@ -363,6 +401,7 @@ export default function RateWindow() {
   const rowsSpread = useMemo(() => buildRateChartRows(seriesByKey, ['t10y2y', 't10y3m'], fromChart), [seriesByKey, fromChart]);
   const rowsHy = useMemo(() => buildRateChartRows(seriesByKey, ['hyYield', 'hySpread'], fromChart), [seriesByKey, fromChart]);
   const rowsMbs = useMemo(() => buildRateChartRows(seriesByKey, ['mbsSpread', 'move'], fromChart), [seriesByKey, fromChart]);
+  const rowsBr = useMemo(() => buildRateChartRows(seriesByKey, ['br10y', 'brSelic', 'brIpca', 'brExp12', 'brlkrw'], fromChart), [seriesByKey, fromChart]);
   const rowsKr = useMemo(() => buildRateChartRows(seriesByKey, ['krBase', 'kr3y', 'kr10y', 'us10y'], fromChart), [seriesByKey, fromChart]);
   // 한국 기준금리 — 서버에 ECOS 인증키가 없으면 값 대신 needKey가 온다(값을 지어내지 않는다)
   const krBaseNeedKey = live?.krBase?.needKey === true;
@@ -433,8 +472,22 @@ export default function RateWindow() {
                 <div key={row.title}>
                   <div className={`text-[11px] font-bold mb-1 ${t.sub}`}>{row.title}</div>
                   <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-                    {row.keys.map(k => <RateCard key={k} k={k} m={metrics[k]} t={t} emptyText={k === 'krBase' && krBaseNeedKey ? '인증키 필요' : null} />)}
+                    {row.keys.map(k => <RateCard key={k} k={k} m={metrics[k]} t={t} emptyText={k === 'krBase' && krBaseNeedKey ? '인증키 필요' : k === 'br10y' ? '자료 없음' : null} />)}
                   </div>
+                  {row.title === '브라질' && (
+                    <div className={`mt-2 rounded border ${t.border} p-2 text-[11px]`}>
+                      <div className="font-bold mb-1">정치·정책 메모 (최근 5건)</div>
+                      {brazilNotes.length === 0
+                        ? <div className={t.sub}>등록된 메모 없음 — 9단계 설정 화면에서 입력</div>
+                        : brazilNotes.slice(0, 5).map((n, i) => (
+                          <div key={`${n.date}-${i}`} className="flex gap-2">
+                            <span className={`tabular-nums ${t.sub}`}>{n.date}</span>
+                            <span className={n.impact === '유리' ? 'text-green-400' : n.impact === '불리' ? 'text-red-400' : t.sub}>{n.impact}</span>
+                            {n.source ? <a href={n.source} target="_blank" rel="noopener noreferrer" className="hover:text-sky-400 hover:underline">{n.text}</a> : <span>{n.text}</span>}
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -475,13 +528,18 @@ export default function RateWindow() {
                           <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">{sg.met}/{sg.total}</td>
                           <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">
                             {sg.yields.length
-                              ? sg.yields.map(y => <div key={y.label}><span className={`text-[10px] ${t.sub}`}>{y.label}</span> {y.pre.toFixed(2)}% / {y.post.toFixed(2)}%</div>)
+                              ? sg.yields.map(y => <div key={y.label}><span className={`text-[10px] ${t.sub}`}>{y.label}</span> {y.pre.toFixed(2)}% / {y.post == null ? '—' : `${y.post.toFixed(2)}%`}</div>)
                               : <span className={t.sub} title="종목 배당률은 6단계에서 추가">-</span>}
                           </td>
                           <td className="py-1.5">
                             {sg.warning && <span className="text-red-400 font-bold mr-1">{sg.warning} ·</span>}
                             <span className={t.sub}>{sg.rationale}</span>
                             {sg.note && <div className="text-[11px] text-amber-400">{sg.note}</div>}
+                            {sg.key === 'brBond' && brBondPrice != null && (
+                              <div className={`text-[11px] ${t.sub}`}>
+                                지금 10년 금리 기준 액면 1,000헤알·표면 {BRL_BOND_COUPON}% 채권 이론 가격 R$ {brBondPrice.toFixed(2)}{brBondKrw != null ? ` ≈ ₩${Math.round(brBondKrw).toLocaleString('ko-KR')}` : ''}
+                              </div>
+                            )}
                           </td>
                         </tr>
                         {open && (
@@ -578,6 +636,21 @@ export default function RateWindow() {
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <Line yAxisId="left" isAnimationActive={false} type="monotone" dataKey="mbsSpread" name={RATE_DEFS.mbsSpread.label} stroke={COLORS.mbsSpread} dot={false} strokeWidth={1.5} connectNulls />
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="move" name={RATE_DEFS.move.label} stroke={COLORS.move} dot={false} strokeWidth={1.5} connectNulls />
+                </ComposedChart>
+              </ChartBox>
+
+              <ChartBox title="브라질 — 10년·Selic·물가·기대물가(왼쪽 %) · 헤알·원(오른쪽, 점선)" rows={rowsBr} t={t}>
+                <ComposedChart data={rowsBr} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke={t.grid} vertical={false} />
+                  <XAxis dataKey="date" tick={axisTick} tickFormatter={shortDate} minTickGap={40} stroke={t.axis} />
+                  <YAxis yAxisId="left" tick={axisTick} stroke={t.axis} width={36} domain={['auto', 'auto']} />
+                  <YAxis yAxisId="right" orientation="right" tick={axisTick} stroke={COLORS.brlkrw} width={40} domain={['auto', 'auto']} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(v, name) => [fmtVal(Number(v), name === RATE_DEFS.brlkrw.label ? '' : '%'), name]} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  {['br10y', 'brSelic', 'brIpca', 'brExp12'].map(k => (
+                    <Line key={k} yAxisId="left" isAnimationActive={false} type="monotone" dataKey={k} name={RATE_DEFS[k].label} stroke={COLORS[k]} dot={false} strokeWidth={1.5} connectNulls />
+                  ))}
+                  <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="brlkrw" name={RATE_DEFS.brlkrw.label} stroke={COLORS.brlkrw} strokeDasharray="4 3" dot={false} strokeWidth={1.2} connectNulls />
                 </ComposedChart>
               </ChartBox>
 
