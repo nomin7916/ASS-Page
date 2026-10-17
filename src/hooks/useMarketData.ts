@@ -45,6 +45,8 @@ export function useMarketData({
     fedRate: null, fedRateChg: null,
     us2y: null, us2yChg: null, us30y: null, us30yChg: null, us3m: null, us3mChg: null,
     t10y2y: null, t10y2yChg: null, t10y3m: null, t10y3mChg: null,
+    hyYield: null, hyYieldChg: null, hySpread: null, hySpreadChg: null, mort30: null, mort30Chg: null, mort30Date: null,
+    mbsSpread: null, mbsSpreadChg: null, move: null, moveChg: null,
     vix: null, vixChg: null,
     btc: null, btcChg: null,
     eth: null, ethChg: null,
@@ -421,6 +423,12 @@ export function useMarketData({
     us3m:     'fred:DGS3MO',
     t10y2y:   'fred:T10Y2Y',
     t10y3m:   'fred:T10Y3M',
+    // 하이일드·모기지·MOVE(2026-10). mbsSpread는 서버 계산값(mort30 − us10y, %p, 0·음수 정상)
+    hyYield:   'fred:BAMLH0A0HYM2EY',
+    hySpread:  'fred:BAMLH0A0HYM2',
+    mort30:    'fred:MORTGAGE30US',
+    mbsSpread: 'calc:MORTGAGE30US-DGS10',
+    move:      'yahoo:^MOVE',
     goldKr:   null,
     vix:      'yahoo:^VIX',
     btc:      'yahoo:BTC-USD',
@@ -435,6 +443,7 @@ export function useMarketData({
     us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold', goldKr: '국내금',
     usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리', vix: 'VIX',
     us2y: '미국 2년', us30y: '미국 30년', us3m: '미국 3개월', t10y2y: '10년−2년', t10y3m: '10년−3개월',
+    hyYield: '하이일드 금리', hySpread: '하이일드 스프레드', mort30: '30년 모기지', mbsSpread: 'MBS 스프레드', move: 'MOVE',
     btc: 'Bitcoin', eth: 'Ethereum',
     kospi: 'KOSPI', sp500: 'S&P500', nasdaq: 'Nasdaq100',
   };
@@ -611,7 +620,8 @@ export function useMarketData({
 
       const keys = ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
                     'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',
-                    'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'];
+                    'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m',
+                    'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'];
 
       setMarketIndicators(prev => {
         const merged = { ...prev };
@@ -625,6 +635,8 @@ export function useMarketData({
             } else {
               merged[k]           = d.price;
               merged[`${k}Chg`]   = d.change;
+              // 관측일 — 주간 지표(30년 모기지)는 카드에 '○월 ○일 값'으로 표시한다
+              if (d.date) merged[`${k}Date`] = d.date;
             }
           } else {
             statusMap[k] = { status: 'fail', source: 'API', updatedAt: now };
@@ -648,7 +660,8 @@ export function useMarketData({
       console.error('시장 지표 수집 오류:', e);
       ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
        'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',
-       'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m']
+       'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m',
+       'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move']
         .forEach(k => { statusMap[k] = { status: 'fail', source: 'API 오류', updatedAt: now }; });
       const clientKeys = Object.keys(fetchersMap);
       retryFailedIndicators(clientKeys, { ...statusMap });

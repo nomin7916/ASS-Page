@@ -22,11 +22,16 @@ async function safeJson(url: string, init?: RequestInit) {
 //    재시도 경로(tradingeconomics 스크래핑 — 차단되기 쉽다)에만 의존하던 것을 막는다.
 // diff=true(장단기 금리차 T10Y2Y·T10Y3M): change를 비율(%)이 아니라 전일 대비 차이(%p)로 낸다 — 0 근처를 오가는
 //    값이라 비율은 무의미하게 폭발한다. 0·음수도 정상값이다.
+// 반환에 date(최신 관측일)·prev·prevDate를 싣는다 — 주간 지표(30년 모기지)는 카드에 '○월 ○일 값'을 표시하고,
+//    MBS 스프레드는 두 시리즈의 날짜를 맞춰 계산한다(2026-10).
 async function fetchFred(seriesId: string, diff = false) {
-  const fromLatest = (vals: number[]) => {
+  const fromLatest = (vals: number[], dates: string[] = []) => {
     const price = vals[0];
     const prev  = vals.length > 1 ? vals[1] : null;
     return {
+      date:   dates[0] ?? null,
+      prev:   prev != null && Number.isFinite(prev) ? prev : null,
+      prevDate: dates[1] ?? null,
       price:  Number.isFinite(price) ? price : null,
       change: diff
         ? (prev != null && Number.isFinite(prev) && Number.isFinite(price) ? price - prev : null)
@@ -37,8 +42,8 @@ async function fetchFred(seriesId: string, diff = false) {
   if (FRED_KEY) {
     const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5`;
     const data = await safeJson(url);
-    const obs = (data?.observations ?? []).filter((o: any) => o.value !== '.').map((o: any) => parseFloat(o.value)).filter((v: number) => Number.isFinite(v));
-    if (obs.length) return fromLatest(obs);
+    const rows = (data?.observations ?? []).filter((o: any) => o.value !== '.' && Number.isFinite(parseFloat(o.value)));
+    if (rows.length) return fromLatest(rows.map((o: any) => parseFloat(o.value)), rows.map((o: any) => o.date));
   }
   try {
     const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
@@ -48,8 +53,8 @@ async function fetchFred(seriesId: string, diff = false) {
     });
     if (res.ok) {
       const rec = parseFredGraphCsv(await res.text(), diff);
-      const vals = Object.keys(rec).sort().reverse().map(d => rec[d]);
-      if (vals.length) return fromLatest(vals);
+      const ds = Object.keys(rec).sort().reverse();
+      if (ds.length) return fromLatest(ds.map(d => rec[d]), ds);
     }
   } catch { /* 폴백 실패 */ }
   return { price: null, change: null, source: 'FRED' };
@@ -220,6 +225,7 @@ export default async function handler(req: Request): Promise<Response> {
     btcYahoo, ethYahoo,
     btcCg, ethCg,
     us2y, us30y, us3m, t10y2y, t10y3m,
+    hyYield, hySpread, mort30, move,
   ] = await Promise.allSettled([
     fetchFred('DGS10'),                                                // US 10Y (FRED — 영업일 종가 기준)
     fetchYahoo('^TNX'),                                                // US 10Y (Yahoo — 장중 실시간 fallback)
@@ -250,6 +256,10 @@ export default async function handler(req: Request): Promise<Response> {
     fetchFred('DGS3MO'),                                               // 미국 3개월 (FRED)
     fetchFred('T10Y2Y', true),                                         // 10년−2년 금리차 (%p)
     fetchFred('T10Y3M', true),                                         // 10년−3개월 금리차 (%p)
+    fetchFred('BAMLH0A0HYM2EY'),                                       // 하이일드 금리 (%)
+    fetchFred('BAMLH0A0HYM2', true),                                   // 하이일드 스프레드 (%p)
+    fetchFred('MORTGAGE30US'),                                         // 30년 모기지 (%, 주간)
+    fetchYahoo('^MOVE'),                                               // MOVE 금리 변동성 지수
   ]);
 
   const ok = <T>(r: PromiseSettledResult<T>) =>
@@ -273,6 +283,20 @@ export default async function handler(req: Request): Promise<Response> {
   // 국내금: Naver front-api(M04020000) → HTML 기준가 순으로 fallback
   const goldKr = ok(goldKrMetal)?.price ? ok(goldKrMetal) : ok(goldKrHtml)?.price ? ok(goldKrHtml) : null;
 
+  // MBS 스프레드(%p) = 30년 모기지 − 미국 10년(FRED DGS10 — 히스토리 /api/history mbsSpread와 같은 소스).
+  //   10년물 최신일에 그날(또는 직전) 모기지 값을 맞춘다. 전일 대비도 같은 규칙의 %p 차이.
+  const mbsSpread = (() => {
+    const m = ok(mort30), u = ok(us10yFred);
+    if (!m || !u || m.price == null || u.price == null || !m.date || !u.date) return { price: null, change: null, source: 'FRED' };
+    const mortAt = (d: string | null) => (d && d >= m.date ? m.price : m.prev);
+    const r4 = (v: number) => Math.round(v * 10000) / 10000;
+    const cur = mortAt(u.date);
+    const prv = u.prev != null ? mortAt(u.prevDate) : null;
+    if (cur == null) return { price: null, change: null, source: 'FRED' };
+    const price = r4(cur - u.price);
+    return { price, change: prv != null && u.prev != null ? r4(price - (prv - u.prev)) : null, source: 'FRED', date: u.date };
+  })();
+
   const body = {
     us10y,
     fedRate: ok(fedRate),
@@ -281,6 +305,11 @@ export default async function handler(req: Request): Promise<Response> {
     us3m:    ok(us3m),
     t10y2y:  ok(t10y2y),
     t10y3m:  ok(t10y3m),
+    hyYield: ok(hyYield),
+    hySpread: ok(hySpread),
+    mort30:  ok(mort30),
+    mbsSpread,
+    move:    ok(move),
     kr10y,
     usdkrw,
     goldKr,

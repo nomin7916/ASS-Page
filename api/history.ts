@@ -7,7 +7,7 @@ const FRED_KEY = process.env.FRED_API_KEY ?? '';
 
 import { getKisToken } from './_kisToken.js';
 import { fetchKisDailyRange } from './_kisDaily.js';
-import { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd } from './_indicatorSources.js';
+import { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread } from './_indicatorSources.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
@@ -102,6 +102,7 @@ const YAHOO_SYMBOLS: Record<string, string> = {
   vix:      '^VIX',
   btc:      'BTC-USD',
   eth:      'ETH-USD',
+  move:     '^MOVE',     // 금리 변동성 지수(2026-10) — Yahoo 2002-11-12~
   // 지수 3종(2026-10) — 시장지표 패널의 KOSPI·S&P500·Nasdaq100도 다른 지표와 같은 커버리지 보충(머리·공백·꼬리)을
   // 타야 한다. 옛 경로는 클라이언트가 외부 CORS 프록시로 Yahoo를 직접 불러 '시작일~오늘' 전량만 받았다.
   kospi:    '^KS11',
@@ -276,7 +277,7 @@ function toCSV(data: Record<string, number>): string {
   return lines.join('\n');
 }
 
-// 순수 과거 지표 히스토리(us10y/us2y/us30y/us3m/t10y2y/t10y3m/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth + 지수 kospi/sp500/nasdaq) → 24h 캐시
+// 순수 과거 지표 히스토리(us10y/us2y/us30y/us3m/t10y2y/t10y3m/hyYield/hySpread/mort30/mbsSpread/move/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth + 지수 kospi/sp500/nasdaq) → 24h 캐시
 // ⚠️ 종료일이 최근(어제·오늘)인 요청은 1h만 캐시한다 — 24h로 두면 '새로고침' 꼬리 수집이 하루 내내 같은
 //    (오늘 값이 빠진) 응답을 돌려받는다. 과거 구간만 담은 요청은 값이 바뀌지 않으므로 24h 그대로.
 function csvResponse(data: Record<string, number>, recent = false): Response {
@@ -753,12 +754,36 @@ export default async function handler(request: Request): Promise<Response> {
     us3m:   { id: 'DGS3MO', signed: false },
     t10y2y: { id: 'T10Y2Y', signed: true },
     t10y3m: { id: 'T10Y3M', signed: true },
+    // 하이일드·모기지(2026-10). ICE BofA 2종은 FRED가 최근 약 3년치만 준다(실측 첫 날짜 2023-10-17).
+    hyYield:  { id: 'BAMLH0A0HYM2EY', signed: false },
+    hySpread: { id: 'BAMLH0A0HYM2',   signed: false },
+    mort30:   { id: 'MORTGAGE30US',   signed: false },   // 주간(목요일 발표)
   };
   if (US_RATE_SERIES[key]) {
     const { id, signed } = US_RATE_SERIES[key];
     const data = await fetchFredHistory(id, d1, d2, 10000, signed);
     if (Object.keys(data).length === 0) return new Response(`${key} 수집 실패`, { status: 502 });
     if (!signed) return csvResponse(data, recent);
+    return new Response(JSON.stringify(data), {
+      headers: {
+        'Content-Type':                'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control':               recent
+          ? 's-maxage=3600, stale-while-revalidate=600'
+          : 's-maxage=86400, stale-while-revalidate=43200',
+      },
+    });
+  }
+
+  // mbsSpread(%p) = mort30 − us10y — 서버에서 계산해 날짜→값으로 내보낸다(_indicatorSources.computeMbsSpread).
+  //   모기지는 주간이라 시작일보다 2주 앞부터 받아 첫 날짜에도 '직전 모기지 값'이 있게 한다. 음수 가능 → JSON 응답.
+  if (key === 'mbsSpread') {
+    const [mort, ust] = await Promise.all([
+      fetchFredHistory('MORTGAGE30US', shiftYmd(d1, -14), d2),
+      fetchFredHistory('DGS10', d1, d2),
+    ]);
+    const data = computeMbsSpread(mort, ust);
+    if (Object.keys(data).length === 0) return new Response('mbsSpread 수집 실패', { status: 502 });
     return new Response(JSON.stringify(data), {
       headers: {
         'Content-Type':                'application/json; charset=utf-8',

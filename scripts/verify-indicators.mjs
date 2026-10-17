@@ -111,14 +111,16 @@ if (C) {
   eq('#10 소스 최초일 이전은 요구하지 않는다(BTC)', seg(daily('2014-09-17', '2026-10-16'), '2004-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.btc), []);
   eq('#10b floor 표 — btc/eth/fedRate', [INDICATOR_SOURCE_FLOOR.btc, INDICATOR_SOURCE_FLOOR.eth, INDICATOR_SOURCE_FLOOR.fedRate], ['2014-09-17', '2017-11-09', '1982-09-27']);
   // 패널 13개 항목 전부 — 키 목록은 순수 모듈이 단일 소스, floor는 13개 전부 ISO 날짜
-  // 2026-10 미국 금리 5종 추가 → 지표 15 + 지수 3 = 18
-  eq('#10c 커버리지 키 = 지표 15 + 지수 3 (18개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 18);
+  // 2026-10 미국 금리 5종 → 18, 하이일드·모기지·MOVE 5종 → 지표 20 + 지수 3 = 23
+  eq('#10c 커버리지 키 = 지표 20 + 지수 3 (23개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 23);
   eq('#10d 지수 키 3종', C.MARKET_INDEX_KEYS, ['kospi', 'sp500', 'nasdaq']);
-  ok('#10e 18개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
+  ok('#10e 23개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
   eq('#10f 지수 floor 이전은 요구하지 않는다(KOSPI 1997-07-01)', seg(daily('1997-07-01', '2026-10-16', 100), '1980-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.kospi), []);
   // ── 미국 금리 5종(2026-10) · 장단기 금리차는 0·음수가 정상값 ──
   ok('#10g 미국 금리 5종이 커버리지 키에 있다', ['us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)));
-  eq('#10h 부호 있는 지표 = 금리차 2종만', C.SIGNED_INDICATOR_KEYS, ['t10y2y', 't10y3m']);
+  eq('#10h 부호 있는 지표 = 장단기 금리차 2종 + MBS 스프레드', C.SIGNED_INDICATOR_KEYS, ['t10y2y', 't10y3m', 'mbsSpread']);
+  ok('#10g2 하이일드·모기지·MOVE 5종이 커버리지 키에 있다', ['hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)));
+  eq('#10g3 실측 첫 날짜 — 하이일드 2종 2023-10-17 · 모기지 1971-04-02 · MOVE 2002-11-12', ['hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'].map(k => INDICATOR_SOURCE_FLOOR[k]), ['2023-10-17', '2023-10-17', '1971-04-02', '1971-04-02', '2002-11-12']);
   ok('#10i isSignedIndicator — 금리차만 true', C.isSignedIndicator('t10y2y') && C.isSignedIndicator('t10y3m') && !C.isSignedIndicator('us10y') && !C.isSignedIndicator(''));
   {
     const sp = { '2023-01-03': -0.71, '2023-01-04': 0, '2023-01-05': 0.12 };
@@ -164,7 +166,7 @@ if (C) {
 console.log('\n── 파트② 소스 병합 (api/_indicatorSources.ts 직접 import) ──');
 const I = await load('api/_indicatorSources.ts');
 if (I) {
-  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd } = I;
+  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread } = I;
   const csv = 'observation_date,DFEDTARU\r\n2008-12-16,0.25\r\n2008-12-17,.\r\n2008-12-18,\r\n2026-10-16,3.75\r\n';
   eq('#21 fredgraph.csv 파싱(헤더·결측 . ·빈 칸·CRLF)', parseFredGraphCsv(csv), { '2008-12-16': 0.25, '2026-10-16': 3.75 });
   eq('#22 옛 헤더(DATE)도', parseFredGraphCsv('DATE,DGS10\n2004-01-02,4.38\n'), { '2004-01-02': 4.38 });
@@ -184,6 +186,11 @@ if (I) {
   ok('#29 isRecentRangeEnd — 오늘·어제 종료는 최근', isRecentRangeEnd('20261017', '20261017') && isRecentRangeEnd('20261015', '20261017'));
   ok('#30 isRecentRangeEnd — 과거 구간은 최근 아님', !isRecentRangeEnd('20150531', '20261017'));
   ok('#31 isRecentRangeEnd — 손상 입력은 최근으로(짧은 캐시가 안전)', isRecentRangeEnd('', '20261017'));
+  // MBS 스프레드 = 30년 모기지(주간·목요일) − 미국 10년(일별). 같은 날짜면 그날 값끼리, 모기지가 없는 날은 직전 모기지.
+  //   첫 모기지 이전 날짜는 만들지 않고, 음수도 그대로 낸다(부동소수 잔차는 소수 4자리로 정리).
+  eq('#33 computeMbsSpread — 같은 날짜·직전 모기지 이월·첫 발표 이전 제외·음수 보존',
+    computeMbsSpread({ '2026-10-02': 6.30, '2026-10-09': 6.81 }, { '2026-10-01': 4.0, '2026-10-02': 4.1, '2026-10-06': 4.2, '2026-10-09': 4.1, '2026-10-12': 7.0 }),
+    { '2026-10-02': 2.2, '2026-10-06': 2.1, '2026-10-09': 2.71, '2026-10-12': -0.19 });
   ok('#32 fillBefore 입력 불변', (() => { const p = { '2004-01-02': 1 }; fillBefore(p, { '2003-01-02': 2 }); return Object.keys(p).length === 1; })());
 }
 
@@ -230,7 +237,11 @@ const panelKeys = [...new Set([...MI.matchAll(/label:\s*'[^']+',\s*key:\s*'(\w+)
 const covKeys = (COV.match(/INDICATOR_HISTORY_KEYS = \[([^\]]+)\]/) || [])[1];
 const idxKeys = (COV.match(/MARKET_INDEX_KEYS = \[([^\]]+)\]/) || [])[1];
 const covSet = new Set([...(covKeys || '').matchAll(/'(\w+)'/g), ...(idxKeys || '').matchAll(/'(\w+)'/g)].map(m => m[1]));
-ok('#G17 패널의 모든 항목(18)이 커버리지 키 목록에 있다', panelKeys.length === 18 && panelKeys.every(k => covSet.has(k)));
+ok('#G17 패널의 모든 항목(23)이 커버리지 키 목록에 있다', panelKeys.length === 23 && panelKeys.every(k => covSet.has(k)));
+ok('#G17b 서버: 하이일드·모기지 FRED · MBS 스프레드는 서버 계산(JSON) · MOVE는 Yahoo', /hyYield:\s*\{ id: 'BAMLH0A0HYM2EY',\s*signed: false \}/.test(H)
+  && /hySpread:\s*\{ id: 'BAMLH0A0HYM2',\s*signed: false \}/.test(H) && /mort30:\s*\{ id: 'MORTGAGE30US',\s*signed: false \}/.test(H)
+  && /const data = computeMbsSpread\(mort, ust\);/.test(H) && /move:\s*'\^MOVE'/.test(H)
+  && /fetchFred\('MORTGAGE30US'\)/.test(IND) && /fetchYahoo\('\^MOVE'\)/.test(IND) && /mbsSpread,/.test(IND));
 ok('#G18 서버: 지수 3종 Yahoo 라우트(kospi/sp500/nasdaq) — 임의 구간 조회 가능', /kospi:\s*'\^KS11'/.test(H) && /sp500:\s*'\^GSPC'/.test(H) && /nasdaq:\s*'\^NDX'/.test(H));
 ok('#G19 훅: 커버리지 키는 순수 모듈 목록 그대로(13개) — 손나열 금지', /const AUTO_INDICATOR_KEYS = INDICATOR_COVERAGE_KEYS;/.test(M)
   && !/AUTO_INDICATOR_KEYS = \['us10y'/.test(M));

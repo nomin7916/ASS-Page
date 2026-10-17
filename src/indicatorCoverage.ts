@@ -17,11 +17,13 @@ export const MAX_GAP_SEGMENTS = 4;            // 한 번에 채우는 내부 공
 //   indicatorHistoryMap에 사는 지표 10종 / marketIndices에 사는 지수 3종(저장 위치가 달라 병합 대상만 갈린다).
 export const INDICATOR_HISTORY_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'goldKr',
   // 미국 금리 5종(2026-10) — FRED 일별. us10y와 같은 경로(서버 /api/history · 커버리지 보충)를 탄다.
-  'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'];
+  'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m',
+  // 하이일드·모기지·MOVE(2026-10). mort30은 주간, mbsSpread는 서버 계산값(mort30 − us10y).
+  'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'];
 // 장단기 금리차(%p)는 **0·음수가 정상값**이다(수익률 곡선 역전). 다른 지표는 0 이하를 손상값으로 버리지만,
 // 이 키들까지 버리면 역전 구간이 통째로 빠지고 커버리지가 그 구간을 매 세션 '구멍'으로 보고 헛조회한다.
 // ⚠️ 판정은 isSignedIndicator 하나로만 — 병합(mergeIndicatorHistory)·커버리지(indicatorDates)·서버 응답 파서가 공유한다.
-export const SIGNED_INDICATOR_KEYS = ['t10y2y', 't10y3m'];
+export const SIGNED_INDICATOR_KEYS = ['t10y2y', 't10y3m', 'mbsSpread'];
 export const isSignedIndicator = (key: string | null | undefined): boolean => !!key && SIGNED_INDICATOR_KEYS.includes(key);
 export const MARKET_INDEX_KEYS = ['kospi', 'sp500', 'nasdaq'];
 export const INDICATOR_COVERAGE_KEYS = [...INDICATOR_HISTORY_KEYS, ...MARKET_INDEX_KEYS];
@@ -35,6 +37,11 @@ export const INDICATOR_SOURCE_FLOOR: Record<string, string> = {
   us3m: '1981-09-01',     // FRED DGS3MO 최초일
   t10y2y: '1976-06-01',   // FRED T10Y2Y 최초일
   t10y3m: '1982-01-04',   // FRED T10Y3M 최초일
+  hyYield: '2023-10-17',  // FRED BAMLH0A0HYM2EY 실측 첫 날짜(ICE BofA — 최근 약 3년치만 제공)
+  hySpread: '2023-10-17', // FRED BAMLH0A0HYM2 실측 첫 날짜(같은 제약)
+  mort30: '1971-04-02',   // FRED MORTGAGE30US 최초일(주간)
+  mbsSpread: '1971-04-02', // mort30 − us10y — mort30 첫 날짜부터
+  move: '2002-11-12',     // Yahoo ^MOVE 실측 첫 날짜
   fedRate: '1982-09-27',  // FRED DFEDTAR 최초일
   kr10y: '2000-10-02',    // FRED IRLTLT01KRM156N(월별) 최초월 — 네이버 일별은 그보다 늦다
   goldIntl: '2000-08-30', // Yahoo GC=F 최초일

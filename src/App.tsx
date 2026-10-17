@@ -1482,7 +1482,7 @@ export default function App() {
     );
   }, [unifiedDates, appliedRange]);
 
-  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'];
+  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'];
   // 장단기 금리차(t10y2y·t10y3m)는 0·음수가 정상값이라 비율(현재÷기준−1)이 무의미하다 → 기준 대비 **차이(%p)**로 그린다.
   //    판정은 indicatorCoverage.isSignedIndicator 하나(수집·병합과 같은 소스).
   const indRateOf = (k, cur, base) => (isSignedIndicator(k)

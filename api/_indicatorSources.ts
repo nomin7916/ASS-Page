@@ -45,6 +45,23 @@ export function joinFedRate(legacy: Record<string, number>, upper: Record<string
   return fillBefore(upper || {}, legacy || {});
 }
 
+// MBS 스프레드(%p) = 30년 모기지(MORTGAGE30US, 주간·목요일 발표) − 미국 10년(DGS10, 일별) — 2026-10.
+// us10y 날짜마다 계산하고, 그날 모기지 값이 없으면 **직전** 모기지 값을 쓴다(같은 날짜면 그날 값끼리).
+// 첫 모기지 발표 이전 날짜는 만들지 않는다. 0·음수가 나올 수 있다(SIGNED_INDICATOR_KEYS의 mbsSpread).
+// 부동소수 잔차(6.81−4.1=2.7099999…)는 소수 4자리로 정리한다.
+export function computeMbsSpread(mort30: Record<string, number>, us10y: Record<string, number>): Record<string, number> {
+  const mk = keysOf(mort30);
+  const out: Record<string, number> = {};
+  let i = 0, cur: number | null = null;
+  for (const d of keysOf(us10y)) {
+    while (i < mk.length && mk[i] <= d) { cur = mort30[mk[i]]; i++; }
+    const u = us10y[d];
+    if (cur == null || !Number.isFinite(cur) || !Number.isFinite(u)) continue;
+    out[d] = Math.round((cur - u) * 10000) / 10000;
+  }
+  return out;
+}
+
 // 응답 캐시 — 종료일이 최근 2일 이내면 '최신 꼬리를 포함한 요청'이라 짧게 캐시한다.
 export function isRecentRangeEnd(d2Ymd: string, todayYmd: string): boolean {
   if (!/^\d{8}$/.test(d2Ymd || '') || !/^\d{8}$/.test(todayYmd || '')) return true;
