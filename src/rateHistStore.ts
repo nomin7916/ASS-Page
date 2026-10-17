@@ -7,6 +7,9 @@
 export const HIST_STORE_VERSION = 1;
 export const HIST_FILE_MAX_BYTES = 4 * 1024 * 1024;   // 이보다 크면 그 묶음을 둘로 나눈다
 export const HIST_TAIL_OVERLAP_DAYS = 5;              // 이어받기는 며칠 겹쳐 받는다(잠정값 보정)
+export const HIST_SLOW_OVERLAP_DAYS = 35;             // 주간·월간 지표는 발표 간격이 길어 35일 겹쳐 받는다
+export const HIST_SLOW_KEYS = ['mort30', 'mbsSpread', 'brIpca']; // 주간(모기지·MBS 스프레드) · 월간(브라질 물가)
+export const HIST_REFRESH_MS = 30 * 60 * 1000;        // 창을 연 동안 최신분 다시 받기 간격
 export const HIST_CHUNK_YEARS = 10;                   // 긴 기간은 10년 단위로 나눠 요청
 export const HIST_BATCH_KEYS = 4;                     // 한 번에 받는 키 수
 
@@ -74,16 +77,26 @@ export function mergeHist(prev: Record<string, number> | null | undefined, incom
   return next || base;
 }
 
-// 이어받기 시작일 — 저장 기록이 없으면 출처 첫 날짜(floor)부터, 있으면 마지막 날짜 − 겹침. 이미 최신이면 null
-export function resumeFrom(entry: any, floor: string, today: string): string | null {
+export const tailOverlapDays = (key: string) => (HIST_SLOW_KEYS.includes(key) ? HIST_SLOW_OVERLAP_DAYS : HIST_TAIL_OVERLAP_DAYS);
+// 이어받기 시작일 — 저장 기록이 없으면 출처 첫 날짜(floor)부터, 있으면 마지막 날짜 − 겹침.
+// 마지막 날짜가 오늘이어도 다시 받는다(오늘 값은 장중 잠정값일 수 있다). 마지막 날짜가 오늘보다 늦으면(시계 어긋남) null
+export function resumeFrom(entry: any, floor: string, today: string, overlap = HIST_TAIL_OVERLAP_DAYS): string | null {
   if (!ISO.test(today)) return null;
   const last = entry && ISO.test(String(entry.last || '')) ? entry.last : null;
   if (!last) return ISO.test(floor) ? floor : shiftIso(today, -3 * 365);
-  if (last >= today) return null;
-  return shiftIso(last, -HIST_TAIL_OVERLAP_DAYS);
+  if (last > today) return null;
+  return shiftIso(last, -overlap);
 }
 // 저장 기록이 출처 첫 날짜까지 다 차 있는가(앞쪽 7일 여유) — 아니면 처음부터 다시 받아야 한다
 export const coversFloor = (entry: any, floor: string) => !!entry && ISO.test(String(entry.first || '')) && (!ISO.test(floor) || entry.first <= shiftIso(floor, 7));
+
+// 키 하나의 받을 구간 — full이면 저장 기록에 없거나 앞쪽이 비어 처음부터(최초 수집), 아니면 최신분만
+export function planFetch(key: string, entry: any, floor: string, today: string): { from: string; to: string; full: boolean } | null {
+  if (!ISO.test(today)) return null;
+  const full = !entry || !coversFloor(entry, floor);
+  const from = resumeFrom(full ? null : entry, floor, today, tailOverlapDays(key));
+  return from ? { from, to: today, full } : null;
+}
 
 // [from, to]를 years년 단위 구간으로 — 오래된 것부터
 export function chunkRanges(from: string, to: string, years = HIST_CHUNK_YEARS): Array<[string, string]> {
@@ -128,6 +141,26 @@ export function planGroupFiles(group: HistGroup, entries: Record<string, HistEnt
   const a = pick(group.keys.slice(0, half)), b = pick(group.keys.slice(half));
   return [{ file: group.file, body: a, bytes: fileBytes(a) }, { file: splitFileName(group.file), body: b, bytes: fileBytes(b) }];
 }
+// 바뀐 묶음 — 저장해 둔 항목과 지금 항목이 다른 키가 하나라도 있는 묶음만(savedAt은 비교하지 않는다)
+const entrySig = (e: any) => (e ? `${e.first}|${e.last}|${e.source}|${(e.d || []).join(',')}|${(e.x || []).join(',')}` : '');
+export function changedGroups(saved: Record<string, any> | null | undefined, now: Record<string, any> | null | undefined): HistGroup[] {
+  return HIST_GROUPS.filter(g => g.keys.some(k => entrySig(saved?.[k]) !== entrySig(now?.[k])));
+}
+// 저장 기록의 가장 늦은 날짜(상단 바 '기록 ○○까지 저장')
+export function latestStoredDate(entries: Record<string, any> | null | undefined): string {
+  let out = '';
+  for (const k of HIST_KEYS) { const l = String(entries?.[k]?.last || ''); if (ISO.test(l) && l > out) out = l; }
+  return out;
+}
+// 차트 끝점이 잠정값인가 — 저장 기록에 없는 현재값(장중)이거나 오늘 날짜면 그 날짜, 아니면 null. 다음 날 확정값이 오면 덮인다
+export function provisionalDate(stored: any, shown: any, today: string): string | null {
+  const pts = seriesPairs(shown, true);
+  if (!pts.length) return null;
+  const [d, v] = pts[pts.length - 1];
+  if ((ISO.test(today) && d >= today) || !stored || stored[d] !== v) return d;
+  return null;
+}
+
 // 불러온 파일들(이름 → 본문) → 키 → 항목
 export function readHistFiles(files: Record<string, any>): Record<string, HistEntry> {
   const out: Record<string, HistEntry> = {};

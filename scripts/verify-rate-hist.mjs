@@ -25,7 +25,8 @@ const C = await load('src/indicatorCoverage.ts');
 
 if (H && C) {
   const { encodeSeries, decodeSeries, mergeHist, resumeFrom, coversFloor, chunkRanges, planGroupFiles, readHistFiles, buildHistFile,
-    HIST_GROUPS, HIST_KEYS, HIST_FILE_NAMES, HIST_FILE_MAX_BYTES, HIST_TAIL_OVERLAP_DAYS, splitFileName, fileBytes } = H;
+    HIST_GROUPS, HIST_KEYS, HIST_FILE_NAMES, HIST_FILE_MAX_BYTES, HIST_TAIL_OVERLAP_DAYS, splitFileName, fileBytes,
+    planFetch, tailOverlapDays, changedGroups, latestStoredDate, provisionalDate, HIST_SLOW_OVERLAP_DAYS, HIST_REFRESH_MS } = H;
   console.log('\n── 파트① 형식 ──');
   const s = { '2026-10-16': 4.12, '1962-01-02': 4.06, '2000-02-29': 6.5, '2026-10-15': 4.1 };
   const e = encodeSeries(s, false, 'api/history', '2026-10-18T00:00:00Z');
@@ -48,12 +49,38 @@ if (H && C) {
   eq('#8 저장 기록 없음 → 출처 첫 날짜부터', resumeFrom(null, '1962-01-02', '2026-10-18'), '1962-01-02');
   eq('#9 저장 기록 있음 → 마지막 날짜 − 5일(겹쳐 받기)', resumeFrom({ last: '2026-10-10' }, '1962-01-02', '2026-10-18'), '2026-10-05');
   ok('#9b 겹침 5일', HIST_TAIL_OVERLAP_DAYS === 5);
-  eq('#10 이미 최신이면 null(받지 않음)', resumeFrom({ last: '2026-10-18' }, '1962-01-02', '2026-10-18'), null);
+  eq('#10 마지막 날짜가 오늘이어도 다시 받는다(장중 잠정값 보정) · 오늘보다 늦으면 null', [resumeFrom({ last: '2026-10-18' }, '1962-01-02', '2026-10-18'), resumeFrom({ last: '2026-10-19' }, '1962-01-02', '2026-10-18')], ['2026-10-13', null]);
   eq('#11 앞쪽이 비어 있으면(출처 첫 날짜 + 7일보다 늦게 시작) 처음부터 다시', [coversFloor({ first: '1962-01-05' }, '1962-01-02'), coversFloor({ first: '1990-01-02' }, '1962-01-02'), coversFloor(null, '1962-01-02')], [true, false, false]);
   const ch = chunkRanges('1962-01-02', '2026-10-18');
   ok('#12 10년 단위 — 7구간 · 빈틈·겹침 없음 · 오늘까지', ch.length === 7 && ch[0][0] === '1962-01-02' && ch[0][1] === '1972-01-01' && ch[6][1] === '2026-10-18'
     && ch.every((c, i) => i === 0 || c[0] === new Date(Date.parse(`${ch[i - 1][1]}T00:00:00Z`) + 86400000).toISOString().slice(0, 10)));
   eq('#12b 짧은 기간은 1구간 · 거꾸로면 없음', [chunkRanges('2026-10-05', '2026-10-18'), chunkRanges('2026-10-19', '2026-10-18')], [[['2026-10-05', '2026-10-18']], []]);
+  console.log('\n── 파트③-2 받을 구간(10-B) ──');
+  const T = '2026-10-18', st = (first, last) => ({ first, last });
+  eq('#30 일간 지표 — 마지막 날짜 − 5일 ~ 오늘 · 최신분만', planFetch('us10y', st(C.INDICATOR_SOURCE_FLOOR.us10y, '2026-10-16'), C.INDICATOR_SOURCE_FLOOR.us10y, T), { from: '2026-10-11', to: T, full: false });
+  eq('#31 주간 지표(30년 모기지·MBS 스프레드) — 마지막 날짜 − 35일', [planFetch('mort30', st(C.INDICATOR_SOURCE_FLOOR.mort30, '2026-10-15'), C.INDICATOR_SOURCE_FLOOR.mort30, T), planFetch('mbsSpread', st(C.INDICATOR_SOURCE_FLOOR.mbsSpread, '2026-10-15'), C.INDICATOR_SOURCE_FLOOR.mbsSpread, T)].map(p => p && [p.from, p.full]), [['2026-09-10', false], ['2026-09-10', false]]);
+  eq('#32 월간 지표(브라질 물가) — 마지막 날짜 − 35일', planFetch('brIpca', st(C.INDICATOR_SOURCE_FLOOR.brIpca, '2026-09-01'), C.INDICATOR_SOURCE_FLOOR.brIpca, T), { from: '2026-07-28', to: T, full: false });
+  ok('#33 겹침 — 일간 5일 · 주간·월간 35일', tailOverlapDays('vix') === 5 && tailOverlapDays('krBase') === 5 && ['mort30', 'mbsSpread', 'brIpca'].every(k => tailOverlapDays(k) === HIST_SLOW_OVERLAP_DAYS) && HIST_SLOW_OVERLAP_DAYS === 35);
+  eq('#34 저장 기록에 없는 키(새로 추가) → 출처 첫 날짜부터 최초 수집', planFetch('brlkrw', null, C.INDICATOR_SOURCE_FLOOR.brlkrw, T), { from: C.INDICATOR_SOURCE_FLOOR.brlkrw, to: T, full: true });
+  eq('#35 앞쪽이 빈 기록 → 처음부터 다시(최초 수집)', planFetch('us10y', st('2020-01-02', '2026-10-16'), C.INDICATOR_SOURCE_FLOOR.us10y, T)?.full, true);
+  eq('#36 날짜 없음 → 받지 않음', planFetch('us10y', null, '1962-01-02', ''), null);
+  ok('#37 다시 받기 간격 30분', HIST_REFRESH_MS === 30 * 60 * 1000);
+  console.log('\n── 파트③-3 바뀐 묶음만 저장(10-B) ──');
+  const E = (x, savedAt = 'a') => encodeSeries({ '2026-10-15': x, '2026-10-16': x + 0.1 }, false, 'api/history', savedAt);
+  const saved = { us10y: E(4.1), krBase: E(3), vix: E(15) };
+  eq('#38 아무것도 안 바뀜 → 저장 0건(저장 시각만 달라도 저장하지 않는다)', changedGroups(saved, { us10y: E(4.1, 'b'), krBase: E(3, 'c'), vix: E(15, 'd') }).map(g => g.id), []);
+  eq('#39 한 키만 바뀜 → 그 묶음 1개만', changedGroups(saved, { ...saved, krBase: E(3.25) }).map(g => g.id), ['kr']);
+  eq('#40 새 키 추가 · 두 묶음 변경 → 두 묶음', changedGroups(saved, { ...saved, us10y: E(4.2), brSelic: E(15) }).map(g => g.id), ['us', 'br']);
+  eq('#41 저장 기록 없음(최초) → 받은 키가 있는 묶음만', changedGroups({}, { vix: E(15) }).map(g => g.id), ['misc']);
+  eq('#42 상단 바 — 저장 기록의 가장 늦은 날짜', [latestStoredDate({ us10y: st('1962-01-02', '2026-10-16'), mort30: st('1971-04-02', '2026-10-15'), junk: st('1962-01-02', '2099-01-01') }), latestStoredDate({})], ['2026-10-16', '']);
+  console.log('\n── 파트③-4 잠정 끝점(10-B) ──');
+  const hs0 = { '2026-10-15': 4.1, '2026-10-16': 4.12 };
+  eq('#43 저장 기록에 없는 현재값이 끝점 → 잠정', provisionalDate(hs0, { ...hs0, '2026-10-17': 4.2 }, T), '2026-10-17');
+  eq('#44 끝점이 오늘 날짜 → 잠정(장중 일봉)', provisionalDate({ ...hs0, [T]: 4.2 }, { ...hs0, [T]: 4.2 }, T), T);
+  eq('#45 끝점이 저장 기록과 같은 확정값 → 잠정 아님(다음 날 덮이면 표시가 사라진다)', provisionalDate(hs0, hs0, T), null);
+  eq('#46 같은 날짜인데 현재값이 다르면 → 잠정 · 빈 기록은 null', [provisionalDate(hs0, { ...hs0, '2026-10-16': 4.15 }, T), provisionalDate({}, {}, T)], ['2026-10-16', null]);
+  eq('#47 금리차(음수) 끝점도 판정', provisionalDate({ '2026-10-16': -0.3 }, { '2026-10-16': -0.3, '2026-10-17': -0.25 }, T), '2026-10-17');
+
   console.log('\n── 파트④ 파일·분할 ──');
   eq('#13 묶음 5개 · 키', HIST_GROUPS.map(g => [g.file, g.keys.length]), [['rate_hist_us.json', 7], ['rate_hist_credit.json', 5], ['rate_hist_kr.json', 4], ['rate_hist_br.json', 7], ['rate_hist_misc.json', 3]]);
   ok('#14 모든 키에 출처 첫 날짜(indicatorCoverage)가 있다', HIST_KEYS.every(k => /^\d{4}-\d{2}-\d{2}$/.test(C.INDICATOR_SOURCE_FLOOR[k] || '')));
@@ -84,8 +111,13 @@ console.log('\n── 파트⑤ 배선 가드 ──');
   ok('#G3 앱 탭은 허용 이름만 saveDriveFile로 저장(버전 백업 없음)', /if \(!HIST_FILE_NAMES\.includes\(d\.name\)/.test(h) && /await saveDriveFile\(token, folderId, d\.name, d\.body\);/.test(h) && !/saveVersionedBackup/.test(h) && /if \(!canWrite\) return reply/.test(h));
   ok('#G4 불러오기는 허용 이름 전부를 loadDriveFile로', /HIST_FILE_NAMES\.map\(n => loadDriveFile\(token, folderId, n\)\)/.test(APP));
   ok('#G5 창 — Drive 모드면 이어받기, 아니면 메모리 모드(기존 받기) + 안내', /setStoreMode\('drive'\);\s+runCollection\(false\);/.test(RW) && /storeMode !== 'memory'\) return;\s+const y = PERIODS/.test(RW) && /기록 저장 안 됨\(앱 탭 필요\)/.test(RW));
-  ok('#G6 한 번에 4개 키 · 묶음마다 저장 · 10년 구간 · 실패하면 멈춤', /i \+= HIST_BATCH_KEYS/.test(RW) && /for \(const g of groups\) await saveGroup\(g\);/.test(RW) && /chunkRanges\(j\.from, today\)/.test(RW) && /if \(!rec\) \{ ok = false; break; \}/.test(RW));
+  ok('#G6 한 번에 4개 키 · 키별 받을 구간(planFetch) · 10년 구간 · 실패하면 멈춤', /i \+= HIST_BATCH_KEYS/.test(RW) && /planFetch\(k, entry, INDICATOR_SOURCE_FLOOR\[k\] \|\| '', today\)/.test(RW) && /chunkRanges\(j\.plan\.from, j\.plan\.to\)/.test(RW) && /if \(!rec\) \{ ok = false; break; \}/.test(RW) && /planFetch,/.test(RW));
   ok('#G7 진행 막대 · 관리자 전체 다시 받기(확인 후)', /과거 기록 수집 중 \{collect\.done\}\/\{collect\.total\}/.test(RW) && /isAdmin && storeMode === 'drive'/.test(RW) && /runCollection\(true\)/.test(RW) && /진행할까요\?/.test(RW));
+  ok('#G10 바뀐 묶음만 저장 — changedGroups(Drive 저장본, 현재) · 성공한 묶음만 저장본 갱신 · 안 바뀐 키는 항목을 다시 만들지 않는다',
+    /changedGroups\(savedRef\.current, storedRef\.current\)/.test(RW) && /if \(allOk\) \{/.test(RW) && /if \(series !== j\.base\) \{/.test(RW) && /savedRef\.current = storedRef\.current;/.test(RW) && /changedGroups,/.test(RW) && !/for \(const g of groups\) await saveGroup/.test(RW));
+  ok('#G11 저장 기록 먼저 — 현재값은 모드 결정(기록 그리기) 뒤에 · 30분마다 최신분+현재값', /if \(access !== 'allowed' \|\| !storeReady\) return;\s+loadLive\(\);/.test(RW) && /setInterval\(\(\) => \{ runCollection\(false\); loadLive\(\); \}, HIST_REFRESH_MS\)/.test(RW) && /HIST_REFRESH_MS,/.test(RW));
+  ok('#G12 기간 버튼 전체 추가 · 잘라 쓰기(Drive 모드는 서버 호출 없음) · 잠정 표시 · 상단 바', /\{ key: 'all', label: '전체', years: null \}/.test(RW) && /const fromChart = today && periodYears \?/.test(RW)
+    && (RW.match(/\{provLine\(\[/g) || []).length === 6 && /value: '잠정'/.test(RW) && /provisionalDate,/.test(RW) && /기록 \$\{storedLast\}까지 저장/.test(RW) && /분 전`\} 갱신/.test(RW) && /latestStoredDate,/.test(RW));
   ok('#G8 앱 탭이 관리자 여부를 알려 준다', /isAdmin: !!rateIsAdminRef\.current/.test(APP));
   ok('#G9 검증 스크립트가 게이트 목록에 있다', pkg.scripts['verify:rate-hist'] === 'node scripts/verify-rate-hist.mjs');
 }

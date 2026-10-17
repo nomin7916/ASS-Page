@@ -13,8 +13,8 @@ import { changeOverDays, roseWithinDays } from '../rateMetrics';
 import { readBrazilNotes } from '../brazilNotes';
 import { applySettingsFile, appendStateChanges, manualToSave } from '../rateSettings';
 import {
-  HIST_GROUPS, HIST_KEYS, HIST_BATCH_KEYS, groupOfKey, splitFileName, encodeSeries, decodeSeries, mergeHist,
-  resumeFrom, coversFloor, chunkRanges, planGroupFiles, readHistFiles,
+  HIST_GROUPS, HIST_KEYS, HIST_BATCH_KEYS, HIST_REFRESH_MS, encodeSeries, decodeSeries, mergeHist,
+  planFetch, chunkRanges, planGroupFiles, readHistFiles, changedGroups, latestStoredDate, provisionalDate,
 } from '../rateHistStore';
 import { INDICATOR_SOURCE_FLOOR, isSignedIndicator } from '../indicatorCoverage';
 import { BCB_BROWSER_KEYS, fetchBcbHistoryBrowser, fillBrazilLiveCapped } from '../bcbClient';
@@ -99,6 +99,7 @@ const PERIODS = [
   { key: '1y', label: '1년', years: 1 },
   { key: '3y', label: '3년', years: 3 },
   { key: '10y', label: '10년', years: 10 },
+  { key: 'all', label: '전체', years: null },   // Drive 기록 전체(메모리 모드는 10년까지만 받는다)
 ];
 
 // 블랙 배경에서 잘 보이는 색(백색에서도 대비가 남는 400 계열)
@@ -230,10 +231,14 @@ export default function RateWindow() {
   const [isAdmin, setIsAdmin] = useState(false);
   // 지표 과거 기록(10-A) — 'pending'(앱 탭 응답 대기) → 'drive'(Drive 기록 + 이어받기·저장) | 'memory'(서버에서 받아 메모리만)
   const [storeMode, setStoreMode] = useState('pending');
-  const [collect, setCollect] = useState({ active: false, done: 0, total: 0 });
+  const [collect, setCollect] = useState({ active: false, done: 0, total: 0, full: false });
   const [histSaveError, setHistSaveError] = useState('');
   const [redoConfirm, setRedoConfirm] = useState(false);
   const storedRef = useRef({});              // 키 → 저장 형식 항목(rateHistStore.HistEntry)
+  const savedRef = useRef({});               // 키 → Drive에 실제로 저장돼 있는 항목 — 이것과 다른 묶음만 저장한다
+  const [storedLast, setStoredLast] = useState('');   // 저장 기록의 가장 늦은 날짜(상단 바)
+  const [refreshedAt, setRefreshedAt] = useState(0);  // 최신분 받기가 끝난 시각(ms)
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const storedFilesRef = useRef(new Set());   // Drive에 실제로 있던 파일 이름(분할 '_2' 파일 정리용)
   const collectingRef = useRef(false);
   const [settingsFile, setSettingsFile] = useState(null);
@@ -371,61 +376,75 @@ export default function RateWindow() {
     setFailedKeys(results.filter(([, , ok]) => !ok).map(([k]) => k));
   }, [needFrom, today]);
 
-  // 현재값 — 권한이 확인된 뒤 한 번
-  useEffect(() => {
-    if (access !== 'allowed') return;
-    let alive = true;
+  // 현재값 — 저장 기록을 먼저 그린 뒤(모드 결정 후) 한 번, 그 뒤 30분마다
+  const loadLive = useCallback(() => {
     fetch('/api/indicators', { signal: AbortSignal.timeout(20000) })
       .then(r => (r.ok ? r.json() : null))
-      .then(async j => { if (j && typeof j === 'object') await fillBrazilLiveCapped(j); if (alive && j && typeof j === 'object') setLive(j); })
+      .then(async j => { if (j && typeof j === 'object') { await fillBrazilLiveCapped(j); setLive(j); setRefreshedAt(Date.now()); } })
       .catch(() => {});
-    return () => { alive = false; };
-  }, [access]);
+  }, []);
+  const storeReady = storeMode === 'drive' || storeMode === 'memory';
+  useEffect(() => {
+    if (access !== 'allowed' || !storeReady) return;
+    loadLive();
+  }, [access, storeReady, loadLive]);
 
   // 메모리 모드(앱 탭 없음·Drive 불가)일 때만 — 지금처럼 기간만큼 서버에서 받아 메모리로만 쓴다
   useEffect(() => {
     if (access !== 'allowed' || !today || storeMode !== 'memory') return;
-    const y = PERIODS.find(p => p.key === period)?.years || 1;
+    const y = PERIODS.find(p => p.key === period)?.years || 10;
     ensureHistory(y);
   }, [access, today, period, ensureHistory, storeMode]);
 
   // ── 지표 과거 기록 Drive 저장(10-A) ──
   // 묶음(파일) 하나 저장 — 4MB를 넘으면 둘로 나눈다. 나눔이 풀리면 예전 '_2' 파일은 빈 본문으로 덮어 오래된 값이 남지 않게 한다
   const saveGroup = useCallback(async (group) => {
-    for (const f of planGroupFiles(group, storedRef.current)) {
+    const snap = storedRef.current;
+    let allOk = true;
+    for (const f of planGroupFiles(group, snap)) {
       const body = f.body || (storedFilesRef.current.has(f.file) ? { v: 1, keys: {} } : null);
       if (!body) continue;
       const r = await request({ type: 'rate:histSave', name: f.file, body });
       if (r?.ok) { storedFilesRef.current.add(f.file); setHistSaveError(''); }
-      else setHistSaveError(r?.error || '기록을 저장하지 못했습니다');
+      else { allOk = false; setHistSaveError(r?.error || '기록을 저장하지 못했습니다'); }
     }
+    // 저장에 성공한 묶음만 '저장됨'으로 — 실패하면 다음 받기 때 다시 저장 대상이 된다
+    if (allOk) { const next = { ...savedRef.current }; for (const k of group.keys) next[k] = snap[k]; savedRef.current = next; }
   }, [request]);
-  // 수집 — 키마다 저장된 마지막 날짜 이후(없으면 출처 첫 날짜부터)를 10년 단위로, 한 번에 4개 키씩. 묶음이 끝날 때마다 해당 파일 저장
+  const saveChanged = useCallback(async () => {
+    for (const g of changedGroups(savedRef.current, storedRef.current)) await saveGroup(g);
+  }, [saveGroup]);
+  // 받기 — 키마다 저장된 마지막 날짜 − 5일(주간·월간 35일)부터 오늘까지만. 저장 기록에 없는 키만 출처 첫 날짜부터(최초 수집, 10년 단위).
+  // 한 번에 4개 키씩. 바뀐 묶음 파일만 저장 — 최초 수집이 섞이면 묶음(4키)마다, 최신분만이면 끝에 한 번
   const runCollection = useCallback(async (force) => {
     if (collectingRef.current || !today) return;
     collectingRef.current = true;
     const jobs = HIST_KEYS.map(k => {
-      const signed = isSignedIndicator(k), floor = INDICATOR_SOURCE_FLOOR[k] || '';
-      const entry = force ? null : storedRef.current[k];
-      const from = entry && coversFloor(entry, floor) ? resumeFrom(entry, floor, today) : resumeFrom(null, floor, today);
-      return { k, signed, from, base: entry ? decodeSeries(entry, signed) : {} };
+      const signed = isSignedIndicator(k), entry = force ? null : storedRef.current[k];
+      const plan = planFetch(k, entry, INDICATOR_SOURCE_FLOOR[k] || '', today);
+      const base = plan && !plan.full && entry ? decodeSeries(entry, signed) : {};
+      return { k, signed, plan, base };
     });
     const total = jobs.length;
-    let done = jobs.filter(j => !j.from).length;
-    setCollect({ active: true, done, total });
+    const full = jobs.some(j => j.plan?.full);
+    let done = jobs.filter(j => !j.plan).length;
+    setCollect({ active: true, done, total, full });
     const failed = [];
-    const todo = jobs.filter(j => j.from);
+    const todo = jobs.filter(j => j.plan);
     for (let i = 0; i < todo.length; i += HIST_BATCH_KEYS) {
       const batch = todo.slice(i, i + HIST_BATCH_KEYS);
       const results = await Promise.all(batch.map(async (j) => {
         let series = j.base, ok = true;
-        for (const [s, e] of chunkRanges(j.from, today)) {
+        for (const [s, e] of chunkRanges(j.plan.from, j.plan.to)) {
           const rec = await fetchHistory(j.k, s, e);
           if (!rec) { ok = false; break; }   // 실패하면 거기서 멈춘다 — 다음에 저장된 마지막 날짜부터 이어 받는다
           series = mergeHist(series, rec, j.signed);
         }
-        const entry = encodeSeries(series, j.signed, 'api/history', new Date().toISOString());
-        if (entry) storedRef.current = { ...storedRef.current, [j.k]: entry };
+        // 바뀐 게 없으면 항목을 다시 만들지 않는다(저장 대상에서 빠진다)
+        if (series !== j.base) {
+          const entry = encodeSeries(series, j.signed, 'api/history', new Date().toISOString());
+          if (entry) storedRef.current = { ...storedRef.current, [j.k]: entry };
+        }
         if (!ok) failed.push(j.k);
         return [j.k, series];
       }));
@@ -434,15 +453,17 @@ export default function RateWindow() {
         for (const [k, series] of results) { if (series !== prev[k] && Object.keys(series).length) { if (next === prev) next = { ...prev }; next[k] = series; } }
         return next;
       });
-      const groups = [...new Set(batch.map(j => groupOfKey(j.k)).filter(Boolean))];
-      for (const g of groups) await saveGroup(g);
+      if (full) await saveChanged();
       done += batch.length;
-      setCollect({ active: true, done, total });
+      setCollect({ active: true, done, total, full });
     }
+    await saveChanged();
+    setStoredLast(latestStoredDate(storedRef.current));
+    setRefreshedAt(Date.now());
     setFailedKeys(failed.filter(k => RATE_KEYS.includes(k)));
-    setCollect({ active: false, done: total, total });
+    setCollect({ active: false, done: total, total, full: false });
     collectingRef.current = false;
-  }, [today, saveGroup]);
+  }, [today, saveChanged]);
   // 모드 결정 — 앱 탭이 쓰기 가능하다고 답하면 Drive 기록을 읽고 이어받기, 4초 안에 그렇지 않으면 메모리 모드
   useEffect(() => {
     if (storeMode !== 'pending' || access !== 'allowed' || !today) return;
@@ -452,6 +473,8 @@ export default function RateWindow() {
         if (!d?.ok) { setStoreMode('memory'); return; }
         for (const [name, body] of Object.entries(d.files || {})) if (body) storedFilesRef.current.add(name);
         storedRef.current = readHistFiles(d.files || {});
+        savedRef.current = storedRef.current;
+        setStoredLast(latestStoredDate(storedRef.current));
         const fromStore = {};
         for (const [k, e] of Object.entries(storedRef.current)) fromStore[k] = decodeSeries(e, isSignedIndicator(k));
         setHist(prev => ({ ...prev, ...fromStore }));
@@ -463,6 +486,23 @@ export default function RateWindow() {
     const id = setTimeout(() => setStoreMode(m => (m === 'pending' ? 'memory' : m)), 4000);
     return () => clearTimeout(id);
   }, [storeMode, access, today, linked, canWrite, request, runCollection]);
+
+  // Drive 모드 — 창을 연 동안 30분마다 최신분 받기 + 현재값
+  useEffect(() => {
+    if (storeMode !== 'drive') return;
+    const id = setInterval(() => { runCollection(false); loadLive(); }, HIST_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [storeMode, runCollection, loadLive]);
+  useEffect(() => {
+    if (storeMode === 'drive') return;
+    const id = setInterval(loadLive, HIST_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [storeMode, loadLive]);
+  // 상단 바 '최신 ○분 전 갱신' — 1분마다 다시 그린다
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
 
   // 과거치 + 현재값(현재값의 날짜가 기록 최신일 이후일 때만 끝에 붙인다 — 날짜가 없으면 기준일)
   const seriesByKey = useMemo(() => {
@@ -638,7 +678,17 @@ export default function RateWindow() {
   const brBondKrw = brBondPrice != null && Number.isFinite(metrics.brlkrw?.current) ? brBondPrice * metrics.brlkrw.current : null;
   const [openSignal, setOpenSignal] = useState(null);
 
-  const fromChart = today ? shiftIsoDays(today, -(PERIODS.find(p => p.key === period)?.years || 1) * 365) : '';
+  // 기간 버튼은 받아 둔 기록에서 잘라 쓴다(서버를 부르지 않는다). 전체 = 자르지 않음
+  const periodYears = PERIODS.find(p => p.key === period)?.years;
+  const fromChart = today && periodYears ? shiftIsoDays(today, -periodYears * 365) : '';
+  // 차트 끝점이 잠정(오늘 장중 현재값)이면 그 날짜에 '잠정' 표시 — 다음 날 확정값을 받으면 덮이고 표시가 사라진다
+  const provLine = (keys, yAxisId) => {
+    const ds = keys.map(k => provisionalDate(hist[k], seriesByKey[k], today)).filter(Boolean).sort();
+    const d = ds[ds.length - 1];
+    if (!d) return null;
+    return <ReferenceLine x={d} {...(yAxisId ? { yAxisId } : {})} stroke={t.axis} strokeDasharray="2 2" strokeOpacity={0.7} ifOverflow="hidden"
+      label={{ value: '잠정', position: 'insideTopRight', fontSize: 9, fill: t.axis }} />;
+  };
   const rowsUs = useMemo(() => buildRateChartRows(seriesByKey, ['fedRate', 'us2y', 'us10y', 'us30y'], fromChart), [seriesByKey, fromChart]);
   const rowsSpread = useMemo(() => buildRateChartRows(seriesByKey, ['t10y2y', 't10y3m'], fromChart), [seriesByKey, fromChart]);
   const rowsHy = useMemo(() => buildRateChartRows(seriesByKey, ['hyYield', 'hySpread'], fromChart), [seriesByKey, fromChart]);
@@ -682,8 +732,15 @@ export default function RateWindow() {
           <h1 className="text-[16px] font-bold">금리 모니터링</h1>
           <span className={`text-[12px] ${t.sub}`}>기준일 {today || '-'}</span>
           {loading && <span className={`text-[11px] ${t.sub}`}>자료 받는 중…</span>}
-          {collect.active && (
-            <span className="flex items-center gap-1.5 text-[11px] text-sky-400" title="지표 과거 기록을 처음부터 받아 Drive에 저장하는 중">
+          {storeMode === 'drive' && (
+            <span className={`text-[11px] ${t.sub}`}>
+              {storedLast ? `기록 ${storedLast}까지 저장` : '저장된 기록 없음'}
+              {refreshedAt ? ` · 최신 ${Math.max(0, Math.floor((nowTick - refreshedAt) / 60000)) === 0 ? '방금' : `${Math.floor((nowTick - refreshedAt) / 60000)}분 전`} 갱신` : ''}
+            </span>
+          )}
+          {collect.active && !collect.full && <span className="text-[11px] text-sky-400">최신분 받는 중 {collect.done}/{collect.total}</span>}
+          {collect.active && collect.full && (
+            <span className="flex items-center gap-1.5 text-[11px] text-sky-400" title="저장 기록에 없는 지표의 과거 기록을 처음부터 받아 Drive에 저장하는 중">
               과거 기록 수집 중 {collect.done}/{collect.total}
               <span className="inline-block w-24 h-1.5 rounded-full overflow-hidden" style={{ background: t.track }}>
                 <span className="block h-full bg-sky-500" style={{ width: `${collect.total ? (collect.done / collect.total) * 100 : 0}%` }} />
@@ -919,6 +976,7 @@ export default function RateWindow() {
                     <Line key={k} isAnimationActive={false} type="monotone" dataKey={k} name={RATE_DEFS[k].label} stroke={COLORS[k]} dot={false} strokeWidth={1.5} connectNulls />
                   ))}
                   {signalLines(['longBond', 'equityReit'], null, fromChart)}
+                  {provLine(['fedRate', 'us2y', 'us10y', 'us30y'], null)}
                 </ComposedChart>
               </ChartBox>
 
@@ -934,6 +992,7 @@ export default function RateWindow() {
                   {['t10y2y', 't10y3m'].map(k => (
                     <Line key={k} isAnimationActive={false} type="monotone" dataKey={k} name={RATE_DEFS[k].label} stroke={COLORS[k]} dot={false} strokeWidth={1.5} connectNulls />
                   ))}
+                  {provLine(['t10y2y', 't10y3m'], null)}
                 </ComposedChart>
               </ChartBox>
 
@@ -952,6 +1011,7 @@ export default function RateWindow() {
                   <Line yAxisId="left" isAnimationActive={false} type="monotone" dataKey="hyYield" name={RATE_DEFS.hyYield.label} stroke={COLORS.hyYield} dot={false} strokeWidth={1.5} connectNulls />
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="hySpread" name={RATE_DEFS.hySpread.label} stroke={COLORS.hySpread} dot={false} strokeWidth={1.5} connectNulls />
                   {signalLines(['highYield', 'bdc'], 'left', fromChart)}
+                  {provLine(['hyYield', 'hySpread'], 'left')}
                 </ComposedChart>
               </ChartBox>
 
@@ -966,6 +1026,7 @@ export default function RateWindow() {
                   <Line yAxisId="left" isAnimationActive={false} type="monotone" dataKey="mbsSpread" name={RATE_DEFS.mbsSpread.label} stroke={COLORS.mbsSpread} dot={false} strokeWidth={1.5} connectNulls />
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="move" name={RATE_DEFS.move.label} stroke={COLORS.move} dot={false} strokeWidth={1.5} connectNulls />
                   {signalLines(['mortgageReit'], 'left', fromChart)}
+                  {provLine(['mbsSpread', 'move'], 'left')}
                 </ComposedChart>
               </ChartBox>
 
@@ -982,6 +1043,7 @@ export default function RateWindow() {
                   ))}
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="brlkrw" name={RATE_DEFS.brlkrw.label} stroke={COLORS.brlkrw} strokeDasharray="4 3" dot={false} strokeWidth={1.2} connectNulls />
                   {signalLines(['brBond'], 'left', fromChart)}
+                  {provLine(['br10y', 'brSelic', 'brIpca', 'brExp12', 'brlkrw'], 'left')}
                 </ComposedChart>
               </ChartBox>
 
@@ -997,6 +1059,7 @@ export default function RateWindow() {
                   ))}
                   <Line isAnimationActive={false} type="monotone" dataKey="us10y" name={RATE_DEFS.us10y.label} stroke={t.axis} strokeDasharray="4 3" dot={false} strokeWidth={1.2} connectNulls />
                   {signalLines(['krBond'], null, fromChart)}
+                  {provLine(['krBase', 'kr3y', 'kr10y', 'us10y'], null)}
                 </ComposedChart>
               </ChartBox>
             </div>
