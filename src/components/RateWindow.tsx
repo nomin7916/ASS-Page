@@ -14,7 +14,7 @@ import { readBrazilNotes } from '../brazilNotes';
 import { applySettingsFile, appendStateChanges, manualToSave } from '../rateSettings';
 import {
   HIST_GROUPS, HIST_KEYS, HIST_BATCH_KEYS, HIST_REFRESH_MS, encodeSeries, decodeSeries, mergeHist,
-  planFetch, chunkRanges, planGroupFiles, readHistFiles, changedGroups, latestStoredDate, provisionalDate,
+  planFetch, orderFetchJobs, fetchChunks, planGroupFiles, readHistFiles, changedGroups, latestStoredDate, provisionalDate,
 } from '../rateHistStore';
 import { INDICATOR_SOURCE_FLOOR, isSignedIndicator } from '../indicatorCoverage';
 import { BCB_BROWSER_KEYS, fetchBcbHistoryBrowser, fillBrazilLiveCapped } from '../bcbClient';
@@ -414,8 +414,9 @@ export default function RateWindow() {
   const saveChanged = useCallback(async () => {
     for (const g of changedGroups(savedRef.current, storedRef.current)) await saveGroup(g);
   }, [saveGroup]);
-  // 받기 — 키마다 저장된 마지막 날짜 − 5일(주간·월간 35일)부터 오늘까지만. 저장 기록에 없는 키만 출처 첫 날짜부터(최초 수집, 10년 단위).
-  // 한 번에 4개 키씩. 바뀐 묶음 파일만 저장 — 최초 수집이 섞이면 묶음(4키)마다, 최신분만이면 끝에 한 번
+  // 받기 — 키마다 저장된 마지막 날짜 − 5일(주간·월간 35일)부터 오늘까지만. 저장 기록에 없는 키만 출처 첫 날짜부터(최초 수집, 최근 10년부터 거꾸로).
+  // 동시에 4개 키씩 — 한 키가 느려도(서버 시간 초과) 다른 키는 기다리지 않는다. 키가 끝날 때마다 화면에 바로 반영.
+  // 바뀐 묶음 파일만 저장 — 최초 수집 키는 끝날 때마다, 최신분은 전부 끝난 뒤 한 번(저장은 한 줄로 차례대로)
   const runCollection = useCallback(async (force) => {
     if (collectingRef.current || !today) return;
     collectingRef.current = true;
@@ -430,33 +431,30 @@ export default function RateWindow() {
     let done = jobs.filter(j => !j.plan).length;
     setCollect({ active: true, done, total, full });
     const failed = [];
-    const todo = jobs.filter(j => j.plan);
-    for (let i = 0; i < todo.length; i += HIST_BATCH_KEYS) {
-      const batch = todo.slice(i, i + HIST_BATCH_KEYS);
-      const results = await Promise.all(batch.map(async (j) => {
-        let series = j.base, ok = true;
-        for (const [s, e] of chunkRanges(j.plan.from, j.plan.to)) {
-          const rec = await fetchHistory(j.k, s, e);
-          if (!rec) { ok = false; break; }   // 실패하면 거기서 멈춘다 — 다음에 저장된 마지막 날짜부터 이어 받는다
-          series = mergeHist(series, rec, j.signed);
-        }
-        // 바뀐 게 없으면 항목을 다시 만들지 않는다(저장 대상에서 빠진다)
-        if (series !== j.base) {
-          const entry = encodeSeries(series, j.signed, 'api/history', new Date().toISOString());
-          if (entry) storedRef.current = { ...storedRef.current, [j.k]: entry };
-        }
-        if (!ok) failed.push(j.k);
-        return [j.k, series];
-      }));
-      setHist(prev => {
-        let next = prev;
-        for (const [k, series] of results) { if (series !== prev[k] && Object.keys(series).length) { if (next === prev) next = { ...prev }; next[k] = series; } }
-        return next;
-      });
-      if (full) await saveChanged();
-      done += batch.length;
+    const queue = orderFetchJobs(jobs);
+    let saving = Promise.resolve();
+    const show = (k, series) => setHist(prev => (series === prev[k] || !Object.keys(series).length ? prev : { ...prev, [k]: series }));
+    const runOne = async (j) => {
+      let series = j.base, ok = true;
+      for (const [s, e] of fetchChunks(j.plan)) {
+        const rec = await fetchHistory(j.k, s, e);
+        if (!rec) { ok = false; break; }   // 실패하면 거기서 멈춘다 — 다음에 저장된 마지막 날짜부터(최초 수집이면 처음부터) 다시 받는다
+        series = mergeHist(series, rec, j.signed);
+        show(j.k, series);
+      }
+      // 바뀐 게 없으면 항목을 다시 만들지 않는다(저장 대상에서 빠진다)
+      if (series !== j.base) {
+        const entry = encodeSeries(series, j.signed, 'api/history', new Date().toISOString());
+        if (entry) storedRef.current = { ...storedRef.current, [j.k]: entry };
+      }
+      if (!ok) failed.push(j.k);
+      if (j.plan.full) { saving = saving.then(saveChanged); await saving; }
+      done += 1;
       setCollect({ active: true, done, total, full });
-    }
+    };
+    const worker = async () => { while (queue.length) await runOne(queue.shift()); };
+    await Promise.all(Array.from({ length: HIST_BATCH_KEYS }, worker));
+    await saving;
     await saveChanged();
     setStoredLast(latestStoredDate(storedRef.current));
     setRefreshedAt(Date.now());

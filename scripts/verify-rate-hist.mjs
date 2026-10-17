@@ -26,7 +26,7 @@ const C = await load('src/indicatorCoverage.ts');
 if (H && C) {
   const { encodeSeries, decodeSeries, mergeHist, resumeFrom, coversFloor, chunkRanges, planGroupFiles, readHistFiles, buildHistFile,
     HIST_GROUPS, HIST_KEYS, HIST_FILE_NAMES, HIST_FILE_MAX_BYTES, HIST_TAIL_OVERLAP_DAYS, splitFileName, fileBytes,
-    planFetch, tailOverlapDays, changedGroups, latestStoredDate, provisionalDate, HIST_SLOW_OVERLAP_DAYS, HIST_REFRESH_MS } = H;
+    planFetch, orderFetchJobs, fetchChunks, tailOverlapDays, changedGroups, latestStoredDate, provisionalDate, HIST_SLOW_OVERLAP_DAYS, HIST_REFRESH_MS } = H;
   console.log('\n── 파트① 형식 ──');
   const s = { '2026-10-16': 4.12, '1962-01-02': 4.06, '2000-02-29': 6.5, '2026-10-15': 4.1 };
   const e = encodeSeries(s, false, 'api/history', '2026-10-18T00:00:00Z');
@@ -65,6 +65,11 @@ if (H && C) {
   eq('#35 앞쪽이 빈 기록 → 처음부터 다시(최초 수집)', planFetch('us10y', st('2020-01-02', '2026-10-16'), C.INDICATOR_SOURCE_FLOOR.us10y, T)?.full, true);
   eq('#36 날짜 없음 → 받지 않음', planFetch('us10y', null, '1962-01-02', ''), null);
   ok('#37 다시 받기 간격 30분', HIST_REFRESH_MS === 30 * 60 * 1000);
+  const J = (k, full) => ({ k, plan: full == null ? null : { from: '2020-01-01', to: T, full } });
+  eq('#48 받는 순서 — 최신분 키 먼저 · 최초 수집 키는 뒤로 · 받을 것 없는 키 제외', orderFetchJobs([J('fedRate', true), J('us10y', false), J('us2y', null), J('kr3y', true), J('vix', false)]).map(j => j.k), ['us10y', 'vix', 'fedRate', 'kr3y']);
+  const fc = fetchChunks({ from: '1962-01-02', to: T, full: true });
+  ok('#49 최초 수집은 최근 10년 구간부터 거꾸로 — 첫 구간이 오늘까지', fc.length === 7 && fc[0][1] === T && fc[6][0] === '1962-01-02' && fc.every((c, i) => i === 0 || c[1] < fc[i - 1][0]));
+  eq('#50 최신분은 한 구간 · 계획 없음은 빈 목록', [fetchChunks({ from: '2026-10-11', to: T, full: false }), fetchChunks(null)], [[['2026-10-11', T]], []]);
   console.log('\n── 파트③-3 바뀐 묶음만 저장(10-B) ──');
   const E = (x, savedAt = 'a') => encodeSeries({ '2026-10-15': x, '2026-10-16': x + 0.1 }, false, 'api/history', savedAt);
   const saved = { us10y: E(4.1), krBase: E(3), vix: E(15) };
@@ -111,7 +116,10 @@ console.log('\n── 파트⑤ 배선 가드 ──');
   ok('#G3 앱 탭은 허용 이름만 saveDriveFile로 저장(버전 백업 없음)', /if \(!HIST_FILE_NAMES\.includes\(d\.name\)/.test(h) && /await saveDriveFile\(token, folderId, d\.name, d\.body\);/.test(h) && !/saveVersionedBackup/.test(h) && /if \(!canWrite\) return reply/.test(h));
   ok('#G4 불러오기는 허용 이름 전부를 loadDriveFile로', /HIST_FILE_NAMES\.map\(n => loadDriveFile\(token, folderId, n\)\)/.test(APP));
   ok('#G5 창 — Drive 모드면 이어받기, 아니면 메모리 모드(기존 받기) + 안내', /setStoreMode\('drive'\);\s+runCollection\(false\);/.test(RW) && /storeMode !== 'memory'\) return;\s+const y = PERIODS/.test(RW) && /기록 저장 안 됨\(앱 탭 필요\)/.test(RW));
-  ok('#G6 한 번에 4개 키 · 키별 받을 구간(planFetch) · 10년 구간 · 실패하면 멈춤', /i \+= HIST_BATCH_KEYS/.test(RW) && /planFetch\(k, entry, INDICATOR_SOURCE_FLOOR\[k\] \|\| '', today\)/.test(RW) && /chunkRanges\(j\.plan\.from, j\.plan\.to\)/.test(RW) && /if \(!rec\) \{ ok = false; break; \}/.test(RW) && /planFetch,/.test(RW));
+  ok('#G6 동시 4개 키(느린 키를 기다리지 않는 작업자 4개) · 키별 받을 구간 · 받는 순서 · 구간마다 화면 반영 · 실패하면 멈춤',
+    /Array\.from\(\{ length: HIST_BATCH_KEYS \}, worker\)/.test(RW) && /planFetch\(k, entry, INDICATOR_SOURCE_FLOOR\[k\] \|\| '', today\)/.test(RW) && /const queue = orderFetchJobs\(jobs\);/.test(RW)
+    && /for \(const \[s, e\] of fetchChunks\(j\.plan\)\)/.test(RW) && /series = mergeHist\(series, rec, j\.signed\);\s+show\(j\.k, series\);/.test(RW) && /if \(!rec\) \{ ok = false; break; \}/.test(RW)
+    && /planFetch, orderFetchJobs, fetchChunks,/.test(RW) && /saving = saving\.then\(saveChanged\)/.test(RW));
   ok('#G7 진행 막대 · 관리자 전체 다시 받기(확인 후)', /과거 기록 수집 중 \{collect\.done\}\/\{collect\.total\}/.test(RW) && /isAdmin && storeMode === 'drive'/.test(RW) && /runCollection\(true\)/.test(RW) && /진행할까요\?/.test(RW));
   ok('#G10 바뀐 묶음만 저장 — changedGroups(Drive 저장본, 현재) · 성공한 묶음만 저장본 갱신 · 안 바뀐 키는 항목을 다시 만들지 않는다',
     /changedGroups\(savedRef\.current, storedRef\.current\)/.test(RW) && /if \(allOk\) \{/.test(RW) && /if \(series !== j\.base\) \{/.test(RW) && /savedRef\.current = storedRef\.current;/.test(RW) && /changedGroups,/.test(RW) && !/for \(const g of groups\) await saveGroup/.test(RW));

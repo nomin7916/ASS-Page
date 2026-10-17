@@ -98,6 +98,19 @@ export function planFetch(key: string, entry: any, floor: string, today: string)
   return from ? { from, to: today, full } : null;
 }
 
+// 받는 순서 — 최신분만 받는 키 먼저(빠르다), 최초 수집 키는 뒤로. 같은 부류 안에서는 원래 순서
+export function orderFetchJobs<T extends { plan: { full: boolean } | null }>(jobs: T[]): T[] {
+  const todo = jobs.filter(j => j.plan);
+  return [...todo.filter(j => !j.plan!.full), ...todo.filter(j => j.plan!.full)];
+}
+// 키 하나의 요청 구간 — 최초 수집은 최근 10년부터 거꾸로(첫 구간만 와도 카드·차트가 바로 그려진다).
+// 중간에 실패하면 앞쪽이 빈 기록이 되어 다음에 coversFloor가 처음부터 다시 받게 한다
+export function fetchChunks(plan: { from: string; to: string; full: boolean } | null): Array<[string, string]> {
+  if (!plan) return [];
+  const ch = chunkRanges(plan.from, plan.to);
+  return plan.full ? ch.reverse() : ch;
+}
+
 // [from, to]를 years년 단위 구간으로 — 오래된 것부터
 export function chunkRanges(from: string, to: string, years = HIST_CHUNK_YEARS): Array<[string, string]> {
   if (!ISO.test(from) || !ISO.test(to) || from > to) return [];
