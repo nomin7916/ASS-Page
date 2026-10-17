@@ -374,8 +374,8 @@ export default async function handler(req: Request): Promise<Response> {
     fetchNaverBond('US2YT=RR', 'Naver채권US'),                         // 미국 2년 (FRED 실패 시)
     fetchNaverBond('US30YT=RR', 'Naver채권US'),                        // 미국 30년 (FRED 실패 시)
     fetchNaverBond('US3MT=RR', 'Naver채권US'),                         // 미국 3개월 (FRED 실패 시)
-    FRED_KEY ? Promise.resolve(null) : fetchUsFedRateNoKey(),          // 기준금리 (FRED 키 없을 때)
-    FRED_KEY ? Promise.resolve(null) : fetchPmmsLatest(),              // 30년 모기지 (FRED 키 없을 때)
+    fetchUsFedRateNoKey(),                                             // 기준금리 (FRED가 비면 — 키 변수가 있어도 무효일 수 있다)
+    fetchPmmsLatest(),                                                 // 30년 모기지 (FRED가 비면)
   ]);
 
   const ok = <T>(r: PromiseSettledResult<T>) =>

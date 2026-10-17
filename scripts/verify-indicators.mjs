@@ -304,7 +304,7 @@ ok('#G17j FRED 키 없는 배포 — 미국 국채는 네이버 · 금리차는 
   && /: await fetchPmmsHistory\(shiftYmd\(d1, -14\), d2\);/.test(H) && (H.match(/fetchUs10yAny\(/g) || []).length === 3
   && /extendStepChanges, parseNyFedTarget, parsePmmsCsv,\s*\} from '\.\/_indicatorSources\.js';/.test(H) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(H)
   && /fetchNaverBond\('US2YT=RR'/.test(IND) && /fetchNaverBond\('US3MT=RR'/.test(IND) && /fetchNaverBond\('US30YT=RR'/.test(IND)
-  && /FRED_KEY \? Promise\.resolve\(null\) : fetchUsFedRateNoKey\(\)/.test(IND) && /FRED_KEY \? Promise\.resolve\(null\) : fetchPmmsLatest\(\)/.test(IND)
+  && /\n\s+fetchUsFedRateNoKey\(\),/.test(IND) && /\n\s+fetchPmmsLatest\(\),/.test(IND) && /const fedRateV = pick\(ok\(fedRate\), ok\(fedRateAlt\)\);/.test(IND)
   && /fedRate: fedRateV,/.test(IND) && /us2y:\s*us2yV,/.test(IND) && /const m = ok\(mort30\), u = us10yForMbs;/.test(IND)
   && /import \{ parseFredGraphCsv, parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv \} from '\.\/_indicatorSources\.js';/.test(IND) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(IND));
 {
