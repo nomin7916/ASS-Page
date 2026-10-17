@@ -1532,7 +1532,8 @@ export function flowLinkedAmount(pid: unknown, portfolioById: Map<string, any>, 
   if (typeof pid !== 'string' || !pid) return null;
   const evalOf = (id: string) => {
     const s = summaryById?.get?.(id);
-    return s && typeof s.currentEval === 'number' && Number.isFinite(s.currentEval) ? s.currentEval : null;
+    // 해외계좌 평가액은 환율 환산으로 소수점이 남는다 → 원 단위로 반올림(합계 = 화면 행의 합).
+    return s && typeof s.currentEval === 'number' && Number.isFinite(s.currentEval) ? Math.round(s.currentEval) : null;
   };
   if (pid === FLOW_TABLE_LINK_ALL) {
     let sum = 0;

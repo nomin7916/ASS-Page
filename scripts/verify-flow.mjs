@@ -763,7 +763,7 @@ function flowLinkedAmount(pid, portfolioById, summaryById) {
   if (typeof pid !== 'string' || !pid) return null;
   const evalOf = (id) => {
     const s = summaryById?.get?.(id);
-    return s && typeof s.currentEval === 'number' && Number.isFinite(s.currentEval) ? s.currentEval : null;
+    return s && typeof s.currentEval === 'number' && Number.isFinite(s.currentEval) ? Math.round(s.currentEval) : null;
   };
   if (pid === FLOW_TABLE_LINK_ALL) {
     let sum = 0, any = false;
@@ -1726,6 +1726,15 @@ console.log('\n■ 표 값 칸 계좌 연결 (사용자 요청 2026-10)');
   eq('#160c 없는 계좌·NaN·빈 id는 null', [lv('nope'), lv('z'), lv(''), lv(undefined)].join(','), ',,,');
   eq('#160d 전체 계좌 합계 = TEST·삭제 제외 합', lv(FLOW_TABLE_LINK_ALL), 140);
   eq('#160e 전체 합계에 값이 하나도 없으면 null(0 단언 금지)', flowLinkedAmount(FLOW_TABLE_LINK_ALL, new Map(), new Map()), null);
+  {
+    // 해외계좌 평가액(환율 환산)은 소수점이 남는다 → 원 단위 반올림, 합계 = 반올림한 행의 합
+    const pF = new Map([['o', { id: 'o' }], ['k', { id: 'k' }]]);
+    const sF = new Map([['o', { currentEval: 193422333.429032 }], ['k', { currentEval: 61125024.6 }]]);
+    eq('#160f 해외계좌 소수점 평가액은 원 단위 반올림', flowLinkedAmount('o', pF, sF), 193422333);
+    eq('#160g 전체 합계 = 반올림한 계좌 값의 합', flowLinkedAmount(FLOW_TABLE_LINK_ALL, pF, sF), 193422333 + 61125025);
+    const sB2 = new Map([['o', { currentEval: 12.5 }]]);
+    eq('#160h 표 문자열에 소수점이 남지 않는다', computeFlowTable({ border: 'none', rows: [{ kind: 'total', label: 'x', value: '', portfolioId: 'o' }] }, (q) => flowLinkedAmount(q, pF, sB2))[0].text, '13');
+  }
 
   const t = { border: 'none', rows: [L('total', '총액', '999', 'a'), L('item', 'x', '30'), L('item', 'y', '5', 'b'), L('rule', ''), L('subtotal', 's'), L('balance', '잔액')] };
   const c = computeFlowTable(t, lv);
@@ -3367,6 +3376,14 @@ await (async () => {
         eq('#137 flowLinkedAmount 일치',
           JSON.stringify(['a', 't', 'd', 'x', '', null, real.FLOW_TABLE_LINK_ALL].map(p => real.flowLinkedAmount(p, pB, sB))),
           JSON.stringify(['a', 't', 'd', 'x', '', null, FLOW_TABLE_LINK_ALL].map(p => flowLinkedAmount(p, pB, sB))));
+        {
+          // 소수점 평가액(해외계좌 환율 환산) — src만 반올림을 되돌려도 잡히게 한다
+          const pR = new Map([['o', { id: 'o' }], ['k', { id: 'k' }]]);
+          const sR = new Map([['o', { currentEval: 193422333.429032 }], ['k', { currentEval: 10.5 }]]);
+          eq('#137i 소수점 평가액 반올림 일치',
+            JSON.stringify(['o', 'k', real.FLOW_TABLE_LINK_ALL].map(p => real.flowLinkedAmount(p, pR, sR))),
+            JSON.stringify(['o', 'k', FLOW_TABLE_LINK_ALL].map(p => flowLinkedAmount(p, pR, sR))));
+        }
         const lrows = [L('total', 'T', '9', 'a'), L('item', 'i', '3', 'd'), L('item', 'j', '2'), L('subtotal', 's', '', 'a'), L('rule', 'r', '', 'a'), L('balance', 'b', '', ' t '), L('item', 'k', '1', 7)];
         eq('#137b normalizeFlowTable 연결 정규화 일치',
           JSON.stringify(real.normalizeFlowTable({ rows: lrows })), JSON.stringify(normalizeFlowTable({ rows: lrows })));
