@@ -253,7 +253,7 @@ export default function App() {
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
-  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false, backtestEnabled: false, ledgerEnabled: false });
+  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false, backtestEnabled: false, ledgerEnabled: false, rateEnabled: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
@@ -627,6 +627,8 @@ export default function App() {
   // ⚠️ effectiveUserFeatures(feature1/2/3만 강제하는 별개 경로)에 얹지 말 것 —
   //    그러면 관리자 본인이 영구 접근 불가가 된다.
   const ledgerAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.ledgerEnabled;
+  // 금리 모니터링 접근 권한(N열 rateEnabled, 2026-10) — ledgerAccess와 같은 근거·같은 자리(브릿지 effect에서 참조).
+  const rateAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.rateEnabled;
   // ⚠️ 백테스트용으로 조회한 종가는 **여기에만** 담는다. stockHistoryMap에 병합하면
   //    buildCloseEvalSeries(보유 평가액 재계산)·useAutoConfirmHistory 데이터완비 가드의 권위
   //    소스가 오염돼 보유+백테스트 중복 코드의 과거 평가액이 영구히 틀어진다(WatchlistPopup 불변식).
@@ -3390,6 +3392,35 @@ export default function App() {
     setShowLedgerPage(false);
   };
 
+  // ── 금리 모니터링 별도 창 (2026-10, 3단계 뼈대) ──
+  // 가계부 창과 같은 규약: App을 마운트하지 않는 창(main.tsx rateWindow 분기) + opener 브릿지.
+  // 지금은 쓰기가 없고, 창이 권한·기준일만 묻는다(rate:ping → rate:pong {allowed, today}).
+  // ⚠️ `noopener` 금지(브릿지가 끊긴다) · 클릭 직후 **동기** window.open · features 인자 금지(팝업 창이 된다).
+  // ⚠️ 권한 판정의 정본은 이 탭(rateAccess)이다 — 창은 조작 가능한 URL로 열리므로 창 쪽 판정을 믿지 않는다.
+  const rateWinRef = useRef(null);
+  const rateAccessRef = useRef(rateAccess);
+  rateAccessRef.current = rateAccess;
+  const openRateWindow = () => {
+    if (!rateAccess) return;
+    const existing = rateWinRef.current;
+    if (existing && !existing.closed) { try { existing.focus(); } catch {} return; }
+    const w = window.open('/?rateWindow=1', 'ass-rate');
+    if (!w) { notify('팝업이 차단되어 금리 모니터링 창을 열지 못했습니다. 브라우저에서 팝업을 허용해 주세요.', 'warning'); return; }
+    rateWinRef.current = w;
+    try { w.focus(); } catch {}
+  };
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;
+      const d = e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'rate:ping') return;
+      if (rateWinRef.current !== e.source) rateWinRef.current = e.source;   // 이 탭이 새로고침된 뒤의 재입양
+      try { e.source?.postMessage({ type: 'rate:pong', allowed: !!rateAccessRef.current, today: getTodayKST() }, window.location.origin); } catch {}
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
   // ── 관심종목 브릿지 ──
   const postToWatchlistWin = (msg) => {
     const w = watchlistWinRef.current;
@@ -4805,6 +4836,8 @@ export default function App() {
           onOpenBacktest={openBacktestWindow}
           canAccessLedger={ledgerAccess}
           onOpenLedger={openLedgerWindow}
+          canAccessRate={rateAccess}
+          onOpenRate={openRateWindow}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
           youtubeUrl={youtubeAccess ? youtubeUrl : ''}

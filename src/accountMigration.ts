@@ -30,11 +30,12 @@ export const MIGRATION_FILES: MigrationFileSpec[] = [
   { key: 'NOTIFICATION_LOG', name: 'notification_log.json',     label: '알림 이력',               required: false },
 ];
 
-// approved_users 시트 E~M열 — AdminPage featureDefs·Apps Script colMap과 같은 9종.
+// approved_users 시트 E~N열 — AdminPage featureDefs·Apps Script colMap과 같은 10종(N열 금리 모니터링 2026-10).
 export const MIGRATION_FEATURE_KEYS = [
   'feature1', 'feature2', 'feature3',
   'youtubeEnabled', 'notebookEnabled', 'reportEnabled',
   'flowEnabled', 'backtestEnabled', 'ledgerEnabled',
+  'rateEnabled',
 ] as const;
 
 export type MigrationFeatureKey = typeof MIGRATION_FEATURE_KEYS[number];

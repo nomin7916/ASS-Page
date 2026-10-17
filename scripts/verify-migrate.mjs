@@ -98,8 +98,8 @@ if (M) {
   const ds = read('src/driveStorage.ts');
   const driveName = (k) => (ds.match(new RegExp(`^\\s*${k}:\\s*'([^']+)'`, 'm')) || [])[1];
   for (const f of MIGRATION_FILES) eq(`#1c ${f.key} 파일명이 DRIVE_FILES와 같다`, f.name, driveName(f.key));
-  eq('#1d 기능 플래그 9종 = Apps Script colMap 순서', [...MIGRATION_FEATURE_KEYS],
-    ['feature1', 'feature2', 'feature3', 'youtubeEnabled', 'notebookEnabled', 'reportEnabled', 'flowEnabled', 'backtestEnabled', 'ledgerEnabled']);
+  eq('#1d 기능 플래그 10종 = Apps Script colMap 순서', [...MIGRATION_FEATURE_KEYS],
+    ['feature1', 'feature2', 'feature3', 'youtubeEnabled', 'notebookEnabled', 'reportEnabled', 'flowEnabled', 'backtestEnabled', 'ledgerEnabled', 'rateEnabled']);
 
   // ── 기능 플래그 차이 ──
   eq('#2 차이 나는 것만, 값은 원본', S(() => diffFeatureFlags({ feature1: true, flowEnabled: true }, { feature1: false, flowEnabled: true, ledgerEnabled: true })),

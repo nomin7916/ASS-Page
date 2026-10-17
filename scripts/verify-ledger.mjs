@@ -1609,8 +1609,9 @@ ok('#G3g 인라인 SVG 아이콘(lucide 신규 아이콘 아님)', /const Ledger
 ok('#G4 AppsScript checkApproval/listUsers가 row[12]를 읽는다',
   (AS.match(/ledgerEnabled:\s*parseBool\(row\[12\]\)/g) || []).length >= 2);
 ok('#G4b AppsScript colMap에 ledgerEnabled: 12', /ledgerEnabled:\s*12/.test(AS));
-ok('#G4c AppsScript 라벨 범위가 E1:M1', /E1:M1/.test(AS) && !/getRange\('E1:L1'\)/.test(AS));
-ok('#G4d AppsScript 검증 범위가 E2:M100', /E2:M100/.test(AS));
+// 2026-10: N열(금리 모니터링) 추가로 범위가 E1:N1·E2:N100으로 넓어졌다 — M열(가계부)을 포함하는 한 통과.
+ok('#G4c AppsScript 라벨 범위가 M열을 포함 (E1:M1 이상)', /E1:[MN]1/.test(AS) && !/getRange\('E1:L1'\)/.test(AS));
+ok('#G4d AppsScript 검증 범위가 M열을 포함 (E2:M100 이상)', /E2:[MN]100/.test(AS));
 ok('#G4e AppsScript addUser가 13열을 쓴다',
   (sliceBlock(AS, 'function handleAddUser', '\n}').match(/'OFF'/g) || []).length >= 9);
 

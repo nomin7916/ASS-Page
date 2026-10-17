@@ -29,6 +29,16 @@ const BacktestIcon = ({ size = 14 }) => (
 // lucide 신규 아이콘 금지: 0.577.0 고정 + package-lock.json 부재라 실재 여부를 확인할 수 없고,
 // 없으면 undefined 컴포넌트 렌더로 이 상단바가 던지는데 UserInfoBar는 ErrorBoundary 격리 밖이라
 // 앱 화면 전체가 오류 페이지가 된다.
+// 금리 모니터링 아이콘 — 꺾은선 + % 기호. LedgerIcon과 같은 이유로 인라인 SVG(lucide 신규 아이콘 금지).
+const RateIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 17l5-5 4 3 6-7" />
+    <path d="M15 21l6-6" />
+    <circle cx="15.5" cy="15.5" r="1" />
+    <circle cx="20.5" cy="20.5" r="1" />
+  </svg>
+);
 const LedgerIcon = ({ size = 14 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -92,6 +102,9 @@ export default function UserInfoBar({
   // 가계부 — 기본값 false = fail-closed (백테스트 바로 오른쪽에 배치)
   canAccessLedger = false,
   onOpenLedger,
+  // 금리 모니터링 — 기본값 false = fail-closed (가계부 바로 오른쪽에 배치)
+  canAccessRate = false,
+  onOpenRate,
   youtubeUrl,
   youtubeEnabled = false,
   notebookLinks = [],
@@ -326,6 +339,16 @@ export default function UserInfoBar({
             className="text-gray-500 hover:text-amber-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
           >
             <LedgerIcon size={14} />
+          </button>
+        )}
+        {/* 금리 모니터링 — 가계부 **바로 오른쪽**. 관리자 또는 rateEnabled만 노출(fail-closed). */}
+        {canAccessRate && (
+          <button
+            onClick={onOpenRate}
+            title="금리 모니터링 (새 창)"
+            className="text-gray-500 hover:text-sky-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+          >
+            <RateIcon size={14} />
           </button>
         )}
         {onToggleCalculator && (
