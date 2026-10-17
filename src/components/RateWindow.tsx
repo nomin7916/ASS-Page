@@ -10,10 +10,15 @@ import {
   computeRateMetrics, parseHistoryText, mergeSeries, withLive, buildRateChartRows, shiftIsoDays,
 } from '../rateMetrics';
 import { evaluateRateSignals, SIGNAL_STATE_LABEL, RATE_RULES } from '../rateSignals';
+import { fetchWatchQuote, fetchWatchDaily, fetchUsDividendEvents } from '../watchlistQuote';
+import {
+  RATE_ASSET_GROUPS, RATE_ANCHOR_TICKERS, buildRateAssetRow, orderRateAssetRows, DIV_CYCLE_LABEL, DIV_CHANGE_LABEL,
+} from '../rateAssets';
 
 /**
  * 금리 모니터링 **별도 브라우저 창** (`/?rateWindow=1`).
- * 3단계: 뼈대 / 4단계(2026-10): ② 현재 금리 보드 + ④ 금리 차트 / 5단계: ③ 지금 적정 자산(판정은 src/rateSignals.ts).
+ * 3단계: 뼈대 / 4단계(2026-10): ② 현재 금리 보드 + ④ 금리 차트 / 5단계: ③ 지금 적정 자산(판정은 src/rateSignals.ts)
+ * / 6단계: ⑤ 자산군별 종목(계산은 src/rateAssets.ts) — 종목 시세·배당은 탭을 처음 열 때만, 동시에 4건씩 받아 창 메모리에만 둔다.
  *
  * ⚠️ 이 창은 App을 마운트하지 않는다(LedgerWindow와 같은 규약). 로그인·권한은 opener(앱 탭)에 묻는다:
  *    창 → `rate:ping` / 앱 → `rate:pong { allowed, today }`. 권한 판정의 정본은 앱 탭(rateAccess)이다 —
@@ -81,6 +86,9 @@ const COLORS = {
 };
 // ③ 상태 색 — 대기 회색 · 관심 하늘 · 적기 녹색 · 경고 빨강
 const SIGNAL_COLOR = { wait: '#9ca3af', watch: '#38bdf8', buy: '#4ade80', warn: '#f87171' };
+const ASSET_CONCURRENCY = 4; // ⑤ 종목 조회 동시 요청 수 상한
+const yahooQuoteUrl = (t) => `https://finance.yahoo.com/quote/${encodeURIComponent(t)}`;
+const fmtPctCell = (v) => (v == null || !Number.isFinite(v) ? '-' : `${v.toFixed(2)}%`);
 const BAND = {
   low:  { label: '낮음', color: '#60a5fa' },
   mid:  { label: '보통', color: '#9ca3af' },
@@ -289,8 +297,61 @@ export default function RateWindow() {
     return out;
   }, [seriesByKey]);
 
-  // ③ 판정 — 충족 비율 내림차순으로 이미 정렬돼 온다
-  const signals = useMemo(() => evaluateRateSignals(metrics), [metrics]);
+  // ⑤ 종목 자료 — ticker → { status:'loading'|'ok'|'fail', quote, daily, divs } (창 메모리 전용)
+  const [assetTab, setAssetTab] = useState(RATE_ASSET_GROUPS[0].key);
+  const [assetData, setAssetData] = useState({});
+  const assetQueueRef = useRef([]);
+  const assetActiveRef = useRef(0);
+  const assetRequestedRef = useRef(new Set());
+  const pumpAssets = useCallback(() => {
+    while (assetActiveRef.current < ASSET_CONCURRENCY && assetQueueRef.current.length) {
+      const tk = assetQueueRef.current.shift();
+      assetActiveRef.current++;
+      (async () => {
+        // 한 종목의 세 요청은 차례로 — 동시에 나가는 요청이 ASSET_CONCURRENCY를 넘지 않게
+        const quote = await fetchWatchQuote('us', tk);
+        const daily = await fetchWatchDaily('us', tk);
+        const divs = await fetchUsDividendEvents(tk);
+        setAssetData(prev => ({ ...prev, [tk]: { status: quote ? 'ok' : 'fail', quote, daily, divs } }));
+      })().catch(() => {
+        setAssetData(prev => ({ ...prev, [tk]: { status: 'fail' } }));
+      }).finally(() => {
+        assetActiveRef.current--;
+        pumpAssets();
+      });
+    }
+  }, []);
+  const loadAssets = useCallback((tickers) => {
+    const todo = tickers.filter(tk => !assetRequestedRef.current.has(tk));
+    if (!todo.length) return;
+    todo.forEach(tk => assetRequestedRef.current.add(tk));
+    setAssetData(prev => {
+      const n = { ...prev };
+      todo.forEach(tk => { n[tk] = { status: 'loading' }; });
+      return n;
+    });
+    assetQueueRef.current.push(...todo);
+    pumpAssets();
+  }, [pumpAssets]);
+  // ③ 판정용 대표 종목은 창을 열 때, 탭 종목은 그 탭을 처음 열 때
+  useEffect(() => {
+    if (access !== 'allowed' || !today) return;
+    loadAssets(RATE_ANCHOR_TICKERS);
+    loadAssets(RATE_ASSET_GROUPS.find(g => g.key === assetTab)?.tickers || []);
+  }, [access, today, assetTab, loadAssets]);
+
+  const us10yNow = metrics.us10y?.current;
+  const assetRows = useMemo(() => {
+    const out = {};
+    for (const g of RATE_ASSET_GROUPS) {
+      for (const tk of g.tickers) out[tk] = buildRateAssetRow(tk, assetData[tk], today, us10yNow, g.etfs.includes(tk));
+    }
+    return out;
+  }, [assetData, today, us10yNow]);
+  const failedTickers = useMemo(() => Object.keys(assetData).filter(tk => assetData[tk]?.status === 'fail'), [assetData]);
+
+  // ③ 판정 — 충족 비율 내림차순으로 이미 정렬돼 온다(대표 종목 행을 함께 넘긴다)
+  const signals = useMemo(() => evaluateRateSignals(metrics, assetRows), [metrics, assetRows]);
   const [openSignal, setOpenSignal] = useState(null);
 
   const fromChart = today ? shiftIsoDays(today, -(PERIODS.find(p => p.key === period)?.years || 1) * 365) : '';
@@ -515,9 +576,91 @@ export default function RateWindow() {
             </div>
           </section>
 
-          {/* ⑤ 자산군별 종목 — 5단계 */}
-          <section className={`rounded-lg border ${t.border} p-3 min-h-[120px]`} style={{ background: t.card }}>
-            <h2 className="text-[13px] font-bold">자산군별 종목</h2>
+          {/* ⑤ 자산군별 종목 */}
+          <section className={`rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
+            <div className="flex flex-wrap items-baseline gap-2 mb-2">
+              <h2 className="text-[13px] font-bold">자산군별 종목</h2>
+              <span className={`text-[10px] ${t.sub}`}>배당률 = 최근 12개월 배당 합계 ÷ 현재가 · 세후 = 원천징수 {RATE_RULES.withholdingPct}% 차감 · 티커를 누르면 Yahoo Finance</span>
+            </div>
+            <div className="flex flex-wrap gap-1 mb-2" role="tablist">
+              {RATE_ASSET_GROUPS.map(g => (
+                <button
+                  key={g.key}
+                  role="tab"
+                  aria-selected={assetTab === g.key}
+                  onClick={() => setAssetTab(g.key)}
+                  className={`px-2 py-0.5 rounded border text-[11px] transition-colors ${
+                    assetTab === g.key ? 'border-sky-500 text-sky-400' : `${t.border} ${t.sub} hover:text-sky-400`
+                  }`}
+                >{g.label}</button>
+              ))}
+            </div>
+            {failedTickers.length > 0 && (
+              <div className="text-[11px] text-amber-400 mb-2">받지 못한 종목: {failedTickers.join(', ')}</div>
+            )}
+            {(() => {
+              const g = RATE_ASSET_GROUPS.find(x => x.key === assetTab) || RATE_ASSET_GROUPS[0];
+              const rows = orderRateAssetRows(g, g.tickers.map(tk => assetRows[tk]));
+              const extraHead = g.extra === 'pb' ? '주가÷장부가' : g.extra === 'spread10y' ? '배당률−미국 10년' : g.extra === 'pnav' ? '주가÷순자산' : null;
+              return (
+                <>
+                  {g.note && <div className={`text-[11px] mb-1 ${t.sub}`}>{g.note}</div>}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[12px] border-collapse">
+                      <thead>
+                        <tr className={`text-[11px] ${t.sub} border-b ${t.border}`}>
+                          <th className="text-left font-normal py-1 pr-2">티커</th>
+                          <th className="text-right font-normal py-1 pr-2">현재가</th>
+                          <th className="text-right font-normal py-1 pr-2">12개월 배당률</th>
+                          <th className="text-right font-normal py-1 pr-2">세후</th>
+                          <th className="text-right font-normal py-1 pr-2">52주 최고 대비</th>
+                          <th className="text-right font-normal py-1 pr-2">최근 배당 변화</th>
+                          <th className="text-right font-normal py-1 pr-2">배당 주기</th>
+                          {extraHead && <th className="text-right font-normal py-1">{extraHead}</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map(r => {
+                          const st = assetData[r.ticker]?.status;
+                          const wait = !st || st === 'loading';
+                          const cell = (txt) => (wait ? '…' : txt);
+                          let extra = null;
+                          if (g.extra === 'pb' || g.extra === 'pnav') {
+                            const v = g.extra === 'pb' ? r.pb : r.pnav;
+                            if (!r.manualKind) extra = <span className={t.sub}>-</span>;
+                            else if (!r.manualSet) extra = <span className="text-amber-400">입력 필요</span>;
+                            else if (v == null) extra = cell('-');
+                            else if (g.extra === 'pb' && v >= RATE_RULES.mreit.pbWarn) extra = <span className="text-red-400 font-bold">{v.toFixed(2)}배 유상증자 위험</span>;
+                            else if (g.extra === 'pb' && v <= RATE_RULES.mreit.pbMax) extra = <span className="text-green-400 font-bold">{v.toFixed(2)}배</span>;
+                            else extra = `${v.toFixed(2)}배`;
+                          } else if (g.extra === 'spread10y') {
+                            extra = cell(r.spread10y == null ? '-' : fmtVal(r.spread10y, '%p'));
+                          }
+                          const chg = r.change ? DIV_CHANGE_LABEL[r.change] : '-';
+                          const chgColor = r.change === 'up' ? 'text-green-400' : r.change === 'down' ? 'text-red-400' : '';
+                          return (
+                            <tr key={r.ticker} className={`border-b ${t.border}`}>
+                              <td className="py-1.5 pr-2 whitespace-nowrap">
+                                <a href={yahooQuoteUrl(r.ticker)} target="_blank" rel="noopener noreferrer" className="font-bold hover:text-sky-400 hover:underline">{r.ticker}</a>
+                                {r.isEtf && <span className={`ml-1 text-[10px] ${t.sub}`}>ETF</span>}
+                                {g.pin === r.ticker && <span className="ml-1 text-[10px] text-sky-400">대표</span>}
+                              </td>
+                              <td className="py-1.5 pr-2 text-right tabular-nums">{cell(r.price == null ? '-' : `$${r.price.toFixed(2)}`)}</td>
+                              <td className="py-1.5 pr-2 text-right tabular-nums font-bold">{cell(r.noDividend ? '배당 없음' : fmtPctCell(r.yield12))}</td>
+                              <td className="py-1.5 pr-2 text-right tabular-nums">{cell(fmtPctCell(r.yieldPost))}</td>
+                              <td className="py-1.5 pr-2 text-right tabular-nums">{cell(r.drawdown52 == null ? '-' : `${r.drawdown52.toFixed(1)}%`)}</td>
+                              <td className={`py-1.5 pr-2 text-right ${chgColor}`}>{cell(chg)}</td>
+                              <td className="py-1.5 pr-2 text-right">{cell(r.cycle ? DIV_CYCLE_LABEL[r.cycle] : '-')}</td>
+                              {extraHead && <td className="py-1.5 text-right tabular-nums whitespace-nowrap">{extra}</td>}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              );
+            })()}
           </section>
         </main>
 

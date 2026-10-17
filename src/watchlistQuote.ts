@@ -7,6 +7,7 @@ import {
 } from './api';
 import { pickNaverDividend, pickNaverAnnualDividend, pickYahooDividend } from './watchlistChart';
 import { formatNumber, formatFundPrice } from './utils';
+import { pickYahooDividendEvents } from './rateAssets';
 
 export type WatchMarket = 'kr' | 'us' | 'fund';
 
@@ -228,6 +229,20 @@ export async function fetchWatchDividend(market: WatchMarket, code: string): Pro
     if (annual?.status === 'ok') return annual;
     if (etf?.status === 'none' || annual?.status === 'none') return { status: 'none' };
     return null;
+  } catch {
+    return null;
+  }
+}
+
+// 미국 종목 배당 이력 전체(최근 2년, 날짜 오름차순) — 금리 모니터링 ⑤가 12개월 합계·1년 전 회차 비교에 쓴다.
+// fetchWatchDividend(최근 1회분)는 그대로 둔다. 결과는 호출한 창 메모리에만 둔다(저장 금지).
+//   { status:'ok', events } / { status:'none' } / null(모든 경로 실패)
+export async function fetchUsDividendEvents(code: string): Promise<any> {
+  const t = (code || '').trim().toUpperCase();
+  if (!t) return null;
+  const base = t.includes('.') ? t.split('.')[0] : t;
+  try {
+    return await firstPicked(`https://query1.finance.yahoo.com/v8/finance/chart/${base}?events=div&interval=1d&range=2y`, pickYahooDividendEvents, 10000);
   } catch {
     return null;
   }
