@@ -172,7 +172,15 @@ if (C) {
 console.log('\n── 파트② 소스 병합 (api/_indicatorSources.ts 직접 import) ──');
 const I = await load('api/_indicatorSources.ts');
 if (I) {
-  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect } = I;
+  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily, stepLatest } = I;
+  const bokHtml = '<table><tr><th>연도</th><th>변경일자</th><th>기준금리</th></tr><tr><td>2026</td><td>08월 27일</td><td>3.00</td></tr>'
+    + '<tr><td>2026</td><td>07월 16일</td><td>2.75</td></tr><tr><td>1999</td><td>05월 06일</td><td>4.75</td></tr><tr><td>합계</td><td>x</td><td>1</td></tr></table>';
+  eq('#41 한국은행 기준금리 공시 페이지 해석 — 날짜 오름차순 · 표 아닌 행 무시', parseBokBaseRateHtml(bokHtml), [['1999-05-06', 4.75], ['2026-07-16', 2.75], ['2026-08-27', 3]]);
+  eq('#41b 표가 없으면 null', parseBokBaseRateHtml('<html>점검 중</html>'), null);
+  const ch = [['2026-07-16', 2.75], ['2026-08-27', 3]];
+  eq('#42 변경 이력 → 달력 날짜마다(주말 포함 — ECOS 일별과 같은 모양) · 첫 변경 전은 만들지 않음', stepToDaily(ch, '2026-07-15', '2026-07-18'), { '2026-07-16': 2.75, '2026-07-17': 2.75, '2026-07-18': 2.75 });
+  eq('#42b 변경일 당일부터 새 금리(ECOS 실측 2026-08-27 → 3.00)', [stepToDaily(ch, '2026-08-26', '2026-08-27')['2026-08-26'], stepToDaily(ch, '2026-08-26', '2026-08-27')['2026-08-27']], [2.75, 3]);
+  eq('#43 오늘 금리 · 직전 변경 폭', [stepLatest(ch, '2026-10-18'), stepLatest(ch, '2026-08-01'), stepLatest(ch, '2026-01-01')], [{ price: 3, change: 0.25, date: '2026-08-27' }, { price: 2.75, change: 0, date: '2026-07-16' }, null]);
   eq('#37 헤알·원 = 원/달러 ÷ 헤알/달러(그날 또는 직전 헤알) · 소수 4자리', computeBrlKrw({ '2026-10-15': 1400, '2026-10-16': 1410 }, { '2026-10-15': 5.6 }), { '2026-10-15': 250, '2026-10-16': 251.7857 });
   eq('#37b 헤알 값이 0·없으면 만들지 않는다', [computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-15': 0 }), computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-16': 5 })], [{}, {}]);
   eq('#38 브라질 실질금리 = 10년 − 기대물가(그날 또는 직전 기대치) · 음수 보존', computeBrReal({ '2026-10-08': 13.9, '2026-10-12': 4.4 }, { '2026-10-08': 4.5, '2026-10-09': 4.48 }), { '2026-10-08': 9.4, '2026-10-12': -0.08 });
@@ -266,10 +274,21 @@ ok('#G17e 서버: 브라질 7종 — SGS 432·13522 · Olinda · 네이버 BR10Y
   && /const data = computeBrlKrw\(krw, brl\);/.test(H) && /const data = computeBrReal\(r10, exp\);/.test(H));
 ok('#G17f 패널: 물가·기대물가는 관측일 표시 · 10년은 비면 자료 없음', /asOf: marketIndicators\.brIpcaDate/.test(MI) && /asOf: marketIndicators\.brExp12Date/.test(MI) && /emptyText: '자료 없음'/.test(MI));
 ok('#G17c 서버: 한국 금리 3종 — 국고채 3년 네이버→Yahoo · 기준금리 ECOS(722Y001/0101000, 키 없으면 needKey) · 한미 금리차 계산', /fetchNaverBond\('KR3YT=RR', 'Naver채권'\)/.test(IND)
-  && /fetchYahoo\('\^KR3YT=RR'\)/.test(IND) && /if \(!ECOS_KEY\) return \{ price: null, change: null, source: 'ECOS', needKey: true \};/.test(IND)
+  && /fetchYahoo\('\^KR3YT=RR'\)/.test(IND) && /const ecos = ECOS_KEY \? await fetchEcosBaseRateRaw\(\) : \{ price: null, change: null, source: 'ECOS', needKey: true \};/.test(IND) && /await fetchBokBaseRateChanges\(\)/.test(IND)
   && /722Y001\/D\/\$\{ymdOf\(start\)\}\/\$\{ymdOf\(end\)\}\/0101000/.test(IND) && /krBase:\s*ok\(krBase\)/.test(IND) && /kr10y\.price - us10y\.price/.test(IND)
-  && /if \(key === 'kr3y'\)/.test(H) && /fetchNaverBondDaily\('KR3YT=RR'/.test(H) && /if \(!ECOS_KEY\) return new Response\('krBase 인증키 필요/.test(H)
+  && /if \(key === 'kr3y'\)/.test(H) && /fetchNaverBondDaily\('KR3YT=RR'/.test(H) && /if \(ECOS_KEY\) try \{/.test(H) && /data = stepToDaily\(changes, iso\(d1\), to\);/.test(H)
   && /const data = computeKrUsSpread\(kr, ust\);/.test(H) && /fetchNaverBondDaily\('KR10YT=RR', d1, d2/.test(H));
+const KB = await load('api/_krBaseRateData.ts');
+if (KB) {
+  const c = KB.KR_BASE_RATE_CHANGES;
+  ok('#G17g 기준금리 스냅샷 — 한국은행 공시 61건 · 1999-05-06 4.75 ~ 2026-08-27 3.00 · 날짜 오름차순',
+    c.length === 61 && c[0][0] === '1999-05-06' && c[0][1] === 4.75 && c[60][0] === '2026-08-27' && c[60][1] === 3 && c.every((x, i) => i === 0 || x[0] > c[i - 1][0]));
+}
+{
+  const RWs = src('src/components/RateWindow.tsx'), BC = src('src/bcbClient.ts');
+  ok('#G17h 브라질 BCB — 서버가 비면 브라우저가 직접(과거치·현재값), 해석은 서버와 같은 함수', /if \(rec \|\| !BCB_BROWSER_KEYS\.includes\(key\)\) return rec;/.test(RWs) && /fetchBcbHistoryBrowser\(key, fromIso, toIso, fetchHistoryServer\)/.test(RWs)
+    && /await fillBrazilLiveCapped\(data\);/.test(M) && /import \{ parseBcbSgs, parseOlindaExpect, computeBrReal \} from '\.\.\/api\/_indicatorSources';/.test(BC));
+}
 ok('#G17d 화면: 기준금리 인증키가 없으면 \'인증키 필요\'(패널·금리 창)', /emptyText: marketIndicators\.krBaseNeedKey \? '인증키 필요' : null/.test(MI)
   && /merged\.krBaseNeedKey = d\?\.needKey === true/.test(M));
 ok('#G17b 서버: 하이일드·모기지 FRED · MBS 스프레드는 서버 계산(JSON) · MOVE는 Yahoo', /hyYield:\s*\{ id: 'BAMLH0A0HYM2EY',\s*signed: false \}/.test(H)

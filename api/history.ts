@@ -11,8 +11,9 @@ import { fetchKisDailyRange } from './_kisDaily.js';
 import {
   parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread,
   computeKrUsSpread, parseEcosRows, parseNaverBondPrices,
-  computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect,
+  computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily,
 } from './_indicatorSources.js';
+import { KR_BASE_RATE_CHANGES, KR_BASE_RATE_SNAPSHOT_AT } from './_krBaseRateData.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
@@ -304,6 +305,19 @@ async function fetchNaverBondDaily(reutersCode: string, d1: string, d2: string, 
     if (lo && days.sort()[0] < lo) break; // 시작일보다 앞까지 받았다
   }
   return out;
+}
+
+// 한국은행 '기준금리 추이' 공시 페이지(키 불필요) — 변경 이력 전체. 실패하면 저장된 스냅샷(_krBaseRateData)
+const BOK_BASE_RATE_URL = 'https://www.bok.or.kr/portal/singl/baseRate/list.do?dataSeCd=01&menuNo=200643';
+async function fetchBokBaseRateChanges(timeoutMs = 6000): Promise<{ changes: Array<[string, number]>; source: string }> {
+  try {
+    const res = await fetch(BOK_BASE_RATE_URL, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(timeoutMs) });
+    if (res.ok) {
+      const parsed = parseBokBaseRateHtml(await res.text());
+      if (parsed && parsed.length) return { changes: parsed, source: 'BOK' };
+    }
+  } catch { /* 스냅샷으로 */ }
+  return { changes: KR_BASE_RATE_CHANGES, source: `BOK 스냅샷(${KR_BASE_RATE_SNAPSHOT_AT})` };
 }
 
 // BCB SGS 과거치 — 일별 시리즈는 한 번에 최대 10년이라 10년 단위로 나눠 받는다(월별도 같은 방식으로 안전하게).
@@ -945,13 +959,20 @@ export default async function handler(request: Request): Promise<Response> {
 
   // krBase(한국은행 기준금리): ECOS 722Y001 / 0101000 / 일별(_indicatorSources.parseEcosRows 주석). 인증키가 없으면 502.
   if (key === 'krBase') {
-    if (!ECOS_KEY) return new Response('krBase 인증키 필요(ECOS_API_KEY)', { status: 502 });
     let data: Record<string, number> | null = null;
-    try {
+    if (ECOS_KEY) try {
       const res = await fetch(`https://ecos.bok.or.kr/api/StatisticSearch/${encodeURIComponent(ECOS_KEY)}/json/kr/1/100000/722Y001/D/${d1 || '19990506'}/${d2 || ymd(new Date().toISOString().slice(0, 10))}/0101000`,
         { signal: AbortSignal.timeout(Math.min(15000, budgetLeft())) });
       if (res.ok) data = parseEcosRows(await res.json());
     } catch { data = null; }
+    // ECOS 키가 없거나 실패 — 한국은행 공시 페이지(없으면 스냅샷)의 변경 이력을 달력 날짜로 펼친다(ECOS 일별과 같은 모양)
+    if (!data || Object.keys(data).length === 0) {
+      const { changes } = await fetchBokBaseRateChanges(Math.min(8000, budgetLeft()));
+      const iso = (y: string) => `${y.slice(0, 4)}-${y.slice(4, 6)}-${y.slice(6, 8)}`;
+      const todayIso = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+      const to = iso(d2) < todayIso ? iso(d2) : todayIso;
+      data = stepToDaily(changes, iso(d1), to);
+    }
     if (!data || Object.keys(data).length === 0) return new Response('krBase 수집 실패', { status: 502 });
     return csvResponse(data, recent);
   }

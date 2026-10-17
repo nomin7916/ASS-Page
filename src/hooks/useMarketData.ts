@@ -4,6 +4,7 @@ import { fetchIndexData } from '../api';
 import { buildIndexStatus, parseIndexCSV } from '../utils';
 import { getTodayKST } from './useMarketCalendar';
 import { indicatorMissingSegments, mergeIndicatorHistory, INDICATOR_SOURCE_FLOOR, INDICATOR_COVERAGE_KEYS, MARKET_INDEX_KEYS, isSignedIndicator } from '../indicatorCoverage';
+import { fillBrazilLiveCapped } from '../bcbClient';
 
 export const defaultCompStocks = [
   { id: 1, code: '', name: '비교종목1', active: false, loading: false, color: '#10b981' },
@@ -634,6 +635,8 @@ export function useMarketData({
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      // 브라질 BCB 값은 배포 서버에서 막히는 일이 있다 — 비어 있으면 브라우저가 직접 받아 채운다(bcbClient)
+      await fillBrazilLiveCapped(data);
 
       const keys = ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
                     'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',

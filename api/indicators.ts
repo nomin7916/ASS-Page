@@ -3,7 +3,8 @@
 // [최적화] timeout 9000→6000ms(느린 응답 CPU 점유 단축), SWR 60→600s(캐시 만료 후 백그라운드 갱신 확대)
 export const config = { runtime: 'edge' };
 
-import { parseFredGraphCsv } from './_indicatorSources.js';
+import { parseFredGraphCsv, parseBokBaseRateHtml, stepLatest } from './_indicatorSources.js';
+import { KR_BASE_RATE_CHANGES, KR_BASE_RATE_SNAPSHOT_AT } from './_krBaseRateData.js';
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
 // 한국은행 ECOS Open API 인증키 — 없으면 한국 기준금리는 빈 값 + needKey(화면에 '인증키 필요'). 값을 지어내지 않는다.
@@ -148,8 +149,29 @@ async function fetchNaverBond(reutersCode: string, source: string) {
 }
 
 // 한국은행 기준금리(ECOS 722Y001 · 0101000 · 일별) — 최근 60일에서 마지막 값과 그 직전의 다른 값(%p 차이)
+// 한국은행 '기준금리 추이' 공시 페이지(키 불필요) — 변경 이력 전체. 실패하면 저장된 스냅샷(_krBaseRateData)
+const BOK_BASE_RATE_URL = 'https://www.bok.or.kr/portal/singl/baseRate/list.do?dataSeCd=01&menuNo=200643';
+async function fetchBokBaseRateChanges(timeoutMs = 6000): Promise<{ changes: Array<[string, number]>; source: string }> {
+  try {
+    const res = await fetch(BOK_BASE_RATE_URL, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(timeoutMs) });
+    if (res.ok) {
+      const parsed = parseBokBaseRateHtml(await res.text());
+      if (parsed && parsed.length) return { changes: parsed, source: 'BOK' };
+    }
+  } catch { /* 스냅샷으로 */ }
+  return { changes: KR_BASE_RATE_CHANGES, source: `BOK 스냅샷(${KR_BASE_RATE_SNAPSHOT_AT})` };
+}
+
+// 한국은행 기준금리 — ECOS(인증키) → 한국은행 공시 페이지 → 스냅샷 순. needKey는 'ECOS 키가 없어 보충 출처를 썼다'는 표시
 async function fetchEcosBaseRate() {
-  if (!ECOS_KEY) return { price: null, change: null, source: 'ECOS', needKey: true };
+  const ecos = ECOS_KEY ? await fetchEcosBaseRateRaw() : { price: null, change: null, source: 'ECOS', needKey: true };
+  if (ecos.price != null) return ecos;
+  const { changes, source } = await fetchBokBaseRateChanges();
+  const latest = stepLatest(changes, new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10));
+  return latest ? { price: latest.price, change: latest.change, source, date: latest.date, needKey: !ECOS_KEY } : ecos;
+}
+
+async function fetchEcosBaseRateRaw() {
   const ymdOf = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '');
   const end = new Date(), start = new Date(Date.now() - 60 * 86400000);
   const data = await safeJson(`https://ecos.bok.or.kr/api/StatisticSearch/${encodeURIComponent(ECOS_KEY)}/json/kr/1/100/722Y001/D/${ymdOf(start)}/${ymdOf(end)}/0101000`);

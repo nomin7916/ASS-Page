@@ -17,6 +17,7 @@ import {
   resumeFrom, coversFloor, chunkRanges, planGroupFiles, readHistFiles,
 } from '../rateHistStore';
 import { INDICATOR_SOURCE_FLOOR, isSignedIndicator } from '../indicatorCoverage';
+import { BCB_BROWSER_KEYS, fetchBcbHistoryBrowser, fillBrazilLiveCapped } from '../bcbClient';
 import RateSettingsPanel from './RateSettingsPanel';
 import { computeBrlBond, BRL_BOND_FACE, BRL_BOND_COUPON, BRL_BOND_YEARS } from '../brlBond';
 import { evaluateRateSignals, evaluateOne, SIGNAL_STATE_LABEL, RATE_RULES } from '../rateSignals';
@@ -148,6 +149,12 @@ const shortDate = (iso) => (iso ? `${iso.slice(2, 4)}/${iso.slice(5, 7)}` : '');
 
 // 과거치 1건 — 실패하면 null(그 키만 빈 카드). /api/history는 일반 키 CSV · 금리차·MBS는 JSON을 준다.
 async function fetchHistory(key, fromIso, toIso) {
+  const rec = await fetchHistoryServer(key, fromIso, toIso);
+  if (rec || !BCB_BROWSER_KEYS.includes(key)) return rec;
+  // 브라질 BCB 값 — 배포 서버에서 막히면 브라우저가 직접 받는다(bcbClient, CORS 허용)
+  return fetchBcbHistoryBrowser(key, fromIso, toIso, fetchHistoryServer);
+}
+async function fetchHistoryServer(key, fromIso, toIso) {
   try {
     const res = await fetch(`/api/history?key=${key}&start=${isoYmd(fromIso)}&end=${isoYmd(toIso)}`, { signal: AbortSignal.timeout(25000) });
     if (!res.ok) return null;
@@ -370,7 +377,7 @@ export default function RateWindow() {
     let alive = true;
     fetch('/api/indicators', { signal: AbortSignal.timeout(20000) })
       .then(r => (r.ok ? r.json() : null))
-      .then(j => { if (alive && j && typeof j === 'object') setLive(j); })
+      .then(async j => { if (j && typeof j === 'object') await fillBrazilLiveCapped(j); if (alive && j && typeof j === 'object') setLive(j); })
       .catch(() => {});
     return () => { alive = false; };
   }, [access]);

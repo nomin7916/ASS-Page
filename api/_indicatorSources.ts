@@ -128,6 +128,42 @@ export function parseOlindaExpect(json: any): Record<string, number> | null {
   return out;
 }
 
+// 한국은행 '기준금리 추이' 공시 페이지 HTML → [[변경일 'YYYY-MM-DD', 기준금리], …](날짜 오름차순). 표를 못 찾으면 null.
+//   표 행 = <td>2026</td><td>08월 27일</td><td>3.00</td>
+export function parseBokBaseRateHtml(html: string): Array<[string, number]> | null {
+  const out: Array<[string, number]> = [];
+  const strip = (s: string) => s.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+  for (const row of String(html || '').match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || []) {
+    const c = (row.match(/<td[^>]*>[\s\S]*?<\/td>/g) || []).map(strip);
+    if (c.length !== 3 || !/^\d{4}$/.test(c[0])) continue;
+    const m = /^(\d{2})월\s*(\d{2})일$/.exec(c[1]);
+    const v = parseFloat(c[2]);
+    if (m && Number.isFinite(v) && v > 0) out.push([`${c[0]}-${m[1]}-${m[2]}`, v]);
+  }
+  out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return out.length ? out : null;
+}
+// 변경 이력(계단) → 달력 날짜마다 그날 적용 금리(ECOS 일별과 같은 모양 — 주말·휴일도 값이 있다). 첫 변경 전 날짜는 만들지 않는다
+export function stepToDaily(changes: Array<[string, number]>, d1Iso: string, d2Iso: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!Array.isArray(changes) || !changes.length) return out;
+  const start = d1Iso > changes[0][0] ? d1Iso : changes[0][0];
+  let i = 0, cur: number | null = null;
+  for (let t = Date.parse(`${start}T00:00:00Z`), end = Date.parse(`${d2Iso}T00:00:00Z`); t <= end; t += 86400000) {
+    const d = new Date(t).toISOString().slice(0, 10);
+    while (i < changes.length && changes[i][0] <= d) { cur = changes[i][1]; i++; }
+    if (cur != null) out[d] = cur;
+  }
+  return out;
+}
+// 오늘 적용 금리와 직전 변경 폭(%p)
+export function stepLatest(changes: Array<[string, number]>, todayIso: string): { price: number; change: number; date: string } | null {
+  const past = (changes || []).filter(c => c[0] <= todayIso);
+  if (!past.length) return null;
+  const last = past[past.length - 1], prev = past[past.length - 2];
+  return { price: last[1], change: prev ? Math.round((last[1] - prev[1]) * 10000) / 10000 : 0, date: last[0] };
+}
+
 // 한국은행 ECOS StatisticSearch 응답 → { 'YYYY-MM-DD': 값 }. 오류 응답(RESULT)·모양이 틀리면 null(= 조회 실패).
 //   기준금리 = 통계표 722Y001(1.3.1. 한국은행 기준금리 및 여수신금리) · 항목 0101000(한국은행 기준금리) · 주기 D(일),
 //   단위 연% · 일별 자료 첫날 1999-05-06(ECOS StatisticItemList로 확인, 2026-10).
