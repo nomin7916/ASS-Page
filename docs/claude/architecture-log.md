@@ -1,0 +1,6740 @@
+# ASS-Page 주요 아키텍처 이력 (CLAUDE.md에서 분리, 2026-10-18)
+
+> 이 파일은 자동으로 읽히지 않습니다. 통째로 열지 말고 `grep -n "<키워드>" docs/claude/architecture-log.md`로 줄 번호를 찾은 뒤 그 주변 100줄 이내만 읽으십시오.
+
+## 주요 아키텍처
+
+### portfolios 배열 구조
+- `portfolios: Portfolio[]` 배열로 계좌 목록 관리
+- 현재 활성 계좌 상태(`portfolio`, `title`, `principal` 등)는 별도 state
+- 계좌 전환: `switchToPortfolio(id)` — 현재 상태를 배열에 저장 후 새 계좌 로드
+- 기본 진입 뷰: 통합 대시보드 (`showIntegratedDashboard`)
+
+### accountType 목록
+`portfolio` | `isa` | `dc-irp` | `pension` | `gold` | `dividend` | `crypto` | `overseas` | `simple`
+
+- `gold`: KRX 금현물 — goldKr 시세 자동 동기화
+- `overseas`: 해외 주식 — USD/KRW 환율 적용
+- `simple`: 직접입력 — evalAmount/principal만 입력
+
+### TEST 계좌 플래그 `isTest` — 통합 대시보드 표시만, 모든 합산에서 제외 (⚠️ 회귀 주의)
+
+계좌별 boolean `p.isTest`. 통합 계좌 현황 표의 **계좌명 셀 빈 공간 클릭**으로 ON/OFF
+(`togglePortfolioTest` — `usePortfolioState`). ON이면 계좌명이 **이탤릭+녹색**으로 표시되고
+통합 대시보드의 **모든 합산·차트·비중에서 제외**되지만 표의 행 자체는 그대로 노출된다(계좌를
+열면 개별 뷰는 정상 동작 — 데이터는 보존, 해제 시 즉시 복원).
+
+- **제외 지점(8곳, 새 통합 합산 추가 시 빠짐없이 isTest 필터 필수)**:
+  `useIntegratedData` — ① `intTotals`(소계+카테고리 비중, `intCatDonutData`는 intTotals.cats 경유로 자동 제외)
+  ② `computedIntHistory`의 `cashSeries`/`accountSeries`/`portfolioPrincipalData`(수익율 그래프·평가액 추이)
+  ③ `intDepositEvents`(입출금 마커) ④ `intHoldingsDonutData`(종목별 비중).
+  `IntegratedDashboard` — ⑤ `histDetailRows`(추이 팝업 소계, 차트값과 일치 유지) ⑥ `appTrackingStartDate`
+  (역추산 경계 마커). `portfolioSummaries`는 행 표시를 위해 **제외하지 않고** `isTest`만 노출.
+- **표 UI**: TEST 행의 **평가비중 셀은 `-`**(100% 합계에서 빠지므로). 계좌명 셀의 **빈 공간 클릭=
+  TEST 토글**(td onClick), **계좌명 텍스트 클릭=계좌 열기**(span onClick+`stopPropagation`),
+  simple/matong 이름 input은 `onClick stopPropagation`으로 편집 중 토글 방지. 별도 토글 버튼/아이콘 없음.
+- **persist**: `App.tsx` `portfolioStructureKey`에 `isTest` 포함(단독 토글도 Drive 저장 트리거).
+  로드 정규화(`applyStateData`/`applyBackupData`)는 `...p` 스프레드라 자동 보존.
+- **관리자 포털**(`AdminPortal.tsx`)도 TEST 계좌 제외: 사용자 Drive `stateData.portfolios`를
+  읽는 시점(`handleRefresh`)에 `.filter(p => !p.isTest)` 1회 적용 → 평가총액·투자원금·전일대비·
+  일별 추이 매트릭스가 전부 그 `portfolios`에서 파생되므로 일괄 제외(소스 단일 필터).
+- **범위 밖(의도)**: 분배금 현황 표(통합 compact)는 isTest 미적용. `useHistoryBackfill`의 계좌별
+  일별 자동기록도 미적용(TEST 계좌도 자기 history는 계속 기록 → 해제 시 데이터 온전).
+
+### 계좌 소프트 삭제 `deletedAt` — 과거 총자산 보존, 삭제일 이후 제외 (⚠️ 회귀 주의)
+
+계좌 삭제는 배열에서 제거하지 않고 `p.deletedAt`(삭제일 `YYYY-MM-DD`, `getTodayKST`) 태그만 단다
+(`deletePortfolio` — `usePortfolioState`, 하드삭제 아님). 과거 삭제로 통합 일별 총자산이 소급 붕괴하던
+문제(computedIntHistory·histDetailRows가 라이브 `portfolios[]`에서 100% 재파생 → 배열 제거 시 그 계좌의
+모든 과거 기여 소멸)를 해결. **복원**(`restorePortfolio` — deletedAt 제거) / **영구삭제**(`purgePortfolio` —
+과거 기록까지 하드삭제) 제공. `IntegratedDashboard` 통합 표 하단 **접힌 "삭제된 계좌" 관리영역**에 노출
+(복원·영구삭제 버튼). 탭바·라이브 표에서는 숨김.
+
+- **핵심 불변식**: 계좌별 경계 `cutoff = min(deletedAt, today)`(더 이른 날짜, `today`=effectiveDate).
+  삭제 계좌는 **`d < cutoff` 날짜에만 삭제 전과 동일하게 기여**하고, `d >= cutoff`(라이브/오늘 포함)에는
+  존재하지 않는 것처럼 처리. `min`인 이유: 새벽(00:00~07:30 KST, effectiveDate가 전일) 삭제 시 라이브
+  시점(today)의 평가(override=제외)와 원금·현금 carry-forward가 어긋나지 않게 today에서도 정지.
+- **라이브/현재 = 완전 제외**: `intTotals`·`intHoldingsDonutData`(`useIntegratedData`, `if(s.deletedAt)`/
+  `if(p.deletedAt) return`), 통합 표 렌더(`IntegratedDashboard` regular/matongAccounts `.filter(!s.deletedAt)`),
+  탭바(`AccountTabBar` visiblePortfolios), 분배금 compact(`DividendSummaryTable` nonGoldPortfolios),
+  관리자 포털 라이브 총액(`AdminPortal` livePortfolios=`filter(!deletedAt)` → needs/recompute/computePrincipal).
+  `intCatDonutData`는 intTotals.cats 경유 자동 제외. `portfolioSummaries`는 행 판정용 `deletedAt` 태그만 노출.
+- **시계열 = `d < cutoff` 보존**: `computedIntHistory`의 accountSeries·cashByDate carry-forward loop와
+  effectivePrincipal reduce가 `cutoffOf(deletedAt)`로 `d >= cutoff` break/skip. `marketSeries`·`cashSeries`는
+  삭제 계좌를 **유지**(시계열 소스)하되 `deletedAt` 실어 보냄. `intDepositEvents`는 `date < deletedAt` 마커만.
+  팝업 `histDetailRows`(`IntegratedDashboard`): `if(p.deletedAt && (isRealtimeDate || histDetailDate >= p.deletedAt)) return`
+  + 이름에 `(삭제됨)` 접미. 관리자 일별 매트릭스 `buildUserSeries`는 full portfolios에 `cutoff` 캡(+cutoff 날짜를
+  ds에 추가해 주말 삭제도 경계에서 하락 materialize).
+- **⚠️ WRITE 동결(삭제일 이후 신규 기록 금지, 기존 이력 불변)**: `useHistoryBackfill` 효과#1(사전체크 `s.deletedAt`
+  + map `p.deletedAt` **양쪽 미러링** — 무한루프 불변식)·효과#2(`computeUpdates` 첫 줄 `if(p.deletedAt) return null`),
+  `useStockData`(수집·기록 map·펀드 NAV 3경로 `|| p.deletedAt`), `useAutoConfirmHistory`(`computeConfirms`),
+  `App.tsx` 스냅샷 효과(`maybeUpdate`).
+- **⚠️ 활성 계좌 기록 효과(App.tsx today-effect·MA펀드 효과)는 `deletedAt` 미가드 시 동결 계좌를 오염**:
+  삭제 대상이 활성이고 남은 비삭제 계좌가 현금뿐이면 과거엔 activePortfolioId가 삭제 계좌에 남아 두 활성 효과가
+  이력을 계속 썼다. → ① `deletePortfolio`/`purgePortfolio` else 분기 `setActivePortfolioId(null)`(activePortfolio=null
+  → totals=0 → 효과 no-op) ② 두 효과 상단 `if(activePortfolio?.deletedAt) return` ③ 로드
+  (`applyStateData`/`applyBackupData`)에서 restored 활성이 `deletedAt`이면 firstLive(비삭제 비현금)로 대체/없으면 null.
+- **⚠️ 이상치 가드 멤버십 일치**: `computedIntHistory` today 보정의 `prevValue`(직전 거래일 총액)는 삭제 계좌를
+  포함(prevDate<cutoff)하므로, **지배적(비중>90%) 계좌 삭제를 가격 미로드 이상치로 오판**(today를 옛 총액으로
+  되돌려 삭제 계좌 부활)한다. → prevDate에서 삭제 계좌 몫을 빼 intTotals(삭제 제외)와 같은 집합으로 맞춤.
+- **persist**: `App.tsx` `portfolioStructureKey`에 `deletedAt` 포함(삭제/복원이 저장 트리거). state 리터럴은 배열
+  전량 저장(삭제 계좌 보존), `applyStateData`/`applyBackupData` `...p` 스프레드로 자동 보존.
+- **동명 신규 계좌 = Drive 충돌 없음**: 계좌는 어디서도 name이 아니라 고유 `id`(`generateId`)로만 저장·매칭.
+  삭제 계좌 보존 + 동명 신규(다른 id) 공존 → 혼선 없음. 팝업 `(삭제됨)` 표기로 시각 구분.
+- **범위 밖(의도)**: 분배금 compact는 삭제 계좌 제외(라이브 뷰). 삭제일 boundary의 '오늘 수익' 절벽
+  (예: 07-14=₩100M → 07-15=₩70M, dod −30%)은 "과거 불변 + 삭제일부터 제외" 불변식의 필연적 결과(정상).
+
+### 관리자 "접속" = 새 탭 impersonation (⚠️ 회귀 주의 — 같은 탭 교체 금지)
+
+관리자 포털/관리자 페이지의 **"접속" 버튼**은 대상 사용자 대시보드를 **새 탭**에서 연다
+(`handleAdminViewUser` → `window.open('/?adminView=<email>', '_blank', 'noopener')`). 과거엔
+같은 탭에서 관리자를 로그아웃→사용자로 재로그인하는 방식이라 **포털로 복귀할 때마다 전 사용자
+Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아 **포털의 in-memory 조회 캐시가 유지**
+된다(복귀 시 재조회 없음). 클릭 제스처 직후 **동기** `window.open`이라야 팝업 차단을 피한다.
+
+- **콜드부팅 진입**: `App.tsx` 모듈 스코프 `ADMIN_VIEW_EMAIL = URLSearchParams.get('adminView')`.
+  파라미터가 있으면 렌더 전에 `sessionStorage.removeItem(SESSION_KEY)`(복제된 관리자 세션이
+  LoginGate 자동 재인증을 발동시켜 impersonation과 충돌하는 것 방지). 렌더 분기:
+  `!authUser && ADMIN_VIEW_EMAIL && !adminViewUserCtx` → `AdminViewBootstrap`.
+- **`AdminViewBootstrap.tsx`**: GIS 무음 OAuth(**전체 drive 스코프**, hint=ADMIN_EMAIL) →
+  **`fetchUserEmail(token) === ADMIN_EMAIL` 검증(⚠️ findUserIndexFolder보다 먼저)** → 대상 폴더
+  검색 → 관리자 PIN 해시(sessionStorage→`loadPinFromDrive` 폴백) → `onReady(ctx)` →
+  `setAdminViewUserCtx`. 이후는 **기존 LoginGate impersonation 경로 그대로**(PIN 화면 → 관리자
+  마스터 PIN 또는 대상 PIN → `handleLoginApproved` adminViewUserCtx 분기). impersonation은
+  SESSION_KEY를 쓰지 않아(`LoginGate` `handlePinSubmit` `!adminViewUserCtx` 가드) 새 탭은 세션을
+  영속하지 않는다(새로고침 시 `?adminView`로 재부팅 — PIN 재잠금).
+- **⚠️ ADMIN_VIEW_EMAIL 가드 불변식**: impersonation 탭의 **모든 로그아웃/reload 경로**는
+  `if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }`를 둬야 한다 — `reload()`가 `?adminView`를
+  유지해 **세션 종료 대신 재부팅 루프**가 되기 때문. 적용처: `useDriveSync` `onForceLogout`(비활동/
+  세션충돌), `UserInfoBar` `onLogout`, `LoginGate` `onCancelAdminView`. `closeAdminViewTab`은
+  `window.close()` + 150ms 폴백 `location.replace(origin+'/')`(noopener 탭은 close가 막힐 수 있음).
+- **보안**: 토큰은 메모리/React state에만(URL·storage 금지 — URL엔 이메일만). `?adminView`는
+  공격자 조작 가능하나 `=== ADMIN_EMAIL` OAuth 신원 검증으로 게이팅(비관리자는 데이터 접근 0).
+  noopener로 새 탭의 `window.opener`(포털 탭) 접근 차단. 신뢰 경계는 기존 포털과 동일.
+- **회귀 주의**: 옛 핸들러가 채우던 `userAccessStatus`(AdminPage 허용/차단 배지)는 새 흐름에선
+  `handleRefreshUserSessions`(세션 새로고침)가 STATE의 `adminAccessAllowed`로 채운다.
+
+### 관리자 페이지 "포털" 버튼 = 새 탭 (⚠️ 회귀 주의 — 같은 탭 교체 금지)
+
+관리자 페이지의 **"포털" 버튼**(`AdminPage` `onOpenPortal`)은 관리자 포털을 **새 탭**에서 연다
+(`App.tsx` `onOpenPortal` → `window.open('/?adminPortal=1', '_blank')`). 관리자 페이지 탭은 상태
+변경 없이 그대로 유지된다(과거엔 같은 탭에서 `setShowAdminPage(false); setShowAdminPortal(true)`로
+교체). "접속" 새 탭 impersonation과 같은 사용성 — 관리자 페이지를 잃지 않고 포털을 병렬로 본다.
+
+- **콜드부팅 진입**: `App.tsx` 모듈 스코프 `ADMIN_PORTAL_BOOT = URLSearchParams.get('adminPortal')==='1'`.
+  ⚠️ **`adminView`와 달리 SESSION_KEY를 제거하지 않는다** — opener의 sessionStorage가 새 탭에
+  복제되면(`noopener` 미사용이라 복제됨) `LoginGate` 무음 재인증이 그 관리자 세션으로 진행돼
+  **PIN 없이** 포털로 진입한다. `handleLoginApproved`에서 관리자 + `ADMIN_PORTAL_BOOT`이면
+  `adminPendingChoice`(선택 모달)를 건너뛰고 `setShowAdminPortal(true)`. 토큰은 `LoginGate`/
+  `AdminPortal`이 GIS로 독립 재발급하므로 **`noopener` 미사용**(noopener는 sessionStorage 복제를
+  막아 무음 재인증을 깨므로 절대 추가 금지 — impersonation과 반대).
+- **sessionStorage 미복제 브라우저 폴백**: SESSION_KEY 부재 → `LoginGate` 로그인 화면 → 수동
+  로그인 후 동일하게 `ADMIN_PORTAL_BOOT` 분기로 포털 진입(우아한 degradation, 결과 동일).
+- **뒤로가기**: 포털 탭의 `onClose`는 `ADMIN_PORTAL_BOOT`이면 `closeAdminViewTab()`(탭 닫기 +
+  150ms 폴백 `location.replace(origin+'/')`)으로 탭을 닫는다 — 관리자 페이지는 원래 탭에 그대로
+  있으므로. 새로고침 시 `?adminPortal=1` 유지로 포털에 재진입(reload-loop 아님, 의도된 동작 —
+  impersonation의 reload 가드와 달리 포털 탭은 reload가 곧 재진입이라 별도 가드 불필요).
+
+### 관리자 '계정 이전' = 옛 계정 Drive 데이터를 새 계정 폴더로 — 기존 파일 갱신만 (⚠️ 회귀 주의 — 새 파일 생성 금지)
+
+관리자 페이지의 **'계정 이전' 카드**(승인 사용자 목록 아래). 원본·대상 계정을 고르고 **미리보기 → 확인 → 적용**.
+발단(사용자 2026-10): Google 계정에 문제가 생겨 새 계정을 만든 사용자가 계좌·종목·기록을 전부 다시 입력해야
+했다. 데이터는 전부 사용자 Drive `Index_Data_<email>` 폴더의 JSON이고 **이메일이 데이터 안에 박혀 있지 않다**
+(계좌는 `generateId` id로만 참조) → 파일 내용을 새 폴더로 옮기면 그대로 산다.
+순수 로직 `src/accountMigration.ts`(⚠️ import 0건·enum 금지 — `verify:migrate`가 직접 import) /
+Drive I/O `driveStorage.updateDriveFileIfExists`·`driveFileExists` / 오케스트레이션 `App.tsx`
+`handleMigrationPreview`·`handleMigrationApply` / UI `AdminPage`.
+
+- **⚠️ 1급 계약 — 대상 폴더에 **새 파일을 만들지 않는다**. 이미 있는 파일의 내용만 PATCH한다.**
+  관리자 토큰으로 사용자 폴더에 만든 파일은 **관리자 소유**가 되고, 사용자 앱(`drive.file` 스코프)은 자기가
+  만들지 않은 파일을 읽지 못할 수 있다(학습자료를 `/api/study-material` 프록시로 중계하는 이유가 바로 이것).
+  그런 STATE가 대상 폴더에 생기면 그 계정은 `findFileId`(metadata.readonly)로는 보이는데 다운로드가 403이라
+  **로드·저장이 통째로 막힌다**. 그래서 라이터는 `saveDriveFile`이 아니라 **생성 분기가 구조적으로 없는**
+  `updateDriveFileIfExists`다(`#G2c`가 POST·parents·생성 엔드포인트 부재를 단언). 기존 파일 PATCH는 소유자를
+  바꾸지 않는다(impersonation 저장이 쓰는 경로와 동일).
+- **전제 조건(= 대상에 사용자 소유 STATE가 있어야 한다)**: 대상 계정이 시트에 승인되고 → 1회 로그인(폴더 생성 +
+  관리자 writer 권한 자동 부여) → **계좌를 하나 만든다**. 신규 사용자는 계좌 0개면 자동 저장이 조기 반환해
+  STATE·MARKET·VERSION 파일이 **생기지 않는다**. 그 더미 계좌는 적용 시 통째로 교체된다. 미리보기 차단 사유가
+  어느 단계가 빠졌는지 그대로 말한다(`migrationBlockers`).
+- **파일 계획 `MIGRATION_FILES`**(⚠️ STATE가 첫 항목 — 적용 루프가 STATE 실패 시 나머지를 중단한다):
+  STATE(필수 — 양쪽에 없으면 `blocked`) · MARKET · STOCK · DIVIDEND_TAX · NOTIFICATION_LOG(**양쪽에 있을 때만**
+  `update`, 아니면 `skip-*`). 종가 캐시(STOCK)가 빠져도 앱이 첫 접속에서 전량 재조회하므로 손실이 아니다
+  (`manualPriceOverrides`·`history`는 STATE 안). **PIN·백업·SESSION·VERSION 생성은 범위 밖** — 대상은 자기
+  PIN을 쓰고, version 파일은 **있을 때만** `{portfolioUpdatedAt: now}`로 갱신한다(없으면 다음 접속에서 STATE를
+  직접 읽는다).
+- **대상 STATE = `prepareMigratedState(srcState, now)`**: 입력 불변·시세 계층(`stockHistoryMap` 등)·`manualSavedAt`
+  제거·`portfolioUpdatedAt`/`chartPrefsUpdatedAt`/`updatedAt`을 **now로 새로** 찍는다(대상 앱의 저장 가드와
+  폴링 재적용이 이 값으로 '변경됨'을 판정) · `startDate` 정규화는 `handleImportStateFile`과 같은 식.
+- **⚠️ 적용 순서(`#G5d`가 indexOf로 단언)**: ① 그 자리에서 미리보기를 **다시 계산**해 ok일 때만(화면의
+  미리보기는 낡았을 수 있다) ② 덮어쓰기 직전 대상 STATE를 **관리자 폴더**(`Index_Data_Admin/migration_backup_
+  <email>_<ts>.json`)에 `saveDriveFile`로 백업 — 관리자 소유라 소유권 문제가 없고, **undo가 없는 이 기능의 유일한
+  복구 지점** ③ 파일 갱신 ④ version ⑤ 시트 기능 플래그 9종 중 **차이 나는 것만** `setUserFeature`.
+  `saveDriveFile` 호출은 적용 블록에 **그 백업 1곳뿐**(`#G5c`), 원본 폴더에는 아무것도 쓰지 않는다(`#G5f`).
+- **⚠️ 토큰은 로그인 토큰(`driveTokenRef`, drive.file)이 아니라 전체 drive 스코프의 별도 GIS 토큰**
+  (`AdminPortal`·`AdminViewBootstrap`과 같은 경로) — `findUserIndexFolder`의 소유자 기준 검색과 타 사용자 파일
+  읽기·갱신이 그 스코프를 요구한다. 토큰 소유자가 관리자인지 `fetchUserEmail === ADMIN_EMAIL`로 검증(hint는
+  힌트일 뿐). 메모리 ref에만 둔다. 401이면 한 번만 재발급(`withMigrationToken`).
+- **⚠️ 적용 게이트 3종(`AdminPage` `migApplyAllowed`, `#G7b`) — 하나도 빼지 말 것**: 미리보기 `ok` + 확인
+  체크박스 + 대상에 데이터가 있으면(`targetHasData` — 더미 계좌 1개·기록 1건은 데이터로 치지 않는다)
+  **대상 이메일을 직접 입력**. 관리자 본인은 원본·대상 어느 쪽도 될 수 없다(`nonAdminUsers`).
+- **경고(차단 아님)**: 대상 사용자가 5분 내 접속 중이면 **앱을 닫게 한 뒤 진행** — 열린 앱이 자기 편집을
+  저장하면 이전 결과를 덮는다(그 저장은 `portfolioUpdatedAt > lastSaved` 게이트라 편집이 있을 때만).
+  적용 뒤 열린 앱은 version 폴링으로 `preserveView` 재적용된다.
+- **영속화 지점 0곳** — 미리보기·결과·선택은 전부 세션 로컬이고, 대상에 쓰는 것은 기존 파일 내용뿐이다.
+  `portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps·Apps Script **전 지점 무수정**
+  (기능 플래그 복사는 기존 `setUserFeature` 재사용).
+- **알려진 한계(의도)**: 사용자 `name`은 Apps Script에 쓰기 액션이 없어 시트에서 직접 고친다 · 옛 Google
+  계정이 **완전히 삭제되면 Drive 파일도 사라져** 옮길 원본이 없다(사본을 먼저 확보할 것) · 옛 사용자가
+  관리자 접근을 꺼 뒀으면 원본 폴더를 찾지 못한다(`adminAccessAllowed`) · 백업 파일(`portfolio_backup_*`)은
+  옮기지 않는다(옮기면 `cleanupOldBackups` 상한에 밀려 **휴지통 없이 영구 삭제**된다).
+- 검증: `npm run verify:migrate` (직접 import `#1~#9` + 배선 가드 `#G1~#G8`, 87건). ⚠️ 가드는 **선언이
+  아니라 사용부**를 단언한다. `#G1`은 주석을 걷어낸 뒤 잰다(모듈 상단 주석이 금지 이유로 'enum' 단어를 적는다).
+  **변이 19종 + 음성 대조 1종으로 검출을 실증**했다(파일 없으면 생성으로 되돌림 · 루트 가드 제거 ·
+  drive.file 스코프 강등 · 관리자 신원 검증 삭제 · 백업 삭제 · 대상 폴더에 `saveDriveFile` 복귀 · 재계산
+  미리보기 게이트 삭제 · `prepareMigratedState` 우회 · prop 배선 삭제 · 적용 게이트 축소 · 버튼이 게이트
+  무시 · 새로고침 삭제 · STATE 순서 뒤집기 · `targetHasData` 축소 · 시세 계층 잔존 · required를 skip으로 ·
+  대상 STATE 부재 차단 삭제 · 입력 제자리 변형 · 미리보기에 쓰기 추가). 가드를 손볼 때 같은 변이가 여전히
+  잡히는지 다시 확인할 것.
+
+### 관리자 포털 '전일대비' = 보유종목 등락률로 직전 거래일 역산 (⚠️ 회귀 주의 — 저장 history 비교 금지)
+
+관리자 포털(`AdminPortal.tsx`)의 **전일대비·일수익(`dailyReturnRate`/`dodAbsChange`)**은 사용자
+통합 대시보드의 '오늘 수익'과 **동일해야** 한다. 대시보드는 `오늘(라이브 합계) − 직전 거래일`로
+계산하고, 그 **직전 거래일 값은 `useHistoryBackfill`이 종가로 재구성한 기록**(라이브 메모리)이다.
+
+- **과거 버그**: 관리자가 사용자 **저장된 raw `p.history`**의 마지막 날짜와 비교했다. 사용자가 직전
+  거래일(예: 월요일)에 앱을 안 켰거나(그날 live 기록 미생성) 백필 재구성이 아직 Drive에 저장되기
+  전이면, 저장 history의 최신 기록이 그 전날(주말 이월)이라 **직전 거래일을 건너뛰고 이틀치 등락을
+  합산**했다(예: 대시보드 +0.78% vs 포털 +1.19%). 총자산은 라이브 재계산이라 일치했지만 전일대비만
+  어긋났다.
+- **현재 방식**: `recomputePortfolioEval`이 `{live, prev}`를 **동시 반환**. `prev`는 **각 보유종목의
+  전일 종가 = 현재가 ÷ (1 + 등락률/100)** 로 `calcPortfolioEvalDetail`을 한 번 더 호출해 Σ(보유 ×
+  전일 종가)를 구한다. `changeRate`는 `getLivePrice`(→`fetchStockInfo`/`fetchUsStockInfo`/
+  `fetchFundInfo`/`fetchMiraeFundInfo`)가 시세와 **함께** 캐시한다(`LiveQuote = {price,changeRate}`).
+  추가 API 호출 0, **저장 history·백필·휴장 달력 의존 없음** → 라이브 시세 한 번으로 직전 거래일
+  복원, 비활성 사용자·impersonation에도 정확.
+- **세부**: 현금성(simple·matong)·예수금·savings는 일변동 0(`prev=live`). overseas는 전일 FX
+  (`fetchLiveUsdKrw`의 `fluctuationsRatio`)로, gold는 `fetchLiveGoldKr`의 `FLUC_RT`(없으면 0)로 prev
+  산출. 전일 종가 미확보 종목/계좌는 **`prev=live`로 폴백**(일변동 0, 노이즈 방지). 보유 매매가
+  직전일~오늘 사이 없으면 대시보드와 정확히 일치(매매 발생 시 미세 차이는 대시보드 raw diff 특성).
+- ⚠️ **`buildUserSeries`/`series`는 일별 비교 매트릭스(수정3) 전용으로만 남겨둠**(그쪽은 과거 저장
+  종가 기준 — footnote 명시). **메인 표 전일대비를 다시 `series[prevDate]`(저장 history)로 계산하지
+  말 것** — 저장 지연 불일치가 재발한다.
+
+### 계좌 타입별 D/S·펀드 게이팅 (⚠️ 회귀 주의 — 절대 합치지 말 것)
+
+두 기능은 **적용 계좌가 다르므로 별개 플래그로 분리**한다. 과거 한 플래그(`isRetirement`)로
+묶여 있어 다른 수정 중 반복 회귀했음. 합치거나 한쪽 조건으로 통일하지 말 것.
+
+- **펀드 기능** (펀드 행 + "펀드 추가" 버튼): **퇴직연금(`dc-irp`) + 개인연금(`pension`)**.
+  그 외 계좌(portfolio/isa/dividend/gold/overseas/crypto/simple)는 펀드 없음.
+  → `App.tsx`의 `isRetirementAccount` → `PortfolioTable` prop `isRetirement`.
+- **위험/안전(D/S) 자산 구분 배지 + D70/S30 통계**: **퇴직연금(`dc-irp`) 전용**. 개인연금 포함 그 외 제외.
+  → `App.tsx`의 `isDcIrpAccount` → `PortfolioTable` props `showAssetClass`(배지) / `showRetirementStats`(통계).
+  D/S 배지는 '구분' 셀의 카테고리(주식-a/배당주식/FUND) **옆 배지만** 의미하며, 카테고리 라벨 자체는 유지.
+- `RebalancingPanel`의 D/S 표시는 내부적으로 `activePortfolioAccountType === 'dc-irp'` /
+  `showRetirementStats`로 이미 dc-irp 전용 게이팅됨 (별도 `isRetirement` prop 없음).
+- 플래그 정의 위치: `App.tsx` `isRetirementAccount` / `isDcIrpAccount` 두 줄. 조건 변경 시 이 두 줄만 수정.
+
+### 해외계좌 투자금액(USD) = 사용자 입력 저장값 `investAmountUsd` (⚠️ 회귀 주의 — 파생 표시로 되돌리지 말 것)
+
+해외 주식 행의 **'투자금액'과 '보유수량'은 사용자가 직접 입력하는 칸**이며 어느 쪽도 상대에서 자동
+산출하지 않는다(국내 행과 같은 계약). 과거엔 투자금액에 저장 필드가 없어 화면이 `purchasePrice ×
+quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기록했다. 그래서 ① `14505.01` 입력 →
+`50.36461805…` 저장 → 되곱해 **`14505.009999999998`**(IEEE754 왕복, 편집 초안에 그대로 노출)
+② **수량만 고쳐도 총액이 저절로 바뀌는** 두 증상이 났다(사용자 보고 2026-08).
+
+- **저장 = `item.investAmountUsd`(USD, 입력 그대로) / `item.purchasePrice` = 파생 미러(= 총액 ÷ 수량)**.
+  해외 원가 소비자(`usePortfolioData` :41·:128, `useIntegratedData` :711, `bookCostOf(costBasisOnly)`,
+  `handleSort` getVal, 이관 `buildTransferPlan`)는 **전부 `purchasePrice × quantity`를 읽으므로 한 줄도
+  고치지 않는다**. 이 미러가 설계의 유일한 정합성 근거다 — 금액·수량 **두 편집 경로 모두**에서 반드시
+  동시에 갱신할 것.
+- **⚠️ 저장 필드를 `investAmount`에 얹지 말 것(신규 필드인 이유 2가지 — 되돌리면 둘 다 재발)**:
+  ① 해외 항목의 `investAmount`에는 **원화 잔존값**이 남아 있을 수 있다(레거시·`PasteModal` 임포트).
+  거기에 사용자 입력을 얹으면 값만 보고 원화/USD를 구분할 수 없고, 수량 편집 시 미러 재산출이 그
+  원화값을 `purchasePrice`로 **세탁**해 `bookCostOf(costBasisOnly)` 방어선을 정확히 우회한다
+  (통합 장부 ≈1,390배 오염 → 흡수 판정·누적 TWR 영구 오염). ② `snapshotCompositionKey`는
+  `investAmount`를 담고 `purchasePrice`는 담지 않는다 → `investAmount`에 쓰면 **원가 정정만 해도 새
+  보유 스냅샷**이 생겨 원장 흐름이 0인 날 `bookDelta`가 점프하고, 그 하루가 흡수 판정을 뒤집어 이후
+  최대 15행(`CARRY_MAX_ROWS`)의 일간 지표가 `'-'`로 잠긴다. 신규 필드는 둘을 구조적으로 회피한다
+  (레거시 점유자 없음 + 구성 지문 밖). `snapshotItemsFromPortfolio`에도 **넣지 말 것**(과거 장부는
+  종전대로 미러로 산출된다).
+- **⚠️ 쓰기 지점은 `usePortfolioState.handleUpdate` 하나** — 반드시
+  `activePortfolioAccountType === 'overseas' && p.type === 'stock'`으로 좁힌다. 이 핸들러는
+  **KrxGoldTable**(금현물은 `purchasePrice`가 사용자 입력이고 `investAmountUsd`가 없어 미러가 매입단가를
+  0으로 지운다)과 **펀드 적립 모달**(`quantity` → `investAmount` 연속 호출로 펀드 행에 없던
+  `purchasePrice`가 박힌다)이 함께 쓰는 범용 라이터다.
+- **⚠️ 미러는 `qty > 0 && Number.isFinite(invest)`일 때만 쓴다** — 0으로 나누면 `Infinity`가 그대로
+  저장되고(`cleanNum`은 숫자를 통과시킨다) `JSON.stringify`가 `null`로 직렬화해 재로드 시 원가가
+  **영구 소실**된다(undo 없음). 수량 0에서는 총액만 저장하고 미러는 건드리지 않는다(나중에 수량을
+  넣으면 그때 생성). 그래서 옛 `if (qty <= 0) return`(입력을 통째로 버리던 가드)은 제거됐다.
+- **읽기는 `utils.overseasInvestAmount(item)` 단일 소스**: 저장값이 있으면 그대로(**0도 유효한 입력**),
+  없으면 레거시 폴백 `round15(purchasePrice × quantity)`. ⚠️ 폴백의 `round15`(유효숫자 15자리)를 빼지
+  말 것 — 옛 UI가 만든 행은 단가가 이미 나눗셈 결과라 되곱하면 `14505.009999999998`이 나오고, 표시는
+  `formatUSD`(2자리)라 가려지지만 **편집 초안(String)에 그대로 노출**돼 "고쳤는데 그대로다"가 된다.
+- **⚠️ `PortfolioTable`이 받는 행은 `totals.calcPortfolio`**라 `item.investAmount`가 이미 **원화 환산값**
+  으로 덮여 있다(`usePortfolioData` :47). `investAmountUsd`는 그 덮어쓰기 대상이 아니라 스프레드로
+  원본이 넘어온다 → **`usePortfolioData`는 무수정**. 셀에서 `item.investAmount`를 읽으면 ≈1,390배 오염.
+- **영속화**: `App.tsx portfolioStructureKey` 항목 화이트리스트에 **`investAmountUsd` 필수**(수량 0인
+  행은 미러를 쓰지 않아 이 필드만 바뀐다 → 빠지면 그 편집이 조용히 유실). 로드·백업·이관은 `...item`
+  스프레드라 무수정. 그 외 **영속화 신규 지점 0곳**.
+- **의미 변경(의도)**: 수량만 고치면 총액이 고정되고 **구매단가가 재산출**된다(국내와 동일). 레거시 행은
+  첫 편집에서 **직전 총액**(`purchasePrice × 옛수량`)으로 1회 시드된다. 부수효과로 "수량만 늘린 날"의
+  `bookDelta`가 0이 되므로 **매수했으면 투자금액도 함께 입력해야** 그날 흡수 판정이 정확하다.
+- **범위 밖(의도)**: 금현물(`gold`)은 매입단가가 직접 입력이라 그대로. 펀드 좌수 표시 반올림
+  (`Math.round`)도 그대로. 해외 투자금액 표시는 `formatUSD`(2자리) 유지 — 소수 3자리 이상을 입력하면
+  저장은 정확하되 표시는 센트 단위로 반올림된다.
+- 검증: `npm run verify:overseas` (참조 구현 미러 #1~#14 + 소스 텍스트 가드 #15~#26). `utils.ts`의
+  `round15`·`overseasInvestInput`·`overseasInvestAmount`와 `handleUpdate`의 해외 분기를
+  **항상 1:1 동기화**할 것. 가드는 배선을 정규식으로 단언하므로 실패 시 **먼저 정규식이 낡았는지**
+  확인하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+
+### 해외계좌 원화 예수금 `depositAmountKrw` — 환전 전 원화 (⚠️ 회귀 주의 — USD에 합치지 말 것)
+
+해외계좌는 예수금·투자금액·원금·원장이 **전부 USD 단일 프레임**인데, 증권사 계좌에는 환전 전
+원화가 함께 남는다(사용자 요청 2026-09, '5826_환전 전용' 계좌). 그 원화를 담는 **별도 필드**가
+`item.depositAmountKrw`(예수금 행)이고, 원장의 원화 행은 `row.currency === 'KRW'`다.
+**총 평가금액(원화) = 달러 자산 × 환율 + 원화 예수금.**
+
+- **⚠️ 통화 분리 원칙 — 원화 예수금은 달러로 환산하지 않는다 (2026-09 사용자 확정, 되돌리지 말 것)**:
+  사용자 문장 그대로 — "원화를 달러로 환산해서 평가금액을 표시하지 말고 달러는 달러로 원화는 원화로
+  표시하고 … 총 평가액은 달러를 원화 환산한 원화 금액과 원화 예수금의 합계". 원화는 환율과 무관하게
+  금액이 고정인데, 달러로 환산해 더하면 **환율이 움직일 때마다 환전하지 않은 현금이 달러 평가액·달러
+  수익률을 흔든다**(가짜 환차손익). 그래서
+  · **달러 표기 = 달러 자산만**(주식 + 달러 예수금) · **원화 예수금 = 원화 그대로** · **총액만** `달러 × 환율 + 원화`.
+  · **원화 프레임 합계에서 달러를 되돌릴 때는 반드시 `utils.usdOfKrwFrame(값, 원화예수금, 환율)`** —
+    `합계 ÷ 환율`로 되돌리는 순간 원화가 달러로 섞인다. 원화 몫의 출처는 `calcPortfolioEvalDetail`의
+    **`krwCash`**(예수금 detail 행의 `krw`) · `usePortfolioData.totals.krwCash` · `depositKrwTotalOf(items, isOverseas)`.
+  · 옛 `depositRowNative`(= USD + 원화 ÷ 환율)와 `overseasUsdEvalAt`의 4번째 인자 `fxAt`은 **삭제**됐다.
+    되살리지 말 것(`verify:overseas #46·#46b`가 부재를 단언).
+  · **원화 예수금은 원금 대비 수익(률)에서도 뺀다** — 원금에 없는 돈을 평가에만 넣으면 원화 입금액이 통째로
+    '수익'이 된다. 적용: 요약 카드 달러 기준·환 평가(`PortfolioStatsPanel` `evalExCash`) · CAGR(`usePortfolioData`) ·
+    추이표 누적 수익률(`HistoryPanel` `ov.usd`) · 차트 '나의 수익률'(`overseasUsdEvalAt`) · 자산검증 평가손익.
+  · **적용 지점(달러 표기 전부)**: 포트폴리오 표(달러 예수금 행 = `item.evalAmount − krw`, TOTAL 투자금액·평가금액 =
+    `fmtSplitTotal` 3줄 `$달러 / +₩원화 / =₩총액`) · 요약 카드 머리줄(`dualSplit`) · 추이표 달러 줄(원화가 있던 날은
+    `+₩원화` / `=₩총액` 줄을 덧붙인다) · 차트 TWR·라인(USD 프레임 — **평가액에서 원화 제외 + 흐름에서 원화 원장 행 제외**가
+    짝: `externalFlowInRange`를 rateOf 없이 호출) · 자산검증 모달(`recomputedUsd`) · 자산검증 비교 모델·엑셀
+    (`evalNative`·예수금 행 USD 투자금액에서 원화 제외, (₩) 열에만 원화 — 각주로 고지) · 포트폴리오 엑셀
+    (원화는 **별도 행** `예수금 (KRW CASH · 환전 전 원화)`, USD 열은 `-`, TOTAL USD 열은 `usdOfKrwFrame`).
+  · **⚠️ 원화 예수금이 0이면 모든 화면이 종전과 한 글자도 다르지 않다**(`usdOfKrwFrame(v, 0, fx) = v ÷ fx`,
+    표·카드는 `if (!krwCash) return fmtDual/dualKRW` 조기 반환, 엑셀은 원화가 있을 때만 행 추가) — 하위호환의 축.
+  · **범위 밖(의도, 사용자 확인 대기)**: ① **리밸런싱**의 총평가금(USD)·현재 비중 분모에는 원화가 여전히
+    USD 환산되어 들어간다(매매 수량이 바뀌는 변경이라 따로 결정) ② ~~통합 대시보드에서 원화 예수금이 수익으로
+    잡힌다~~ → **2026-10 해소**: 통합은 원화 예수금을 **원화 투자원금**으로 집계한다(아래 전용 절 — '원금에 넣는다'
+    쪽을 택했다. 이관해 온 원금이라 받는 쪽에서도 원금이어야 통합 투자원금이 이관 전후로 변하지 않는다).
+
+- **⚠️ `depositAmount`(USD)에 합치지 말 것** — 한 필드에 두 통화가 섞이면 환율을 곱할 몫과 곱하면
+  안 되는 몫을 구분할 수 없어 평가액이 조용히 ≈1,355배 어긋난다. 같은 이유로 **원장의 원화 행에는
+  `fxRate`를 저장하지 않는다**(`fxRate: 0`) — 값을 남기면 마커·누적·흐름의 `d.fxRate || 라이브환율`
+  폴백이 원화에 환율을 곱한다.
+- **⚠️ 사용자 확정 규약 3종(2026-09 — 되돌리지 말 것)**: ① 평가금액에는 **반영**
+  ② **달러** 투자원금에는 **미반영**(환전 전 원화는 달러 원금이 아니다 — `cumDepositsUpTo`·`overseasPrincipalAt`·
+  `useIntegratedData`의 `effectivePrincipal` **달러 부분** 역추산이 KRW 행을 제외한다. ⚠️ 2026-10부터 **통합 대시보드의
+  원화 프레임에서는 원화 예수금을 원화 투자원금으로 집계**한다 — 아래 '원화 예수금 = 통합 원화 투자원금' 절) ③ 일간 손익에서는
+  **입출금으로 처리**(입금일에 가짜 수익이 찍히지 않게). ②와 ③은 모순이 아니다 — 원금
+  (`cumDepositsUpTo`)과 흐름(`externalFlowInRange`)은 이미 분리된 두 함수다.
+- **⚠️ 평가액을 더하는 모든 경로가 `depositRowEval(item, fxRate, isOverseas)` 하나를 공유**한다
+  (손복제 금지): `calcPortfolioEvalDetail`(→ 추이표·통합·자산검증·백필 전부) · `usePortfolioData.totals` ·
+  `useIntegratedData`(계좌 합계·종목별 비중) · `useStockData`(비활성 계좌 기록).
+  USD 표기 화면은 원화를 **빼고** 되돌린다(`usdOfKrwFrame` — 위 '통화 분리 원칙').
+  ⚠️ **예수금 행은 투자금액 = 평가금액이어야 한다** — 원화를 평가액에만 더하면 그 행의 수익률이
+  0이 아니게 되고 TOTAL 차익이 원화 잔액만큼 통째로 부풀어 오른다.
+- **⚠️ `depositKrwOf`는 비해외 계좌에서 항상 0**을 반환한다 — 계좌 타입이 바뀌어 잔존값이 남아도
+  국내 예수금(그 자체가 원화)에 이중 계상되지 않게 하는 구조적 방어선이다.
+- **⚠️ 프레임별 환산 — 섞으면 그 화면만 조용히 틀린다**:
+  · **원화 프레임**(추이표·통합·CSV): 흐름 배율은 **`krwFlowRateOf(indicatorHistoryMap, liveFx)`
+    공유 함수 하나**. 원화 행은 배율 1, 달러 행은 그날 환율. 세 화면이 이 함수를 써야 같은 날짜에
+    흐름이 갈리지 않는다(⚠️ `HistoryPanel`은 flowRate가 **2곳**이다 — 한쪽만 고치면 기간 모드에서만 틀린다).
+  · **USD 프레임**(개별 차트 TWR·라인): 원화 예수금을 **통째로 뺀다** — `overseasUsdEvalAt(items, date, map)`
+    (3인자)은 원화를 읽지 않고, 흐름은 `externalFlowInRange`를 **rateOf 없이** 불러 원화 원장 행을 뺀다.
+    ⚠️ 둘은 짝이다 — 평가액에서만 빼고 흐름에 남기면(또는 반대) 원화 입출금일에 가짜 손익이 생긴다.
+    (옛 방식 = 원화를 `1/환율`로 환산해 양쪽에 넣기 — 환율 변동만으로 달러 수익률이 흔들려 폐기.)
+  · **fail-safe(제거 금지)**: `externalFlowInRange`는 **`rateOf`가 없으면 원화 행을 집계하지
+    않는다**(호출부가 프레임을 모르므로) — USD 프레임이 원화를 빼는 수단이 바로 이것이다.
+- **⚠️ 장부액(흡수 판정)**: `buildBookCostSeries`가 **`rateOf`가 있고 해외계좌일 때만**(=원화 프레임)
+  원화 예수금을 환율 없이 더한다. 빼면 원화 입금일이 `unreflected-idle`로 분류돼 그 금액이 손익으로
+  찍힌다. ⚠️ `bookCostOf` 본문은 **무수정**(USD 프레임 유지) — 거기에 더하면 단위가 섞인다.
+- **⚠️ 영속화**: `App.tsx portfolioStructureKey` 항목 화이트리스트에 **`depositAmountKrw` 필수**
+  (빠지면 원화만 고친 세션이 조용히 유실된다 — `investAmountUsd`·`targetAmount`와 동일 버그 클래스).
+  원장의 `currency`는 `depositHistory`가 배열 통째로 지문에 들어가므로 자동. 그 외 **신규 지점 0곳**.
+  `snapshotItemsFromPortfolio`가 원화를 **보존**하고(과거 날짜 재현), `snapshotCompositionKey`는
+  **값이 있을 때만** 토큰을 붙인다(항상 붙이면 기존 계좌 지문이 배포만으로 달라져 스냅샷이 한 번 더 쌓인다).
+- **UI**: 해외계좌 표는 예수금을 **두 행**으로 그린다 — `예수금 (USD CASH)`(달러 입력·달러 평가) +
+  `예수금 (KRW CASH)`(원화 입력·원화 평가, 해외계좌면 원화가 0이어도 **항상** 렌더 — 입력칸이 그 행에 있다).
+  원화 행은 **새 데이터가 아니라 같은 예수금 항목의 `depositAmountKrw`를 그리는 렌더 전용 행**이다.
+  ⚠️ 그 행의 열 구성은 달러 예수금 행과 **완전히 같아야** 한다(라벨 `colSpan={depositColSpan}` 1 · `!H(…)` 금액 6칸 ·
+  액션 1칸) — 칸 하나만 빠져도 그 행부터 정렬이 깨진다(`verify:overseas #43c`가 행 구간을 잘라 센다).
+  비중(투자·평가)은 달러 행 = `(calc값 − 원화) ÷ 합계`, 원화 행 = `원화 ÷ 합계`라 두 행 합이 옛 한 행과 같다.
+  입출금 내역은 헤더의 **`₩+` 버튼**(해외 전용, 입금·출금 각 1개)으로 원화 행을 만들고, 환율 칸의
+  `원화` 배지를 누르면 달러 행으로 되돌린다. 누적 합계는 통화별로 **따로** 쌓는다
+  (`cumulative` / `cumulativeKrw` — 한 합계에 섞으면 통화가 다른 값이 더해진다).
+  ⚠️ `DepositPanel.amountBlur`는 원화 행에서 **`setPrincipal`을 건너뛴다**(원금은 USD다).
+- **범위 밖(의도)**: 원화→달러 환전 기록 UI(환전은 원화 칸을 줄이고 달러 칸을 늘리면 된다) ·
+  현금 이관(`transferCashToPortfolio`)의 원화 지원(USD 예수금만 이관) · 리밸런싱 매수 재원에 원화 포함
+  (환전해야 살 수 있으므로 USD 예수금만 — 단 **총평가금 분모에는 USD 환산되어 들어간다**).
+- 검증: `npm run verify:overseas` 파트③(#27~#45b — `src/utils.ts` **직접 import** + 배선 가드) +
+  **통화 분리 #29b~#29e·#30d~#30f·#32~#32d·#34b~#34d·#43b~#43d·#46~#54(배선)·#55~#56f(엑셀·비교 모델 값, 직접 import)**.
+  통화 분리 가드는 **변이 21종 + 음성 대조 1종**(USD 프레임에 원화 재가산 · 표 달러 행/TOTAL/조기 반환 ·
+  원화 행 열 누락/달러 표기 · 요약 카드 달러·수익·수익률 · 추이표 · 차트 흐름 rateOf 부활·4인자 호출 ·
+  자산검증 합계·행 · 비교 총액·행 · 엑셀 TOTAL · CAGR · krwCash 미집계 · usdOfKrwFrame 무시 ·
+  depositKrwTotalOf 비예수금 포함)으로 **실제 검출을 확인**했다.
+  ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 17종 + 음성 대조 1종**(평가액에서 원화 제거 ·
+  `isOverseas` 게이트 제거 · 원화 배율 1 제거 · fail-safe 2종 제거 · 스냅샷 미보존 · 지문 토큰 상시 ·
+  장부 게이트 제거 · 화이트리스트 제거 · 공유 함수 미사용 2곳 · 입력칸/버튼 삭제 · 환율 저장 ·
+  원금 가드 제거 · 흐름 손복제)으로 **실제 검출을 확인**했다. 그 과정에서 **죽은 단언 3건**을 잡았다 —
+  전부 '존재만 보는' 가드가 **첫 일치에 가려진** 경우였다(지문은 정확 형식 비교로, 원화 버튼과
+  추이표 flowRate는 **개수**로 센다). 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+
+### 해외계좌 원화 예수금 = 통합 원화 투자원금 · 원화 ↔ 해외 원화 예수금 현금 이관 (2026-10, ⚠️ 회귀 주의)
+
+발단(사용자 보고 2026-10-16): COVERD 예수금 20,000,000을 해외계좌(5826_환전 전용)의 **원화 예수금**으로 옮겼는데
+① 현금 이관 모달이 해외계좌를 '통화 불일치'로 막아 손으로 적어야 했고 ② 통합 대시보드가 그 계좌를 **수익
++66.30%**(원금 30,170,656 · 총자산 50,172,570)로, 전체 수익율을 **+11.67%**로 부풀렸으며 ③ 통합 '오늘 수익'·전일대비가
+이틀 연속 `-`였다. ②의 원인은 옛 규약 ②('투자원금 미반영')가 원화 프레임인 통합에도 적용돼, 원계좌 원금은 출금으로
+20,000,000 줄었는데 받는 쪽 원금에는 들어가지 않아 그 돈이 통째로 '수익'이 된 것이다. ③은 손으로 적은 출금 원장(10/15)과
+예수금을 줄인 기록일(21시 이후 = 10/16)이 하루 어긋나 흐름이 '반영 대기'로 이월된 것이다.
+
+- **⚠️ 규약(2026-10) — 통합 대시보드(원화 프레임)에서는 해외계좌의 원화 예수금을 그대로 원화 투자원금으로 본다.**
+  단일 소스 `utils.overseasKrwPrincipalAt(date, krwCashLive, deps, wds)` = 라이브 원화 예수금 − 그 날짜 **이후**의
+  원화 입금 + 원화 출금(`Math.max(0, ·)`). 소비자 **4곳**: `useIntegratedData.portfolioSummaries`(계좌 행 투자원금·수익·
+  수익율·CAGR → `intTotals` 전체 수익율) · `computedIntHistory.effectivePrincipal`(평가액 추이 투자원금·원금대비·차트
+  costAmount) · `utils.buildHistDetailRows`(날짜별 계좌별 현황 팝업·메모 달력) · `AdminPortal.computePrincipal`.
+  ⚠️ 한 곳만 빠지면 같은 날짜에 표·차트·팝업의 투자원금이 갈린다(`verify:overseas #60~#60e`).
+  ⚠️ **달러 투자원금(`p.principal`)·개별 해외계좌 화면(USD 프레임)은 종전 그대로** — 원화는 평가·원금 양쪽에서 뺀다
+  ('통화 분리 원칙'). 이 절은 통합만 바꾼다. 원화 예수금이 0이고 원화 원장 행이 없으면 통합 원금은 한 원도 변하지 않는다.
+- **⚠️ 달러 역추산은 원화 행을 거르고(`!isKrwLedgerRow`), 원화 몫은 원화 행만으로 따로 역추산한다** — 섞으면 원화
+  입금이 달러 원금을 소급해서 깎는다. `buildHistDetailRows`의 옛 코드는 원화 행을 `fxRate 0 || 1 = 1`로 달러 부분에
+  섞고 있었다(함께 정정). `overseasPrincipalAt`(개별 차트·추이표의 달러 원금)도 원화 행을 **건너뛰지 않던 결함**을
+  고쳤다 — ₩+ 원화 입금 20,000,000이 달러 원금에 그대로 더해지던 경로다(`verify:overseas #58·#60f`).
+- **⚠️ 그래서 원화를 옮긴 날짜가 원장에 있어야 과거 원금이 정확하다** — 원화 예수금 칸에 숫자만 치면 그 돈이 '처음부터
+  있던 원금'으로 역추산된다. 현금 이관 모달은 원화 행을 자동으로 만들고, 손으로 넣었다면 입출금 내역의 `₩+` 원화 입금
+  행을 그 날짜로 적어야 한다(사용자 데이터 정정 안내 2026-10-16).
+- **현금 이관 통화 규칙(`utils.cashTransferBlockReason(srcType, tgt, currency)`)**: 옮기는 돈의 통화가 기준이다 —
+  **원화는 국내 계좌·직접입력·해외계좌의 원화 예수금 어디로든**, **달러는 해외계좌끼리만**. 옛 '계좌 타입 일치'
+  (`(t === 'overseas') !== (srcType === 'overseas')`)로 되돌리지 말 것(`verify:transfer #65c`가 부재를 단언).
+  진입점 2곳: 국내·달러 예수금 행 버튼 = `onTransferCash()` / 해외계좌 **원화 예수금(KRW CASH) 행 버튼** = `onTransferCash('KRW')`
+  → `App` `showCashTransfer`가 `true | 'KRW'`, 통화는 **한 변수 `cashTransferCurrency`**로 자격·잔액(`transferableCashOf(p, cur)`)·
+  라이터(`plan.currency`)·모달에 같이 흐른다.
+- **⚠️ 원화 예수금이 한쪽이라도 끼면 원금은 반드시 함께 이동한다**(라이터 `movePrincipal = krwSide ? true : …`, 모달은
+  선택지를 잠그고 사유를 보인다). '원화 예수금 = 원화 원금' 정의상 '수익만 이동'을 표현할 저장 필드가 없다 — 억지로
+  허용하면 내부 이동 한 번에 통합 총수익이 이관액만큼 흔들린다.
+- **원장 행**: 해외계좌의 원화 예수금 쪽 행만 원화 행(`currency:'KRW'`·`fxRate 0`, `buildTransferLedgerRows`의 `krwSrc`/
+  `krwTgt`)이고 국내 쪽 행은 종전 그대로다. ⚠️ 국내 행에 원화 태그를 달면 `cumDepositsUpTo`가 그 행을 원금에서 빼
+  버린다. 메타에 `currency`가 실려 메모 달력 이관 패드가 해외계좌의 원화 이관을 ₩로 표기한다. 통합 ①-c는 원화 행을
+  배율 1로 읽으므로 같은 날짜의 쌍이 그대로 상쇄된다(국내 21:00 이후 이관은 날짜가 갈려 각 다리가 자기 날 장부로 흡수).
+- **라이터(`transferCashToPortfolio`)**: 원화 쪽은 `depositAmountKrw`를 움직이고 달러 원금 `p.principal`은 **건드리지
+  않는다**(삼항 `srcKrw ? p.principal : …` / `tgtKrw ? p.principal : …`). 영속화 신규 지점 **0곳**(`depositAmountKrw`·
+  `principal`·원장은 이미 지문에 있다).
+- **⚠️ 환전은 두 행으로**: 원화 → 달러 환전은 원화 예수금 칸을 줄이고 달러 칸을 늘리되, 입출금 내역에 **원화 출금(₩+)과
+  달러 입금을 함께** 적어야 한다 — 한쪽만 적으면 그날 흐름이 한쪽으로 쏠려 '-'로 잠기고, 달러 입금을 빼먹으면 달러 원금이
+  안 올라 개별 화면 수익이 부푼다(범위 밖 — 환전 전용 UI 없음).
+- **알려진 한계(의도)**: 리밸런싱의 총평가금(USD) 분모에 원화가 USD 환산되어 들어가는 것은 그대로(위 범위 밖 ①).
+- 검증: `npm run verify:overseas` **파트④ `#57~#60g`**(직접 import — 역추산·달러 원금 격리·자격·잔액 + 배선 가드) ·
+  `npm run verify:transfer` **#59g~#59p**(원화 이관 원장 회계) + **파트⑧ #73~#77b**(라이터·표·App·모달·달력 배선) ·
+  `npm run verify:cal-detail` **#27·#27b** + 드리프트 가드 `overseas-krw` 픽스처(없으면 그 가드가 이 분기에 눈이 먼다).
+  ⚠️ 작성 세션에 node가 없어 소스 텍스트 가드는 python3로 재현(변이 14종 + 음성 대조 1종 검출 실증)했고 직접 import
+  단언(#57~#59g·#27·#59g~#59p)은 python 포팅으로 기대값만 검산했다 — node가 있는 세션에서 `npm run gate`를 반드시 돌릴 것.
+
+### 입출금 내역 표 = 날짜순 누적 합계 · 최신 날짜 우선 (⚠️ 회귀 주의 — 입력 순서 누적으로 되돌리지 말 것)
+
+`DepositPanel`의 입금·출금 표 '합계' 열은 **날짜 오름차순**으로 쌓은 누적이고(같은 날짜는 먼저 입력한
+행부터), 기본 표시는 그 정확한 역순(**최신 날짜가 맨 위 · 맨 윗줄 합계 = 총합계**)이다.
+발단(사용자 보고 2026-09): 9/29를 먼저 적고 과거 8/26을 나중에 적으면 8/26이 위에 뜨고, 일자로
+정렬해도 **총합계가 나중에 적은 8/26 행에** 찍혔다 — 합계를 저장 배열(= 입력 순서, 새 행을 앞에 붙임)
+순서로 쌓았기 때문이다.
+
+- **단일 소스 = `utils.ledgerRowsWithRunningSum` + `sortLedgerRows`** — `usePortfolioData`의
+  `depositWithSum(2)`·`depositWithSum(2)Sorted`가 이 둘만 부른다(입금·출금이 같은 함수라 규칙이 갈리지 않는다).
+  CSV(`buildDepositCSV(depositWithSum)`)도 자동으로 같은 합계를 쓴다.
+- **⚠️ 저장 배열 순서는 건드리지 않는다**(표시 전용 파생). 편집은 전부 `originalIndex`로 저장 배열을 가리킨다 —
+  표시 순서 인덱스로 쓰면 다른 행이 고쳐진다.
+- 누적 규칙은 종전 그대로: 미반영(`noPrincipal`) 행은 더하지 않고, 원화 행(`currency:'KRW'`)은 달러와 **따로** 쌓는다.
+  날짜가 빈 행은 가장 오래된 것(맨 아래)이다. 날짜 비교는 ISO 문자열 비교(`cumDepositsUpTo`와 같은 규약).
+- **일자 정렬은 비교 정렬이 아니라 '기본 순서 / 정확한 역순'** — 같은 날짜 여러 건이 ▲▼에서 정확히 뒤집혀야
+  합계 열이 단조롭게 읽힌다. 기본 정렬 설정은 `{ key:'date', direction:-1 }`(▼ 표시) — 앱 탭(`usePortfolioState`)과
+  카드 별도 창(`CardWindow`) **두 곳**.
+- **새 행 날짜는 그 계좌의 평가 기록 반영일 `getBackfillBoundaryForAccount(accountType)`**(2026-10 — 국내 계좌는 21:00
+  이후·새벽에 **다음 날**, 해외는 07:30 경계). 현금 이관 모달·자산검증 스냅샷과 같은 규약이다. ⚠️ `getTodayKST()`(달력일)로
+  되돌리지 말 것 — 저녁에 적은 출금이 '오늘' 원장에, 함께 줄인 예수금은 '내일' 기록에 실려 그날 일간 수익률이 '-'(반영
+  대기)로 잠기고 다음 날이 이틀치를 합산했다(사용자 보고 2026-10, COVERD 10/15 출금). UTC(`toISOString`)는 00:00~09:00에
+  어제가 되어 더 나쁘다. 가드 `verify:deposit-ledger #G5`.
+- 영속화 지점 **0곳**(전부 매 렌더 파생값 + 세션 로컬 정렬 설정).
+- 검증: `npm run verify:deposit-ledger` (직접 import `#1~#12` + 배선 가드 `#G1~#G7`). **변이 12종 + 음성 대조 1종으로
+  검출을 실증**했다(같은 날 순서 뒤집기 · 날짜 비교 제거 · 미반영 포함 · 원화 섞기 · ▲ 역순 제거 · 표시 역순 제거 ·
+  출금만 옛 코드 · 앱/창 기본 정렬 복귀 · 새 행 UTC · import 누락 · 금액 정렬 방향 무시).
+
+### 예적금(savings) 항목 — 퇴직연금(dc-irp) 전용 (⚠️ 펀드/예수금과 혼동 금지)
+
+원금보장형 예적금(예: "kb손해보험 이율보증형 3년")을 위한 **별도 항목 타입 `type:'savings'`**.
+`type:'deposit'`(예수금/CASH 행)와 **완전 별개** — 절대 합치지 말 것. "펀드 추가" 아래
+"예적금 추가" 버튼으로 추가하며 **`dc-irp` 전용**(펀드는 dc-irp+pension, 예적금은 dc-irp만).
+→ `App.tsx` `isDcIrpAccount` → `PortfolioTable` prop `showSavings`.
+
+- **데이터 모델**: `{ type:'savings', category:'예적금', assetClass:'S'|'D'(기본 S), name,
+  annualRate(연이율 %, 원시 문자열 — 소수 입력 보존), startDate/endDate(투자기간),
+  investAmount(=Σ deposits), evalAmount(저장 안 함 — 산출값), deposits:[{id,date,amount}] }`.
+- **평가액 = `savingsEval(item, asOf?)`** (`utils.ts`): 각 적립(deposit) 트랜치를 그 날짜부터
+  만기/asOf까지 **연이율 단리**로 누적. **일(day) 단위 계산**(`toSavingsDayNum` — 타임존 무관
+  캘린더 일자) — 입금 당일은 이자 0(평가금=원금), 다음 날부터 1일치 단리. `asOf` 미전달 시 오늘.
+  과거 백필은 `asOf=date`로 그날 기준 누적(미래 적립분 제외, `min(asOf,오늘)` 캡). 만기일 이후로는
+  만기일에서 정지. **evalAmount를 item에 저장하지 않으므로** 모든 합산 경로가 `savingsEval`을 직접
+  호출해야 함(usePortfolioData/useStockData/useIntegratedData/calcPortfolioEvalDetail/App
+  auto-history·차트/RebalancingPanel). 투자원금=`savingsInvest`.
+  ⚠️ **시각(datetime) 비교 금지** — 과거 `new Date(dateStr)`(UTC 자정) > `Date.now()` 비교가
+  한국 오전엔 "오늘" 적립을 미래로 오판→스킵해 평가금 0이 되던 버그. 반드시 일 단위로 비교.
+- **만기금액 = `savingsMaturity(item)`** (`utils.ts`): 각 적립을 **만기일(endDate)까지** 단리
+  누적(오늘 상한 없음). `savingsEval(item, endDate)`는 `min(asOf,오늘)` 캡 탓에 오늘값이 나오므로
+  만기 산출엔 못 씀 → 별도 함수. endDate 미설정/적립 없음 → 0. **표시**: `PortfolioTable` 평가금
+  셀 하단 작은 글씨("만기 ₩…") + 적립 모달 요약(연이율·투자기간 아래). 적립 모달 입금일 기본값=오늘(`openSavingsModal`).
+- **트랜치 평가금 = `savingsDepositEval(item, deposit, asOf?)`** (`utils.ts`): 단일 적립의 입금일부터
+  오늘(또는 asOf)까지 단리 누적. 미입금(입금일>오늘)은 0. **불변식: 모든 적립의 savingsDepositEval
+  합 = savingsEval(item)**. 적립 모달 "적립 내역" 각 행에 `입금액 (현재 평가금)` 표기(미입금 행은 "예정").
+- **CRUD**: `usePortfolioState` — `handleAddSavings`, `updateSavingsField`(annualRate는 원시
+  문자열 저장), `addSavingsDeposit`/`removeSavingsDeposit`(적립 모달, investAmount 재계산).
+- **리밸런싱·통합뷰 노출** (펀드처럼 표시 — dc-irp): savings는 **시세·수량이 없어 매매 대상이
+  아니므로 "고정 참고 행"**으로 취급한다. `usePortfolioData` `rebalanceData` 필터에 `savings` 포함
+  → `curEval=savingsEval`, `expEval=curEval`(이월, 매매 0), `action/cost=0`, `isSavings:true`.
+  단 **목표비중(`effectiveTargetRatio`)은 펀드처럼 편집 가능 + 목표비중 합계(100%)에 포함**(라이브
+  미러 `cycleMirror` 시드 대상에도 savings 추가). `RebalancingPanel` `renderRow`는 `isSavings`면
+  현재가/수량/추가/추가가능/예상주식수/실구매비용 셀을 `-`로 렌더(목표비중 셀은 편집 유지).
+  카테고리 도넛(`rebalCatDonutData`)·종목별 비중은 `예적금` 카테고리로 자동 편입. `CATEGORY_DISPLAY_ORDER`
+  에 `예적금`을 **FUND 다음**에 추가(통합 자산카테고리·종목별비중에서 펀드 뒤 정렬), `CATEGORY_HEX_COLORS`
+  에 `예적금:#2DD4BF` 색 추가. 통합 대시보드 데이터(`useIntegratedData` 카테고리·holdings)는 이미 savingsEval 포함.
+- **회귀 주의**: ① Drive 변경감지 키(`App.tsx` `portfolioStructureKey`)에 savings 고유 필드
+  (annualRate/startDate/endDate/assetClass/deposits)를 포함해야 단독 수정이 저장됨(목표비중
+  targetRatio/targetRatioVar는 공통 필드라 이미 포함). ② 정렬(`handleSort`)·스냅샷
+  (`snapshotItemsFromPortfolio`)에서 savings 보존. ③ D/S 합산(PortfolioTable retirementStats·
+  RebalancingPanel projD/S)에 savings 포함(원금보장=안전 S 기본). ⚠️ **RebalancingPanel projD/S는
+  savings를 `rebalanceData`(expEval) 경유로만 합산** — 과거처럼 `savingsEval`로 별도 가산하면
+  **이중 계상**. `getAssetClass`는 savings를 fund처럼 기본 S 처리(`assetClass ?? 'S'`).
+
+### 수동 현금 행 = 투자금액을 그대로 평가금액으로 (⚠️ 회귀 주의 — 조건을 느슨하게 하지 말 것)
+
+시세가 없는 현금성 자산을 종목 표에 한 줄로 적어 두는 **아주 이례적인 용도**(사용자 요청 2026-10).
+주식 행이 **네 조건을 전부** 만족할 때만 '투자금액 = 평가금액'(수익 0)으로 평가한다 — 하나라도 빠지면
+종전대로 수량 × 현재가: ① 구분(`category`) = `'현금'` ② 종목코드 없음 ③ 보유수량 **정확히 1**
+④ 투자금액 > 0. 사용자가 "조건을 여러 개 설정해서 이 조건이 맞아야만"을 명시했다 — 코드를 아직 안
+넣은 일반 종목 행이 조용히 투자금액으로 평가되면 그 행의 평가액·수익률이 거짓이 된다.
+
+- **판정·값의 단일 소스 = `utils.isManualCashShape` / `isManualCashRow(item, accountType)` / `manualCashEval`**.
+  ⚠️ `category === '현금'` 비교를 다른 파일에 손복제하지 말 것(`verify:cash-row #G1b`가 부재를 단언).
+- **해외·금현물 계좌는 대상이 아니다** — 해외 행의 `investAmount`는 원화 잔존값일 수 있는 미사용 필드
+  (저장 필드는 `investAmountUsd`)라 그대로 쓰면 ≈1,390배 오염되고, 금현물 행은 코드가 원래 없다.
+- **적용 지점(전부 같은 함수)**: `usePortfolioData` totals(표·요약·CAGR) · rebalanceData · `useIntegratedData`
+  계좌 합계·종목별 비중 · `useStockData` 비활성 계좌 기록 2곳 · `calcPortfolioEvalDetail`(과거 추이·통합·
+  자산검증·백필·관리자 포털·두 날짜 비교 공통) · `App` 펀드 자동기록·종목 정렬. 한 곳만 빠지면 표 TOTAL·
+  통합 대시보드·추이표가 서로 다른 총자산을 표시한다.
+- **`calcPortfolioEvalDetail`은 `source: 'cash'`**(단가 = 평가액 = 투자금액)를 낸다. ⚠️ `allExact` 판정
+  **두 곳**(`utils`·`useAutoConfirmHistory`)이 `'cash'`를 정확값으로 쳐야 한다 — 빠지면 그 행이 든 모든
+  과거 날짜가 '종가 없음'으로 직전 값 이월에 갇히고 자동확정이 영구 보류된다(이 기능 이전의 실제 상태).
+- **리밸런싱 = 예적금 같은 고정 참고 행**(매매 0 · 예상평가금 = 현재 평가금 · 목표비중은 편집·합계 포함).
+  ⚠️ 가격이 0이라 일반 분기로 흘리면 예상평가금이 `(수량+매매)×0 = 0`이 되어 그 현금이 리밸런싱 결과에서
+  사라진다. 표 렌더는 `rebalanceData`의 `isManualCash`를 `isSavings`와 같이 취급하고, (%) 미러 시드
+  (`curRatioOf`)도 투자금액으로 현재 비중을 잡는다(0%로 시드되면 리밸런싱 모드에서 '전량 매도' 지시가 된다).
+- **과거 날짜**: 판정에 구분이 필요하므로 `snapshotItemsFromPortfolio`가 `category`를 **보존**하고,
+  `snapshotCompositionKey`는 현금 행 모양일 때만 `:cash` 토큰을 붙인다(구분을 현금으로 바꾼 날 새 스냅샷이
+  남는다 · 현금 행이 없는 계좌의 지문은 종전과 한 글자도 같다 → 배포만으로 스냅샷이 쌓이지 않는다).
+  구분 보존 **이전** 스냅샷(category 키 자체가 없다)은 `resolveHoldings`의 `withLegacyCashCategory`가
+  **읽기 시점에만** 복원한다 — ⚠️ 조건 ③ "지금 계좌에 현금 행이 실제로 있을 때만"을 빼지 말 것(과거에
+  잠깐 있던 코드 미입력 일반 종목 행을 현금으로 오인한다). 바뀐 게 없으면 원본 배열 참조를 그대로 돌려준다.
+  **알려진 한계**: 현금 행을 지우면 레거시 스냅샷 날짜만 복원이 꺼진다(새 형식 스냅샷 날짜는 무관).
+- **표시**: 포트폴리오 표·엑셀의 현재가 칸 = `'-'`(0을 찍으면 평가금액과 모순), 평가금액 칸 툴팁,
+  자산검증 모달 `💵 현금` 배지 + 종가 수동입력 비활성. calc 행의 `isManualCash`는 **표시 전용 파생 플래그**다
+  (저장 안 됨).
+- **영속화 신규 지점 0곳** — 판정 입력(구분·코드·수량·투자금액)이 전부 `portfolioStructureKey` 항목
+  화이트리스트에 이미 있다. 장부액(`bookCostOf`)은 투자금액을 그대로 더하므로 평가 − 장부 = 0.
+- **범위 밖(의도)**: 해외·금현물 계좌, 일간 지표에서 '현금 행을 새로 만든 날'의 흐름 처리(입금 원장을 함께
+  적지 않으면 그날 평가액 증가가 손익으로 보인다 — 예수금을 직접 늘린 날과 같은 기존 규약), 종목 이관.
+- 검증: `npm run verify:cash-row` (직접 import #1~#8 + 배선 가드 #G1~#G9). **변이 22종 + 음성 대조 1종으로
+  검출을 실증**했다(조건 3종 완화 · 해외 허용 · calc 분기 삭제 · allExact 2곳 · 스냅샷 미보존 · 지문 토큰 상시 ·
+  레거시 복원 게이트/참조 보존/baseline 경로 · 표 합계 · 리밸런싱 예상평가금 · 통합 · useStockData · App 2종 ·
+  리밸런싱 고정행 · 미러 시드 · 표 현재가 · 손복제 판정).
+
+### 평가액 확정 시각 — 시장별 분리 (⚠️ 회귀 주의)
+
+일별 평가액 기록의 종가 확정 컷오프는 **시장별로 다르다** (`useMarketCalendar.ts`).
+
+- **국내시장 계좌** `KR_CUTOFF_ACCOUNT_TYPES` = {portfolio, isa, dc-irp, pension, dividend, gold}:
+  **당일 21:00 KST 확정**. `getEffectiveDateKR()` — **기록 창 09:00(개장)~21:00에만 오늘 반환**,
+  그 외(21:00~익일 09:00) `null`(기록 중단). 모든 기록 경로는 null이면 skip. 미래 날짜 기록 금지.
+  ⚠️ **개장 전 placeholder 금지가 핵심** — 과거 "자정부터 전일 종가 이월값을 당일 날짜에
+  isFixed:false로 기록"하는 설계는 실시간 기록 보호 가드가 그 오귀속 값을 영구 보호해
+  (새벽에만 접속하는 사용자의 기록이 매일 하루 밀림) 폐기했다. 당일 기록은 개장 후 라이브
+  갱신 또는 21:00 이후 백필(종가)로 생성된다.
+- **해외(overseas)·암호화폐(crypto)·현금성(matong/simple)**: 기존 글로벌 익일 07:30
+  (`getEffectiveDate()`) 유지.
+- **백필 상한**: `getBackfillBoundaryForAccount(accountType)` — KR 계좌는 21:00 이후
+  `d < 내일`(당일 백필 허용, 밤에만 접속해도 당일 기록 확보), 그 외 글로벌 날짜.
+  `getBackfillBoundaryKR()`은 "다음 실시간 기록 대상일"과 값이 같아 자산검증 스냅샷 날짜로도 사용
+  (21:00 이후 구성 변경 스냅샷은 내일 날짜 → 당일 종가 재계산에 미반영, 의도된 동작).
+- **당일 종가 보정 예외** (`getKrSettledTodayDate`, 21:00~24:00에만 오늘 반환): 장중 값(예 14시)
+  으로 동결된 **당일** 실시간 기록(isFixed:false)에 한해 백필이 종가 재계산으로 1회 덮어쓴다
+  (`useHistoryBackfill` `liveOverrideDate`). 사용자 확정(adjustedAmount)·과거 날짜·비KR 계좌의
+  "실시간 기록은 권위값" 불변식은 그대로 유지.
+- **규칙**: 기록 경로는 실행 시점에 `getEffectiveDateForAccount`/`getBackfillBoundaryForAccount`를
+  직접 호출한다. `App.tsx`의 `effectiveDateKey`/`krEffectiveDateKey` state는 **재실행 트리거일 뿐**
+  기록 날짜로 쓰지 말 것(타이머 드리프트 자가보정). 타이머는 07:30/09:00/21:00 3경계 재무장 루프
+  (`getMsUntilNextBoundary`). 자정엔 두 날짜 모두 변하지 않아 경계 불필요.
+- ⚠️ **accountType 해석 통일**: `portfolioSummaries`의 `accountType`은 시장 계좌가 전부
+  `'portfolio'`로 고정(`useIntegratedData.ts` — overseas/gold/crypto 포함)이고, 레거시 계좌는
+  accountType 미설정(undefined)일 수 있다 → 시장 분류 시 반드시 `portfolios` 배열에서
+  `p.accountType || 'portfolio'`로 해석(`useHistoryBackfill` 효과 #1 `typeById` 참조). 동결 skip과
+  타입 해석은 사전체크 루프와 setPortfolios map **양쪽에 동일하게 미러링** 필수 — 한쪽만 다르면
+  ref 키 불일치로 `needsUpdate` 영구 true → 렌더/Drive 저장 무한 루프.
+- **MA: 펀드 자동기록 2곳(App.tsx, useStockData.ts)은 의도된 예외** — 펀드 기준가는 익일 발표라
+  21:00에 "확정된" KR 날을 다음날 아침 NAV로 보정(덮어쓰기)한다. 건드리지 말 것.
+
+### 평가액 history 날짜 중복 방지 (⚠️ 회귀 주의 — 절대 raw append 금지)
+
+각 계좌 `p.history`는 **날짜당 1건** 불변식을 유지한다. history에 레코드를 추가하는 모든
+경로는 `findIndex(h => h.date === date)` 또는 날짜 Set 가드로 **같은 날짜 중복을 막아야** 한다.
+- 실시간 자동기록은 `isFixed:false` + `evalAmount>0` → **권위 값, 절대 백필로 덮어쓰지 말 것**.
+- 안전 경로(가드 있음): 자동 백필 `applyUpdates`(`useHistoryBackfill.ts` findIndex+실시간 보호),
+  일별 자동기록(`App.tsx` today 교체), MA펀드/비활성/simple 기록(findIndex), `fillNonTradingGaps`(dateSet).
+- **과거 버그**: 수동 백필 `fillMissing`이 `existingDates`를 `isFixed`만으로 산출해 실시간 레코드
+  있는 거래일을 '누락'으로 오판 → 같은 날짜 백필 레코드를 raw append. 통합 합산 Map(last-wins)이
+  뒷값(백필)을 채택해 그 날 총자산이 틀어졌음. → `existingDates = new Set(hist.map(h=>h.date))` +
+  `mergeMissing`(없는 날짜만 추가)로 수정.
+- **로드 시 방어**: `utils.ts` `dedupeHistoryByDate`가 `applyStateData`/`applyBackupData`/레거시
+  복원에서 기존 중복을 정리(우선순위 실시간>확정>백필, 중복 없으면 동일 참조 반환).
+- 검증: `npm run verify:history`.
+
+### 비거래일(주말/공휴일)엔 라이브 스냅샷 금지 — 비활성 시장 계좌 (⚠️ 회귀 주의)
+
+**증권 캘린더를 따르는 계좌(KR: portfolio·isa·dc-irp·pension·dividend·gold + overseas)는 비거래일
+(주말/공휴일)에 시세가 변하지 않으므로, 그날 값은 반드시 직전 거래일 종가여야 한다.** `getEffectiveDateKR`/
+`getEffectiveDate`는 요일을 검사하지 않아 토/일에도 '오늘'을 반환하므로, 기록 경로가 비거래일 라이브
+스냅샷을 만들지 않도록 **거래일 게이팅**이 필요하다.
+
+- **판정 헬퍼**: `useMarketCalendar.ts` `isNonTradingDayForAccount(accountType, date, krHolidays, usHolidays)`.
+  KR 계좌는 KRX 캘린더, overseas는 NYSE 캘린더. **crypto(24시간 시장)·현금성(matong/simple, 상시 편집)은
+  항상 false**(=상시 기록 허용 — 절대 게이팅/치유 대상에 넣지 말 것). 공휴일 배열이 비면(캘린더 로드 전)
+  주말만 판정(graceful degradation, 주말은 캘린더 불필요).
+- **예방(비활성 전용)**: `useHistoryBackfill` 효과#1의 `recDateFor`, `useStockData` refreshPrices 기록
+  경로(`isActive` return 뒤 = 비활성) 둘 다 recDate가 비거래일이면 `null`로 만들어 기록을 생략한다.
+  ⚠️ `recDateFor`는 **사전체크 루프와 setPortfolios map 양쪽이 같은 함수를 호출**해 자동 미러링(무한루프
+  방지 불변식). **활성 계좌 today-effect(`App.tsx`)는 게이팅하지 않는다** — 활성은 라이브 시세가 완전
+  로드돼 주말값=금요일 종가로 정확하고, 이미 주말 cleanup(`1841-1846`)+`fillNonTradingGaps`로 관리되며,
+  게이팅하면 개별 계좌 차트(`finalChartData`)의 '오늘' 점이 주말 낮에 사라진다.
+- **치유(전 계좌, 값 다를 때만)**: `useHistoryBackfill` 효과#2의 백필 실시간 보호 2곳(gap-fill
+  `isProtectedEntry`, `applyUpdates` `isProtected`)에 `isNonTradingDayForAccount` 예외를 두어, 비거래일의
+  `isFixed:false` 라이브 스냅샷을 직전 거래일 종가 carry-forward로 **덮어쓴다**(`applyUpdates`는 값이 실제로
+  다를 때만 교체 → 정상 주말 레코드는 무손). 치유 결과(`isFixed:true`)는 `historyVerifyKey` 경유로 Drive
+  영속. `getKrSettledTodayDate`(당일 21:00 예외)는 과거 날짜엔 무효라 무관.
+- **과거 버그**: 비활성 KR 계좌가 토요일 09:00~21:00에 부분로드/스테일 시세(`summary.currentEval`)를
+  `isFixed:false`로 그날 기록 → cleanup이 없어 영구 잔존 + 백필 실시간 보호로 금요일 carry-forward를 가림
+  → 통합 대시보드 추이에 주말 딥(예: -1.52%) 후 일요일 라이브 회복(+1.53% **가짜 오늘 수익**). 활성
+  COVERD는 cleanup으로 면역이라 정상이었음(원인은 비활성 계좌). 재구성(차트·팝업)은 저장값을 충실히
+  재현만 하므로 버그는 재구성이 아니라 **기록측**에 있었다.
+- **⚠️ crypto 제외 필수**: 24시간 시장이라 주말 라이브값이 정당 → 치유하면 손익이 지워지는 회귀.
+  `isNonTradingDayForAccount`가 crypto에 false를 반환하는 것이 이 안전장치.
+- **범위 밖(별개)**: 차트-팝업 overseas 소계 미세차(FX 재계산 vs 저장값)는 이 딥과 독립된 상시 이슈.
+
+### 앱 실행 시 '수량×종가로 자동확정' (`useAutoConfirmHistory`) — 자산검증 불일치 자동 보정 (⚠️ 회귀 주의)
+
+자산검증 모달(`VerifyEvalModal`)의 **'수량*종가로 확정'을 앱 실행 시 자동 수행**한다. `useHistoryBackfill`이
+실시간 기록(`isFixed:false`+`evalAmount>0`)을 권위값으로 보호해 종가로 덮어쓰지 않으므로(당일 21:00
+`liveOverrideDate` 예외만), 장중 기록된 과거 라이브 값이 종가와 어긋나도 영구히 '불일치'로 남았다 →
+사용자가 손수 확정해 왔다. 이 훅이 그 동작을 자동화한다.
+
+- **대상 레코드**: `isFixed:false`(라이브) + `evalAmount>0` + **불일치**(모달과 동일 판정) +
+  **모든 가격 종목이 그 날짜의 정확한 종가/NAV(또는 manual)** + 구성 확정(`!estimated`) + `autoConfirmDeclined`
+  없음. 날짜는 **과거(오늘 미만), 또는 KR 계좌(`isKrCutoffAccount`)의 당일 KST 21:00 이후**(`getKrSettledTodayDate`).
+  당일 확정은 KR 전용 — crypto 등 비KR은 과거만. 확정 = `{evalAmount=adjustedAmount=재계산값, isFixed:true}`
+  (수동 확정과 동일). **모든 계좌**(현금성 simple/matong 제외 — 시세 이력 없음, overseas는 환율 재계산이
+  권위라 항상 '일치'로 자연 제외).
+- **데이터 완비 가드(⚠️ 핵심)**: 한 가격 종목이라도 그 날짜의 **정확한 데이터가 없으면 보류**. source가
+  `history`여도 `getClosestValue`의 **소급 근사(carry-back)**일 수 있어(당일 종가 미로드 시 전일 종가 반환)
+  신뢰 불가 → `stockHistoryMap[code][date]`/`goldKr[date]` **해당 날짜 키 존재를 직접 확인**. `manual`(수동
+  입력)·deposit·savings는 허용, 그 외(`none`/`approximate`/펀드 `currentPrice`·`evalAmount` 폴백/소급 history)는
+  보류. 잘못된 값(특히 21:00 직후 당일 종가 API 지연 시 전일가, 과거 펀드 NAV 미로드 시 당일 currentPrice)을
+  영구 고정하는 것 방지. 모달 수동 확정은 이 가드가 없음(사용자 재량) → 자동확정이 더 보수적. 미완비 날짜는
+  라이브로 남아 데이터 로드 후 다음 실행에서 확정(또는 수동 확정).
+- **추정 구성 가드**: `resolveHoldings(p,date).estimated`(스냅샷 없음·미검증 pre-baseline — 보유수량
+  불확실)면 보류. 모달은 '🟡 추정' 경고로 사용자 검토를 받지만 자동 잠금은 잘못된 수량을 박을 위험 →
+  구성이 확정된(`estimated:false`) 날짜만 자동확정.
+- **확정 취소(`unconfirm`)는 `autoConfirmDeclined:true`를 박제** → 자동확정이 그 날짜를 재확정하지 않음
+  (취소 영속). 수동 확정(`confirm`)은 `autoConfirmDeclined`를 해제. 두 핸들러는 `VerifyEvalModal`에 있음.
+- **setPortfolios 합성(⚠️ 회귀 주의)**: 모든 계좌(활성+비활성)를 **단일 functional `setPortfolios`**로
+  처리하고 본 훅을 **`useHistoryBackfill` 뒤에 배치**. 백필은 비활성 계좌를 non-functional
+  setPortfolios(배열, 활성은 그대로 반환)로 갱신하므로, 같은 커밋에서 setHistory(=patchActive functional)와
+  섞이면 active 갱신이 유실될 수 있다. 단일 functional 갱신을 백필 뒤에 두면 백필 결과 위에 안전하게
+  compose된다. `applyConfirms`는 `prev`에서 `isFixed`/`autoConfirmDeclined`를 **재확인(staleness 가드)** →
+  백필/사용자가 먼저 처리한 레코드는 보존. 확정 후 `isFixed:true`라 다음 실행에서 제외(멱등). deps에
+  `portfolios` 없음 → 자기 setState로 재실행 안 됨(백필과 동일 패턴, 무한루프 없음).
+- **당일(21:00 이후) 처리**: KR 계좌 당일은 21:00 이후에만 대상(그 전엔 today-effect가 라이브 기록,
+  `getEffectiveDateKR`이 21:00 후 null이라 today-effect는 정지 → 본 훅과 시간대가 분리됨). 백필
+  `liveOverrideDate`(당일)도 종가로 보정하므로 본 훅이 뒤에서 합성 시 staleness 가드로 건너뛸 수 있음(값은
+  양쪽 모두 종가=정확). 활성 계좌 당일이 본 훅으로 잠기면(`isFixed`+`adjustedAmount`) **today-effect가
+  라이브로 되돌리지 않도록 보존 가드**를 둠(`App.tsx` today-effect 상단: `existingToday.isFixed &&
+  adjustedAmount!==undefined`면 `return prev`).
+- **persist(⚠️ 회귀 주의)**: 확정/거부는 record 내용만 바꿔 `historyLen`은 불변 → 과거엔 `portfolioStructureKey`가
+  안 바뀌어 `portfolioUpdatedAt` 미상승 → `useDriveSync`의 STATE 저장 가드(`portfolioUpdatedAt>lastSaved`)가
+  **저장을 건너뛰어** 확정/거부가 Drive에 안 남던 버그가 있었다(수동 확정도 동일). → `portfolioStructureKey`에
+  **`historyVerifyKey`**(확정 레코드 `date:반올림evalAmount` + 거부 레코드 `date:D`) 추가 → 확정상태 변경이
+  키를 바꿔 `portfolioUpdatedAt` 상승 → 저장됨. **라이브(`isFixed:false`) evalAmount는 키에서 제외**(시장가
+  갱신이 저장을 유발하지 않도록 — `historyLen` 주석 의도 유지). `dedupeHistoryByDate`는 원본 레코드를 그대로
+  반환 → `autoConfirmDeclined` 보존. 로드 정규화(`applyStateData`/`applyBackupData`)도 `...` 스프레드라 보존.
+
+### 부팅 = STOCK-first · 영속 마커 증분 조회 · 이력 패스 단일 커밋 · 정착(settled) 게이트 · 하루 1회 종료 백업 (⚠️ 회귀 주의)
+
+**발단(사용자 보고 2026-09)**: 앱 실행 시 로딩이 길고, 로딩 중 '오늘 이전' 날짜의 평가금액(통합 추이표·개별 차트·
+자산 평가액 추이)이 여러 번 바뀌며, 안정될 때까지 다른 화면으로 이동해도 통합 대시보드로 되돌아왔다. 원인은
+표시 계층이 아니라 **입력(`stockHistoryMap`)이 언제·몇 번 커밋되는가**다 — 표시 계층(`buildCloseEvalSeries`·
+`evalSeriesDates`·`calcPortfolioEvalDetail`·`useIntegratedData.marketSeries`·`HistoryPanel.displayEvalByDate`)은
+**한 줄도 바꾸지 않는다**(`verify:boot` G12가 시그니처를 단언). 원칙: **cache-first(Drive STOCK을 STATE와 함께
+먼저) → 세션 간 반복 작업 제거(영속 마커·증분 조회) → 스트림은 스테이징에 모아 한 번에 커밋 → 준비 신호는
+타이머가 아니라 실제 완료 이벤트 → 읽기 안정화와 비가역 쓰기의 분리 → 복구 지점은 '하루 1회·변경 시에만'.**
+
+**Phase 1 — 부팅 순서·중복 제거·오버레이·강제 복귀 (2026-09)**
+
+- **되돌리면 재발하는 사고**: ① STOCK을 STATE 뒤에 따로 받던 순서 — 첫 렌더의 맵이 `{}`라 과거 평가액이
+  저장값 폴백 → 코드 도착마다 중간값(편입 경계 이후 구간은 나중 편입 종목이 빠진 carry-forward, 해외는 계단식
+  부분합) → 최종값으로 흔들리고 도착 순서가 세션마다 달라 값도 달랐다(`verify:boot #1b`가 그 중간값을 문서화)
+  ② 부팅 중 `refreshPrices` **3회**(계좌 전환 effect·로드 effect·`applyStockData`의 1200ms 타이머 — 재진입 가드가
+  없어 in-flight 위에 큐잉, KIS 동시 8×2) ③ `setShowIntegratedDashboard(true)` 강제 복귀(초기값이 true라
+  정상 부팅에선 no-op, 오버레이를 닫고 이동한 사용자만 되돌려 보냄) ④ STOCK 저장에 dirty 판정이 없어
+  하이드레이션 뒤 모든 저장이 수 MB 전량 업로드.
+- **⚠️ STOCK-first**: `useDriveSync.loadFromDrive`가 `Promise.allSettled([STATE, MARKET, race(STOCK, 10s)])`.
+  STOCK fulfilled면 **`applyStateData`보다 앞, 같은 동기 블록(사이 await 금지)**에서 `applyStockData` → 두
+  setState가 한 렌더로 배치돼 첫 페인트부터 과거 종가가 실린다. STOCK rejected → `stockLoadFailedRef`(강등: 빈
+  맵·STOCK 쓰기 보류 = 옛 동작). 상한(`STOCK_HYDRATE_WAIT_MS` 10s) 초과 → STATE만 적용, 늦게 도착하면 그때
+  1회 하이드레이션(Drive 베이스 + 메모리 우선 병합). ⚠️ `Promise.all`로 묶어 STOCK 실패가 STATE 적용을 막게
+  하지 말 것. ⚠️ **MARKET 실패는 종전대로 throw(오류 상태)** — MARKET 저장에는 dirty 가드가 없어 못 읽은 채
+  진행하면 첫 저장이 빈 `indicatorHistoryMap`으로 금현물·환율 이력을 덮는다(명세의 '개별 판정'을 채택하지
+  않은 이유). 폴링(`checkAndSyncFromDrive`)의 `loadStockFromDrive` 호출은 Phase 4에서 정리한다.
+- **⚠️ STOCK dirty = 참조 비교**(`lastSavedStockMapRef`): `saveAllToDrive` STOCK 분기
+  `length>0 && stockHydratedRef && shm !== lastSaved`(가드 순서: hydrated가 **앞** — 부분 맵 truncate 방어가
+  1순위). `setStockHistoryMap`은 매번 새 객체를 만들므로 참조 비교가 곧 정확한 dirty 플래그다. `applyStockData`는
+  메모리가 비어 있으면 Drive 맵을 **같은 참조**로 채택하고 loadFromDrive가 그 참조를 lastSaved로 시드 → 방금
+  내려받은 맵을 그대로 다시 올리지 않는다. `stockHydratedRef` 가드는 제거·완화·이동 금지(saveAllToDrive 본문에만).
+- **⚠️ 첫 시세 갱신은 로드 effect가 직접 부르지 않고 `bootRefreshSeq` effect가 쏜다**: `refreshPrices`는
+  `portfoliosRef`·`activePortfolioIdRef`·`stockHistoryMapRef` 등 **effect로 동기화되는 ref**를 동기적으로
+  읽는데, loadFromDrive 안의 setState는 DefaultLane이라 렌더·passive effect가 **다음 매크로태스크들**에서 돌고
+  `await loadFromDrive()` 직후 컨티뉴에이션은 그보다 앞선 마이크로태스크다 → 거기서 직접 부르면 **빈 계좌를
+  읽어 시세를 한 건도 조회하지 않는다**(`setTimeout(0)`도 passive effect 태스크보다 먼저 발화할 수 있어
+  신뢰 불가). ref 동기화 effect(`portfoliosRef.current = portfolios`)보다 **뒤에 선언된** effect가 쏘고, 로드
+  effect는 `bootStarted`를 받아 `started.run`을 기다린다. ⚠️ resolve에 Promise를 직접 넘기지 말 것(채택돼
+  '시작' 신호가 '완료'까지 미뤄진다 — `{ run }` 객체로 감싼다). effect가 `BOOT_REFRESH_START_TIMEOUT_MS`(5s)
+  안에 안 돌면(언마운트 등) 직접 쏜다(그때는 렌더가 끝난 지 오래다).
+- **부팅 순서**: loadFromDrive(STATE+MARKET+STOCK) → 신규 사용자 분기 → ledger 잠금 해제 →
+  **`awaitingSettleRef = true`(오버레이 해제 예약 — Phase 7에서 '정착까지 유지'로 바뀌었다)** → `fetchMarketIndicators` →
+  `setBootRefreshSeq`(첫 갱신 트리거) → 부수 로드 5건(세금·알림로그·SETTINGS·getSettings·getNotifications —
+  내용 무수정, **시작만** 병행) → `await started.run` → `initSession` → `isInitialLoad=false`. 강제 복귀·
+  `loadStockFromDrive(token)`·`applyStockData`의 `setTimeout(refreshPrices)` 전부 삭제. `LoadingOverlay`의
+  5초 버튼·20초 자동 해제 타이머는 **폴백으로 유지**.
+- **⚠️ `refreshPrices` 재진입 가드**(`refreshInFlightRef`/`pendingForceRef`): 진행 중이면 **같은 Promise**를
+  돌려주고, force는 1건만 큐잉해 완료 후 1회 재실행(`fetchMarketIndicators`의 `indicatorInFlightRef` 패턴).
+  폴링·07:30 타이머·HistoryPanel force 경로 전부 이 가드를 지난다. 계좌 탭 전환 effect는 `isInitialLoad`면
+  쏘지 않는다(applyStateData의 null→복원 id 전환이 여분 refresh를 만들던 경로; 사용자 전환은 종전대로).
+- **⚠️ 종료 저장 게이트 = `stateAppliedRef`**(isInitialLoad 아님): 오버레이가 STATE 적용 직후 내려가므로
+  사용자는 refreshPrices가 끝나기 전(시세 타임아웃 최대 10초)에도 편집할 수 있는데, 탭 숨김·pagehide·비활동
+  로그아웃 저장이 isInitialLoad에 막혀 있으면 그 편집이 **어디에도 저장되지 않는다**. isInitialLoad의 존재
+  이유는 "Drive를 읽기 전에 빈 상태를 덮어쓰지 않기"뿐 → STATE 적용 직후(또는 Drive에 STATE가 없음을 확인한
+  신규 사용자 분기)에 true. 800ms 자동저장·chartPrefs·알림로그·폴링·자동 백업의 isInitialLoad 게이트는
+  **그대로**(부팅 직후 STATE+VERSION churn 방지). STATE 로드 실패 세션은 여전히 종료 저장이 차단된다.
+- **⚠️ 임시 자동확정 게이트 `firstHistoryPassDone`**(Phase 3의 `histPhase` 정착 게이트가 들어올 때까지):
+  STOCK-first는 Drive 캐시(전 세션 장중 stamp 포함)를 KIS 실제종가 도착 **전에** 보이게 하므로
+  `useAutoConfirmHistory`의 비가역 확정은 첫 KIS/US 이력 패스가 끝난 뒤에만 한다(**state**여야 한다 — ref면
+  마지막 병합 뒤 effect를 재실행할 계기가 없다). 이력 조회 대상 0건·예외 패스는 `refreshPrices`의 finally에서
+  완료 처리(안 그러면 자동확정이 영구 보류). 이를 위해 `useAutoConfirmHistory` 호출을 `useStockData`
+  **뒤**로 옮겼다(useHistoryBackfill 뒤 배치 규약은 유지). `useHistoryBackfill` 효과#2는 게이팅하지 않는다
+  (값이 다르면 재계산되는 가역 쓰기).
+- **절대 하지 말 것**: 관심종목(WatchlistPopup/watchlistQuote)·백테스트(btFetched)·환율(fxRates) 결과의
+  `stockHistoryMap` 병합 / history 레코드에 새 필드 / 날짜당 1건·실시간 기록 보호·자동확정 allExact 가드
+  완화 / `portfolioStructureKey`에 시세성 값 / 외부 npm 의존성 / 성공·진행 `notify()` / 계측 코드 커밋.
+- 검증: `npm run verify:boot` (파트① `src/utils.ts` 직접 import — '중간값 회귀 기록' #1~#1e / 파트② 소스
+  텍스트 가드 G1~G14). ⚠️ 가드는 선언이 아니라 **사용부**를 단언하며 **변이 25종**(allSettled→all · STOCK
+  적용을 applyStateData 뒤로 · 사이에 await 삽입 · 하이드레이션 호출 삭제 · setTimeout 부활 · 같은 참조 채택
+  제거 · 강제 복귀 부활 · loadStockFromDrive 부활 · 오버레이 해제 순서 · effect 선언 순서 뒤집기 · 재진입
+  가드/force 큐잉 삭제 · 탭 전환 게이트 삭제 · dirty 비교 삭제/순서 뒤집기 · 자동확정 게이트/deps/finally/
+  미진입 처리 삭제 · 종료 게이트 3경로 되돌림 · 신규 분기 플래그 삭제 · 800ms 게이트 제거(오탐 대조) ·
+  표시 계층 시그니처 변경)으로 **실제 검출을 확인**했다. 그중 'STOCK 적용을 뒤로'·'하이드레이션 삭제'는 처음에
+  **죽은 단언**이었다 — '첫 `applyStockData(` 출현'으로 재면 지연 도착 경로(`.then` 안)의 호출이 대신
+  통과시킨다 → G1b는 fulfilled 분기 **블록 안**의 동기 호출을 본다. 가드를 손볼 때 같은 변이가 여전히 잡히는지
+  다시 확인할 것.
+
+**Phase 2 — 영속 마이그레이션 마커 → 증분 조회 (2026-09, 사용자 의도 "접속 시점의 최신만")**
+
+- **되돌리면 재발하는 사고**: `trendMigratedInSession`(세션 ref)이 국내 **전 코드**를 매 세션 KIS 전체 이력
+  (fromYear=2000, 최대 13청크) 재조회 대상으로 만들었다 — 로딩 지연의 주범이자, 코드마다 응답 즉시 병합돼
+  과거 평가액이 코드 수만큼 흔들리던 원인. **식별자 자체가 없어야 한다**(verify:boot G10).
+- **STOCK 파일 페이로드 = `{ stockHistoryMap, meta: { realClose: { [code]: { at, lastDate } } } }`**.
+  마커는 **STATE가 아니라 STOCK 안에만** 산다(STATE에 넣으면 백업 22본으로 복제되고 `portfolioStructureKey`를
+  흔든다). 소유자는 `useDriveSync.stockMetaRef` — 로드 3경로(부팅·지연 도착·폴링)가 `normalizeStockMeta` +
+  `mergeStockMeta`(lastDate 늦은 쪽 채택)로 읽고, 저장은 `saveAllToDrive` STOCK 분기가 동반한다(STOCK dirty는
+  종전대로 맵 참조 비교 — 마커 갱신은 항상 병합과 함께 오므로 별도 dirty가 필요 없다). 손상값·meta 부재는
+  **미마이그로 강등**(구버전 클라이언트가 meta 없이 저장하면 전량 재조회로 강등 — fail-safe, 롤백 안전).
+- **`src/stockHistorySync.ts`**(순수, **import 0건**, `@ts-nocheck` 금지 — 검증이 직접 import): `planKorHistoryFetch(codes,
+  map, meta, {force, todayKST, lastTradingDay})` → `{full, incremental, skip}` **서로소**. force=전부 full / 마커
+  없음·캐시 ≤3키·**at이 30일 초과**(`MARKER_FULL_REFRESH_DAYS` — 배당·분할 소급 정정 흡수)=full / `lastDate ≥
+  lastTradingDay`=skip / 그 외 incremental. `markerLastDateOf`: 응답 최대 날짜 중 **오늘 미만**, 21:00 이후
+  (`getKrSettledTodayDate`)에만 오늘 허용 — 장중 당일 행을 '확정 종가'로 굳히지 않는다.
+- **useStockData**: `lastKrTradingDay`(21:00 이후면 오늘, 아니면 어제부터 KR 주말·휴장일 역행) · `korPlanOpts(force)` ·
+  `markRealClose(code, data, full)`. ⚠️ 마커는 **완전한 KIS 응답**(`isCompleteKisHistory`)에서만 — trend 폴백은
+  sparse(실측 161/446건)라 세우면 다음 세션부터 증분만 돌아 빈 날짜가 영영 실제종가로 안 채워진다(다음 세션에
+  KIS를 다시 시도하는 것이 맞다). ⚠️ `at`은 **전체 조회일만** 갱신(증분은 lastDate만) — at을 매번 갱신하면 30일
+  전체 재조회가 영영 오지 않는다.
+- **증분 경로**(`korTasks` 상단 `incrementalSet` 분기): `fetchKISStockHistory(code, 마커 lastDate의 연도)` 1청크 →
+  실패 시 `fetchNaverDomesticHistory(code, lastDate−7일)` → **overwrite** 병합(실제종가만 들어온다). fchart 보강
+  없음(캐시가 이미 있다). 비교종목 blur(`ensureCompHistoryInner`)·강제 재조회(`handleForceRefetchComp`)도 같은
+  마커를 쓴다 — 강제 재조회는 마커를 무시하고(force 의미) 완전 응답이 오면 새로 쓴다. HistoryPanel의
+  `refreshPrices({force:true})`는 여전히 전량 재조회.
+- **`api.ts fetchKISStockHistory`에 `asOf=YYYYMMDD(KST)`** — 서버 라우트는 무시하지만 **엣지 캐시 키가 하루
+  단위로 회전**한다(같은 날 재요청은 캐시 히트, 다음 날은 새 응답). 없으면 24h 캐시가 전날의 '당일 장중 행'을
+  다음 날 아침에 다시 돌려준다.
+- 펀드 NAV·해외 이력의 신선도 판정(`stockHistoryMapRef` 기준)은 STOCK-first만으로 Drive 캐시를 보게 돼
+  불필요 재조회가 사라진다 — **무수정**.
+- **알려진 한계(의도)**: 마커 lastDate의 연도부터 1청크를 받으므로 연초(1월 초)에는 전년 12월 말 며칠이 그
+  청크에 포함되지 않을 수 있다 → 30일 전체 재조회가 흡수한다. KIS가 계속 실패하는 코드(상장폐지 등)는 마커가
+  서지 않아 세션마다 전체 조회를 시도한다(옛 동작과 동일 비용).
+- 검증: `verify:boot` 파트① #2~#7c(`stockHistorySync` 직접 import — 정규화 멱등·손상 강등·병합·집합 서로소·
+  30일 경계·lastDate 규칙) + G10~G10k(세션 ref 부재·payload meta·로더 3경로·asOf·계획/증분/마커 배선·모듈
+  순수성). **변이 16종**(payload meta 누락 · asOf 제거 · 폴링 로더 meta 미읽기 · force 무시 · 0.5일 필터 부활 ·
+  증분이 at 갱신 · trend가 마커 세움 · at 항상 오늘 · 세션 ref 부활 · 모듈에 import 추가 · skip 조건 완화 ·
+  날짜 검증 제거 · 장중 당일 허용 · 주기 30→60 · ≤3키 게이트 삭제 · 강제 재조회 마커 삭제)으로 **실제 검출을
+  확인**했다.
+
+**Phase 3 — 이력 패스 단일 커밋(스테이징) · 정착 신호 · 쓰기 게이트 · 배지 (2026-09)**
+
+- **되돌리면 재발하는 사고**: 코드별 `setStockHistoryMap` — 병합 1회 = 렌더 + 전 계좌 `portfolioStructureKey`
+  직렬화 + `marketSeries`·`finalChartData` 재계산 + 백필 효과#2 + 자동확정 실행. 코드 수만큼 과거 평가액이
+  흔들리고(편입 경계 이후 구간은 나중 편입 종목이 빠진 carry-forward 중간값, 해외는 계단식 부분합), 도착
+  순서가 세션마다 달라 값도 달랐다. 그리고 부분 맵 위에서 자동확정이 stale 값을 `isFixed`로 박을 수 있었다.
+- **커밋 지점 화이트리스트(`setStockHistoryMap`)**: ① Drive 하이드레이션(`useDriveSync` 부팅·지연·폴링)
+  ② 시세 stamp 1회(`fetchAllPortfoliosPrices` 종료 — `stampStaging`) ③ 이력 패스 1회(`commitStaged` — KIS·US·NAV
+  전부 정착) ④ 워치독 ⑤ 사용자 명시 동작(자산검증 단일 재조회·비교종목 blur/toggle/force·종가 임포트·
+  단일 종목 새로고침 — 종전 경로 그대로). 관심종목·백테스트·환율계산기는 종전대로 병합 금지(G13).
+- **`src/stockHistorySync.ts`**: `mergeCodeHistory`를 `useStockData`에서 **본문 무수정으로 이전**(verify:boot #8이
+  이전 전 본문 미러 8케이스로 고정). `applyStagedMerges(prev, staged)` — 코드별 `deleteKeys → replace →
+  mergeCodeHistory(base, {gapFill, overwrite})`, 빈 staged면 **prev 참조 그대로**, 다른 코드 내부 참조 보존.
+  `mergeStagedPatch`는 같은 코드에 패치가 두 번 쌓일 때(겹친 패스) 합친다. **도착 순서 무관성**: 코드별 순차
+  병합 20순열 == 한 번에 커밋(#10), 그 맵들에 대한 `buildCloseEvalSeries`도 동일(#10c).
+- **useStockData**: `historyStagingRef` + `stage(code, patch)` + `commitStaged()`(applyStagedMerges 1회 + 저장 예약
+  1회 — 옛 KIS/US·NAV 두 곳의 `.then(setTimeout(saveAllToDrive))` 통합, refreshPricesInner 안에 `saveAllToDrive`
+  직접 호출 0건). 스트림 3종(kor+US Promise.all, NAV Promise.all)을 `streams[]`에 싣고
+  `Promise.allSettled(streams)` → `settleFinal`(then/catch 양쪽) → 커밋 + `settled`. **워치독**
+  `HISTORY_PASS_WATCHDOG_MS`(90s) 초과 → 도착분 커밋 + `histPartial=true` + settled, 남은 스트림이 끝나면 한 번
+  더 커밋 + partial=false(강등 경로에서만 2회 커밋). 스트림 0건 패스는 finally에서 즉시 settled(안 그러면
+  백필·자동확정이 영구 보류). 진행 카운터 `histProgress`는 ref 증가 + 500ms 스로틀. 겹친 패스(폴링이 부팅 패스
+  중에 시작) 방어: 스테이징에 이미 실린 코드는 KR·US·NAV 계획에서 제외.
+- **상태 머신 `histPhase`**(useStockData 소유, App이 prop 배포): `loading` → (첫 갱신 시작) `hydrated` |
+  `hydrate-failed`(STOCK 로드 실패, `stockLoadFailedRef`) → (첫 이력 패스 커밋) `settled`. 이후 갱신은
+  `refreshing` → `settled`. ⚠️ 정착 신호는 **타이머가 아니라 실제 완료 이벤트**(allSettled)다 — 워치독은
+  강등 경로일 뿐. state여야 한다(ref면 마지막 커밋 뒤 effect 재실행 계기가 없다).
+- **⚠️ 쓰기 게이트(읽기 안정화와 비가역 쓰기의 분리)**: `useAutoConfirmHistory`는 `histPhase === 'settled' &&
+  !histPartial`에서만, `useHistoryBackfill` **효과#2**는 `histPhase === 'settled'`에서만(효과#1 — 비활성 계좌
+  오늘 기록 — 은 **무수정**, 사전체크/map 미러링 불변식 그대로). Phase 1의 임시 `firstHistoryPassDone`은
+  **제거**(식별자 부재를 G7d가 단언). App에서 `useHistoryBackfill`·`useAutoConfirmHistory` 호출을 둘 다
+  `useStockData` **뒤**로 옮겼다(백필 → 자동확정 순서는 유지 — 자동확정은 백필 결과 위에 합성).
+- **배지(`AccountTabBar` `HistSyncBadge`)**: `hydrated/refreshing` → '과거 종가 동기화 중 n/N', `settled` →
+  '종가 정착됨'(4초 뒤 흐리게), `partial` → '일부 미수집 — 새로고침으로 재시도', `hydrate-failed` → '종가 캐시
+  미로드'. `notify()` 호출 0건(알림 최소화 정책 — 진행은 배지로만). 기본값은 'settled'라 미전달 호출부는 흐린
+  배지만 보인다.
+- **A/B 의도된 결과 차이 1건**(#11): 캐시에 있던 날짜에 fchart(수정종가) gapFill이 들어오고 KIS 응답에는 없는
+  경우 — 옛 순서(빈 맵 → 코드별 병합 → Drive 베이스 + **메모리 우선**)는 수정종가가 Drive 캐시의 실제종가를
+  덮었고(규약 위반), 새 순서(Drive → 스테이징 1회 커밋)는 규약대로 캐시가 이긴다. 그 외 diff 0건.
+- 검증: `verify:boot` 파트① #8~#11c + G6~G9(스트림 구간 `setStockHistoryMap` 부재·stamp 1회 커밋·NAV/US 스테이징·
+  저장 직접 호출 0건·겹친 패스 제외·게이트 2종·효과#1 무침범·정착 신호 4지점·배지 4분기). **변이 24종**
+  (증분/전체/stamp/NAV/US를 코드별 setState로 · stamp 커밋 삭제 · 백필 게이트/deps 삭제 · 효과#1 침범 ·
+  partial 게이트 완화 · settleFinal 한 지점 · 워치독 리터럴/커밋 삭제/partial 미해제 · 저장 직접 호출 부활 ·
+  스테이징 제외 삭제 · mergeCodeHistory 한 글자 · 빈 staged 새 객체 · deleteKeys 순서 · 참조 복사 · 배지/prop
+  삭제 · 백필 histPhase 제거 · 호출 순서 뒤집기)으로 **실제 검출을 확인**했다.
+
+**Phase 4 — 폴링 재적용의 뷰 보존 (2026-09, 행동 변경 — 기본값으로 진행·보고에 명시)**
+
+- **되돌리면 재발하는 사고**: 폴링(`checkAndSyncFromDrive`)이 version 변경을 감지해 `loadFromDrive`로 STATE를
+  재적용할 때 `applyStateData`가 부팅과 같은 경로로 **원격의 활성 계좌·통합 대시보드로 화면을 점프**시켰고,
+  이어 `loadStockFromDrive`가 방금 받은 STOCK(수 MB)을 **한 번 더** 내려받았다.
+- **`applyStateData(stateData, stockMap, marketData, opts?)`의 `opts.preserveView`**: true면 활성 계좌·통합
+  대시보드 전환 3줄을 건너뛴다. ⚠️ 단 현재 활성 계좌가 새 배열에 **없거나 `deletedAt`**이면 종전 firstLive
+  폴백(없으면 `null` + 통합 대시보드)을 그대로 수행한다 — 동결 계좌 오염 불변식('활성 계좌 기록 효과가 삭제
+  계좌에 이력을 쓴다'). 부팅·수동 불러오기·백업 복원은 opts 없이 종전대로.
+- **⚠️ 3줄만 건너뛰면 부족했던 두 곳(함께 게이팅)**: ① 계좌별 차트 상태(`chartPeriod`/`dateRange`/`appliedRange`/
+  `showTotalEval`/`showReturnRate`)와 `acctHistPeriod` 복원은 `stateData.activePortfolioId`(원격 활성 계좌)
+  기준이라, 뷰를 유지하면서 그대로 두면 **원격 계좌의 조회기간을 이 계좌에 씌운다** → preserveView면
+  `activePortfolioIdRef.current`(현재 활성) 기준. ② `intDashCompStocks` → `setCompStocks`는 부팅(통합
+  대시보드에서 시작)엔 맞지만, 개별 계좌를 보는 중이면 **그 계좌의 비교종목 칩을 대시보드 칩으로 덮는다** →
+  `!preserveView || showIntegratedDashboard`일 때만.
+- `useDriveSync.loadFromDrive(token, updateAccessLog, isRetry, opts?)` — opts를 `applyStateData`와 **401 재시도**에
+  그대로 전달. `checkAndSyncFromDrive`는 `{ preserveView: true }`로 부르고 `loadStockFromDrive` 후속 호출을
+  없앴다(STOCK은 loadFromDrive가 포함). `loadStockFromDrive` 함수는 호출부 0곳으로 남는다(수동 불러오기도
+  loadFromDrive 경유).
+- **알려진 한계(의도)**: 폴링 재적용 시 STOCK은 Drive 베이스 + 메모리 우선 병합이라 새 객체가 되어 다음 저장에서
+  STOCK을 1회 업로드한다(메모리에 이 세션의 신규 종가가 있을 수 있으므로 정상). 원격이 바꾼 앱 레벨 chartPrefs
+  (지표 토글·숨김 열 등)는 종전대로 그대로 적용된다 — 뷰 보존은 '어느 계좌·어느 화면을 보고 있는가'만 지킨다.
+- 검증: `verify:boot` G11~G11f(preserveView 분기·폴백·현재 계좌 기준 복원·compStocks 가드·opts 전달 2경로·
+  checkAndSync 배선·부팅 오탐 대조). **변이 8종**(분기 삭제 · 폴백 삭제 · loadStockFromDrive 부활 · opts 미전달 ·
+  401 재시도 누락 · compStocks 가드 삭제 · 원격 계좌 기준 복귀 · 부팅까지 preserveView)으로 **실제 검출을 확인**했다.
+
+**Phase 5 — 하루 1회 종료 백업 (2026-09, 사용자 의도 "종료 시점 데이터를 저장 기록으로 복원")**
+
+- **되돌리면 재발하는 사고**: 복구 지점(타임스탬프 백업본)은 수동 저장 버튼(manual 10개)과 화면의 '앱 닫기'
+  버튼(`handleAppClose` → auto)만 만들었다 — 브라우저 X·탭 닫기·새로고침·800ms 자동 저장은 STATE만 덮어써서
+  **하루 종일 편집해도 복구 지점이 하나도 안 생길 수 있었다**(가계부 유실 사고 2026-08-29의 배경).
+  반대로 **탭 숨김·pagehide마다 백업을 내면** auto 상한 초과분이 `cleanupOldBackups`로 **휴지통 없이 영구
+  삭제**돼 어제·그제 복구 지점이 밀려 사라진다 → **하루 1회 · 변경이 있을 때만 · 탭을 숨기는 시점**.
+- **`useDriveSync`**: `lastAutoBackupAtRef`(ms, 초기 0) — 부팅 완료(`isInitialLoad=false`) 직후 App이 비차단으로
+  `seedLastAutoBackupAt()`을 불러 Drive 목록(`listBackups`)의 **`_auto.json` 최신 createdTime**으로 시드(목록
+  실패 시 0 유지 = 오늘 첫 숨김에서 1회 생성). `handleAppClose`의 auto 백업 성공 시에도 `Date.now()`로 갱신
+  (같은 날 이중 생성 방지). ⚠️ 이 시각은 **STATE·localStorage·sessionStorage에 저장하지 않는다** — Drive 목록에서
+  파생(다중 계정 오염 방지, G18).
+- **조건 3종 전부 만족할 때만**(`shouldAutoBackupNow`): ① `!adminViewingAsRef && !adminTransitioningRef`
+  (impersonation 중 금지) ② `kstDateOf(lastAutoBackupAt) < getTodayKST()`(오늘 아직 없음) ③ `portfolioUpdatedAtRef
+  > lastAutoBackupAt`(마지막 백업 뒤 실제 변경). 호출 직전 `lastAutoBackupAtRef = Date.now()`를 **낙관적으로**
+  세운다(같은 날 연속 숨김 중복 방지 — 실패해도 하루치 복구 지점 1회를 놓칠 뿐 데이터 손실은 아니다).
+- **⚠️ 'auto'는 같은 저장 호출에 싣는다**: `handleVisibilityChange` hidden 분기가 `saveAllToDrive(snap, 'auto')`
+  **또는** `saveAllToDrive(snap)` 중 하나만 부른다. 명세의 "기존 저장 뒤 별도 호출"로 쪼개면 두 번째 호출이
+  `syncStatusRef === 'saving'` 락에 걸려 `pendingSaveRef`로 넘어가고, 그 재실행은 versioned 없이 돌아
+  **백업이 조용히 사라진다**(saveAllToDrive 진입부 참조).
+- **`handlePageHide`에는 백업을 넣지 않는다** — 브라우저가 언로드 중 요청을 끊을 수 있어 신뢰 불가. pagehide 앞에
+  hidden이 먼저 발화하므로 위 경로가 그 경우를 덮는다. 종료 저장 게이트(`stateAppliedRef`, Phase 1)와 결합돼
+  **STATE 로드 실패 세션에서는 백업도 생기지 않는다**.
+- **`driveStorage.MAX_BACKUPS` 6 → 10**(auto·change 공통 상한): 하루 1회면 10일치 복구 지점. ⚠️ 상한 초과분은
+  영구 삭제라 줄이는 방향은 위험하다. `DriveBackupModal`(저장 기록 불러오기)은 auto 백업을 이미 목록에 보여 준다
+  — 무수정.
+- **알려진 한계(의도)**: 시드 목록이 실패하고 그날 편집이 없어도 첫 숨김에서 1회 백업이 생길 수 있다(0 시드 →
+  조건 ②③ 통과). 하루 중 여러 번 편집해도 복구 지점은 그날 **첫 숨김 시점 1개**다(그 뒤 편집은 다음 날 백업
+  또는 수동 저장). impersonation 탭은 백업을 만들지 않는다.
+- 검증: `verify:boot` G15~G19c(같은 호출에 'auto'·조건 3종·pagehide 부재·상한 10·브라우저 저장소 부재·시드
+  소스·앱 닫기 갱신·stateAppliedRef 안쪽). **변이 12종**(하루 1회 조건 삭제 · 변경 조건 삭제 · impersonation 금지
+  삭제 · pagehide 백업 추가 · 낙관적 세팅 삭제 · 별도 호출로 쪼갬 · 상한 6 복귀 · localStorage 저장 · 시드 호출
+  삭제 · 앱 닫기 갱신 삭제 · manual까지 시드 · 게이트 밖으로 이동)으로 **실제 검출을 확인**했다.
+
+**Phase 6 — 적대적 리뷰(상태·비동기 렌즈)가 잡은 확정 결함 5건 (2026-09)**
+
+Phase 1~5 배포 직후 3렌즈 리뷰에서 나온 것으로, **Phase 2(마커)와 Phase 3(스테이징)의 상호작용**이
+만든 결함이 대부분이다(단독 Phase에서는 없던 창).
+
+- **⚠️ 마커는 맵과 **같은 순간** 전진해야 한다 — 스큐가 곧 종가 영구 누락(최대 30일)**:
+  `markRealClose`는 응답 도착 즉시 `stockMetaRef`(라이브 ref)를 전진시키는데 맵은 `commitStaged`에서만
+  커밋된다. 그 사이(수 분)에 저장이 끼면 payload의 `shm`(state 스냅샷 = 커밋 전)과 `meta`(전진한 마커)가
+  함께 기록돼 **"마커는 최신인데 맵엔 그 날짜가 없는"** STOCK 파일이 Drive에 박히고, 다음 세션의
+  `planKorHistoryFetch`가 그 코드를 skip해 그 구간 종가가 영영 안 채워진다. 스큐는 항상 '마커가 앞서는'
+  위험 방향으로만 생긴다. → **2겹으로 막는다**: ① 이력 패스 마커는 `markRealClose(..., defer=true)`로
+  `pendingMetaRef`에 보류했다가 `commitStaged`에서 맵과 함께 승격(비교종목 경로는 맵을 즉시 커밋하므로
+  defer 없이 그대로) ② 저장 직전 `pruneStockMeta(meta, shm)`로 **같은 payload의 맵**과 대조해 보증하지
+  못하는 마커를 버린다(버려진 마커는 다음 세션에 전체 조회로 자연 복구 — 안전한 방향).
+- **⚠️ 옛 패스가 새 패스를 settled로 만들면 안 된다 — 패스 세대 토큰(`passIdRef`/`isMyPass`)**:
+  `refreshPricesInner`는 이력 스트림을 **await하지 않고**(지수 조회까지만 대기) 반환하므로 재진입 가드가
+  스트림 도중에 풀린다 → 계좌 탭 전환·새로고침으로 새 패스가 시작될 수 있고, 그때 옛 패스의 정착 핸들러가
+  `histPhase='settled'`를 세우면 **부분 맵 위에서 쓰기 게이트가 열려** 전 세션 Drive 캐시의 stale 값이
+  `isFixed:true`로 확정된다(자동확정은 isFixed를 다시 안 건드리므로 영구 고착, unconfirm만이 해제).
+  → **상태 전이(setHistPhase/setHistPartial)는 자기 세대일 때만**, 커밋(`commitStaged`)은 세대와 무관하게
+  수행한다(받아 둔 이력을 버리지 않는다 — 값은 정확하고 커밋만 이를 뿐이다).
+  덤으로 `inFlightCodesRef`(조회 중인 코드)를 계획에서 제외해 겹친 패스의 중복 KIS 조회를 막는다
+  (`stagedNow`는 '결과가 이미 온' 코드만 걸러 in-flight를 놓친다).
+- **⚠️ `histPartial` 해제를 패스 로컬 조건에 묶지 말 것**: 옛 코드는 `if (watchdogFired) setHistPartial(false)`
+  라, 워치독을 겪지 않고 **정상 완료한 새 패스가 이전 패스의 partial=true를 영영 못 지웠다**(배지가 '일부
+  미수집'에 고착되고 자동확정이 계속 차단). 자기 세대면 **무조건** 해제한다.
+- **⚠️ 정착 등록은 반드시 `finally`에서**: try 안에 두면 스트림을 push한 **뒤** 예외가 났을 때(손상된 Drive
+  값 등) 핸들러가 영영 등록되지 않아 `histPhase`가 'refreshing'에 고착되고, 백필 효과#2·자동확정이 그 세션
+  내내 멈추며 스테이징도 커밋되지 않는다(옛 구제 조건이 `streams.length === 0`뿐이라 걸리지도 않았다).
+  스트림 0건 경로도 `commitStaged()` 후 정착시킨다. 짝으로 `commitStaged`는 **스테이징·보류 마커가 둘 다
+  비면 아무것도 하지 않는다**(모든 패스가 이 함수를 부르므로 무조건 저장을 예약하면 헛저장이 나간다).
+- **배지(표시)**: `histProgress`를 패스마다 리셋한다(누적하면 두 번째 패스가 "30/55"로 시작해 "412/430"까지
+  간다). `total`은 시세 조회(종목당 최대 10초)가 끝나야 정해지므로 그 전에는 **카운터를 감춘다**("0/0"은
+  정보가 아니라 '멈춘 것처럼 보이는' 오해이고, 오버레이 해제 직후 가장 먼저 보이는 자리다). 스로틀 타이머는
+  언마운트에서 정리한다. STOCK **지연 도착** 분기도 부팅 분기와 대칭으로 `lastSavedStockMapRef`를 시드한다
+  (빠지면 방금 받은 수 MB를 그대로 되올린다 — 느린 회선에서만 발생해 눈에 안 띈다).
+- 검증: `verify:boot` 143건(파트① `pruneStockMeta` #7d~#7g + G20~G25). **변이 14종**(마커 defer 제거 2곳 ·
+  defer 분기 제거 · commitStaged 승격 삭제 · pruneStockMeta 미적용 · pendingMeta 우선순위 제거 · 세대 게이트
+  제거 · inFlight 삭제 · settle을 try로 · 진행도 리셋/타이머 정리 삭제 · 배지 0/0 복귀 · 지연 도착 시드 삭제 ·
+  입출금 min-h 제거)으로 **실제 검출을 확인**했고, Phase 1~5 변이 85종도 전부 재검출된다.
+  ⚠️ 하네스는 **검증 스크립트가 정상 종료 요약을 냈을 때만** 검출로 센다 — 스크립트가 죽으면 exit≠0이라
+  모든 변이가 '검출'로 위장된다(실측: 식별자 중복 선언 하나로 65종이 전부 거짓 초록이었다).
+
+**Phase 7 — 진행 표시는 '로딩 팝업' 한 곳, 상단바 배지 제거 (2026-09, ⚠️ 사용자 확정 — 되돌리지 말 것)**
+
+사용자 요구 그대로다: "앱을 실행하면 로딩중으로 팝업, 이때 과거 종가 동기화 표시하고 로딩이 끝나면 앱이
+정상 동작. 구름 아이콘 옆 종가 동기화 문구는 표시하지 않음."
+
+- **⚠️ 오버레이 해제 = 이력 패스 정착(`histPhase === 'settled'`)**. Phase 1의 '조기 해제'(STATE 적용 직후)를
+  의도적으로 되돌린 것이다 — **팝업이 닫히는 순간 앱이 완전한 상태**여야 한다는 것이 이 기능의 계약이다.
+  로드 effect는 `awaitingSettleRef.current = true`만 세우고 닫지 않는다(그 안에 `setIsInitialLoading(false)`가
+  다시 생기면 계약이 깨진다 — 가드 G3c가 부재를 단언).
+  ⚠️ **`histPhase === 'settled'`만 보고 닫지 말 것** — 그 값은 부팅 뒤에도 갱신마다 refreshing↔settled를
+  오가고, 관리자 impersonation 진입처럼 **리로드 없이** 오버레이를 다시 켜는 경로에서는 이전 세션의
+  'settled'가 남아 있어 로드가 시작되기도 전에 팝업이 닫힌다 → `awaitingSettleRef` 게이트가 그 방어선이고,
+  닫을 때(정착·수동 해제 **양쪽**) 내려야 뒤늦은 정착이 다시 닫으려 하지 않는다.
+- **안전장치는 `LoadingOverlay` 자체**(5초 뒤 '계속 사용하기' 버튼 + 20초 자동 해제) — 첫 세션처럼 마커가
+  없어 전 종목을 조회하는 경우 20초를 넘기므로, 그때는 사용자가 앱을 쓰고 **동기화는 배경에서 계속된다**
+  (푸터 문구가 그 사실을 밝힌다). 2회차부터는 Phase 2 증분 조회 덕에 몇 초 만에 닫힌다.
+- **팝업 단계 문구 = `bootStepText(phase, progress, partial)`**: `loading`→'계좌·종가 캐시를 불러오는 중' /
+  `hydrated`·`refreshing`→'과거 종가 동기화 중 n/N' / `hydrate-failed`→'종가 캐시를 불러오지 못했습니다' /
+  `settled`→'동기화 완료'(+partial이면 '일부 미수집'). ⚠️ `total`은 시세 조회(종목당 최대 10초)가 끝나야
+  정해지므로 **0이면 카운터를 감춘다**('0/0'은 멈춘 것처럼 보인다).
+- **⚠️ 상단바(`AccountTabBar`)에는 같은 정보를 두지 말 것** — 구름 아이콘 옆 상시 문구는 정상 상태에서도
+  무언가 진행 중인 것처럼 보인다(사용자가 명시적으로 제거를 요청했다). 진행 중 표시는 기존 구름 아이콘
+  (`isLoading`)이 이미 맡는다. 가드 G9d가 `HistSyncBadge`·`histPhase`·`histProgress`·`histPartial`
+  **식별자 부재**를 단언한다(Phase 3에서 만든 배지는 이 Phase에서 통째로 삭제됐다).
+- 검증: `verify:boot` 147건(G3c·G9~G9g·G23c가 새 계약). **변이 10종**(정착 effect 삭제 · awaitingSettleRef
+  게이트 제거 · settled 조건 완화 · 해제 시 게이트 미하강 · 수동 해제 게이트 미하강 · 팝업 prop 미전달 ·
+  단계 줄 렌더 삭제 · 단계 계산 고정 · 동기화 분기 삭제 · 상단바 배지 부활)으로 **실제 검출을 확인**했고,
+  Phase 1~6 변이 99종도 전부 재검출된다(배지 삭제로 무의미해진 옛 변이 2종은 제거).
+
+**Phase 8 — 로드 실패·지연 세션은 '아무것도 쓰지 않는다' (2026-10 사용자 보고 — 빈 화면, ⚠️ 되돌리지 말 것)**
+
+발단: 배포 직후 앱을 열자 총자산 ₩0 · 지표 '-' · '계좌가 없습니다'만 보였다(새로고침 후 정상). Drive 불러오기가
+늦거나 실패해 로딩 팝업이 20초 폴백으로 닫히면서 **빈 껍데기**가 드러난 것이다(데이터 자체는 Drive에 그대로였다).
+더 큰 문제는 그 상태가 **쓰기를 막지 않았다**는 것이다 — 로드가 실패해도 부팅은 끝까지 진행돼 `isInitialLoad`가
+풀리고, 화면이 '계좌 없음'이라 사용자가 계좌를 만들거나(800ms 자동저장) 관리자 공지 '확인'·관리자 접근 토글·
+'앱 닫기'를 누르면 **빈(또는 한 계좌짜리) STATE가 실제 데이터를 덮을 수 있었다**.
+
+- **⚠️ `saveAllToDrive` 진입부 `if (!stateAppliedRef.current) return`(fail-closed)** — 자동·수동·종료 저장의 단일
+  관문이다. `stateAppliedRef`는 **STATE 적용 성공** 또는 **신규 사용자 확인**에서만 선다. 막힌 사실은 세션당 1회
+  `notify`(중요 오류 등급)로 알린다. ⚠️ 게이트는 토큰 확인·폴더 조회보다 **앞**이어야 한다.
+- **⚠️ `handleAppClose`는 `saveAllToDrive`를 거치지 않고 STATE를 직접 쓴다** → 같은 조건을 직접 둔다.
+  직접 STATE를 쓰는 경로를 새로 만들면 반드시 같은 게이트를 달 것(백업 복원·파일 가져오기는 사용자가 명시적으로
+  고른 전량 교체라 예외).
+- **⚠️ `initTokenClient`에 `error_callback` 필수** — 팝업 차단·창 닫힘은 `callback`이 아니라 `error_callback`으로만
+  오므로, 없으면 401 무음 갱신을 기다리는 Promise가 영영 끝나지 않아 불러오기·저장이 통째로 멈춘다.
+- **화면**: `IntegratedDashboard`의 `dataState`(= App `ledgerDataState` — STATE 확정 직후 한 곳에서 서는 앱 전역
+  신호, 기본값 `'ready'`)로 빈 계좌 행을 **error → loading → '계좌 없음'** 순으로 분기하고 새로고침 버튼을 준다.
+  '새 계좌'·'직접입력' 버튼은 `ready` 전까지 잠근다. ⚠️ 로드 전·실패를 '계좌 없음'으로 보이지 말 것 — 사용자가
+  데이터가 사라진 줄 알고 새로 입력하게 되고, 그 입력이 정확히 저장된 데이터를 덮는 경로였다.
+- **영속화 지점 0곳** · Phase 7(로딩 팝업 20초 폴백)은 무수정 — 폴백이 드러내는 화면을 정직하게 만들었을 뿐이다.
+- **알려진 한계**: 불러오기가 응답 없이 멈추면(Drive 요청 자체에 타임아웃이 없다) 화면은 '불러오는 중'에 머문다
+  (거짓 '계좌 없음'보다는 낫고, 안내 문구가 새로고침을 권한다).
+- 검증: `verify:boot` 파트⑧ G26~G29e. **변이 8종 + 음성 대조 1종으로 검출을 실증**했다(게이트 무력화 · 알림 래치
+  제거 · 앱 닫기 게이트 제거 · error_callback 무력화 · dataState 미전달 · error 분기 제거 · 버튼 잠금 제거 ·
+  기본값 변경).
+
+**Phase 9 — KIS 100건 상한 페이지 넘김 + 실제종가 마커 세대 v2 (2026-10 사용자 보고 — ⚠️ 되돌리지 말 것)**
+
+발단: 수익률 차트 비교종목 480040의 2026-05-14 값이 **16,509원**인데 네이버 일별 시세는 **19,245원**(×0.8578)이었다.
+- **원인 = 서버 수집 누락 → 클라이언트가 수정주가로 메움**: KIS 일별 시세(FHKST03010100)는 호출당 **최대 100건 —
+  요청 구간의 최근 100거래일**만 준다. `api/stock-history.ts`는 2년(≈490거래일) 구간을 한 번씩만 불러 **구간마다 앞쪽
+  ~390거래일을 버렸고**, 그래도 `partial:false`를 찍었다(실측: 480040 2026 구간은 05-20~10-16 100건뿐, 005930은
+  21-12-30→23-08-02·23-12-28→25-08-04가 통째로 비었다). 클라이언트는 그 빈 날짜를 네이버 fchart(**수정종가** — 이후
+  분배금·권리락을 소급해 과거를 낮춘 가격)로 `gapFill`했다 → 한 종목 안에 두 가격 기준이 섞여 경계(05-20)에 **인공
+  급등**이 생겼다. **보유 종목도 같은 경로**라 그 날짜들의 과거 평가액(`buildCloseEvalSeries`)이 수정주가로 계산돼 있었다.
+- **서버 = `api/_kisDaily.ts` `fetchKisDailyRange`**(stock-history·history 두 라우트 공유): 받은 건수가 상한이면 '가장 이른
+  날짜의 하루 전'을 새 구간 끝으로 다시 부른다. ⚠️ **상한 판정은 '날짜가 있는 행 수'** — 종가 0(거래정지) 행을 빼고 세면
+  꽉 찬 페이지를 마지막으로 오판한다. ⚠️ 진전이 없으면(응답이 구간 끝 무시) 같은 요청을 반복하지 않고 멈춘다(truncated).
+  ⚠️ 구간당 1회 호출로 되돌리지 말 것 — 라우트에 KIS 일별 시세 직접 호출이 **없어야** 한다(G30b·G30f).
+  조기 중단: 배치의 가장 오래된 구간이 **정상 응답으로** 비면 그 이전은 상장 전이라 더 부르지 않는다(실패·잘림은 제외 —
+  상장 전으로 오인하면 `partial:false`로 구멍이 영구화된다). 동시 구간 수 5→4(페이지가 순차라 초당 한도 여유).
+- **⚠️ 응답 계약 `paged: true`** — 클라이언트 `isCompleteKisHistory`는 **`paged === true && partial === false`일 때만**
+  완전이다. 건수 휴리스틱(`>= 100`) 폴백으로 되돌리지 말 것 — 바로 그 불완전 응답이 100건 이상이다.
+  요청 URL에는 캐시 세대 `gen`(`KIS_HISTORY_CACHE_GEN`)을 붙여 같은 날 구버전 응답이 엣지 캐시에서 돌아오지 않게 한다.
+- **⚠️ 저장된 잘못된 값의 1회 치유 = 마커 세대 `v`**(`REAL_CLOSE_MARKER_VERSION = 2`): v 없음·v<2 마커는
+  `planKorHistoryFetch`가 **신선해도 full**로 보낸다 → 다음 접속에서 국내 전 코드가 한 번 전체 재조회되고 실제종가가
+  `overwrite`로 그 날짜의 수정종가를 덮는다. `markRealClose`는 항상 현재 세대를 싣고, `normalizeStockMeta`는 양의 정수
+  v만 남긴다(손상값 = 구세대 강등 = 전체 조회, 안전한 방향). `pruneStockMeta`는 v를 그대로 저장한다.
+  ⚠️ `mergeStockMeta`는 **세대를 먼저** 본다 — 날짜만 보면 같은 날 구서버로 세운 v1 마커(at·lastDate 동일)가 방금 세운
+  v2 마커를 이겨(동률이면 기존 유지) 치유 결과가 버려지고 그날 접속마다 전체 재조회가 반복된다.
+  ⚠️ 서버 수집 방식이 다시 바뀌어 과거 응답을 믿을 수 없게 되면 **세대(마커 v·캐시 gen)를 함께** 올린다.
+- **의미 변경(의도)**: 치유 뒤 분배형 ETF(커버드콜 등)의 **과거 평가액·차트 비교종목 선·기간 수익률이 실제 종가 기준으로
+  바뀐다**(수정주가는 과거를 낮추므로 대개 과거 값이 올라가고 그 이후 수익률은 내려간다). 자동확정으로 이미 잠긴 기록의
+  저장 `evalAmount`는 그대로다(표시는 재계산이 권위값).
+- **알려진 한계·범위 밖**: 첫 접속의 전체 재조회는 코드 수 × 페이지 수만큼 KIS를 부르므로 초당 한도에 걸린 코드는
+  `partial`로 끝나 마커가 서지 않고 다음 접속에서 다시 시도한다(받은 실제종가는 그때마다 반영). **관심종목 팝업·종목 비교
+  차트 별도 창(`fetchWatchDaily`)은 여전히 fchart 수정종가 단일 소스**라 네이버 일별 시세와 다를 수 있다(한 기준으로는
+  일관 — 바꾸려면 사용자 결정 필요).
+- 검증: `verify:boot` `#2b·#3d·#3e·#4b·#6j·#7h`(마커 세대) + `#K0~#K11`(api/_kisDaily.ts 직접 import · 가짜 KIS가 100건 상한을
+  흉내) + 배선 `G30~G30j`. **변이 16종 + 음성 대조 1종으로 검출을 실증**했다(병합의 세대 우선 제거 · 첫 페이지 뒤 종료 · 종가>0 행만 계수 2종 ·
+  구세대 규칙 삭제 · 정규화가 v를 버림 · v 누락/1로 기록 · 완전성 옛 휴리스틱 · 조기중단 ok 무시 · paged 누락 · history
+  라우트 미적용 · gen 제거 · prevYmd 하루 어긋남 · 실패 구간 partial 미반영 · 진전 검사 제거). ⚠️ `#K1b`는 옵셔널 체이닝
+  필수 — 페이지 넘김이 죽으면 `calls[1]`이 없어 스크립트가 죽고 모든 변이가 '검출'로 위장된다(실측).
+
+### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
+
+**마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가
+편집할 때만 바뀐다. 평가금액=투자원금=예수금이라 **수익·수익률은 항상 0**이어야 한다(라이브 표
+불변식). 일별 자동기록(`useHistoryBackfill`)이 그날의 잔액을 `p.history`에 적재하므로, 추이/팝업
+에서 **시장 계좌처럼 스냅샷 carry-forward로 과거 그날의 기록값을 그대로 복원**한다. **현재값을
+과거 날짜에 소급하지 않는다** — '오늘'만 현재값을 권위로 사용(최신 편집·비움 즉시 반영).
+- **설계 전환 배경**: 과거엔 "현재값을 시작일 이후 평탄 반영"(스냅샷 무시)했으나, 이는 현재값을
+  편집하면 **모든 과거 날짜가 소급 변경**돼 일별 분석 기록이 부정확해지는 문제가 있었다(예: BNK
+  마통을 8.29M→9.29M 수정 시 6/2~6/5 팝업이 전부 9.29M로 바뀜). 일별 스냅샷이 이미 존재하므로
+  이를 신뢰해 carry-forward로 복원한다.
+- **유령 잔액(emptied-to-0) 회귀 방지**: 평탄 설계가 본래 막으려던 버그는 "CMA를 0으로 비워도
+  과거 양수 스냅샷이 carry-forward로 **오늘**까지 박제"되던 것. 핵심 원인은 **비움(0)이 스냅샷에
+  기록되지 않아** 마지막 양수값이 계속 이월된 것. → `useHistoryBackfill` 자동기록이 현금성 계좌는
+  **0도 기록(오늘 값 변경 시 upsert)** 하도록 수정 → 비우면 `{오늘:0}`이 남아 carry-forward가
+  0으로 이어진다. 과거 날짜는 그날의 실제값을 유지(=정확). (단 한 번도 잔액이 없던 빈 계좌는 0
+  스냅샷 생략 — 노이즈 방지.)
+- **구현(현재 설계)**: `computedIntHistory`·`histDetailRows` 양쪽에서 현금성 계좌를 **동일 규칙**으로
+  처리. `cashSeries`(차트)는 `p.history` 스냅샷 맵(0 포함, `evalAmount>=0`)을 carry-forward하여
+  `cashByDate`로 날짜별 잔액 산출 — `오늘=currentEval`(simple=`evalAmount`, matong=`wt-(cw+wl)`),
+  `시작일 이전=0`. 원금도 `cashByDate` 동일 합산(평가와 동일 → 수익 0). 팝업도 `isCash`면 실시간
+  날짜는 `currentEval`, 과거는 `rec`(스냅샷 carry-forward, `evalAmount>=0`); `effPrincipal=
+  depositAmt=evalAmt`, 시작일 가드 `startDate>histDetailDate`면 제외. **양쪽이 같은 스냅샷 carry-
+  forward를 쓰므로 팝업 소계 = 차트 그날 값**으로 항상 일치.
+- **주의**: 더는 현금성 계좌를 "현재값 평탄 합산"하지 말 것. 차트·팝업·자동기록 셋이 같은 스냅샷
+  규칙(0 포함 carry-forward + 오늘 현재값)으로 묶여야 일치한다.
+- 시장 계좌(주식·gold·overseas 등)의 **평가액은 저장된 `evalAmount`가 아니라 항상 '수량×종가'로
+  재계산**한다 — 아래 `buildCloseEvalSeries` 섹션 참조. 입출금 시점 원금 보정식은 유지.
+
+### 시장 계좌 평가액 추이·팝업 = 항상 '수량×종가'(`buildCloseEvalSeries`) 단일 소스 (⚠️ 회귀 주의)
+
+**개별 계좌 차트·자산 평가액 추이 표·통합 대시보드 추이·날짜별 '계좌별 현황' 팝업·달력 스냅샷은
+전부 저장된 라이브 `p.history[date].evalAmount`가 아니라 `buildCloseEvalSeries`(항상 '수량×종가'
+확정 종가)를 권위값으로 써야 한다.** 저장 evalAmount는 부분 로딩·장중 스테일 시세로 오염될 수
+있어(예: 4종목 중 1종목만 로드된 ₩307,890 스냅샷) 개별 계좌(재계산=₩52.8M)와 통합 대시보드가
+어긋났다. `buildCloseEvalSeries`(`utils.ts`)가 그 단일 소스다.
+
+- **`buildCloseEvalSeries(p, dates, accountType, stockHistoryMap, indicatorHistoryMap, edk, fxRate?)`**:
+  날짜별로 ① 보유수량 확정(`resolveHoldings` `!estimated`)+정확 종가 완비(`allExact`)면 `calcPortfolioEvalDetail`
+  재계산값(모달 '재계산 합계'와 동일) ② 주말·휴장·종가 미로드·추정 수량이면 **직전 정확값 이월**
+  (carry-forward, carry-back 근사로 튀지 않게) ③ 오늘(`edk`)·첫 정확값 이전이면 **미설정** → 호출부가
+  `?? 저장 evalAmount`로 폴백. 반환 `Map<date, number>`.
+- **적용 지점(모두 동일 함수·동일 입력이라 값이 일치)**:
+  ① 개별 계좌: `App.tsx` `activeCloseEvalByDate` → `finalChartData`(`cb ?? exactHist.evalAmount`).
+  ② `HistoryPanel`(자산 평가액 추이 표).
+  ③ 통합: `useIntegratedData` **`marketSeries`**(계좌별 `{id,dates,map}`) — `computedIntHistory`(추이
+  차트·`intMonthlyHistory`·달력 스냅샷)와 **`intAccountSeriesById`**(팝업용)가 공유.
+  ④ 팝업: `IntegratedDashboard` `histDetailRows` 시장계좌 분기가 `intAccountSeriesById[p.id]`를
+  `histDetailDate` 이하 최신값으로 carry-forward. **`computedIntHistory`의 `dateToTotal` carry-forward와
+  동일 `{dates,map}` 객체를 읽으므로 팝업 소계 = 차트 그날 값 = 개별 계좌 추이**(정확한 일별 추적).
+- **`edk`(오늘 skip)는 계좌별로 해석**: `isKrCutoffAccount(acctType) ? krEffectiveDateKey : effectiveDateKey`
+  — `App.tsx` 개별 차트와 동일해야 통합⟷개별이 모든 시간대에서 일치. `useIntegratedData`에 `krEffectiveDateKey`
+  전달 필수.
+- **해외계좌 예외**: `buildCloseEvalSeries` 대상 아님. `marketSeries` 해외 분기는 종전대로 USD(과거 종가)
+  ×날짜별 환율 재계산(`calcPortfolioEvalDetail(...,'overseas',...,liveFx)`) 유지. 현금성(matong/simple)도
+  대상 아님(위 스냅샷 carry-forward 섹션).
+- **폴백 안전망**: `buildCloseEvalSeries`가 미설정(데이터 공백·추정)일 때만 저장 evalAmount로 폴백하므로
+  초기 로딩·신규 상장에도 0/NaN 붕괴 없음. `allExact`·`!estimated` 게이트라 잘못된 소급 근사로 과거를
+  오염시키지 않는다.
+- **⚠️ '평가액 0'은 '데이터 없음'이 아니다**: 평가 대상 detail이 0건이면(종목을 전부 이관·매도해 비운
+  계좌) **exact 0**으로 확정하고 이월하지 않는다. 평가 날짜도 기록일이 아니라 `utils.evalSeriesDates`
+  (기록일 ∪ 구성 변경일)를 **통합·개별 차트·추이 표 3곳이 공유**한다. 근거와 배선 4개는 '종목 계좌 간
+  이관' 섹션의 "원계좌를 '비우는' 이관은 평가액 0이 실제로 시계열에 박혀야 한다" 항목 참조.
+- ⚠️ **회귀 주의**: 통합 추이·팝업을 다시 `h.evalAmount`(저장 라이브값) 직접 합산으로 돌리지 말 것 —
+  개별 계좌와 어긋난다. 새 통합 합산/뷰 추가 시에도 `marketSeries`/`intAccountSeriesById`(또는
+  `buildCloseEvalSeries`)를 소스로 쓸 것.
+
+### 일간 지표 = 입출금 보정(Modified Dietz) — 전일대비·일간 손익 (⚠️ 회귀 주의)
+
+**'전일대비'와 '일간 손익'은 순 외부현금흐름(netFlow)을 제거한 뒤 산출한다.** 과거엔
+`(당일 평가액 / 전일 평가액) − 1` 이라 계좌에 입금하면 입금액이 통째로 수익으로 계상됐다
+(₩49,118,578 입금일에 통합 **+9.10%** / 개별 계좌 **+350.69%**. 실제 시장 수익은 ₩11,312,160 = **+1.59%**).
+
+```
+IN(t)  = Σ입금(날짜별 환율, noPrincipal 제외) + Δ현금성잔액⁺ + 신규 편입 계좌 첫 평가액
+OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭제 계좌 경계 평가액
+일간 손익 = V(t) − V(t−1) − (IN − OUT)      ← 입출금 규모와 완전히 무관. 표의 주인공.
+일간 수익률 = (V(t) + OUT) / (V(t−1) + IN) − 1
+```
+
+- **분모 규약(⚠️ 바꾸지 말 것)**: 유입은 기초(BOD)·유출은 기말(EOD) 가중. 분모를 `V(t−1)`로만 두면
+  소액 계좌에 대형 입금 시 **+50% 폭발**(고치려던 버그의 재발), 유출까지 분모에 넣으면 전액 출금일에
+  분모가 0이 되어 그날 실수익이 소실된다. 이 비대칭이 두 붕괴를 동시에 피한다.
+  관리자 포털(`recomputePortfolioEval`)이 구조적으로 같은 규약이라 입금일에 자동 정합된다.
+- **⚠️ `effectivePrincipal`의 일별 차분을 흐름으로 쓰지 말 것(폐기된 설계)**: 그 값은 '원가 표시용'이라
+  `Math.max(0,...)` 클램프·`startDate` 게이트·`noPrincipal` 미필터가 섞여 있어, 차분을 흐름으로 삼으면
+  ① 출금 1건이 **몇 달 전 일간 수익률을 소급 변경**하고 ② 계좌 삭제일에 누적 미실현손익이 통째로 하루
+  수익이 되어 **부호까지 뒤집힌다**(−3.01% → +4.52%). `effectivePrincipal`(`useIntegratedData`)은
+  투자원금 열·차트 costAmount 전용으로 **현행 유지**하고, 흐름은 반드시 아래 3원 소스로 별도 산출한다.
+- **흐름 3원 소스**(`useIntegratedData` `computedIntHistory` 내부, ③→①→①-b→②→이월 순):
+  ③ **계좌 편입/이탈** — 원장에 없는 흐름. 편입일 `+평가액 전액`(원금 아님), `cutoffOf` 경계일 `−평가액 전액`.
+  편입일(`firstSeenById`) 이하의 원장은 ①에서 제외해 이중계상을 막는다.
+  ① **시장 계좌 입출금 원장** — **입금·출금 모두 `noPrincipal`(미반영) 행은 제외**(2026-09 사용자 확정.
+  옛 규약은 '출금은 전액 반영'이라는 비대칭이었다 — 아래 '미반영 원장 행' 절 참조).
+  `firstSeenById`에 없는 계좌는 통째로 제외(V에 기여 안 함).
+  ①-c **계좌 간 이관 쌍은 상쇄**(⚠️ 되돌리지 말 것) — 이관은 '원계좌 출금 M + 대상계좌 입금 M' 원장 쌍이라
+  **순액은 0인데 총유입(IN)·총유출(OUT)이 각각 M만큼 부푼다**. 분모가 `V_prev + IN`, 분자가 `V + OUT`이라
+  그날 %가 `(V+M)/(V_prev+M)−1`로 통째로 희석된다(실측 2026-08 통합 월간 **+2.12% → +1.90%**).
+  `holdTransfer`가 `row.transfer.role`(`'in'`/`'out'`)을 `xferPend`에 모으고, ① 루프가 끝난 뒤
+  **양쪽이 다 모였고 날짜가 같을 때만** 쌍을 제거한다. **순액이 0이라 `dodAbsChange`(=ΔV−순흐름)와
+  보류 판정(`shouldHoldDailyMetrics`는 `fIn−fOut`만 본다)은 1원도 안 바뀌고 오직 %만 정확해진다.**
+  ⚠️ 한쪽이 TEST·삭제·기록 0건이면 통합 자산이 **실제로** 드나든 것이므로 상쇄 금지(못 맞춘 쌍 = 옛 동작).
+  ⚠️ 날짜가 갈리면(계좌 타입이 달라 기록 확정일이 다른 21:00 이후 이관) 상쇄 금지 — 원계좌 출금일에 M이
+  통째로 가짜 손실이 된다. ⚠️ 같은 역할 2건(손상 데이터)이면 상쇄를 포기하되 **흐름을 버리지는 않는다**.
+  ⚠️ **반드시 `flowAtRow`(기록 없는 날의 흐름 이월) 구성보다 앞**에서 끝낼 것.
+  ⚠️ **③ 계좌 편입/이탈은 상쇄 대상이 아니다** — 그건 통합 자산의 실제 증감이라, 빼면 편입일 평가액
+  전액이 가짜 수익·삭제일 평가액 전액이 가짜 손실이 된다.
+  ⚠️ **개별 계좌 뷰(`externalFlowInRange`)는 무변경** — 그 계좌 기준으로는 자산이 실제로 나갔다.
+  ①-b **평가 시계열이 없는 계좌**(기록 0건) — today 행이 `intTotals.totalEval`로 덮어써져 오늘 V에는
+  100% 포함되므로, `portfolioSummaries.currentEval`을 today 편입 흐름으로 계상(유령 수익 방지).
+  ② **현금성 계좌(마통·simple) 잔액 Δ** — 원장 편집 UI가 **구조적으로 존재하지 않으므로**(`usePortfolioState`가
+  현금성 계좌의 개별 뷰 진입을 차단) `cashByDate` 차분이 유일한 소스. ΔV와 같은 값이라 r=0 유지.
+- **⚠️ `Math.abs()` 금지**: `DepositPanel`은 음수 '정정 행'을 빨간 글씨로 명시 지원한다. abs를 씌우면
+  마이너스 입금이 유입으로 뒤집혀 **오차가 원장 금액의 2배**가 된다(정정 쌍이 상쇄 대신 이중 계상).
+  코드베이스의 다른 모든 원장 소비자(`cumDepositsUpTo`·`portfolioPrincipalData`·`intDepositEvents`·
+  `depositWithSum`)가 부호 있는 합을 쓴다 — 부호별로 IN/OUT에 라우팅할 것.
+- **⚠️ 일간 지표는 `utils.ts` `computeDailyMetricsSeries` **단 하나**를 통합·개별 계좌·CSV 3곳이 공유**한다.
+  행별 독립 계산으로 되돌리지 말 것 — 아래 '보류+이월'이 시계열 상태를 갖기 때문에, 한 곳만 누락하면
+  같은 날짜에 통합 +1.59% vs 개별 +9.10%로 두 화면이 정면 모순되고 원래 버그가 그 화면에 그대로 살아남는다.
+  입력은 `[{date, evalAmount, flowIn, flowOut, ledger?, flowSuspect?}]` **날짜 오름차순**, 출력은
+  `Map<date, {dodAbsChange, dodChange, ledgerFlow, held}>`. 소비자는 조회만 한다.
+- **보류(hold) 판정 = 'V가 그 흐름을 담고 있다고 볼 수 있는가'**(`shouldHoldDailyMetrics`), 순서 중요:
+  ① `흐름 === 0` → 판정 불필요(false) ② **`ΔV === 0` → 무조건 보류** (비거래일 carry-forward 행은 시장
+  정보가 0이라 어떤 크기의 흐름도 반영될 수 없다 — 주 경로) ③ `|흐름| <= 전일V × 1%` → 소액이라 대상 아님
+  ④ **부호를 보는 흡수 판정**: `흐름>0 ? 흡수량 < 흐름×0.5 : 흡수량 > 흐름×0.5` 면 보류.
+  **흡수량 = `bookDelta ?? ΔV`** — 아래 '장부액 관측' 참조. ΔV는 시세에 오염된 추측이고 `bookDelta`는 관측이다.
+  ⚠️ **되돌리지 말아야 할 오답 4종**: (a) `|ΔV| < |흐름|×5%` — 창이 ±0.37%뿐이라 시장이 조금만 움직여도
+  보류가 풀려 `−흐름` 전액이 가짜 대손실(₩46M). (b) `|ΔV−흐름| > 전일V×5%` — 흐름이 **이미 반영된 날**에도
+  '손익이 크면' 보류해(crypto +10%일) 다음 날 한 번 더 차감했고, 전일V 5% 미만 미반영 흐름은 놓쳤다.
+  (c) **②를 ③ 뒤에 두는 것** — 전일V의 1% 이하 입금(월 적립식)이 주말 원장에서 통째로 새어 나간다.
+  (d) **④를 `Math.abs(ΔV)`로 쓰는 것** — 흐름과 반대 방향 시장 변동을 '흡수 증거'로 오인해(입금일 하락,
+  출금일 상승) 보류가 풀리고 흐름 전액이 손익이 된다(미반영 출금 + 상승 시 **+11.9%**까지 나왔다).
+- **장부액 관측(`bookDelta`) — 흡수 판정의 1순위 근거 (⚠️ 제거하지 말 것)**: `bookCostOf` =
+  `Σ(예수금 depositAmount + 매입원가 investAmount)`. **시세로는 변하지 않고 외부 입출금으로만 변하므로**
+  "원장 흐름이 그날 평가액에 반영됐는가"를 추측이 아니라 관측으로 답한다.
+  ⚠️ **주식(gold 포함) 원가는 `investAmount`가 아니라 `purchasePrice × quantity`** — 그 필드는
+  `handleAddStock`이 0으로 만든 뒤 갱신되지 않는다(화면은 매번 계산). `investAmount`만 읽으면
+  "입금 후 같은 날 매수"에서 bookDelta가 0이 되어 정상 입금을 '미반영'으로 오판한다.
+  `investAmount`가 권위인 것은 **fund·savings뿐**. 스냅샷이 purchasePrice·quantity를 보존하므로
+  과거 날짜도 산출된다(단 `snapshotCompositionKey`에 purchasePrice가 없어 **매입단가만 고친 편집은
+  새 스냅샷을 만들지 않는다** — 외부 흐름이 아니므로 무해하나, 정정과 입금이 겹치면 오차 여지).
+  `buildBookCostSeries(p, dates)`(날짜별 Map, `resolveHoldings().estimated`면 그 날짜 제외) +
+  `bookDeltaBetween(map, prevDate, date)`(한쪽이라도 없으면 null) — 둘 다 `utils.ts`.
+  **공급자 = 활성 계좌 단일 Map(`App.tsx` `activeBookByDate`)을 3소비자가 공유** — `accountTwrByDate`
+  (차트 조회시작 0% 라인)·`HistoryPanel`(prop)·`handleDownloadCSV`. ⚠️ **`accountTwrByDate`를 빠뜨리지
+  말 것** — TWR은 곱셈 체인이라 하루의 판정 차이가 이후 전 구간에 영구 고정되고, 같은 날짜에
+  표 −2.00% vs 차트 +0.01%로 갈린다. 통합은 별도로 `useIntegratedData` `marketSeries.bookMap` →
+  `computedIntHistory.bookTotal` → `intMonthlyHistory`.
+  ⚠️ **미제공(null)이면 기존 ΔV 휴리스틱으로 폴백**해 동작이 100% 동일하다(하위호환 — 검증 #29d).
+  통합은 한 계좌라도 그날 장부를 못 내면 그날 합계를 통째로 무효(`bookInvalid`)로 둔다 — 일부만 더한
+  합계는 흐름과 비교할 수 없다. 현금성 계좌는 평가액=잔액=장부액이라 `cashByDate`를 그대로 더한다.
+  - **⚠️ 해외계좌 장부 = 통합은 공급(원화 환산) / 개별은 미공급 — 절대 통일하지 말 것**:
+    `buildBookCostSeries(p, dates, opts?)`의 `opts.rateOf`가 환산율이다. **통합**
+    (`useIntegratedData` `marketSeries`)은 평가액도 흐름(`rateOf`)도 이미 원화 환산이므로 장부도
+    원화로 환산해 **반드시 공급**한다.
+    ⚠️ **되돌리지 말 것(2026-07-28 실측 버그)**: 통합에서 해외를 `bookMap = null`로 두면 `bookInvalid`가
+    **해외계좌 첫 기록일 이후 모든 날짜**를 삼켜 통합 일간 지표가 **영구히 ΔV 추측 폴백**이 된다. 그러면
+    ₩40,000,000 입금일(ΔV −₩11,418,780)이 '미반영'으로 오탐 보류되고 이월까지 겹쳐 **2행 연속 `'-'`**
+    로 잠기는데, 같은 날 개별 계좌 추이(AI −11.90% / COVERD −7.57%)는 장부 관측으로 정상 산출돼
+    **두 화면이 정면 모순**된다. 검증 #30(+ 소스 텍스트 가드 #30d).
+  - **⚠️ 해외 장부 환산은 '날짜별'이 아니라 '단일 상수' 환율 — 되돌리지 말 것**: `bookTotal`은
+    어디서도 레벨로 소비되지 않고 오직 전일 대비 **차분**으로만 쓰인다(`intTwrCumByDate`·
+    `intMonthlyHistory`). 날짜별 환율을 쓰면
+    `bookDelta = Δ장부(USD)×fx(d) + 장부(전일,USD)×Δfx` 가 되어 뒤 항, 즉 **외부 흐름이 아닌 환율
+    재평가분**이 섞이고 "장부액은 시세로 변하지 않고 외부 입출금으로만 변한다"는 이 관측의 근본 전제가
+    깨진다. 뒤집힘 경계는 **`|Δfx/fx| ≥ 0.005 × 총자산 / 해외장부`** — 해외 비중 8.9%면 하루 5.7%가
+    필요해 안전하지만 **비중 50%면 하루 1%, 100%면 0.5%로 충분**하다(양방향 모두 발생: 미반영 흐름이
+    '흡수됨'으로 오판되거나, 반영된 흐름이 보류로 잠긴다). 상수 배율이면 그 항이 정확히 0이고,
+    흐름(날짜별 환율)과의 배율 차이는 기껏해야 수 %라 흡수 문턱 50%에 못 미친다. 검증 #30c.
+  - **⚠️ 개별 계좌 해외 미공급의 이유는 '단위'가 아니라 '단일 Map 공유 제약'**(주석을 단위 문제로
+    되돌리지 말 것): `App.tsx activeBookByDate` 하나를 세 소비자가 나눠 쓰는데 프레임이 서로 다르다 —
+    `accountTwrByDate`=USD(`overseasUsdEvalAt` + 무환산 `externalFlowInRange`), `HistoryPanel`=**원화**
+    (`ov.krw` + 날짜별 환율 `flowRate`), CSV=저장 evalAmount 폴백. 한 프레임으로 셋을 동시에 만족시킬 수
+    없어 해외는 미공급이다. **`HistoryPanel`이 원화라고 그쪽에만 원화 장부를 주지 말 것** — 같은 Map을
+    쓰는 `accountTwrByDate`(USD)와 판정이 갈려 표와 차트가 어긋나고, TWR은 곱셈 체인이라 영구 고정된다.
+  - **⚠️ 해외는 `rateOf`와 `costBasisOnly`를 반드시 함께 넘긴다**: `bookCostOf`는 기본적으로
+    `investAmount`를 우선하는데, **해외 항목의 `investAmount`는 어떤 UI도 쓰지 않는 잔존 필드**다
+    (해외 투자금액 칸의 저장 필드는 별도 `investAmountUsd` — 전용 섹션 참조. `usePortfolioData`
+    :41·:128과 통합 종목별 비중도 전부 `investAmount`를 우회). 레거시·`PasteModal` 임포트
+    데이터에 **원화** `investAmount`가 남아 있으면 거기에 환율(≈1,390배)이 곱해져 장부 단위가
+    3자릿수 규모로 오염되고 흡수 판정이 통째로 무너진다 → `costBasisOnly:true`로 매입가×수량(USD)만
+    쓴다. `fund`·`savings`는 매입가×수량 개념이 없어 `investAmount`가 권위이므로 예외. 검증 #30b.
+    ⚠️ **"이제 해외도 투자금액을 저장하니 이 옵션은 불필요"는 오답** — 새 저장 필드는
+    `investAmountUsd`라 `bookCostOf`가 읽지 않고, 원화 잔존값 위험은 그대로다(`verify:overseas` #25).
+  - **⚠️ 통합에서는 ACTIVE 자가치유(2행)가 꺼진다 — 의도된 맞바꿈**: `computeDailyMetricsSeries`의
+    폐기 조건이 `bookDelta == null && activeRows >= 2`라, 통합이 관측 모드로 바뀌면 `CARRY_MAX_ROWS`
+    (15행)만 남는다. 관측이 있으면 '미반영'이 확정 사실이라 폐기가 곧 가짜 손익이므로 이것이 목적이다
+    (위 'ACTIVE 폐기는 `bookDelta == null`일 때만' 항목과 동일 근거). 다만 통합 `bookTotal`은 전 계좌
+    합이라 **한 계좌의 장부 이상이 포트폴리오 전체 판정을 오염**시킬 수 있다(개별 뷰엔 없는 결합).
+  - **알려진 한계 3종(전부 개별에도 있던 기존 노출, 통합은 계좌 수만큼 확률↑ — 산식을 건드리지 말 것)**:
+    ① **게이트 비대칭**(비해외 계좌): `buildCloseEvalSeries`는 `allExact && !estimated`를 요구해 미충족 시
+    직전값을 이월하는데 `buildBookCostSeries`는 `!estimated`만 본다(종가 불필요). 신규 매수 종목의 그날
+    종가가 아직 없으면 **V는 전일 이월인데 장부만 +흐름**이 되어 흡수를 거짓 입증한다. 게이트를 통합에만
+    좁히면 개별과 규칙이 갈려 이 버그의 원인(비대칭)을 되풀이하므로 **대칭 유지**를 택했다(오늘 행은
+    스냅샷 장부 vs 라이브 V라 좁히면 오히려 당일 입금이 상시 보류된다). 해외 분기는 `buildCloseEvalSeries`
+    를 쓰지 않고 `calcPortfolioEvalDetail`의 `hasAnyPrice` 폴백을 쓰므로 게이트 자체가 더 느슨하다.
+    ② **추정 날짜는 '미제공'이 아니라 '낡은 장부 이월'로 흐른다**: `resolveHoldings().estimated`인 날짜는
+    `buildBookCostSeries`가 건너뛰는데, 집계 루프의 `lastBook` 캐리 때문에 `lastBook != null`이 유지돼
+    `bookInvalid`가 서지 않는다 → 그날 흐름이 있어도 bookDelta=0이라는 **관측처럼 보이는 오답**이 난다.
+    ③ **계좌 편입/이탈·기록 0건 계좌**: 편입/삭제 경계 흐름은 **평가액 전액**인데 장부는 **원가**만
+    움직여, 미실현이익이 원가의 100%를 넘는 계좌의 경계일에 오탐 보류가 난다. 기록 0건 계좌의
+    `currentEval`(①-b)은 today 유입으로만 잡히고 장부엔 기여하지 않아 신규 계좌 추가 당일 헤더
+    '오늘 수익'이 `'-'`로 잠길 수 있다.
+  ⚠️ **`ΔV === 0`(비거래일) 규칙에는 `bookDelta`가 있어도 예외를 두지 말 것** — 장부가 바뀌었어도
+  평가 시계열이 직전값 이월이면 그 흐름은 실제로 V에 없다.
+  **고친 결함 2종(회귀 시 재발)**: (A) 계좌의 2%를 인출한 날 시장이 +1.5%면 ΔV로는 '미반영'으로 오탐돼
+  `'-'`로 은폐되고, 그 이월이 **다음 날 한 번 더 차감돼 부호가 뒤집혔다**(시장 −2%인데 +₩10,000 이익 표시).
+  (B) 출금 원장일과 예수금 수정일이 어긋난 구간에서 ACTIVE 폐기가 흐름을 소각해 **반영일에 출금액 전액이
+  가짜 손실**로 찍혔다. `DepositPanel`은 `portfolio`를 참조하지 않으므로(참조 0건) 원장 입력만으로는
+  평가액이 변하지 않는다 — 날짜가 어긋나는 것이 **구조적 정상**이다.
+- **⚠️ ACTIVE 폐기는 `bookDelta == null`일 때만**: 관측이 있으면 '미반영'이 확정 사실이므로 폐기하면
+  흐름 전액이 가짜 손익이 된다(위 (B)). FROZEN 상한(`CARRY_MAX_ROWS`)은 관측이 있어도 그대로 적용해
+  무한 이월을 막는다.
+- **⚠️ 장부가 한 푼도 안 움직인 행(`bookDelta === 0`)은 '이월'하되 '표시'는 보류하지 않는다
+  (2026-09 사용자 보고 — 되돌리지 말 것)**: 평가액(`buildCloseEvalSeries`)과 장부액
+  (`buildBookCostSeries`)이 **같은 `resolveHoldings` 스냅샷**을 읽으므로, `bookDelta`가 정확히 0이면
+  예수금·수량·매입원가가 전부 그대로 = **그 행의 ΔV는 순수 시세 변동이고 흐름은 1원도 V에 없다**
+  (구조적 보장). 뺄 것이 없으니 `dodAbsChange = ΔV`가 곧 그날의 정답인데, 옛 코드는 그 행을 통째로
+  `'-'`로 가려 **시장 손익까지 함께 삼켰다**(실측: 09/02 출금 ₩4,550,000 1건이 09/02~09/16 **15행**을
+  잠그고 그동안 누적 TWR 라인이 평평하게 동결 — `bookDelta != null`이라 ACTIVE 폐기 2행 상한이
+  구조적으로 봉인돼 `CARRY_MAX_ROWS` 15행만 남기 때문).
+  - **`holdReasonOf`가 유일한 분류 지점**(`utils.ts`) — `null` / `'no-data'` / `'frozen'` /
+    **`'frozen-idle'`**(ΔV=0 **이고** 장부 불변) / **`'unreflected-idle'`**(장부 불변) / `'unreflected'`.
+    `shouldHoldDailyMetrics`는 `holdReasonOf(...) != null` 래퍼로 남는다 — ⚠️ 그 함수는 이제
+    '**흐름이 아직 소진되지 않았다(=이월한다)**'를 뜻하며 **화면의 `'-'`와 1:1이 아니다**.
+    화면 보류를 단언하려면 반드시 `computeDailyMetricsSeries`의 `held`를 볼 것.
+  - **⚠️ 열림 게이트를 `bookDelta != null`로 넓히지 말 것** — 적대적 검증이 실측한 오판 3경로에서
+    `'-'`가 **확정 가짜 손익**으로 승격되고 TWR은 곱셈 체인이라 그 하루가 이후 전 구간에 영구 고정된다:
+    ① **종목 계좌 간 이관**(앱 자체 기능) — 시가 ₩60,000,000이 나가는데 장부는 **원가** ₩20,000,000만
+    빠져 흡수 문턱(−30,000,000)을 넘지 못한다 → 정답 ₩0인데 **−₩60,000,000 / −60%**
+    ② 계좌를 비우는 이관 → **−₩1억** ③ 매도 실현이익 ₩12,000,000 + 같은 날 출금 ₩10,000,000
+    (bookDelta **+**2,000,000) → 정답 ₩0인데 **−₩10,000,000**. 셋 다 `bookDelta !== 0`이라
+    현재 게이트에서는 **종전대로 보류**된다(`verify:twr #29e`가 값으로 고정).
+  - **⚠️ 이월·폐기 로직은 한 줄도 바뀌지 않았다** — 내부 `held`(이월 판정)와 화면 `emitHeld`(표시)를
+    **분리**했을 뿐이고, `carryRows`/`activeRows` 증가와 2차 폐기 조건식은 `held` 기준 그대로다.
+    그래서 `carryObserved` 같은 폐기 면제 플래그를 도입하지 말 것 — 적대적 검증 실측상 그 플래그는
+    목적(관측 이월 보호)에는 **도달 불가**하면서 observed/guess 혼합 체인의 상한을 파괴해
+    `'-'` 잠금을 **59행**(통합 24행)으로 늘린다.
+  - **⚠️ 하위호환은 논증이 아니라 구조로 보장된다** — `*-idle`은 `bookDelta === 0`에서만 나오므로
+    **미제공(`null`) 경로는 그 분기에 도달할 수 없다**(`null === 0`은 false). 실측: 격자 퍼즈
+    12,600칸에서 `*-idle` 외 차이 **0건**, 미제공 경로 1,500칸 + 누적 TWR **차이 0**,
+    `shouldHoldDailyMetrics` 전수 3,402조합 **차이 0**.
+  - **표시 계층 3지점**: `pendingFlow`(이 행에서 차감하지 않고 이월한 순흐름)와 `holdReason`은
+    **표시 전용**이라 값 산식(`dodAbsChange`/`dodChange`/`ledgerFlow`)에 **절대 넣지 말 것**.
+    문구는 `utils.holdReasonText` **공유 포매터**로만 만든다(손복제 금지).
+    ⚠️ 통합 헤더 '오늘 수익' 카드의 **`입금/출금 반영 대기` 배지는 `todayHeld` 삼항 밖**에 두고
+    조건도 `todayPendingFlow !== 0` **단독**이어야 한다 — 안쪽에 두거나 `todayHeld &&`를 더하면
+    관측 미반영 행(`held=false`)에서 미반영 입출금을 알릴 **유일한 신호가 구조적으로 사라진다**.
+    ⚠️ `HistoryPanel`의 `'입출금이 없던 날'` 문구는 `pendingNet === 0` 분기에만 — 미반영 행은
+    `ledgerFlow`가 0이라 그 분기로 떨어지는데, 그러면 **실제로 출금한 날에 '입출금이 없던 날'이라
+    단언**하게 된다.
+  - **알려진 한계(의도)**: 흐름이 끝내 착지하지 않으면 `CARRY_MAX_ROWS` 15행에서 종전대로 폐기된다
+    (그 뒤 실제 착지일에 가짜 손실 — **기존 동작 그대로**이며 이번 변경이 만든 것이 아니다).
+    착지일에 `bookDelta`가 실현손익으로 오염돼 문턱 안에 들어오면 그 행은 종전대로 `'-'`다.
+    근본 해소는 **원장 날짜에 예수금을 맞추는 것**(자산검증 모달의 소급 스냅샷)이다.
+- **⚠️ 미반영(`noPrincipal`) 원장 행 = 어떤 집계에도 들어가지 않는 순수 메모 (2026-09 사용자 확정 — 되돌리지 말 것)**:
+  **입금·출금 모두** `externalFlowInRange`의 `in`/`out`에서 제외하고, 부호 있는 순액만 **`memoNet`**
+  (= Σ미반영 입금 − Σ미반영 출금)으로 따로 반환한다. `computeDailyMetricsSeries`는 흡수 판정 직전에
+  `bookDelta − memo`로 **그 몫을 장부 관측에서 걷어내** '외부 흐름이 V에 반영됐는가'만 대조한다.
+  - **사용자 의도(그대로 인용할 것)**: "분배금은 계좌에서 발생한 수익이지만 사용자가 임의로 다른 곳에
+    이체하거나 사용할 수 있는 것이므로, 출금내역에 미반영을 하면 **단순 기록**으로 쓰기 위함. 실제 종목이
+    수익을 내서 매도한 금액이 아니고 분배금은 정기적으로 발생하는데 이것을 어디에 어떻게 쓸지는 사용자가
+    결정하기 때문에, 출금 내역의 미반영은 **그 어떤 계산에도 영향을 주지 않는 단순 메모용**이어야 한다."
+  - **⚠️ 옛 규약(비대칭)으로 되돌리지 말 것**: 전에는 '입금만 제외, **출금은 noPrincipal이어도 전액 유출**'
+    이었다. 다른 소비자(원금 `cumDepositsUpTo`·`overseasPrincipalAt`·App 6곳, 누적 합계 `depositWithSum`,
+    차트 마커 `PortfolioChart`, 자산검증 `VerifyEvalModal`)는 **이미 전부 입출금 모두 제외**하고 있었고
+    **흐름만 예외**였다 — 그 비대칭을 없앤 것이다. `#10b`가 새 계약을 값으로 고정한다.
+  - **⚠️ 알려진 대가(사용자 수용)**: 실제로 돈이 나가 예수금을 줄였다면 그 감소분이 **시세 손실로 표시**된다
+    (COVERD 09/02: `-12,208,765` / `-2.79%`). 대신 **보류(`'-'`)가 사라지고** 구간 손익이 평가액 차이와
+    정확히 일치한다(08/31~09/07 `+11,271,195` = ΔV). 이 트레이드오프를 다시 뒤집으려면 사용자 확인 필수.
+  - **⚠️ `memoNet`은 그 행의 것만 쓴다 — 이월 금지**(`const memo = h.memoNet || 0`, `carryIncome`류 식별자
+    부재를 `#30e`가 단언). `bookDelta`는 **전일 대비 하루치 델타**라, 그 행에서 이미 걷어낸 몫이 다음 날
+    raw에는 없는데 또 빼면 **순수 이중 차감**이다. 실측: 무기한 이월되면 장부가 1원도 안 움직인 날의 미반영
+    출금이 '흡수됨'으로 확정돼 출금액 전액이 가짜 이익이 된다(TWR **+15.12% vs 정답 +3.00%**). 반대로 착지한
+    입금이 미반영으로 오판돼 15행 뒤 폐기되는 경로도 있다(퍼즈 1,200건 중 20.3% 악화).
+    ⚠️ '그 몫이 장부에 반영됐는가'는 **관측으로 알 수 없다**(`bookDelta === memo`와 '둘 다 미반영이라 0'이
+    구조적으로 구별 불가) — 그래서 이월하지 않는 쪽을 택했다(`#33e`).
+  - **⚠️ 공급자 5곳을 전부 채울 것**(한 곳만 빠지면 그 화면만 보정을 못 받아 화면끼리 갈린다):
+    `App.tsx accountDailySeries`(차트) · `HistoryPanel`(추이표) · `utils.buildHistoryCSV`(CSV) ·
+    `useIntegratedData` **①의 `addMemo`(입금·출금 양쪽) + rows 2곳**(`intTwrCumByDate`·`intMonthlyHistory`,
+    `netMemoNet` 경유). `evalCompare.flowReflected`도 같은 규약(`bookDelta − memoNet`).
+  - **하위호환**: 미반영 행이 없으면(`memoNet` 0) 판정·값이 종전과 1바이트도 다르지 않다(`#33b`가 단언).
+  - **⚠️ 진단 문구는 판정에 실제로 쓰인 값(`bookDelta − incomeIn`)을 보여야 한다** — raw를 띄우면
+    배당이 기록된 행에서 '+₩0인데 `-`'라는 자기모순이 화면에 뜬다. 적용 2곳: `HistoryPanel` 보류 행
+    툴팁, `evalCompareExcel` '흐름 미반영' 경고(`model.bookFlowPart`). `evalCompare`가 그 값을 반환한다.
+- **⚠️ 표시 계층은 '그 날의 수익'이라 단언하지 않는다 (2026-09)**: 기준(anchor) 행 규약 때문에
+  `dodAbsChange`는 **구간 합산일 수 있다**. `spanFrom`이 있으면 반드시 밝힐 것 — 적용 4곳:
+  헤더 '오늘 수익' 카드(`M/D부터 합산` 배지) · 개별 추이표 툴팁 · **메모 달력 칸·패드**(`*` + 툴팁).
+  달력을 빠뜨리면 비거래일 칸에 설명 없는 큰 금액이 뜬다(실측 토요일 +₩400만).
+  ⚠️ `holdReasonText`의 `unreflected-idle`을 '**그날의** 시세 변동분'으로 되돌리지 말 것(같은 툴팁의
+  `spanFromText`와 정면 모순). `no-data`는 **anchor를 전진시키는 유일한 사유**라 '다음 산출 행에
+  합산됩니다'가 거짓이다 — 전용 `case`를 두고, 보류 툴팁의 장부액 줄도 그 사유에는 붙이지 않는다.
+- **⚠️ 기준(anchor) 행 규약 — 보류('-') 거래일의 ΔV는 버려지지 않고 다음 산출 행이 합산한다 (2026-09, 되돌리지 말 것)**:
+  `computeDailyMetricsSeries`는 값(`dodAbsChange`/`dodChange`)의 기준을 **인접 행이 아니라 직전 '산출' 행**
+  (`anchor`)으로 잡는다. 보류(`emitHeld`) 행은 기준을 전진시키지 않으므로 그 다음 산출 행이 보류 구간 전체의
+  변동을 내고 `spanFrom`(표시 전용)에 구간 시작 날짜를 싣는다. 보존 항등식 **Σ dodAbsChange = ΔV(전체) −
+  Σ(차감된 흐름)** 이 이것으로 성립한다.
+  - **과거 결함(실측 2026-09)**: `prev = h`가 무조건 전진해 보류 행의 ΔV가 **어느 행에도 실리지 않았다** —
+    흐름만 이월되고 시장 변동은 Σ·누적 TWR에서 영구 소실. COVERD 09/02 출금 4,550,000이 `unreflected`
+    (bookΔ≠0·미흡수)로 보류되자 그날 −12,208,765가 사라져 구간 TWR +5.55% vs 진실 +3.65%/+2.60%. 주석
+    "보류된 흐름은 이월되므로 곱은 정확하다"는 ΔV=0(frozen)일 때만 참이었다. 통합·개별·CSV 전부 같은 함수라
+    동일하게 전파됐다(도입 커밋 a41a5e1·b100b28은 주말만 염두, e81c277은 `bookDelta===0` 경로만 열었다).
+  - **⚠️ 보류 판정(`holdReasonOf`)은 종전대로 인접 행 기준** — 소액 하한(1%)·ΔV 추측·bookDelta 관측이 전부
+    '하루치' 스케일 가정이라 기준을 anchor로 바꾸면 판정 자체가 달라진다. **값만** anchor 기준이다.
+  - **`'no-data'`(직전 V 0/없음) 행은 새 기준이 된다** — 비교 기준이 무의미한 행의 ΔV를 이월하면 평가 0 다음의
+    복귀 행이 `+V` 가짜 이익이 된다(#28·#31c).
+  - **의미 변경(의도) 2건**: ① 흡수 행의 값이 '보류 구간 전체 − 흐름'이 된다(#21c 1,000,000 → 4,000,000 —
+    옛 값은 보류 2행의 +3M이 소실된 것) ② 주말 crypto 드리프트가 월요일에 합산된다(#21b 11,312,160 →
+    11,412,160 — 옛 값은 +100,000이 소실된 것, #7 '주말 crypto 손익 보존'과 이쪽이 맞다). 헤더 '오늘 수익'
+    카드도 어제가 보류였으면 2일치를 낸다 — `spanFrom`을 보고 '(M/D부터 합산)'을 표기한다.
+  - **⚠️ 검증은 미러만 보면 죽는다** — `verify-twr`의 #1~#31은 그 파일 안 **미러**를 검사하므로 src만 되돌려도
+    통과한다. `#32`가 실제 `src/utils.ts`를 import해 미러와 대조한다(드리프트 가드, verify-period 방식).
+    **변이 6종**(src/미러 각각 anchor 무조건 전진 · no-data 규칙 삭제 · spanFrom 삭제 · 값/배율을 인접 기준으로)
+    + 음성 대조 1종으로 검출을 실증했다.
+- **⚠️ 보류된 행의 흐름은 반드시 다음 행으로 이월**: 소각하면 다음 기록일 ΔV에 입금액이 그대로 남아
+  **원래 버그가 하루 밀려 재발한다**(토 '-' → 월 +9.10%).
+  **첫 행은 이월 금지**(그 흐름은 ③ 계좌 편입 평가액이라 이미 V에 반영됨 → 이월 시 둘째 행이 가짜 손실).
+  `flowSuspect`(오늘 라이브 이상치)는 항상 마지막 행이라 이월 대상 아님.
+  주말 행은 `fillNonTradingGaps`·`useHistoryBackfill` 치유로 **항상 존재**하고 `buildCloseEvalSeries`가
+  직전 정확값을 이월하므로 이 경로는 드문 예외가 아니라 상시 발생한다.
+- **이월 상한 2종(⚠️ 줄이지 말 것)**: `CARRY_MAX_ROWS=15`는 KR 최장 연휴(실측 최장 6일)를 덮는 값
+  (5였을 때 2026 설 연휴에서 흐름이 소각돼 입금액 전액이 가짜 수익으로 부활했다).
+  `CARRY_MAX_ACTIVE_ROWS=2`는 **거래일 보류**에만 적용되는 짧은 상한 — 흐름과 시장 변동이 비슷한 크기로
+  상쇄되면 '미반영'과 형태가 같아 **오탐 보류가 원리적으로 불가피**한데, 이월을 오래 들고 가면 이미 반영된
+  흐름이 계속 차감돼 부호가 뒤집힌 값이 몇 주간 표시된다.
+- **⚠️ 폐기는 '여전히 보류일 때'만 — 루프 진입부 무조건 폐기로 되돌리지 말 것**: 이월을 실은 채 먼저
+  판정하고(1차), 그래도 `held`이면서 상한을 넘겼을 때만 폐기 후 자기 흐름으로 재산출한다(2차).
+  진입부에서 무조건 폐기하면 **흐름을 흡수하는 바로 그 행**에서 이월이 버려져 입금액 전액이 하루 수익으로
+  찍힌다(고치려던 +9.10% 버그 재현).
+- **⚠️ ACTIVE 카운트는 `dV !== 0`이 아니라 `|ΔV| > |흐름| × 5%`**: crypto(24시간 시장)·예적금(일 단위
+  단리)을 보유하면 **비거래일에도 총자산이 몇십만 원씩 움직인다**. 1원만 움직여도 ACTIVE로 세면 주말 2행
+  만으로 예산이 소진돼 월요일에 이월이 폐기되고 원래 버그가 재현된다.
+- **보류 행 표시 규약(4곳 통일)**: `dodAbsChange=null` + `%`도 `'-'`. `0.00%`로 단언하면 '변동 없음'과
+  구분되지 않는다. 통합 추이표·`HistoryPanel`·**헤더 '오늘 수익' 카드**(⚠️ `?? 0`으로 삼키지 말 것)는 `'-'`,
+  메모 달력은 줄 자체를 숨김. 헤더는 보류 시 원본 `ledgerFlow`로 "입금 ₩N 반영 대기"를 안내한다.
+  ⚠️ 이 규약은 **`held === true`인 행에만** 적용된다. 장부 관측이 '미반영'을 확정한 `*-idle` 행은
+  `held === false`이고 값(ΔV)을 내므로 `'-'` 대상이 **아니다**(위 전용 항목) — 그 행의 경고는
+  `pendingFlow` 기반 '반영 대기' 배지·툴팁이 담당한다.
+- **적용 지점**: `useIntegratedData` `intMonthlyHistory`(통합 단일 소스) → 통합 추이표·**헤더 '오늘 수익' 카드**
+  (⚠️ 과거엔 raw `intHistory`로 **자체 계산**했다 — 되돌리면 헤더 +9.10% vs 표 +1.59%로 갈라지고 '달력 오늘 칸
+  = 헤더 카드 일치' 불변식이 깨진다)·메모 달력(무수정 자동 반영, `dodAbsChange` **null 계약** 준수 필수).
+  개별 계좌는 `HistoryPanel`의 `dailyMetricsByDate` memo + `utils.ts` `externalFlowInRange`(반개구간
+  `(직전 기록일, 당일]` — 직전 '거래일'이 아니라 '기록일'이다). 소비처는 `HistoryPanel` 3열 셀·툴팁.
+  (⚠️ CSV는 이 memo가 아니라 `computeDailyMetricsSeries`를 **직접 호출**한다 — 화면과 CSV가 같은 값을
+  내려면 아래 인자를 화면과 동일하게 넘겨야 한다는 뜻이지, memo를 공유한다는 뜻이 아니다.) CSV는
+  `buildHistoryCSV(history, deps, wds, rateOf, evalByDate)` — ⚠️ **평가액 소스(`activeCloseEvalByDate`)와
+  날짜별 환율까지 화면과 같이 넘겨야** 보류 판정 자체가 갈리지 않는다.
+  **알려진 한계**: `activeCloseEvalByDate`는 해외·현금성 계좌에서 빈 Map이라 그 계좌들의 CSV는 저장
+  `evalAmount`로 폴백한다. 해외는 화면이 날짜별 환율로 재계산하므로 CSV와 평가자산·일간 손익이 어긋난다
+  (기존 동작 유지 — 해소하려면 `HistoryPanel`의 해외 재계산을 `App.tsx`로 승격해야 한다).
+- **⚠️ 해외 흐름 환산은 날짜별 환율(`getClosestValue(indicatorHistoryMap.usdkrw, d.date)`) 우선**, 원장의
+  `d.fxRate`는 폴백. `d.fxRate`는 '행 생성 시점' 환율로 박제되므로 소급 입력 시 V(날짜별 환율 재계산)와
+  어긋나 그날 환율차만큼 가짜 손익이 남는다. 통합·개별·CSV **3곳 모두** 같은 식을 써야 한다.
+- **⚠️ 관리자 포털(`AdminPortal`)은 손대지 말 것** — `recomputePortfolioEval`이 같은 보유 스냅샷을 두 가격
+  벡터로 평가해 흐름이 대수적으로 소거되므로 **이미 구조적으로 면역**이다. 저장 history 비교로 되돌리는 것도 금지.
+- **영속화 무관**: `netFlow`/`ledgerFlow`/`flowSuspect`/일간 지표는 전부 매 렌더 파생값이다.
+  `portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps **전 지점 무수정**.
+  ⚠️ **일간 수익률이나 netFlow를 `p.history` 레코드에 저장 금지** — '날짜당 1건' 불변식·백필 실시간 보호 가드·
+  `historyVerifyKey`·`dedupeHistoryByDate`와 전부 충돌한다.
+- **누적 TWR 곡선(`Π(1+r)−1`)은 개별 계좌 + 통합 대시보드 차트에 도입 완료** — 아래 전용 섹션 참조.
+  이 `dodChange`가 그 곡선의 유일한 원자재다(개별=`accountTwrByDate`, 통합=`intTwrCumByDate`가
+  `computeCumulativeTwrSeries`로 소비). **범위 밖(의도)**: CAGR·XIRR은 여전히 **미적용**.
+  '원금대비'(`monthlyChange`)는 누적 지표로 **현행 유지**(입금일 희석은 정의상 정상).
+- 검증: `npm run verify:twr` (명세 테스트 #1~#5 + 엣지 #6~#16 + 회귀 #17~#21c + 장부액 관측 #29~#29d
+  + **사유 분류·미반영 행 열림 #29c·#29e~#29g** + 통합 장부 집계·해외 단위·상수환율 #30~#30c
+  + **소스 텍스트 가드 #30d·#30e** + **기준(anchor) 행 규약 #31~#31d** + **src↔미러 드리프트 가드 #32**
+  + **미반영 원장 행 #10b·#33~#33e** + **누적 게이트 통일 #34**).
+  ⚠️ `#32`는 실제 `src/utils.ts`를 import한다 — 미러만 검사하는 나머지 단언의 사각지대(src만 되돌린 변경)를
+  막는 유일한 가드이므로 지우지 말 것. 새 픽스처를 미러 테스트에 넣을 때 `#32`의 픽스처 목록에도 넣을 것.
+  ⚠️ `#30e`의 배선 가드는 **선언이 아니라 사용부**를, 그것도 **조건식까지 한 덩어리로** 단언한다 —
+  '표현식 존재'만 재면 죽은 단언이 된다(실측: 삼항 조건을 `false &&`로 죽여도, 개별 계좌 쪽을 지워도
+  통합 대시보드의 같은 패턴이 대신 통과시켰다). App.tsx는 개별 계좌 effect 구간(`setDefaultSelectionResult`
+  사이)을 잘라서 본다. **변이 23종 + 음성 대조 2종**으로 검출을 실증했다.
+  ⚠️ `#29c`는 이제 3행이 `null`이 아니라 **시세 변동분(+₩1,100,000)** 임을 단언한다 — 바뀐 것은 그
+  '3행 보류' 부분뿐이고 **(B) 회귀 가드의 본체(`05-22 === 0`)는 그대로 통과**한다(`bookDelta == null &&`
+  봉인을 지우면 05-21에서 폐기가 일어나 거기서 잡힌다). "(B) 봉인이 풀렸다"로 오독하지 말 것.
+  ⚠️ `#30e`는 미러로 표현 불가한 배선 10건(열림 게이트·폐기 조건식 무수정·이월이 `held` 기준·
+  표시 전용 필드 비누출·통합 `pendingFlow` 전달·헤더 배지 위치와 **조건식 리터럴**·툴팁 공유 포매터·
+  `'입출금이 없던 날'` 분기)을 소스 텍스트로 단언한다. **변이 15종 + 음성대조 1종으로 검출을 실증**
+  했다(열림 게이트 확대·열림 삭제·`*-idle` 무조건 반환·`frozen-idle` 제거·ACTIVE 절 삭제·이월을
+  `emitHeld` 기준으로·`pendingFlow` 0·`ledgerFlow` 누출·열린 행이 흐름 차감·배지를 `todayHeld`로
+  게이팅·`todayPendingFlow` 되돌림·통합 미전달·툴팁 옛 문구·`dV===0` 순서 뒤바꿈·`Math.abs` 흡수).
+  ⚠️ 배지 가드는 **위치만 재면 죽은 단언**이다(실측) — 조건식 리터럴
+  `{todayPendingFlow !== 0 && (`까지 함께 못 박아야 `todayHeld &&`·`false &&` 삽입을 잡는다.
+  같은 이유로 `'입출금이 없던 날'` 가드도 '문구가 어느 분기에 있나'가 아니라 그 분기가 실제로
+  `holdReasonText(`를 부르는지를 본다.
+  ⚠️ #1~#30c는 전부 **참조 구현 미러**라 함수 본문 회귀만 잡는다. 이번에 깨졌던 것처럼 **호출부 인자**
+  (통합이 해외에 bookMap을 주는가·상수 배율인가)는 미러로 표현할 수 없어, `#30d`가 `readFileSync`로
+  `useIntegratedData.ts`/`utils.ts`를 직접 읽어 그 계약을 단언한다(`verify-market-calendar.mjs` 선례).
+  포맷 변경에 취약하므로 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+  `scripts/verify-twr.mjs`의 참조 구현은 `utils.ts`의 `externalFlowInRange`·`dailyFlowAdjustedRate`·
+  **`holdReasonOf`**·`shouldHoldDailyMetrics`(bookDelta 인자 포함)·`computeDailyMetricsSeries`·
+  **`bookCostOf`**(#30b) 본문,
+  그리고 **`useIntegratedData`의 장부 합산 루프**(`lastVal`/`lastBook`/`sawAny`/`bookInvalid` — #30의
+  `aggregateIntBook`)와 **항상 1:1로 동기화**할 것.
+  ⚠️ #29c의 시장 등락(+1,100,000)은 `ACTIVE_DRIFT_RATIO`(흐름의 5% = 50만)를 넘겨 폐기를 실제로
+  발동시키려는 값이다 — 줄이면 옛 코드에서도 통과해 회귀를 못 잡는다.
+
+### 평가액 추이 표 기간 단위(일간/주간/월간/연간) (⚠️ 회귀 주의)
+
+통합 대시보드 '평가액 추이'(`IntegratedDashboard`)와 개별 계좌 '자산 평가액 추이'(`HistoryPanel`)의
+행을 주(월~일)·월·연 단위로 접는 토글. 대표 시점은 **그 기간의 마지막 실제 기록 행**(사용자 확정),
+클릭은 대표 날짜로 기존 팝업/모달을 연다, 열 제목은 모드에 맞춰 바뀐다.
+
+- **⚠️ 1급 계약 — 기간 값은 '일별 지표의 누적 차분'이다. 압축한 행을
+  `computeDailyMetricsSeries`에 **재투입하지 말 것**.**
+  `기간 손익 = cumProfit(대표일) − cumProfit(직전 대표일)` / `기간 수익률 = rebaseTwr(twr(대표일), twr(직전 대표일))`.
+  그 함수의 상수(`MATERIAL_FLOW_RATIO` 1% · `ABSORBED_RATIO` 0.5 · `CARRY_MAX_ROWS` 15 ·
+  `CARRY_MAX_ACTIVE_ROWS` 2)와 `bookDelta` 관측은 전부 **'하루치 흐름 vs 하루치 ΔV'** 스케일 가정
+  위에 서 있는데, 기간 합산은 흐름·ΔV·장부 드리프트를 **서로 다른 속도로** 키워 그 가정을 동시에
+  무너뜨린다(설계 검증 실측 4종): ① 분배금이 예수금에 쌓여 `bookDelta`가 흐름과 **반대 부호**가 되면
+  흡수 판정이 실패하고, `bookDelta == null && activeRows >= 2`라 **`bookDelta`가 있으면 ACTIVE 폐기
+  게이트가 봉인**돼 held가 자기강화한다(연간 표 전부 `'-'`). ② 이월이 `'-'`가 아니라 **그럴듯한 틀린
+  숫자**를 만든다(실측 +₩9,000만 표시 vs 실제 +₩1억 5천만). ③ 월 적립 0.71%(일간에서는 1% 면제로
+  **구조적 면역**)가 연 합계 8.6%가 되어 판정 대상으로 승격 — 일간에 원리적으로 없던 보류 경로가 생긴다.
+  ④ Dietz의 BOD 가중이 기간에서 왜곡돼 같은 행의 %와 ₩이 **최대 2배** 어긋난다(손익 ₩1,000만인데 +5.00%).
+  누적 차분은 흡수 판정 입력이 **항상 하루치**라 넷을 동시에 없애고, 부수 효과로 기간 %가 **수익률 차트
+  라인·드래그 구간 수익률과 같은 규약**이 된다.
+- **⚠️ '그 기간 전체가 보류'는 `0.00%`가 아니라 `'-'`다.** held 행은 누적을 갱신하지 않으므로 경계
+  차분이 **정확히 0**이 되어 '변동 없음'과 구분되지 않는다 → `accumulateDailySeries`가 함께 내는
+  **기여일 카운트**(`count` / 훅은 `okCount`) 차분이 0이면 보류로 본다. 같은 순간 헤더 '오늘 수익'
+  카드는 `'-'`를 띄우므로, 이 게이트가 없으면 두 화면이 정면 모순한다(보류 표시 규약 4곳 통일).
+  카운트 미제공이면 조건이 자동으로 꺼져 종전 동작(하위호환 fail-safe).
+- **⚠️ `intMonthlyHistory`는 일별 그대로 둔다** — 표 말고도 3소비자가 공유한다(헤더 '오늘 수익' 카드
+  `[0]` · 팝업 `realtimeDate` · 메모 달력 `metricsHistory` 날짜 키 맵). 제자리 압축하면 달력이 주/월당
+  한 칸만 스냅샷을 그리고(그 블록이 자산현황 패드의 **유일한 진입점**) `realtimeDate`가 오늘이 아니게 돼
+  팝업 소계가 라이브 대신 carry-forward가 된다 → "달력 칸 총자산 = 팝업 소계 = 차트 그날 값" 붕괴.
+  압축은 **표 전용 파생 memo**(`histRows` / `viewRows`)에만 존재한다.
+- **⚠️ 화이트리스트 fail-safe** — `compressPeriodRows`는 `week|month|year`가 **아니면 입력 배열을
+  그대로(참조 동일) 반환**한다. `'day'만 항등`으로 두면 prop 누락·손상 Drive 값·payload 미전달이
+  전부 **조용한 1행 붕괴**가 된다. 참조가 같으므로 일간 모드 하위호환이 논증이 아니라 **구조**로 보장된다.
+  데이터 경로와 **프레젠테이션 플래그**(`isHistPeriodMode`/`isPeriodMode`)가 같은 화이트리스트를 써야
+  "행은 일별인데 화면은 기간 모드"가 안 생긴다.
+- **⚠️ 대표는 '실제로 존재하는 마지막 기록 행'** — 달력상 말일 같은 **합성 날짜를 만들지 말 것**.
+  없는 날짜를 대표로 쓰면 `buildCloseEvalSeries`·`bookByDate`·`overseasEvalByDate` 조회가 전부 miss돼
+  저장 라이브 `evalAmount`로 조용히 폴백하고 "시장 계좌 평가액은 항상 수량×종가"가 그 뷰에서만 깨진다.
+  기록 0건 기간은 **행을 만들지 않는다**(그 흐름은 다음 대표일의 반개구간에 이미 포함).
+- **⚠️ '오늘' 하이라이트는 인덱스 판정 + `latestRecDate`**(달력상 오늘 아님). 기간 모드는 내림차순 0번,
+  일간 모드는 `intMonthlyHistory[0].date`. `getTodayKST()`로 재면 행 날짜의 출처(`getEffectiveDate()`)와
+  어긋나 **KST 00:00~07:30에 어느 행도 안 칠해진다**(옛 UTC 비교는 그 구간에서 오히려 맞았다 — 메모 달력
+  절의 `latestRecDate` 규약과 같은 함정). 개별은 `effectiveDateKey`가 KR 계좌에서 21~09시 **null**이라
+  기간 모드에서 반드시 인덱스로 판정한다.
+- **⚠️ 감사(audit) 신호는 범위 OR, 신뢰도 신호는 대표값 승계** — 묻는 질문이 다르다.
+  일자 색상(`periodModifiedCount`)·'조정됨' 배지(`periodAdjustedCount`)는 *"이 기간 안에 사람 손이
+  닿았나"*라 **OR 집계**(대표일만 보면 그 기간의 수동 개입이 화면에서 사라지는 **거짓 음성**).
+  `flowSuspect`는 *"지금 이 값이 신뢰 가능한가"*라 **대표값 승계**(OR로 모으면 과거 이상치가 기간을 오염).
+  ⚠️ '조정됨'은 `isAdjusted` **단독** 집계 — `userModifiedDates`(수량·종가 편집)까지 섞으면 조정한 적
+  없는 기간에 배지가 뜬다.
+- **⚠️ 전체 이력을 유지해야 하는 것**: `displayEvalByDate`·`overseasEvalByDate`·`cumulativeByDate`·
+  `dailyMetricsByDate`는 **일별 그대로** 두고 대표 날짜로 **조회만** 한다. 특히 `cumulativeByDate`의
+  `asc` 인자를 압축본으로 바꾸면 `computeEffectivePrincipal`의 `principalManual` 앵커와
+  `resolveRecordPrincipal`의 '직전 기록 principal' 역스캔이 드롭된 날짜를 못 봐 **차트와 표의 누적
+  수익률이 갈린다**.
+- **⚠️ 흐름 합산은 부호 있는 합**(`Math.abs` 금지 — 음수 정정 행이 유입으로 뒤집히면 오차가 2배)이고
+  **커서는 루프 밖**(안에 두면 O(기간수 × 전체행수) — 주간 3년치 회당 ~17만 회가 시세 갱신마다 돈다).
+  압축 행의 `netFlowIn/Out`·`ledgerFlow`·`netFlow`를 **명시적으로 덮어쓸 것** — 안 그러면 대표일
+  하루치 스칼라가 남아 나중에 붙는 진단 문구가 기간 합이 아니라 하루치를 표시한다.
+  개별 계좌는 `externalFlowInRange`가 반개구간 `(from, to]`이라 **인접 대표일 쌍이 곧 기간 합**이다(합산 코드 0줄).
+- **⚠️ 압축 입력에서 `date` 없는 행을 먼저 거를 것** — `compressPeriodRows`는 거르는데 커서 루프가
+  `asc[ai].date`를 비교하므로 `undefined`가 섞이면 커서가 **영구 정지**해 그 이후 모든 기간의 표시가
+  조용히 사라진다.
+- **⚠️ 해외계좌는 '차트와 같은 기준'이 아니다** — 개별 표는 **원화 프레임**(`ov.krw` + 날짜별 환율),
+  차트 `accountTwrByDate`는 **USD 프레임**(`overseasUsdEvalAt` + 무환산 흐름)이라 구조적으로 다르다.
+  툴팁·도움말에서 그 단언을 **해외에서만 끈다**(KRW 계좌 테스트로는 절대 드러나지 않는다).
+  통합은 `intTwrCumByDate.twr`을 차트와 **공유**하므로 단언이 참이다.
+- **⚠️ 문구는 `periodNoun` 공유 포매터로만** — 모드별로 거짓이 되는 문장을 화면마다 따로 들고 있으면
+  한 곳만 고쳐지고 나머지가 계속 거짓말을 한다. 분기 대상에 **셀 툴팁**(월간 값에 '일간 손익'이라 쓰고
+  '(당일−전일)÷전일과 동일'이라 단언하면 둘 다 거짓 — 기간 값은 일별 배율의 **곱**)과 **도움말의
+  '옆 칸'·'일자 색상'·'조정됨' 블록**을 반드시 포함할 것(그 셋은 '일간 지표'가 아니라 다른 블록에 있어
+  누락되기 쉽다). ⚠️ 도움말은 **평문 렌더**(마크다운 파서 없음) — `**`를 쓰면 화면에 그대로 보인다.
+- **UI 배치가 두 카드에서 다르다(같게 만들지 말 것)**: 통합은 카드 헤더(`xl:w-[490px]`라 여유),
+  개별은 **thead 위 얇은 바**(카드가 `xl:w-[21%]`≈252px, 헤더 가용 220px인데 제목+?+확장이 이미 190px).
+  헤더에 넣으면 제목이 한글 글자 단위로 줄바꿈되고 고정 높이 + `overflow-hidden`이라 **표 행이 사라진다**.
+  헤더를 안 건드리면 `verify:card-window #G14g`(`CardExpandButton` 한 줄 문자 일치)도 구조적으로 안전하다.
+  ⚠️ 바(32px)를 넣었으므로 카드 높이를 `360→392`(국내)·`520→552`(해외)로 올리고 **형제 카드**
+  (`PortfolioStatsPanel` 1곳·`DepositPanel` 2곳)도 **함께** 올린다 — 각 카드가 명시적 height라
+  `items-stretch`가 먹지 않아 한쪽만 올리면 같은 행의 바닥이 그 차이만큼 어긋난다.
+  형제의 해외 분기 `h-full`은 부모 높이가 indefinite라 stretch로 승격되지 않으므로(`height:100%`는
+  `auto`가 아니라 `align-items:stretch` 대상 밖) **실효 높이는 `min-h`가 정한다** — `min-h`가 곧 계약이다.
+  ⚠️ **단 입출금 카드(`DepositPanel` 2곳)의 해외 분기는 `h-[552px] min-h-[552px]` 고정이다**(사용자 보고 2026-10) —
+  '최소 높이'뿐이라 입금 행이 늘면 카드가 투자요약·평가액 추이(552px)보다 길어졌다. 고정 높이 + 내부
+  `flex-1 overflow-y-auto`라야 행이 늘어도 카드 안에서 스크롤된다. `h-full`로 되돌리지 말 것(`#G12c`).
+  (`PortfolioStatsPanel`의 해외 `h-full min-h-[552px]`는 그대로 — 이 행의 기준 카드라 내용이 잘리면 안 된다.)
+  ⚠️ **실제로 국내(360→392)만 반영되고 해외(520)가 남아 32px 어긋난 채 배포된 이력**이 있다
+  (사용자 보고 2026-09, 해외계좌 한정). 옛 `#G12b`가 양쪽 숫자를 **따로 박아** 둬서 초록이었다 →
+  지금은 `HistoryPanel` 소스에서 두 값을 파싱해 **같은 값인지(관계)** 를 단언한다. 리터럴 가드로
+  되돌리지 말 것.
+  ⚠️ **`DepositPanel`의 `min-h-[392px]`를 빼지 말 것 — 모바일에서 카드가 헤더만 남고 붕괴한다**
+  (사용자 보고 2026-09, 국내계좌 한정). 부모(`App` stats 섹션)가 `flex flex-col xl:flex-row`라 **모바일에서는
+  main axis가 세로**인데, 입출금 두 카드만 `flex-1`(= `flex:1 1 0%`)이고 형제(통계·히스토리)에 있는
+  `shrink-0`이 없다 → 세로 축에서 `flex-basis:0%`가 `h-[392px]`를 덮어쓰고 `overflow-hidden` 때문에
+  automatic minimum size(`min-height:auto`)마저 0으로 계산돼 높이가 헤더 줄까지 무너진다. 해외 분기는
+  `min-h`가 있어 원래부터 무사했다. PC(xl↑)는 main axis가 가로라 이 `min-h`가 레이아웃을 바꾸지
+  않는다. ⚠️ `flex-1`을 건드리는 방향으로 고치지 말 것(PC의 가로 균등 분배가 달라진다).
+  검증: `verify:period #G12b`가 두 카드 모두에서 이 계약을 단언한다.
+- **영속화(통합)**: `chartPrefs.intHistPeriod` — App.tsx 5지점(state 리터럴·`chartPrefsUpdatedAt` deps·
+  STATE 저장 deps·`applyStateData`·`applyBackupData`) 전부. ⚠️ ②와 ③은 **둘 다** 필요(②만 → 저장 미예약 /
+  ③만 → `chartPrefsUpdatedAt` 미상승으로 STATE write 스킵). 로드 2경로는 `normalizeHistPeriod`를
+  통과시킬 것. 수동 저장 4핸들러는 `{...saveStateRef.current}` 스프레드라 무수정.
+- **영속화(개별) = 계좌별**(⚠️ 회귀 주의 — '계좌 공통'으로 되돌리지 말 것, 사용자 요청 2026-08):
+  `currentChartStateRef.histPeriod` → `chartPrefs.accountChartStates[pid].histPeriod`.
+  **'차트 토글은 계좌별로 독립' 절의 4지점 규약을 그대로 따른다** — ① ref 기본값 리터럴(`histPeriod: 'day'`)
+  ② 동기화 effect 객체 + **deps(`acctHistPeriod`)** ③ 계좌 전환 `saved` 복원(`normalizeHistPeriod(saved.histPeriod)`
+  — 필드 없는 옛 저장본은 `'day'`) ④ 처음 방문 기본값 `'day'`(사용자 확정 — 직전 계좌를 물려받지 않는다).
+  ⚠️ **부팅 복원(`applyStateData`)은 계좌별 값이 앱 레벨 값을 이겨야 한다.** `accountChartStates` 블록이
+  `acctHistPeriod` 복원보다 **위**에 있어서, `showTotalEval`처럼 그 블록에 넣으면 아래 앱 레벨 줄이
+  덮어쓴다(순서가 반대라 같은 자리에 둘 수 없다) → `acctHistPeriod` 줄 자리에서 `_bootAcct.histPeriod`를
+  먼저 보고, 없을 때만 앱 레벨 값으로 폴백한다. 계좌 전환 effect는 `prevId===null`이라 최초 로드엔 안 돈다.
+  **영속화 신규 지점 0곳** — `accountChartStates`는 이미 `chartPrefs`에 실려 저장되고, 앱 레벨
+  `acctHistPeriod`(=활성 계좌의 라이브 값)도 종전 5지점 그대로 남아 저장 트리거 역할을 한다.
+- **⚠️ 셀 툴팁 = '왜 평가금액 두 칸으로 검산하면 안 맞는가'의 진단 (산식은 무변경 — 사용자 확정 2026-08)**:
+  사용자가 표의 평가금액 두 칸으로 직접 검산한다(`774,826,963 × (1+0.019) ≠ 791,529,823`). 그런데
+  평가금액 열은 **총자산 레벨**(입출금 포함)이고 손익·수익률 열은 **투자성과**(흐름 제거)라 그 항등식은
+  구조적으로 성립할 수 없다. 산식을 단순 차분으로 되돌리지 말 것(입금이 통째로 수익이 되는 원래 버그) —
+  대신 **툴팁(hover)** 으로 `평가금액 차이 = 손익 + 순입출금`을 분해해 보여준다.
+  문구는 `utils`의 **공유 포매터 2종**(`periodGapLines` · `periodRateGapLine`)으로만 만든다(손복제 금지 —
+  `periodNoun`과 같은 규약). ⚠️ 금액은 **툴팁에만** — CLAUDE.md '입출금 금액 배지는 어느 화면에도 상시
+  렌더하지 않는다'(사용자 요청)를 그대로 지킨다. ⚠️ 잔차(ΔV−손익)를 원장 순흐름이라 **단언하지 않는다**
+  (보류 이월·계좌 편입/이탈 경계가 섞인다) — `ledger`와 값이 일치할 때만 '순입출금'이라 부른다.
+  ⚠️ **null 계약** — 보류 행·첫 기간(`profit`/`prevEval` 없음)이면 아무 줄도 만들지 않는다(0으로 단언 금지).
+  ⚠️ 입출금이 없어 두 값이 사실상 같은 기간에는 해명 줄을 **만들지 않는다**(맞는 값에 해명을 붙이면
+  '뭔가 어긋났다'는 잘못된 인상을 준다). ⚠️ 통합은 `hideAmounts`면 툴팁을 **아예 만들지 않는다**
+  (셀은 가려 놓고 hover에 실금액을 노출하면 '금액 숨기기'가 반쪽이 된다).
+  ⚠️ 기준 평가액은 **표가 실제로 그리는 값**이어야 검산이 된다 — 통합은 `periodPrevEval`(직전 대표일
+  `evalAmount`), 개별은 `shownEvalOf`(평가자산 셀과 같은 소스: 해외 `ov.krw` → `displayEvalByDate` →
+  저장값 폴백). 저장 `evalAmount`를 직접 읽지 말 것.
+- **별도 창(stats 카드)**: `card:data`로 **1회만** 시드(`!gotDataRef.current` 게이트)하고 이후 **창 로컬**.
+  ⚠️ 그 메시지는 계좌 객체가 바뀔 때마다 오는 **반복 푸시**라, `hideAmounts`처럼 매번 적용하면 창에서
+  고른 기간이 (같은 창에서 메모 한 글자만 고쳐도) 앱 값으로 되돌아간다. `CARD_NEEDS.stats.histPeriod`로
+  게이팅(전 카드 브로드캐스트 방지), `CARD_OPS` 무수정(쓰기가 아님). 창 세그먼트에 '저장되지 않음'을 표기한다.
+- **⚠️ 측정 구간은 반개구간 `(직전 대표일, 이번 대표일]` — '기준일'을 화면에 노출한다 (사용자 문의 2026-08)**:
+  일자 셀 라벨(`periodRangeLabel`)은 **버킷 범위**('8/24~8/26')인데 실제 측정은 **직전 행의 대표일
+  종가**에서 시작한다(8/23). 그래서 사용자가 "라벨 첫 날부터 재는 줄 알았다 → 8/23→8/24 하루가 빠진
+  것 아니냐"고 오독한다(실제로는 이미 포함돼 있다 — 실측 검산: cum(8/26)−cum(8/23)=−₩159,970 =
+  일별 −945,745+611,500+174,275, 라벨 첫날 기준이면 +₩785,775로 그 하루가 통째로 증발).
+  ⚠️ **산식을 라벨대로 바꾸지 말 것** — 반개구간이라야 **모든 기간 손익의 합 = 전체 누적 손익**
+  (연쇄성)이 성립하고, 라벨 기준이면 경계마다 하루씩 사라져 어느 행에도 없는 유령이 된다.
+  대신 `utils.periodBasisLines({prevDate,curDate,mode})` **공유 포매터**(손복제 금지)가 기준을 말한다:
+  `측정 기준: 26/08/23 (일) 종가 → 26/08/26 (수) 종가` + `시작값 = 바로 아래 행의 평가액입니다`.
+  - **노출 5지점**: 통합 일자 셀 title · 통합 % 셀(`periodRateGapLine`의 **선택 인자 `basis`**) ·
+    통합 손익 셀(`periodGapLines`의 **선택 인자 `prevDate`/`curDate`**) · 개별 일자 셀 title ·
+    개별 손익 툴팁(`gapTail`의 `pd`). th 툴팁 2개(통합)·th+도움말(개별)은 **행별 날짜 없이도 참인**
+    문장("시작값 = 바로 아래 행의 평가액")을 hover하지 않는 사용자를 위해 상시 유지한다.
+  - **⚠️ 두 선택 인자는 미전달이면 반환값이 종전과 한 글자도 다르지 않다**(하위호환의 축, 검증 #25·#22).
+    특히 `periodRateGapLine`의 '해명이 필요 없으면 빈 문자열' 계약은 `basis` 없을 때 그대로 유지된다.
+  - **⚠️ '바로 아래 행'은 구조적으로 항상 참이다** — 두 표 모두 내림차순이고 `prev`는 `packed[i-1]`(통합)
+    / `viewRows[i+1]`(개별)이라 화면상 한 칸 아래다. 정렬 UI가 없으므로 뒤집히지 않는다.
+  - **⚠️ 기록 0건 기간이 건너뛰어진 경우 반드시 알린다** — `compressPeriodRows`가 그 행을 만들지 않아
+    라벨이 측정 범위를 축소해 보여 준다(8월 기록이 없으면 '2026-09' 행이 7/31 기준으로 두 달을 잰다).
+    `periodBucketSpan`이 버킷 거리를 재어 2 이상이면 경고 줄을 붙인다.
+    ⚠️ 문구에 `periodNoun(mode).unit.replace('간','')`을 쓰지 말 것(연간에서 '그 연'이라는 비문).
+  - **⚠️ null 계약** — 가장 오래된 기간(직전 대표일 없음)은 **빈 배열**이다. 없는 기준을 지어내지 않는다.
+  - **⚠️ 시각 노출은 폭이 안 나온다** — 통합 카드 490px에 6열이라 일자 열 여유가 ≈97px뿐이고(현재 부제
+    `진행 중 · 대표 08/26`이 이미 그 폭), 개별은 `xl:w-[21%]`≈252px다. 부제에 `· 기준 08/23`을 더하면
+    가로 스크롤이 생긴다 → **툴팁 전용**이 의도된 선택이다.
+  - **영속화 지점 0곳** — 전부 매 렌더 파생값이다(`periodPrevDate`도 `histRows` memo 안). `chartPrefs`·
+    `portfolioStructureKey`·`applyStateData`·`applyBackupData` 무수정.
+- **범위 밖(의도)**: CSV(`handleDownloadCSV`는 **죽은 prop** — 두 표에 진입점이 0개다) · 기간 행
+  드릴다운(일별 펼치기) · 기간 값 산식 변경(단순 차분·`손익÷직전평가액` 둘 다 검토 후 **미채택**).
+- **알려진 한계**: 가장 오래된 기간 행은 비교 대상이 없어 항상 `'-'`(기간 모드에서 그 비중이 커진다).
+  기간 모드에서는 **대표일의 자산검증만** 열린다(비대표일 평가액을 고치려면 '일'로 되돌려야 한다 —
+  모드가 Drive에 영속되므로 다음 세션에도 유지된다). 통합 표 기간(`intHistPeriod`)은 계좌와 무관한 단일
+  값이라 어느 계좌에서 바꾸든 통합 화면 하나에만 적용된다(개별 계좌 표는 2026-08부터 계좌별이다).
+- 검증: `npm run verify:period` (직접 import #1~#27c + 소스 텍스트 가드 #G1~#G28h).
+  ⚠️ **미러 금지 — `src/utils.ts`를 직접 import**한다(그 파일은 import 0건이라 Node가 타입만 벗겨 실행).
+  가드는 **선언이 아니라 사용부**를 단언하며 **변이 51종**(압축 행 재투입 · fail-safe 되돌림 ·
+  **기준일 노출 11종**(일자/%/손익 셀 호출 삭제 · `periodPrevDate` 제거 · `basis`·날짜 인자 무시 ·
+  th·도움말 문장 삭제 · 건너뛴 기간 경고 삭제) ·
+  오늘 판정 UTC/getTodayKST 복귀 · `cumulativeByDate` 압축본 주입 · 창 반복 적용 · `Math.abs` ·
+  chartPrefs deps 누락 · 형제 카드 높이 · 전 구간 보류 0.00% 복귀 · 해외 고지 제거 · 커서 O(n²) 복귀 ·
+  `date` 필터 제거 · **계좌별 4지점 각각 되돌림 · 부팅 복원 앱 레벨 복귀 · 툴팁 삭제/값 바꿔치기 ·
+  hideAmounts 게이트 제거 · `shownEvalOf`→저장 evalAmount · 잔차를 '순입출금'으로 단언 · 부호 처리 제거 ·
+  null 계약 0으로 변경 · 해명 줄 상시 표시 · 산식을 단순 차분으로 되돌림** 등)으로 **실제 검출을 확인**했다.
+  가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+
+### 누적 지표 = 원금대비 · 조회시작 0% 모드는 '수익률'이 아님 (⚠️ 회귀 주의)
+
+일간 지표(위 Modified Dietz)와 **역할이 다른 누적 지표**의 규약. 세 화면이 같은 날짜에 서로 다른
+수익률을 보여주던 문제를 정리한 결과다.
+
+- **지표별 역할 고정(섞지 말 것)**: 누적 원금대비 `(V−C)/C` = "시작부터 통틀어 내 돈이 불었나"
+  (요약 카드·추이 표 평가자산 셀 하단·통합 추이표 '원금대비' 열·차트 일반 모드) / 일간 보정 수익률 =
+  **"오늘 장에서 벌었나"**(개별 계좌 추이표 '일간 수익률·수익금' 열, 통합 추이표 '전일대비'·'일간 손익' 열).
+  ⚠️ **전일대비 열에 누적값을 넣지 말 것** — 애써 만든 입출금 보정이 사라진다.
+  ⚠️ **거꾸로 일간 열을 없애지도 말 것** — 사용자가 이 표에서 1순위로 보는 값이 "어제 종가를 오늘의
+  시작 금액으로 놓고 오늘 종가까지 얼마 벌었나"다(2026-07 사용자 정의). 한 번 3열을 누적으로 바꿨다가
+  되돌린 이력이 있다.
+- **`utils.ts` `resolveRecordPrincipal(effectiveValue, record, date, sortedHistAsc, principalProp)`가
+  기록 날짜 원금의 단일 소스**. 우선순위 `수동 anchor 전파값 > 그 기록의 principal > 직전 기록의
+  principal > 계좌 principal 필드`. **소비자 2곳이 반드시 공유**: `App.tsx` `finalChartData`의
+  `exactHist` 분기(차트 '나의 수익률'), `HistoryPanel` `cumulativeByDate`(추이 표 평가자산 셀 하단 누적 2줄).
+  ⚠️ 한쪽만 자체 계산으로 되돌리면 같은 날짜에 차트와 표가 다른 누적 수익률을 표시한다
+  (`computeDailyMetricsSeries` 단일 소스 규약과 같은 이유). `effectiveValue`는 호출부가 이미 구한
+  `computeEffectivePrincipal(...).value`를 **값으로** 넘긴다 — 날짜 루프 안 재계산(O(n²)) 방지.
+  오늘 행은 today-effect가 `principal: cleanNum(principal)`(라이브)를 기록에 쓰므로 **요약 카드 수익률과
+  자동 일치**한다.
+- **해외(overseas)는 USD 기준 별도 분기**: 원금도 평가도 USD라 환산하지 않는다. 원금의 단일 소스는
+  `resolveRecordPrincipal`이 아니라 **`utils.ts` `overseasPrincipalAt(date, sortedDeps, sortedWds,
+  principal, portfolioStartDate)`** — 날짜별 원장 누적(입금 − `principalDeducted ?? amount`, `noPrincipal`
+  제외) + principal 필드 하한. **소비자 2곳 공유 필수**: `App.tsx` `finalChartData` 해외 분기,
+  `HistoryPanel` `cumulativeByDate` 해외 분기(`portfolioStartDate` prop 필요).
+  ⚠️ **`cleanNum(principal)`을 전 행에 평탄 적용하지 말 것** — 출금 시 principal 필드만
+  `principalDeducted`만큼 줄어들어, 출금 이전 과거 행의 원금·수익금이 차트와 갈린다(2026-07 수정 전 상태).
+  ⚠️ 수익금도 **USD − USD라 `formatUsd`($)로 표기**한다 — 원화 환산 금지(환율 시점이 섞여 가짜 손익이
+  생긴다). 행 스코프 `fmtAmount = isOverseasAcc ? formatUsd : formatCurrency` 하나가 셀·툴팁을 통일한다.
+- **수익률 차트 라인 = 항상 누적 TWR**(2026-07 통일, 아래 전용 섹션 참조). 과거의 시계 아이콘
+  (`isZeroBaseMode`/`intIsZeroBaseMode`) 토글은 **제거**됐다 — 라인은 개별·통합 모두 입출금 보정 누적
+  TWR로 고정. `PortfolioChart`의 `myReturnLabel = '기간 수익률'`(상수)이 **범례·정보패널·계산식 검증
+  패널·버튼 title**을 통일한다. 원금대비 `(V−C)/C`는 **요약 카드·추이 표 누적 열에만** 남는다(차트 라인 아님).
+  ⚠️ **`chartUtils.tsx`의 `[구간: x%]` 태그 매칭이 라인명을 본다** — 개별 `'기간 수익률'`은
+  `selectionResult.myReturnPeriodRate`(두 끝점 TWR의 비), 통합 `'수익률'`은 `selectionResult.rate`
+  (이제 구간 TWR)로 갈라야 라인·정보패널과 일치한다. 라벨 변경 시 양쪽을 같이 고칠 것.
+- **추이 표 셀 구성 (2026-07 확정 — 되돌리지 말 것)**: 개별 계좌(`HistoryPanel`)는 3열
+  `일자 / 평가자산 + 누적 수익률 · 수익금 / 일간 수익률 · 수익금`이다.
+  - **2열(평가자산 셀, 3줄)**: 금액 → `±N%`(`cum.rate`, 10px) → `±₩누적수익금`(`cum.profit`, 9px).
+    셀 툴팁은 `투자원금 · 평가자산` 원본값(`cumTitle`).
+  - **3열(일간, 2줄)**: `%`(`dodChange`) → `±₩일간손익`(`dodAbsChange`). 셀 툴팁은 금액 + 그날 흐름 설명.
+  - **사용자 정의(⚠️ 이 문장이 3열의 존재 이유)**: "어제의 평가금 총액을 오늘의 시작 금액으로 보고,
+    오늘 종가와 비교해 얼마 벌었나". 현행 Modified Dietz가 **정확히 그 값**이다 — 입출금이 없는 날은
+    `(당일−전일)÷전일`과 **항등**이고, 있는 날만 그 금액이 분자에서 빠지고 분모(시작 자산)에 더해진다.
+    안내 문구는 반드시 이 프레이밍("시작 금액", "오늘 장에서 번 돈")으로 쓸 것 — 'Modified Dietz'·
+    '입출금 보정' 같은 용어를 전면에 내면 사용자가 자기 질문과 연결하지 못한다.
+  - **⚠️ 되돌리기 이력**: 한 번 3열을 누적으로 바꾸고 일간을 툴팁으로 내렸다가(커밋 7b406bf) 사용자
+    재요청으로 원복했다. 그 발단이던 **07/21 −₩11,002,033 / 07/22 +₩7,385,947 거울상은 산식 결함이
+    아니라 데이터 타이밍**(입금 원장 07/21 vs 평가액 반영 07/22)이다. 같은 현상이 다시 보고되면
+    산식을 바꾸지 말고 **원장 날짜와 평가 스냅샷을 맞추는 쪽**을 보라. `shouldHoldDailyMetrics`가 못 잡은
+    이유는 ΔV가 흐름의 78%로 50% 임계를 넘겨서다(임계를 올리면 정상 수익일이 대량 보류되니 손대지 말 것).
+- **⚠️ 입출금 금액 배지는 어느 화면에도 렌더하지 않는다(사용자 요청 — 되돌리지 말 것)**: 일간 지표는
+  이미 흐름이 제거된 값이라 금액을 함께 띄우면 중복 노이즈다. 제거된 3곳 — 통합 추이표 전일대비 셀,
+  `HistoryPanel` 일간 수익률 셀, 헤더 '오늘 수익' 카드("입금 ₩N 제외"). 보류 안내는 **금액 없이**
+  `'입금 반영 대기'`로만 표기한다(`'-'`가 왜 떴는지 알려주는 진단이라 문구 자체는 유지).
+  `netFlow`·`ledgerFlow` **필드는 계속 계산·소비되므로 제거 금지** — 보류 판정과 툴팁이 쓴다.
+  금액은 `HistoryPanel` **일간 수익률 셀의 툴팁(hover)** 에만 남긴다(상시 표시가 아니므로 허용).
+  **예외 없음(2026-07 갱신)** — 과거 유일 예외였던 `PortfolioChart` 조회시작 0% 모드의
+  `⚠ 순입금 N 포함 · 실손익 M`은 **제거**됐다. 그 문구는 그 모드의 %가 입금액을 분자에 넣어 거짓말을
+  하던 시절의 **오표시 정정 고지**였는데, 라인이 누적 TWR로 바뀌어 %도 ₩(실손익)도 흐름이 제거된
+  값이 되면서 전제가 사라졌다. 지금은 흐름이 있으면 금액 없이 `입출금 보정됨`만 표기한다.
+- **파생값이라 영속화 무관**: `resolveRecordPrincipal`·누적 %·실손익은 전부 매 렌더 파생값이다.
+  `portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps **전 지점 무수정**.
+- **범위 밖(의도)**: XIRR은 **미적용**. 누적 TWR 곡선은 개별 계좌 차트에 한해 도입됐다(아래 전용 섹션).
+
+### 수익률 차트 라인 = 누적 TWR — 개별 + 통합 (⚠️ 회귀 주의 — 평가액 비율·원금대비 라인으로 되돌리지 말 것)
+
+개별 계좌·통합 대시보드 수익률 차트의 `%` 라인(`showReturnRate`)은 **항상 입출금 보정 누적 TWR**이다
+(2026-07 통일). 과거엔 시계 아이콘(`isZeroBaseMode`/`intIsZeroBaseMode`) 토글로 라인을 전환했는데,
+옛 식 모두 **구간 중 입금액이 분자에 통째로 들어가거나(평가액 비율: 12.5M→106.4M을 +747%로 표시,
+실손익은 −₩5,365,205) 입금일에 분모 C가 급증해 절벽처럼 꺾여**(원금대비) 왜곡됐다 — **왜곡 없는 곡선이
+하나도 없었다**. 사용자 요청으로 **토글을 제거하고 라인·드래그 선택을 전부 TWR/구간 실제값으로 통일**했다.
+드래그 선택 헤드라인은 **항상 구간 실제값**(종점 누적 아님): % = 두 끝점 TWR의 비, ₩ = 구간 실손익.
+
+- **지표별 역할 고정**: 차트 라인 = `기간 수익률`(누적 TWR, 입출금 보정) — "시장에서 얼마나 벌었나".
+  원금대비 `(V−C)/C`("내 돈이 불었나")는 **차트 라인이 아니라 요약 카드·추이 표 누적 열에만** 남는다
+  (`resolveRecordPrincipal`/`overseasPrincipalAt` 공유). ⚠️ 카드/추이표 누적 열을 '차트와 맞춘다'며
+  TWR로 바꾸지 말 것 — 라인만 TWR, 카드/표는 원금대비 유지. finalChartData 원금대비 계산(raw pass
+  `principalReturnRate`·`principalAmount`)은 **신뢰불가 날짜 null-gate + 계산식 검증 패널 투자원금**으로
+  계속 쓰이므로 제거 금지.
+- **계산식**: `TWR(t) = Π(1 + r(s))` where `r` = `computeDailyMetricsSeries`의 `dodChange`(Modified Dietz).
+  입금일 `r`은 이미 흐름이 제거돼 있어 **입출금 규모와 무관**. 부수 효과로 지수·비교종목 라인(0% 정규화
+  가격비)과 같은 축에서 처음으로 직접 비교 가능해졌다.
+- **`utils.ts` 3함수**: `computeCumulativeTwrSeries(rows)`(전체 이력 누적) / `rebaseTwr(twr, base)`(구간
+  재베이스) / `overseasUsdEvalAt(items, date, map)`(해외 USD 평가 — 차트 라인과 TWR이 **공유 필수**).
+  `rows` 형식·정렬은 `computeDailyMetricsSeries`와 **동일**(날짜 오름차순).
+- **⚠️ `held` 행은 배율 1.0**(직전값 유지) — 일간 표시 계약(`dodAbsChange=null` → `'-'`)과 **다른 것이
+  정상**이다. null로 빼면 주말마다 선이 끊기고, 보류된 흐름은 `computeDailyMetricsSeries`가 다음 행으로
+  이월하며 **보류 행의 ΔV도 다음 산출 행이 기준(anchor) 행 대비로 합산**하므로 곱은 그대로 정확하다.
+  ⚠️ '흐름 이월'만으로는 ΔV=0(비거래일)일 때만 정확했다 — 거래일 보류 행의 ΔV는 기준 행 규약(일간 지표 절)
+  없이는 곱에서 영구 소실된다(2026-09 결함).
+- **⚠️ 전체 이력에서 한 번 누적하고 조회구간은 나눗셈으로 재베이스**(개별=`App.tsx` `accountTwrByDate`
+  → `finalChartData`의 `twrByChartDate`/`baseTwr` → `rebaseTwr`; 통합=`useIntegratedData` `intTwrCumByDate`
+  → `intChartData` `baseTwr=filtered[0]` → `rebaseTwr`). 구간만 잘라 체인하면 첫 행이 `held`(비교 대상
+  없음)라 경계에서 흐름 이월 상태가 끊긴다. 재베이스 방식은 조회구간을 바꿔도 곡선 모양이 불변.
+- **⚠️ 통합 구간 실손익 ₩ = 누적 `Σ dodAbsChange` 차분(`cumProfit`)** — 개별의 `externalFlowInRange`
+  (단일 원장)를 통합에 쓰면 계좌 편입/삭제 경계·현금성·다계좌 흐름 누락으로 틀린다. 통합 rows는
+  `intMonthlyHistory`와 **완전 동일 구성**(오름차순 + netFlowIn/Out·ledger·flowSuspect·bookDelta)이라
+  추이표·헤더 카드와 정합. 통합은 다계좌라 bookInvalid(해외·추정) 빈도↑ — 그날 bookDelta null이면 ΔV 폴백.
+- **⚠️ 평가액 소스는 차트 라인과 동일**: 시장계좌=`activeCloseEvalByDate`(수량×종가), 해외=`overseasUsdEvalAt`
+  (USD — 원장도 환산 없이 USD 그대로). 기록일이 아닌 차트 날짜는 직전 기록일 TWR을 carry-forward.
+- **⚠️ 곱셈 체인은 하루짜리 이상치를 영구 고정한다**(원금대비는 다음 날 자동 복구). 1차 방어는
+  `buildCloseEvalSeries`의 `allExact`·`!estimated` 게이트, 2차는 `r = −100%`(평가 0 + 출금 없음 = 데이터
+  누락) 행을 **배율 1로 흡수**하는 가드. **일간 |r| 상한 클램프는 미도입** — 실데이터 관찰 후 임계값 확정.
+- **구간 수익률**: `selectionResult.myReturnPeriodRate` = `(1+누적종료) ÷ (1+누적시작) − 1`(base 약분).
+  `useChartInteraction.calculateSelection`과 `App.tsx` `defaultSelectionResult` **양쪽에 동일 식**.
+  시작점이 null이면 0%(조회시작 base)로 폴백. ⚠️ `selectionResult.rate`(평가액 비율)로 되돌리지 말 것.
+- **⚠️ 정보패널 ₩ 값 = 누적 `Σ dodAbsChange` 차분 (2026-09 통일 — 원장 raw 차감으로 되돌리지 말 것)**:
+  `%`(두 끝점 누적 TWR의 비)와 **같은 일간 지표**에서 나와야 보류·이월·장부 관측이 둘에 똑같이 반영된다.
+  공급자는 `App.tsx accountDailySeries.cumProfit` → `finalChartData.cumProfit`(라인과 같은 게이트로 null
+  처리) → `useChartInteraction.calculateSelection`·`App defaultSelectionResult`가 두 끝점 차분,
+  `PortfolioChart`는 `displayResult.profit`을 표시만 한다. **통합(`calculateIntSelection`)과 같은 규약**이다.
+  - **⚠️ 누적은 공용 `accumulateDailySeries` 하나로만**(개별 차트·통합 차트·기간 표 3소비자 공유 —
+    손복제 금지). 그 함수만이 **손익·배율·기여일에 같은 게이트**(`usable = next > 0`)를 적용한다.
+    `r = −100%`(평가 0 = 데이터 누락·계좌를 비운 이관) 행은 곱에서 흡수되는데 손익만 그대로 더하면
+    그 행의 −V가 ₩에 남아 **같은 줄의 %와 정면으로 모순**된다(실측: `+1.00%` 옆에 `−₩98,995,000`).
+  - **⚠️ null 처리를 %와 대칭으로**: `profit = e.cumProfit != null ? e.cumProfit − (s.cumProfit ?? 0) : null`.
+    %(`myReturnPeriodRate`)가 시작점 null을 `?? 0`(조회시작 기준점)으로 흡수하므로 ₩도 같아야 한다 —
+    "둘 다 있어야" 조건으로 되돌리면 조회기간이 첫 기록보다 길 때(‘전체’·‘5년’) ₩만 raw ΔV로 떨어져
+    **평가액 전액이 기간 손익**으로 찍힌다(커밋 전보다 나쁜 회귀).
+  - **과거 결함(실측 2026-09)**: ₩만 `endEval − startEval − externalFlowInRange`(원장 raw)라 같은 줄에서
+    모순됐다 — 08/15~09/07 `+0.14%` 옆에 `+₩5,078,791`(= ΔV 628,791 + 원장 출금 4,450,000). %는 보류·장부
+    관측을 거친 값인데 ₩는 원장에 있으면 무조건 빼서, 미반영 흐름을 이중으로 계상했다.
+  - `externalFlowInRange` 호출은 **'입출금 보정됨' 배지 표시 전용**으로만 남는다(값 계산에 쓰지 말 것).
+  - 라벨은 `selectionResult ? '선택시작' : '조회시작'` — 드래그 선택인데 '조회시작'이라 쓰면 거짓이다.
+- **영속화 무관**: `accountTwrByDate`·`intTwrCumByDate`·TWR·`myReturnPeriodRate`·`cumProfit`은 전부 매
+  렌더 파생값이다. `isZeroBaseMode`/`intIsZeroBaseMode` 상태·`chartPrefs` 저장·prop은 **전부 제거**됐고
+  (`useHistoryChart`·`App.tsx`·`PortfolioChart`·`IntegratedDashboard`) `portfolioStructureKey`·
+  `applyStateData`·`applyBackupData`·저장 effect deps 무관(옛 chartPrefs에 남은 값은 로드 시 무시).
+- 검증: `npm run verify:twr` (#22~#28 — 흐름 0 항등·대형 입금 중립·전액 출금·held 배율 1.0·재베이스
+  항등식·첫 행 0%·−100% 영구고정 방지). 참조 구현(`computeCumulativeTwrSeries`/`rebaseTwr`/
+  `computeDailyMetricsSeries`)은 시그니처·본문 불변 → 통일이 이 함수들을 안 바꿔 검증 무영향.
+- **범위 밖(의도)**: CAGR·XIRR은 **미적용**.
+
+### 차트 드래그 구간 선택 = '비선택 구간 딤(scrim)' — 선택은 원본 그대로 (⚠️ 회귀 주의)
+
+수익률 차트에서 드래그로 기간을 고르면 **선택 구간은 원본 밝기 그대로 두고 그 바깥을 어둡게 덮는다**
+(사용자 요청 2026-08 "선택한 부분만 선명하게, 선택되지 않은 부분은 음영처리"). 종전에는 선택 구간을
+흰색 8~10% `ReferenceArea`로 칠하기만 해서 어두운 차트 배경에서 **선택 범위가 사실상 보이지 않았다**.
+
+- **⚠️ 하이라이트를 밝게 올리는 방향으로 되돌리지 말 것** — 밝기를 더 주면 선택 구간의 라인 색이
+  씻겨 "선명하게 보이고 싶다"는 원래 목적과 정면으로 충돌한다. 대비를 **바깥에서** 만드는 반전이 답이다.
+- **`utils.selectionDimBands(rows, left, right)` 단일 소스** — 개별 계좌 차트(`PortfolioChart`)와
+  통합 대시보드 차트(`IntegratedDashboard`)가 **같은 함수 + 같은 토큰**(`design.CHART_SELECTION`)을
+  공유한다. 값을 손복제하면 같은 제스처가 두 화면에서 다르게 보인다.
+  반환 `{ start, end, before, after }` — `before`/`after`가 딤 밴드(끝에 닿으면 `null`).
+- **⚠️ 상보성(complementarity)이 기하학적 핵심**: `ComposedChart`에 `<Bar>`가 없어 category 축이
+  `scalePoint`(bandwidth 0)로 잡히므로 `ReferenceArea x1..x2`는 **두 점의 중심 사이**를 정확히 덮는다.
+  그래서 `before`(첫날→시작) · 선택 창 · `after`(끝→마지막날) 셋이 플롯 영역을 **빈틈도 겹침도 없이**
+  분할한다. 빈틈이 생기면 안 어두워진 띠가, 겹치면 두 번 칠해져 더 어두운 띠가 남는다.
+  `<Bar>`를 추가하면 축이 `scaleBand`로 바뀌어 이 전제가 깨진다.
+- **⚠️ paint 순서 = 선언 순서**(recharts `renderByOrder`). `ReferenceArea`의 `isFront` prop은
+  2.15.3에서 **무시되므로**(generateCategoricalChart가 참조하지 않는다) 선언 위치가 유일한 수단이다.
+  딤 3개는 반드시 **모든 `<Area>`/`<Line>` 뒤**에 선언한다 — 앞에 두면 선 뒤에 깔려 아무것도
+  어두워지지 않는다. NBER 경기침체 음영이 **앞**에 선언돼 배경으로 깔리는 것과 정확히 반대 이유다.
+- **⚠️ Fragment로 묶지 말고 형제로 둘 것** — 이 저장소의 다른 차트 요소가 전부 형제/배열 형태다
+  (`toArray`가 Fragment를 펴 주긴 하지만 검증된 형태를 유지한다).
+- **⚠️ 3개 밴드 전부 `ifOverflow="hidden"` 필수 — 기본값 `'discard'`로 되돌리지 말 것**
+  (적대적 리뷰 확정 결함, 2026-08): `ScaleHelper.isInRange`가 epsilon 없이 `>=`/`<=`로 재는데,
+  d3 scalePoint의 `start += (stop - start - step * (n - 1)) * align` 잔차 때문에
+  **`scale(첫 날짜)`가 `range()[0]`보다 ~1e-13 작아지는 폭이 실재한다**. 그러면 첫/마지막 날짜를
+  x1/x2로 쓰는 딤 밴드가 `getRect`에서 `null`이 되어 **통째로 사라지고 한쪽만 어두워진다**
+  (실측: 1년치 366행에서 폭 534종 중 46종 ≈ 8.6%, 2년치 730행 8.1%. 리사이즈로 나타났다 사라지는
+  간헐 증상이라 원인 추적이 어렵다). 선택이 첫 날짜에서 시작하면 **선택 창까지** 함께 사라져
+  위 null 계약이 막으려던 바로 그 상태가 된다. `'hidden'`은 discard 분기를 건너뛰고 clip만 적용해
+  **정상 케이스 픽셀이 완전히 동일**하다(실측 148건 전수 대조). 종전 단일 하이라이트는 x1/x2가
+  내부 날짜라 거의 안 걸렸고 걸려도 무해했다 — 양 끝 앵커로 바뀌면서 상시 노출로 승격됐다.
+- **⚠️ null 계약 — '딤만 깔리고 선택 창은 없는(=차트 전체가 어두운)' 상태를 구조적으로 차단**:
+  경계를 `rows`에서만 고르고 하나라도 못 찾으면 `selectionDimBands`가 **null**을 돌려준다.
+  `ReferenceArea`의 `ifOverflow='discard'`는 밴드마다 **따로** 판정하므로, 호출부 조건
+  (`refAreaLeft && refAreaRight`)만으로는 낡은 선택 날짜에서 딤 2개만 살아남는 상태를 막지 못한다.
+- **⚠️ 역방향 드래그(오른쪽→왼쪽) 정규화 필수** — 인덱스 `min`/`max`로 정렬하지 않으면 그쪽
+  드래그에서 딤이 뒤집혀 **선택한 구간만 어두워진다**(의도와 정반대).
+- **해제 경로 4종 — 하나라도 빠지면 차트가 어두운 채로 고착된다**(종전엔 흰색 8% 띠라 잔존해도
+  티가 안 났다. 이 변경으로 잔존의 대가가 커졌으므로 넷 다 필수):
+  ⚠️ **`MouseLeave`는 더 이상 해제 경로가 아니다**(2026-08) — 커서가 wrapper를 벗어나도 드래그를
+  취소하지 않는다. 아래 '차트 구간 선택 = ref가 정본' 절 참조.
+  ① **차트 안 단순 클릭** — `useChartInteraction`의 두 `MouseUp`. ⚠️ 통합 차트는
+  `intRefAreaRight`가 `''`인 채로 `calculateIntSelection`에 넘기면 `[l,r].sort()`가 `''`를 앞으로
+  보내 **차트 시작~클릭 지점**이라는 없는 구간을 돌려준다(하이라이트는 안 뜨는데 패널만 '선택 기간'으로
+  바뀌는 모순). 개별 차트에는 원래부터 있던 가드를 통합에도 넣었고, 해제 시 `setIntSelectionResult(null)`도
+  **함께** 호출한다.
+  ② **플롯 영역 밖(축 눈금) 클릭** — 두 `MouseDown`의 `else` 분기(적대적 리뷰 확정 결함).
+  ⚠️ recharts는 Y축 눈금 거터·X축 날짜 띠를 눌러도 `onMouseDown`을 **부른다**
+  (`handleOuterEvent`가 `getMouseInfo` 결과를 `mouse ?? {}`로 넘긴다 — `inRange`는 플롯 rect만 본다).
+  거기서 `activeLabel`이 없다고 no-op으로 두면, 그 영역은 `.chart-container-for-drag` **안**이라
+  ③의 차트 밖 클릭 해제도 건너뛰어 **아무 경로도 없다**. 통합 차트 기준 축 띠가 카드의 약 1/4이고
+  날짜 라벨이 전부 거기 있어 오클릭이 잦다.
+  ③ **차트 밖 클릭** — `App.tsx`의 window `mousedown` + `touchstart` 리스너.
+  ⚠️ 두 차트가 같은 `.chart-container-for-drag` 클래스를 쓰는데 과거엔 **개별 계좌 state만** 지웠다
+  → `int*` 3종도 반드시 함께 초기화할 것(두 차트는 `showIntegratedDashboard`로 갈려 동시에
+  마운트되지 않아 교차 초기화 부작용이 없다).
+  ⚠️ 판정은 '카드 안인가'가 아니라 **recharts 표면(`.recharts-wrapper`) 위인가**다 — 카드 안이라도
+  컨테이너 패딩(`p-2`~`p-4` / `px-2`)에 떨어진 클릭은 recharts 이벤트가 **아예 발생하지 않아**,
+  컨테이너만 보면 ②로도 ③으로도 안 걸리는 링이 남는다.
+  ⚠️ **`touchstart`를 함께 들을 것** — recharts는 `<Tooltip>`이 있으면 `onTouchStart`를
+  `handleMouseDown`으로 위임하므로(`generateCategoricalChart` `parseEventsOfWrapper`) **손가락
+  드래그로도 선택이 만들어진다**. 그런데 스크롤로 판정된 터치에는 호환 `mousedown`이 발생하지
+  않아, `mousedown`만 듣던 종전 코드로는 딤이 영영 안 걷혔다.
+  ④ **조회기간 변경** — `[appliedRange]` / `[intAppliedRange]` 리셋 effect 2개(둘 다 기존).
+  ⚠️ **②③④는 state뿐 아니라 `resetChartSelectionRefs()`로 ref도 함께 지워야 한다** — 정본이 ref라
+  한쪽만 지우면 다음 mousedown이 유령 앵커를 되살린다(상세는 아래 절).
+- **영속화 지점 0곳** — 딤은 전부 매 렌더 파생값이고 선택 state는 종전부터 세션 로컬이다.
+  `chartPrefs` 5지점·`portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps
+  **전 지점 무수정**. `selectionResult`/`calculateSelection`/`calculateIntSelection` **산식도 무수정**
+  (누적 TWR 규약 무영향 — 정상 드래그의 결과값이 1원도 바뀌지 않는다).
+- **범위 밖(의도)**: 선택 구간 확대(zoom), 카드 별도 창의 수익률 차트
+  (`cardWindow`에 `chart`는 원래 미지원), 차트 컨테이너의 `touch-action` 지정.
+  ⚠️ 마지막 항목은 **알려진 한계**다 — 차트 위에서 시작한 세로 스크롤이 가로 성분을 가지면
+  스크롤과 **동시에** 구간 선택이 만들어진다(recharts의 터치 위임 때문. 이 변경 이전부터 있던
+  동작이다). `touch-action: pan-y`로 막고 싶어도 recharts가 `onTouchCancel`을 바인딩하지 않아
+  `isDragging`이 true로 남을 수 있어 더 나쁘다 → 위 ③의 `touchstart` 해제로 탈출구만 열어 뒀다.
+- 검증: `npm run verify:chart-sel` (`src/utils.ts` 직접 import #1~#17 + 소스 텍스트 가드 #G1~#G17).
+  ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 26종**(딤/선택 창 개별 삭제 · paint 순서를
+  `<Area>` 앞으로 되돌림 · 토큰 손복제 · 옛 흰색 하이라이트 부활 · Fragment 래핑 · 단순 클릭 가드 제거 ·
+  차트 밖 클릭에서 통합 초기화 제거 · 없는 날짜 통과 · 역방향 정규화 제거 · 폭 0 딤 · 상보성 파괴 ·
+  입력 배열 변형 · memo가 남의 차트 데이터를 읽음 · deps 누락 · **밴드별 `ifOverflow` 제거 ·
+  플롯 밖 클릭 else 분기 삭제 · 표면 판정 되돌림 · `touchstart` 등록/해제 누락**)으로
+  **실제 검출을 확인**했다.
+  ⚠️ `#G3c`는 밴드를 **한 줄씩** 검사한다 — 개수만 세면 한 밴드에서 빼고 다른 곳에 붙여도 통과한다.
+  ⚠️ 산술로 표현되지 않는 두 계약(경계 날짜 `discard` · paint 순서)은 이 스크립트 밖에서
+  **react-dom/server로 실제 recharts SVG를 렌더해** 검증했다(딤 3개 path의 x/width가 빈틈·겹침 없이
+  플롯 폭을 정확히 분할 · DOM 순서상 데이터 선보다 뒤 · 폭×행수 2,136조합에서 `hidden` 적용 후 소실 0건).
+  회귀가 의심되면 그 방식으로 다시 재현할 것.
+  ⚠️ 파트①은 예외를 **그 케이스의 실패**로 바꾸는 래퍼(`S`)를 통해 호출한다 — 직접 호출하면 던지는
+  구현이 스크립트를 통째로 중단시켜 어느 계약이 깨졌는지 알 수 없고, 변이 테스트에서 '검출됨'과
+  '죽은 단언'을 구분할 수 없다(실측: `i1 === -1` 가드를 지우면 `rows[-1].date`로 TypeError).
+  가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+
+### 차트 구간 선택 = 'ref가 정본' + 더블클릭 시작점 고정 (⚠️ 회귀 주의)
+
+수익률 차트(개별 계좌 `PortfolioChart` · 통합 대시보드 `IntegratedDashboard`)의 기간 선택은 두 제스처를
+**같은 상태 머신 하나**로 지원한다: ① 종전의 **그냥 드래그** ② **더블클릭으로 시작점을 고정한 뒤
+클릭하거나 드래그해 끝점 지정**(2026-08 신설, 사용자 확정 — 둘 다 허용).
+발단은 사용자 보고 "그래프선에 마우스를 놓고 드래그해 기간을 고르려는데 **잘 안 되고, 조회기간이
+길수록 심하다**". 원인은 UI가 아니라 **React 18 이벤트 우선순위 비대칭**이었다.
+
+- **⚠️ 1급 계약 — 진행 상태의 정본은 `useChartInteraction`의 ref(`acctRef`/`intRef`)다. React state로
+  되돌리지 말 것.** `mousemove`의 `setState`는 **ContinuousLane**(Scheduler UserBlocking = MessageChannel
+  **매크로태스크**)로 비동기 커밋되는데 `mouseup`은 **DiscreteLane**(SyncLane, 마이크로태스크)이라 그
+  자리에서 즉시 처리된다. 차트가 무거우면 mousemove가 커밋되기 **전에** mouseup이 실행되고, mouseup
+  핸들러가 **직전 커밋 렌더의 클로저**를 읽는 순간 `refAreaRight`가 `''`라 '단순 클릭 = 해제' 분기를 타
+  **선택이 통째로 사라진다**. 게다가 mouseup의 `setRefAreaRight('')`가 훅 업데이트 큐에 더 나중에
+  들어가므로 뒤늦게 도착한 mousemove 값은 **구조적으로 살아남을 수 없다**.
+  ref는 커밋과 무관하게 동기 갱신되므로 **렌더 속도와 정확성이 완전히 분리**된다.
+  - **왜 조회기간이 길수록 심한가**: 이 레이스의 창(window) 크기 = 리렌더 1회 시간이고, 그 시간이
+    포인트 수 N에 정비례한다. `unifiedDates`는 기록일 ∪ 지수 ∪ 전 보유·비교종목 일봉 ∪ 전 시장지표라
+    3개월 ≈ 65, 1년 ≈ 265(암호화폐 이력이 있으면 365), 3년 ≈ 800, 10년 ≈ 2,650이다. 게다가 recharts는
+    `isChildrenEqual`이 **구조적으로 항상 false**(인라인 화살표 prop — `tickFormatter`·`label`·
+    `content={() => null}`)라 매 렌더 `updateStateOfAxisMapsOffsetAndStackGroups`를 **O(N × 시리즈수)**로
+    돌린다. 개별 차트는 지표를 전부 켜면 시리즈가 최대 24개다.
+  - ⚠️ **그 `isChildrenEqual`을 고쳐도 드래그 중에는 아무 효과가 없다** — 딤·선택창 `ReferenceArea`의
+    props가 매 move마다 **의도적으로** 바뀌므로 드래그 중에는 항상 false다. 인라인 화살표를 상수로
+    끌어올리는 대규모 리팩터링은 이 버그에 무효이므로 하지 말 것.
+- **⚠️ 훅은 지연 state를 아예 받지 않는다(구조적 불변식)** — `useChartInteraction`의 시그니처에
+  `refAreaLeft`/`refAreaRight`/`isDragging`이 **없다**. '읽지 않는다'를 규율로만 두면 언젠가 다시
+  읽게 되므로, 참조할 방법 자체를 없앴다. `App.tsx`의 호출부도 setter만 넘긴다(가드 #G10b·#G10c).
+  React state(`refAreaLeft` 등)는 이제 **딤·앵커선을 그리기 위한 거울**일 뿐이다.
+- **⚠️ `MouseLeave`가 드래그를 취소하지 않는다** — recharts 플롯 상단 여백이 기본 `margin.top` =
+  **5px**뿐이라, 구간을 끝까지 끌다 위로 살짝만 넘겨도 `.recharts-wrapper`를 벗어나 mouseleave가 뜬다.
+  종전엔 `handleChartMouseLeave = handleChartMouseUp`이라 그 순간 선택이 통째로 사라졌다(오른쪽 끝까지
+  끌어 '오늘까지' 고르려는 가장 흔한 동작에서 특히 잦다). 지금은 **hover만 끄고** 확정은 mousedown에서
+  무장한 **window `mouseup`**(`armWindowUp`, 포인터 캡처 대용)이 맡는다.
+  ⚠️ **드래그 고착 자가치유 2종을 세트로 둘 것** — 취소를 없앱기 때문에 버튼을 누른 채 창을
+  벗어나면 `dragging`이 true로 남아 돌아왔을 때 **버튼을 안 눌렀는데도 구간이 커서를 따라온다**.
+  ① `armWindowUp`이 window **`blur`**도 함께 듣고(alt-tab 즉시 확정) ② mousemove에서
+  `s.dragging && ev.buttons === 0`이면 그 자리에서 확정한다(돌아왔을 때 지연 치유).
+  ⚠️ ②는 **반드시 `s.dragging`과 함께** 판정할 것 — 앵커 미리보기는 원래 버튼 없이 따라오므로
+  `buttons === 0`만 보면 그 기능이 통째로 죽는다(가드 #G11c).
+  ⚠️ recharts의 `onMouseUp`이 먼저 실행되며 `disarmWindowUp()`으로 리스너를 떼므로 **이중 확정이 없다**
+  (React 루트가 window보다 앞 노드라 순서가 보장된다). 커서가 밖에 있으면 recharts 쪽이 안 오고 window
+  쪽만 확정한다.
+- **상태 머신** (개별·통합 동일, `ChartSel = {anchor, left, right, dragging}`):
+
+  | 현재 | 이벤트 | 동작 |
+  |---|---|---|
+  | 아무 때나 | 플롯 위 **더블클릭** | `anchor = left = 그 날짜`, `right=''` → 대기 상태(파란 점선 '시작' 표시) |
+  | 앵커 없음 | mousedown(플롯) | `left = 그 날짜`, `right=''` — 종전 드래그 시작 |
+  | **앵커 있음** | mousedown(플롯) | **시작점을 덮어쓰지 않는다** — 그 지점은 `right`(종료점 후보) |
+  | 드래그 중 · 앵커 대기 | mousemove | `right` 갱신 + 미리보기(앵커 모드는 **버튼을 안 눌러도** 따라온다) |
+  | 〃 | mouseup / window mouseup | `left && right && left !== right`면 확정(+앵커 해제), 아니면 해제 |
+  | 앵커 있음 | 앵커 위에서 mouseup | 시작점 유지하고 계속 대기(취소가 아니다) |
+  | 아무 때나 | 플롯 **밖** mousedown · 차트 밖 클릭 · 조회기간 변경 · **Esc** | 전부 해제(앵커·ref 포함) |
+
+  ⚠️ **`(s.dragging || s.anchor)`에서 `s.anchor`를 빼지 말 것** — 빼면 '클릭으로 끝점 지정'이 통째로
+  죽어 사용자가 고른 "둘 다 허용" 규약이 반쪽이 된다(가드 #G16b).
+- **⚠️ 더블클릭의 두 번째 클릭에서 오는 mousedown/mouseup은 무시한다**(`isSecondClick(ev)` = `ev.detail >= 2`,
+  **4곳**). 안 그러면 한 제스처 안에서 '앵커 확정 → 즉시 선택 확정 → 해제'가 연달아 일어나 화면이
+  번쩍인다. recharts는 `onMouseDown`/`onMouseUp`을 `handleOuterEvent`로 넘기며 2번째 인자에 React
+  합성 이벤트를 실어 주므로 `detail`을 읽을 수 있다. **Touch 경로는 `detail`이 없어 항상 false**(기존 동작 유지).
+  ⚠️ 앵커 상태에서 다시 더블클릭하면 1번째 클릭이 먼저 구간을 확정했다가 dblclick이 새 앵커를 잡는다 —
+  한 프레임 깜빡일 수 있으나 결과는 정확하다. 이를 없애려면 클릭 확정을 250ms 지연해야 해서 **미채택**.
+- **⚠️ `onDoubleClick`은 `<Tooltip>`이 있어야 온다** — recharts `parseEventsOfWrapper`가 tooltipEvents로
+  `onDoubleClick: handleDoubleClick`을 바인딩한다(두 차트 모두 `<RechartsTooltip content={() => null} />`을
+  렌더하므로 성립). `getMouseInfo`가 **null**을 그대로 넘기므로 핸들러는 `e?.activeLabel` 가드 필수.
+- **앵커 표시** — `anchorDate`/`intAnchorDate` state(그리기 전용) → 파란 점선 `ReferenceLine` + '시작' 라벨,
+  그리고 선택 패널의 안내 문구. ⚠️ **딤·선택창보다 뒤에 선언**해야 위에 보이고(paint 순서 = 선언 순서),
+  **`ifOverflow="hidden"` 필수** — 조회기간 첫 날짜에 앵커를 찍으면 d3 `scalePoint` 잔차로 기본값
+  `'discard'`가 표시선을 통째로 버려 "더블클릭했는데 아무 표시도 없다"가 된다(딤 밴드와 같은 근거).
+  색·굵기는 `design.CHART_SELECTION.anchorStroke/anchorStrokeWidth/anchorDash`를 **두 차트가 공유**한다.
+- **Esc = 앵커·선택 취소**(훅 안 window `keydown`). 앵커 대기 상태의 유일한 키보드 탈출구다.
+  ⚠️ **지울 게 있을 때만 동작**시킬 것 — 모달이 열려 있을 때 눌린 Esc가 부작용을 만들지 않게 한다.
+- **⚠️ `selectionResult`·`calculateSelection`·`calculateIntSelection` 산식은 1바이트도 바뀌지 않았다**
+  (누적 TWR 재베이스 규약 무영향). 정상 드래그의 결과값은 종전과 동일하고, 달라진 것은 '결과가 유실되지
+  않는다'뿐이다.
+- **부수 성능 개선 2건**: ① 활성 tick이 그대로인 mousemove는 `setHoveredPoint`를 건너뛴다
+  (`hoverKeyRef`/`intHoverKeyRef` — ⚠️ 두 차트가 **같은 ref를 공유하면** 뷰 전환 직후 같은 날짜에서 첫
+  갱신이 스킵되므로 분리한다). ② `useIntegratedData`의 `intChartData`가 `intFilteredDates.includes(...)`를
+  filter 콜백에서 부르던 O(행수 × 날짜수)를 **Set 조회**로 바꿨다(10년치에서 실측 43.5ms → 0.1ms 규모, 가드 #G17).
+- **영속화 지점 0곳** — `anchorDate`/`intAnchorDate`는 `useHistoryChart`의 세션 로컬 state이고 ref는
+  메모리다. `chartPrefs` 5지점·`portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps
+  **전 지점 무수정**.
+- **범위 밖(의도)**: 카드 별도 창의 수익률 차트(`cardWindow`에 `chart`는 원래 미지원) · 선택 구간 확대(zoom) ·
+  터치에서의 더블탭 앵커(`detail`이 없어 판별 불가) · `touch-action` 지정.
+  **알려진 한계**: recharts가 `onTouchCancel`을 바인딩하지 않아, 스크롤로 취소된 터치는 `s.dragging`이
+  true로 남아 다음 손가락 이동이 구간을 이어 그릴 수 있다(**이 변경 이전과 동일**한 기존 동작).
+- 검증: `npm run verify:chart-sel` 파트③ `#G10~#G17`. ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며
+  **변이 20종**(blur 리스너 제거 · `buttons` 자가치유 제거 · 자가치유가 앵커 미리보기까지 잡음 · 훅 시그니처에 지연 state 복귀 · mouseLeave가 다시 취소 · 앵커 분기가 시작점 덮어쓰기 ·
+  `onDoubleClick` 배선 제거 · 앵커 표시선 삭제/`ifOverflow` 제거/토큰 손복제/paint 순서 · 해제 3경로에서
+  ref 초기화 누락 · `isSecondClick` 가드 제거 · 앵커 미리보기 제거 · window mouseup 무장 제거 ·
+  ref 정본 제거 · mouseUp이 state를 읽음 · Esc 제거 · App prop 제거 · Set 필터 되돌림)으로
+  **실제 검출을 확인**했다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+
+### 차트 토글은 계좌별로 독립 — 화이트리스트는 `currentChartStateRef` 하나 (⚠️ 회귀 주의)
+
+개별 계좌 화면의 토글 6종(**비교종목 · 시장지표 · 조회기간 · 수익률 · 평가자산 · 평가액 추이 기간 단위**)은
+계좌마다 마지막 상태를 유지하고 **다른 계좌에 절대 새어 나가지 않는다**. 저장소는 앱 레벨
+`accountChartStatesRef`(`{ [portfolioId]: {...} }` → `chartPrefs.accountChartStates`로 Drive 영속)이고,
+**무엇을 계좌별로 볼지는 `App.tsx` `currentChartStateRef`의 필드 목록이 단독으로 정한다**.
+
+- **⚠️ 새 차트 토글을 추가하면 반드시 4곳을 같이 고칠 것** — 하나라도 빠지면 그 토글만 앱 레벨로
+  남아 계좌 간 누수가 난다: ① `currentChartStateRef` **기본값 리터럴** ② 최신값 동기화 effect의
+  객체 + **deps** ③ 계좌 전환 effect의 `saved` **복원 분기** ④ 같은 effect의 **처음 방문 기본값 분기**.
+  (①②만 하면 저장은 되는데 복원이 없어 값이 그대로 남고, ③만 하면 신규 계좌가 직전 계좌를 물려받는다.)
+- **과거 버그**: `showTotalEval`(평가자산)·`showReturnRate`(수익률)가 `chartPrefs` **최상위 키에만**
+  있고 이 화이트리스트에 없었다. 전환 effect가 저장도 복원도 하지 않아, A계좌에서 켠 버튼이
+  B계좌에서도 켜진 채로 떴다(나머지 3종은 원래부터 계좌별이라 정상이었다).
+- **⚠️ 마이그레이션 폴백은 지점마다 다르다(둘 다 의도)**: 계좌 전환 복원은 필드가 없으면
+  **`?? true`**(컴포넌트 기본값) — '앱 레벨 값 그대로 두기'로 폴백하면 저장본이 한 바퀴 갱신될
+  때까지 원래의 누수가 그대로 보인다. 반대로 `applyStateData`의 **부팅 시 활성 계좌 복원**은
+  `!== undefined` 가드만 둔다 — 부팅 시점엔 계좌가 하나뿐이라 누수가 없고, 앱 레벨 값(직전에 쓰던
+  값)이 가장 자연스럽다. ⚠️ 이 복원은 `chartPrefs.showTotalEval/showReturnRate` 복원보다 **뒤에**
+  와야 계좌별 값이 이긴다.
+- **앱 레벨로 남는 것(의도)**: `showMarketPanel`·`indicatorScales`·`hideAmounts`(전역 표시 설정),
+  통합 대시보드 계열(`int*`). `PortfolioChart`의 `showPrincipal`(투자원금)은 **컴포넌트 로컬**이라
+  계좌 간 누수가 있고 저장도 안 된다 — 기존 동작 유지(이번 범위 밖).
+- **영속화 신규 지점 0곳**: `accountChartStatesRef`는 이미 `chartPrefs`에 실려 있고
+  `showTotalEval`/`showReturnRate`는 이미 `chartPrefsUpdatedAt` effect deps·STATE 저장 effect deps에
+  있다. 계좌 전환이 두 값을 바꾸므로 저장이 자동 트리거된다.
+
+### usePortfolioState 훅 (모든 포트폴리오 상태 + CRUD)
+`switchToPortfolio`, `addPortfolio`, `deletePortfolio`, `addSimpleAccount`,
+`updateSimpleAccountField`, `updatePortfolioStartDate`, `updatePortfolioName`,
+`updatePortfolioColor`, `resetAllPortfolioColors`, `updateSettingsForType`,
+`updatePortfolioMemo`, `movePortfolio`, `handleUpdate`, `handleDeleteStock`(async+confirm),
+`transferStockToPortfolio` (종목 계좌 간 이관 — 전용 섹션 참조),
+`transferCashToPortfolio` (현금 계좌 간 이관 — 전용 섹션 참조),
+`handleAddStock`, `handleAddFund`,
+`handleAddSavings`, `updateSavingsField`, `addSavingsDeposit`, `removeSavingsDeposit` (예적금, dc-irp 전용),
+`updateDividendHistory`, `updatePortfolioDividendHistory`, `updatePortfolioActualDividend`,
+`updateTaxBasePurchases`, `updateTaxBaseSales`, `updateTaxBaseExPrice`, `updateTaxBaseAvgPrice` (한국 ETF 과표 입력)
+
+### 분배금 데이터 구조
+- `portfolio.dividendHistory`: `{ [code]: { [YYYY-MM]: perShareAmount } }` — API 조회
+- `portfolio.actualDividend`: `{ [code]: { [YYYY-MM]: absoluteAmount } }` — 사용자 입력(절댓값, 수량 무관)
+- `portfolio.rowColor`: 계좌별 색상 (hex) — DividendSummaryTable compact 그라데이션에 사용
+- **저장 키는 배당락월(YYYY-MM) 기준** 유지. dividendExDate/actualDividend/actualDividendQty/dividendTaxAmounts/actualAfterTax* 동일.
+- `portfolio.taxBaseHistory`: `{ [code]: { purchases: [{id,date,shares,taxBasePrice}], sales: [{id,date,shares}], exTaxBase: {[YYYY-MM]: number}, avgTaxBase: {[YYYY-MM]: number} } }` — 한국 ETF 과표 입력. `exTaxBase`(배당락일 과표) / `avgTaxBase`(시점별 평균 과표) 모두 월별 저장. `KrEtfTaxMatrix`의 5단 셀(배당 과표·보유 주식수·평균 과표·과세 과표·예상 과세)에서 직접 입력. **평균 과표 자동 산출(매입 이벤트 기반)·분배금 표 세금 적용 로직은 추후 작업.** `calculateKrEtfDividendTax`(utils.ts) 함수는 `dividendTaxAmounts[code][ym]`을 채울 때 사용 가능하지만 현재 UI에서는 호출되지 않음.
+- 모달 노출 조건: `accountType ∈ {portfolio, dividend, isa, pension, dc-irp}` (한국 ETF 보유 가능 타입). 탭 무관 항상 노출. `npm run verify:tax`로 계산 함수 단위 테스트.
+
+### 분배금 현황 = 지급월 기준 표시
+`DividendSummaryTable`의 12개월 컬럼은 **지급일(배당락+2영업일, `dividendPayDate`) 기준**으로 재배치한다.
+저장 키는 배당락월 그대로 두고 `buildPaySlots(codeHistory, codeExHistory, hol)`가 종목별로
+지급월 슬롯(0-11)에 소스 이벤트를 모은다. 각 `monthData[i].yearMonth`는 지배(금액 큰)
+소스의 배당락월 키 → 셀 편집/세금 조회가 올바른 저장 키를 가리킨다.
+- 직전연도 12월 배당락 → 올해 1월 지급분은 1월 슬롯에 편입
+- 올해 12월 배당락 → 내년 1월 지급분은 올해 표에서 제외
+- 한 지급월에 2건 겹치면 **합산**, 분배락/지급일·주당분배금 표기는 지배 소스 기준
+  (합산 셀은 `srcCount>1` → `DivMeta`가 "외 N건" 표기로 합계임을 명시)
+- **확정 우선 dedup (⚠️ 회귀 주의)**: 한 지급월 슬롯에 `exPredicted=false`(확정 배당락)
+  소스가 있으면 같은 슬롯의 `exPredicted=true`(직전연도 추정) 소스는 `buildPaySlots`
+  반환 직전에 제거한다. 일정 과도기(월중→월초 등)에 직전연도 예측 배당락이 실제
+  배당락의 지급월로 끌려와 **실지급 + 예측이 이중 계상**(셀 합계 ≠ 수량×주당분배금)
+  되던 버그 방지. 확정 데이터가 있는 달은 예측을 노이즈로 보고 버림(확정 우선).
+  검증: `npm run verify:dividend` (slots 재배치·dedup 단위 테스트).
+- 예측월(분배 이력 있고 배당락일만 미확정)은 직전연도 배당락일+2영업일로 추정 배치
+- **분배 이력 자체가 없는 빈 미래월**(월 입금 내역 탭): 예측값을 표시하지 않고
+  빈 셀(`-`)로 두되 클릭 시 사용자가 실수령액 직접 입력 가능. 저장 키는
+  `buildFallbackExYms(slots)`가 산출 — 실제 소스의 배당락월 키 및 다른 빈 슬롯의
+  폴백 키와 절대 겹치지 않도록 보장(겹치면 한 셀 편집·삭제가 옆 달로 전이됨).
+  slots가 고정이면 결과도 결정적이라 입력 전후 같은 셀 유지. expectedRows(월
+  예상 분배금)는 빈 슬롯을 `yearMonth:''`로 두어 편집 비활성 — 폴백 미적용.
+- `extraDividendRows`(수동 추가 행)는 사용자가 월을 직접 지정 → 재배치 대상 아님
+- 적용 범위: expectedRows / actualRows / compactExpectedRows / compactActualRows
+  (빈 미래월 폴백은 actualRows / compactActualRows 에만 적용)
+
+### 분배율 = 해외계좌는 '종목별', 그 외는 '계좌 총원금' (⚠️ 회귀 주의 — 두 경로를 합치지 말 것)
+
+분배율 행은 **두 구현이 공존**하고 분기는 `hasOverseas` 하나가 정한다(`DividendSummaryTable`).
+
+| 화면 | 함수 | 분모 | 분자 | 통화 |
+|---|---|---|---|---|
+| **해외계좌 개별 뷰** | `renderStockRateRows` | **그 종목의 투자금** `overseasInvestAmount(item)` | **세후(net)** | **USD 1가지** |
+| 국내계좌 개별 뷰 · 통합(compact) | `renderDistRateRow` | 계좌 총원금 `p.principal` 합 | 세전(gross) | 원화(+달러 2행) |
+
+**왜 종목별인가**(사용자 요청 2026-08): 계좌 총원금에는 **분배금을 한 푼도 주지 않는 종목·예수금·
+현금이 섞여 있어** 분배율이 구조적으로 희석된다. 종목 단위로 나눠야 "이 종목에 넣은 돈이 매달 몇
+%를 돌려주는가"라는 실제로 쓸 수 있는 수치가 된다. **계좌 총원금 1행으로 되돌리지 말 것.**
+
+- **표시 규약**: 라벨 열 = **종목코드**(첫 행에만 `분배율 · 종목 투자금 대비` 캡션). 월 셀 2줄 —
+  위 `세후분배금 / 투자금`(9px 회색), 아래 **`월분배율`(굵게) + `(연환산)`**(연환산 = 월 분배율 × 12).
+  **연간합계 셀은 이미 1년치라 연환산 괄호를 붙이지 않는다**(`stockRateCell`의 `showAnnualized=false`).
+- **⚠️ 분자는 세후(net)** — 사용자 확정(실수령 기준). 그리고 **tbody 종목 행과 문자 그대로 같은 식**을
+  써야 한다: 월 예상 탭 `d.amountUsd * (1 - taxRate/100)` · 연간 `row.annualUsd * (1 - taxRate/100)` /
+  월 입금 탭 `d.hasManual ? d.afterTaxUsd : 0` · 연간 `row.annualAfterUsd`. 다른 식을 쓰면 같은 표의
+  세후 열과 분배율이 모순된다(tfoot `monthlyUsdTaxTotals`는 `Math.round`도 `perShareTaxableBase`도
+  적용하지 않아 행 단위 식과 미세하게 다르다 — 그쪽을 베끼지 말 것).
+- **⚠️ 분모는 `utils.overseasInvestAmount(item)`(USD)** — `item.investAmount`를 읽으면 **원화 잔존값**
+  (레거시·`PasteModal` 임포트)이 섞여 ≈1,390배 오염된다('해외계좌 투자금액' 섹션). 값은 `expectedRows`/
+  `actualRows`의 **`investUsd` 필드**로 실어 보낸다(파생값 — 저장 지점 0곳). 이 표가 받는 배열은
+  `allPortfoliosForDividend`라 **raw item**(환율 미적용)이므로 `totals.calcPortfolio` 함정과는 무관하다.
+- **⚠️ `hasOverseas`는 반드시 인자로 받는다** — `expectedHasOverseas`는 **탭 IIFE 지역 변수**라
+  컴포넌트 스코프 헬퍼가 그냥 참조하면 렌더 중 ReferenceError로 **표 전체가 ErrorBoundary 화면**이
+  된다(`@ts-nocheck` + esbuild라 컴파일러도 `undefcheck`도 못 잡는다 — `initTradeRest` 장애와 동일 부류.
+  `scopecheck.mjs`가 이 부류 전용 게이트다).
+- **열 수 항등식**(어기면 그 행부터 표 정렬이 통째로 깨진다): `1(sticky 라벨) + Σ_{!isMonthHidden(i)}
+  (hasOverseas?2:1) + (hasOverseas?2:1)`. **연간 셀을 빠뜨리는 사고가 잦다.** 월 순회는 12칸 원본 배열 +
+  `!isMonthHidden(i)` — `.filter().map()` 금지(인덱스가 밀려 저장 키가 옆 달로 간다).
+- **행 집합 = `rows.filter(r => r.isOverseas)` 중 `annual > 0`**. `extraActualRows`(수동 추가 행)는
+  **제외**(수량·투자금액 개념이 구조적으로 없다). 유령 행(`__orphan`, 삭제된 종목)은 **포함하되**
+  `investUsd = 0`이라 분모 없음 → `fmtRate`가 `'-'`를 반환한다(조용한 오적용보다 명시적 미적용).
+- **⚠️ 분기 게이트는 `hasOverseas`가 아니라 `stockRates.length > 0`이다**(적대적 리뷰 확정 결함).
+  `actualHasOverseas`는 `extraActualRows`까지 포함해 판정하는데 `actualStockRates`는 `actualRows`만
+  보므로, `hasOverseas`로 재면 **'보유 종목 0 + 수동 추가 행만' 계좌**에서 분배율 섹션이 통째로
+  사라지고 각주 설명만 남는다(수동 행에는 투자금액 개념이 없어 사용자가 값을 채워도 복구 불가).
+  빈 배열이면 계좌 기준 행으로 폴백한다. 국내 계좌는 `stockRates`가 구조적으로 항상 빈 배열이라
+  이 조건 하나로 종전 경로가 그대로 유지된다.
+- **범위 밖(의도)**: 국내 계좌·통합 뷰는 종목별 분배율 **미적용**(아래 통화 규약 그대로). 통합은
+  계좌별 행이라 종목 단위 데이터가 없고, 국내는 사용자가 해외만 요청했다.
+
+### 분배율 행(국내·통합) = 통화별 2행(달러/원화) — 해외계좌 원금은 USD (⚠️ 회귀 주의)
+
+`renderDistRateRow`(`DividendSummaryTable`)의 분모는 **통화를 맞춰야** 한다. **해외계좌(overseas)의
+`p.principal`은 USD**(원금·평가 모두 USD 기준 — '해외계좌 투자금액' 섹션)인데, 과거엔 그 값을 원화
+분배금 합계의 분모로 그대로 써서 분배율이 **환율 배수(≈1,390배)만큼 부풀었다**(원금 $28,304 · 12월
+₩346,802 → **1328.79%**). 단일 `totalPrincipal`로 되돌리지 말 것.
+
+- **분모 2종**: `principalUsd` = overseas 계좌 principal 합(USD) / `totalPrincipal` = 국내 계좌
+  principal 합 + `principalUsd × usdkrw`(원화 환산). 환율 미확보(`usdkrw <= 0`)면 원화 분모를 **0**으로
+  두어 `'-'`로 표시한다(부풀린 값을 단언하지 않는다).
+- **표시**: `principalUsd > 0` + USD 배열이 전달되면 셀이 2행 — **달러 기준(굵게) 위 · 원화 기준
+  (작게·흐리게) 아래**. 그 외에는 종전처럼 원화 1행.
+- **⚠️ 두 값이 다른 것이 정상** — 원화 분배금은 사용자가 **실제 입금 시점 환율로 입력**한 값이고
+  원화 환산 원금은 **현재 환율**로 환산하기 때문이다. 하나로 합치지 말 것.
+- **호출 3지점 전부 USD 배열을 넘길 것**(빠뜨리면 그 화면만 조용히 1행으로 강등): compact 통합
+  (`compact*MonthlyUsd`/`compact*AnnualUsd`, 탭별) · 월 예상 분배금(`monthlyUsdTotals`/`annualUsdTotal`) ·
+  월 입금 내역(`actualMonthlyGrossUsd`/`actualAnnualGrossUsd` — KRW도 **gross**라 세전끼리 짝을 맞춤).
+  ⚠️ 개별 뷰 2지점은 **`hasOverseas`가 false일 때만 실행**되므로(해외면 위 종목별 행이 대신 렌더된다)
+  실제로 2행이 뜨는 곳은 **compact 하나뿐**이다. 그래도 USD 인자를 지우지 말 것 — 종목별 경로를
+  되돌리거나 국내·해외 혼합 계좌가 생기면 그 순간 조용히 1행으로 강등된다.
+- 3번째 인자 `hasOverseas`는 **colSpan 전용**(세전/세후 2열 여부)이고 2행 표시 여부와 무관하다 —
+  compact는 열이 1개라 `false`를 넘기면서도 2행을 표시한다.
+
+### DividendSummaryTable
+- `compact=false` (기본): 개별 계좌 뷰, 종목 행 표시, 셀 직접 편집 가능
+- `compact=true`: 통합 대시보드 뷰, 계좌별 월 합계만 표시, rowColor 그라데이션 텍스트
+- 렌더 위치: non-compact = `App.tsx`(`showIntegratedDashboard` 아닐 때) / compact = `IntegratedDashboard.tsx`
+  (compact는 App.tsx가 아니라 **IntegratedDashboard 내부**에서 렌더된다)
+
+### 분배금 표 월 컬럼 숨기기 (⚠️ 회귀 주의 — 렌더 지점 23곳 전수 적용 필수)
+
+'월 예상 분배금'·'월 입금 내역' 탭에서 **월 `<th>` 상단 12px 빈 띠 클릭 → 그 월 컬럼 전체 숨김**
+(`KrEtfTaxMatrix`의 `hiddenTaxMonths`를 이식). 가로 스크롤이 긴 표에서 필요한 달만 남기는 용도.
+
+- **불변식**: 숨김은 **렌더 전용**. `monthlyTotals`·`compactMonthlyTotals`·`actualMonthlyGrossKrw`·
+  연간합계·분배율·과세합계는 전부 `Array.from({length:12})` 그대로 유지 — 숫자는 절대 변하지 않는다.
+  저장 키(`monthData[i].yearMonth`)도 원본 인덱스 `i`를 그대로 쓴다. ⚠️ **`.filter().map()`으로 바꾸면
+  인덱스가 밀려 옆 달에 저장된다 — 반드시 12개 원본 배열을 순회하고 반환값만 걸러낼 것.**
+- **저장 위치 2원화**(탭별 독립 — expected/actual 공유 안 함):
+  - 개별 계좌 → 계좌 필드 `p.hiddenDivMonthsExpected` / `p.hiddenDivMonthsActual`
+    (`usePortfolioState.toggleHiddenDividendMonth(portfolioId, tab, monthIndex)`).
+    영속화: `App.tsx` `portfolioStructureKey`에 두 필드 포함(⚠️ 없으면 `portfolioUpdatedAt` 미상승 →
+    Drive STATE 저장 스킵). 로드는 `...p` 스프레드로 자동 보존.
+  - 통합 대시보드 → 앱 레벨 `chartPrefs.intHiddenDivMonths = {expected:[],actual:[]}`
+    (compact는 여러 계좌 합산 뷰라 저장할 단일 계좌가 없음 → `intSec`·`sectionCollapsedMap`이 사는 곳 재사용).
+    ⚠️ **영속화 5지점 필수**: state 리터럴 `chartPrefs`, `chartPrefsUpdatedAt` effect deps,
+    STATE 저장 effect deps, `applyStateData`, `applyBackupData`. 저장 가드는
+    `useDriveSync` `portfolioChanged || chartPrefsChanged`라 chartPrefs 단독 변경도 저장된다
+    (단 `saveVersionFile`은 `portfolioChanged`일 때만 → **타 기기 즉시 반영은 안 됨**, 기존 chartPrefs와 동일).
+    로드 정규화 `normalizeIntHiddenDivMonths`(App.tsx 모듈 스코프)로 손상값 방어.
+- **컴포넌트 인터페이스**: `DividendSummaryTable`은 저장 위치를 모른다 — `hiddenMonths={{expected,actual}}`(읽기) +
+  `onToggleHiddenMonth(tab, monthIndex)`(쓰기) 2개 prop만 받는다. 핸들러가 없으면 스트립·칩 미렌더(graceful).
+  App→IntegratedDashboard 구간 prop명은 `intHiddenDivMonths`/`onToggleIntHiddenDivMonth`(3-hop).
+- **렌더 지점 23곳**(하나라도 빠지면 그 행만 열이 남아 **표 정렬이 깨진다**): `renderDistRateRow` 1 +
+  compact 7(thead·tbody·tfoot 3분기·과세합계 2) + expected 6(thead·overseas 서브헤더·tbody 2분기·tfoot 2) +
+  actual 9(thead·서브헤더·tbody 2(종목행/extraActualRows)·tfoot 2·과세합계·실수령·해외 과세합계).
+  표현식 바디 map은 `!isMonthHidden(i) && (...)`, 블록 바디 map은 첫 줄 `if (isMonthHidden(i)) return null;`.
+  ⚠️ 서브헤더(세전/세후)는 **필터만** 적용하고 스트립은 넣지 않는다(메인 헤더에만).
+  ⚠️ `expectedHasOverseas`/`actualHasOverseas`는 **행 집합에서 파생**되므로 월 필터를 태우면 안 된다.
+- **⚠️ 스트립 z-index는 `z-[1]`**(과표표의 `z-10` 아님): 이 표의 첫 열 sticky `<th>`가 `z-10`이고 월 `<th>`는
+  sticky가 아니라, 스트립을 `z-10`으로 두면 동률+DOM 후순위라 **가로 스크롤 시 스트립이 sticky 열 위로 얹혀
+  그 영역 클릭을 가로챈다**(과표표는 sticky th가 `z-20`이라 무사). 월 `<th>`에는 `relative` 필요.
+- **`toggleMonth(i)` 래퍼 경유 필수**(스트립·복원 칩 양쪽): `afterTaxBlurTimer` 정리 + 편집 중이면 `commitEdit()`.
+  안 그러면 셀이 언마운트된 뒤 150ms blur 타이머만 살아남아 **보이지 않는 월에 조용히 커밋**된다.
+- **`hiddenTab` 정규화**: `activeTab`이 `'tax'`일 수 있으므로 저장 버킷 인자는 `'actual'|'expected'`로 정규화해
+  전달한다(과표 탭은 `KrEtfTaxMatrix`가 자체 `hiddenTaxMonths`로 처리 — 절대 합치지 말 것).
+- **`lastVisibleMonth`**: 열 오른쪽 경계선이 원래 `i === 11` 고정이라 12월을 숨기면 표 끝에 여분 세로선이
+  남는다. `isLastCol`/`isLastMonthCol`/`i < 11` 5곳을 이 값 기준으로 비교.
+- **⚠️ non-compact 툴바는 `flex-wrap` 필수**: 카드가 `overflow-hidden`이라 숨긴 월 칩이 늘면 우측
+  `shrink-0` 그룹(행 추가·새로고침)이 **잘려 클릭 불가**가 된다. 칩은 그 그룹 **밖**에 둔다.
+  칩은 유일한 복원 수단이므로 합계 표시 조건부 블록 안에 넣지 말 것.
+- **범위 밖(의도)**: 백업 복원 sticky 규칙(`_preserveStickyPersonalData`) 미적용 — 계좌 필드는
+  `portfolios[]` 내부라 top-level 평면 머지 계약과 안 맞고, `intHiddenDivMonths`는 `intSec`·`matongClosedIds`와
+  같은 뷰 선호도 등급(클릭 한 번으로 복구 가능).
+
+### 삭제된 종목의 분배금·과세 입력 보존 = '삭제됨' 유령 행 (⚠️ 회귀 주의)
+
+포트폴리오 테이블에서 종목을 삭제(`handleDeleteStock` = `pf.portfolio` filter)해도 **계좌 단위로
+코드별 보관되는 사용자 입력 분배금/과표 데이터는 지워지지 않는다** — 삭제는 종목 행만 제거한다.
+분배금 표(`actualRows`/`compactActualRows`)와 과표 표(`getKrEtfStocks`)가 `pf.portfolio`만 순회하던
+탓에 그 데이터가 표에서 사라져 보이던 것을, 삭제된 코드를 **'삭제됨' 유령 행**으로 계속 노출한다.
+
+- **분배금 유령 행**: `getDividendOrphanCodes(pf)`(`DividendSummaryTable.tsx` 모듈 함수) — 금액이 실제
+  입력된 맵(`actualDividend`/`actualDividendUsd`/`actualAfterTaxUsd`/`actualAfterTaxKrw`/
+  `dividendTaxAmounts`)에 데이터가 남고 `pf.portfolio`에 없는 코드. `actualRows`·`compactActualRows`가
+  `[...pf.portfolio, ...orphanItems]`(orphan은 `quantity:0`,`__orphan:true`)를 순회하며 가드는
+  `if (!qty && !item.__orphan)`. 저장 키(exYm)는 삭제로 안 바뀌는 `dividendHistory`/`dividendExDate`에서
+  산출되고 `handleRefreshAll`은 `pf.portfolio`만 갱신하므로, 유령 행 셀은 삭제 전과 **동일 월에 매핑**된다.
+  '월 예상 분배금' 탭은 orphan 미포함(보유 없으면 예상 0 — 의도).
+- **종목명 복원(⚠️ 코드만 표시 금지)**: 삭제 시 종목명은 코드별 데이터에 저장 안 되지만, 보유 중 찍힌
+  `holdingSnapshots`(`snapshotItemsFromPortfolio`가 `name` 보존)에서 오프라인으로 복원한다 —
+  `buildHeldNameMap(pf)`(`utils.ts`, 최신 스냅샷 이름 우선 + 현재 포트폴리오 이름). `actualRows` orphanItems와
+  `KrEtfTaxMatrix` orphan의 `name`을 이 맵에서 채워, 유령 행이 **기존처럼 종목명+코드**로 표시된다(스냅샷에
+  없으면 코드만 — graceful). `KrEtfTaxMatrix` `krStocks` deps에 `holdingSnapshots` 포함. `allPortfoliosForDividend`
+  는 `...p` 스프레드라 `holdingSnapshots` 보존(이름 소스 확보).
+- **과표 유령 행**: `KrEtfTaxMatrix` `krStocks`에 `taxBaseHistory`에 입력값이 남고 포트폴리오에 없는
+  코드를 `{type:'stock',__orphan:true,quantity:0}`로 추가(`taxBaseHasData` 트리거). **한계**: 매입/매도
+  이벤트 없이 배당 과표만 입력한 경우, 삭제된 종목의 과거 보유수량이 taxBaseHistory에 없어 `보유주식수`/
+  `예상 과세`가 0으로 표시된다(입력값=배당 과표·평균 과표·과세 과표는 보존·표시). 이벤트가 있으면
+  `computeMonthlyQtyForGrid`가 수량을 복원해 정상.
+- **영구 삭제(× 버튼)**: 유령 행의 작은 ×/휴지통 → `confirmDialog` 후 `deletePortfolioDividendData`
+  (분배금 맵 8개 strip + `dividendHistoryUpdatedAt` 갱신) / `deletePortfolioTaxData`(`taxBaseHistory[code]`
+  삭제). 지문(`portfolioStructureKey`)의 `actualDividend`/`dividendHistoryUpdatedAt`/`taxBaseKey` 변경으로
+  Drive STATE 저장 트리거(⚠️ `dividendTaxAmounts`/`actualDividendQty`는 지문 미포함이라
+  `dividendHistoryUpdatedAt` 갱신이 저장 보장). props: App→DividendSummaryTable(`deletePortfolioDividendData`/
+  `deletePortfolioTaxData`/`confirmDialog={confirm}`), DividendSummaryTable→KrEtfTaxMatrix(뒤 2개). compact
+  테이블(IntegratedDashboard)은 × 미전달(`&& deletePortfolioDividendData` 가드로 안전).
+- **⚠️ 이중 계상 방지(회귀 주의)**: `getDividendOrphanCodes`는 같은 코드로 만든 기존 '수동 추가 행'
+  (`extraDividendRows`, 목적 동일=제거 종목 배당 기록)이 있으면 그 코드를 **제외**한다. 안 그러면 유령 행
+  (`actualDividend`)과 수동 추가 행(`afterTaxKrw`)이 월/연 합계에서 **둘 다 합산**돼 2배가 되고 2줄로 뜬다.
+  기존 수동 행 우선, 유령 행 억제(데이터는 계좌에 남아 수동 행 삭제 시 복원). **새 통합 합산/orphan 소스
+  추가 시 이 dedup을 빠뜨리지 말 것.**
+
+### 평균 과표 계산기 — 매도단가·매도금액 + 과세 3열 (⚠️ 회귀 주의)
+
+과표 탭 종목명을 클릭하면 열리는 확장 행(`KrEtfTaxMatrix` '평균 과표 계산기')에서, 매도 행도
+**매입단가 칸에 매도단가(그날의 종가)를 입력**하면 매도금액이 뜨고 과세가 **세 열**로 갈린다:
+`과세 금액(과표)`(= 과표기준가 − 평균 과표) · `과세 금액(단가)`(= 매도단가 − 평균단가) · `실제 과세`
+(둘 다 > 0일 때만 과세, 금액은 1주당 min × 매도수량). 세율 미적용 **과세표준**이다.
+
+- **⚠️ 매도단가는 `evt.sellPrice` — `evt.purchasePrice`와 절대 합치지 말 것**: 화면은 한 칸이지만
+  저장 필드는 분리한다(`priceField = isSell ? 'sellPrice' : 'purchasePrice'`). 한 필드를 공유하면
+  **매매수량 부호를 정정하는 순간**(-630 오타를 +630으로) 저장값이 반대 의미로 재해석돼, 입력한 적
+  없는 매입단가가 `buyEvts`(`change > 0 && purchasePrice > 0`)를 통과해 `buyAmountTotal`·
+  `buySummary.avgPrice`·손익을 오염시키거나 그 반대가 된다. 분리하면 부호를 되돌릴 때 각 값이 자기
+  필드에 그대로 남는다(데이터 파괴 없음). `purchasePrice`는 종전대로 **매수 전용**이다.
+- **⚠️ 평균단가(구매단가)는 `item.purchasePrice`가 아니다** — 국내 주식 행의 포트폴리오 테이블
+  '구매단가'는 **`investAmount ÷ quantity`**(`PortfolioTable` 국내 분기)이고, `purchasePrice` 필드는
+  해외 계좌·`PasteModal` 임포트에서만 기록돼 국내 종목에서는 거의 항상 0이다. 그대로 읽으면 단가
+  기준 과세가 통째로 '판정 불가'가 된다. → `krEtfTaxHelpers.resolveAvgBuyPrice(stock, fallbackAvg,
+  fallbackReliable)` 4분기: `portfolio`(inv÷qty) → `item`(purchasePrice) → `events`(계산기 매수 평균)
+  → `none`. 반올림하지 않는다(표시만 2자리).
+- **⚠️ `events` 폴백은 '매수 평균에서 빠진 매수 행이 0건'일 때만 신뢰**(`fallbackReliable`):
+  `buySummary.avgPrice`는 매입단가가 빈 매수 행을 **통째로 제외한 부분 평균**이라, 그대로 쓰면 실제와
+  다른 평균단가로 **'비과세'를 확정**한다(예: 100주@10,000 입력 + 900주 미입력 → 부분 평균 10,000인데
+  실제는 8,200 → 매도단가 9,000이 과세인데 비과세로 표시). 신뢰 불가면 `source:'unreliable'` +
+  value 0 → 단가 기준을 **계산하지 않고** '평균단가 불확실'로 표기한다(명시적 미적용).
+  ⚠️ 제외 판정은 `buySummary.noPriceCount`가 아니라 **`buyEvts`의 여집합**(`buyExcludedCount`)이다 —
+  `noPriceCount`는 날짜가 유효한 행만 세므로 **날짜를 지운 매수 행**을 놓친다.
+- **⚠️ 판정 규약**: `0은 비과세`(`> 0`이 과세 — 기존 열의 `sellPerShareTax > 0`과 갈리면 두 열이
+  모순된다). **한쪽만 준비돼도 그 값이 0 이하면 `비과세` 확정**(이미 확정된 사실을 '-'로 감추지 않는다),
+  반대로 **`과세` 확정은 양쪽이 다 준비돼야** 한다(조용한 오적용 금지). 그 외에는 `판정 불가`.
+  `exemptReason`은 `base|price|both` — `baseExempt`/`priceExempt`를 **먼저 둘 다 계산**해야 `both`가
+  도달 가능하다(순차 if로 바꾸면 'both'가 죽는다).
+- **⚠️ 1주당 차이는 `PER_SHARE_EPS`(1e-6)로 0에 스냅**: 과표기준가는 소수 2자리가 실질 단위인데 가중
+  평균 누적에 IEEE754 잔차(1e-12 규모)가 남아, 수학적으로 0인 행이 `> 0`을 통과해 **표기는 `0.00`인데
+  판정은 '과세 ₩0'** 이 된다(신규 '실제 과세' 열이 그걸 노랗게 단언한다). 기존 9열도 갖고 있던 결함.
+- **⚠️ 구매단가는 '현재 시점' 값이라 과거 매도 행 판정이 소급 변경된다**(사용자 선택 — 러닝 평균 아님).
+  특히 매도를 포트폴리오 표에 반영할 때 **보유수량만 줄이고 투자금액을 그대로 두면** 구매단가가 폭등해
+  정상 과세가 비과세로 뒤집힌다 → `avgBuy.verify` **3값**으로 교차검증한다:
+  `ok`(계산기 매수 평균과 5% 이내) / `mismatch`(≥`AVG_BUY_MISMATCH_RATIO` → 앰버 `⚠`) /
+  **`none`(비교 대상 자체가 없음 → '교차검증 불가')**.
+  ⚠️ **`none`을 '정상'으로 뭉뚱그리지 말 것** — 과거엔 `eventsAvg > 0 && 괴리 ≥5%`만 경고했는데,
+  `eventsAvg`는 매수 행이 불완전하면 0이라 **경고가 가장 필요한 계좌에서 정확히 꺼졌다**(적대적 리뷰
+  3렌즈 독립 확인). `source`(`portfolio`/`item`/`events`)도 툴팁이 아니라 **헤더 서브라인에 상시 노출**
+  한다 — 호버하지 않는 사용자는 화면에 없는 값(예: `investAmount=0`이라 포트폴리오 표가 `0`을 보여주는
+  행에서 `item` 폴백으로 판정된 값)으로 확정이 내려진 걸 알 수 없다.
+- **⚠️ 각주는 폴백 3단계를 그대로 서술할 것** — "평균단가 = 포트폴리오 구매단가"·"매입단가가 비면
+  계산하지 않습니다"처럼 단정하면 `item`/`portfolio` 경로에서 **거짓**이 된다(리뷰 확정 지적 2건).
+- **열 개수 10 → 12**. 이 확장 행 내부 표에는 **colSpan을 쓰는 행이 없다**(하단 요약·각주는 표 바깥
+  `<div>`) → 열 추가 시 고칠 곳은 **thead 1곳 + tbody 1곳뿐**. 바깥 표의 `colSpan={visibleMonthCount + 2}`는
+  무관. 하단 요약 바는 **매수 요약 줄 + 매도 요약 줄 2단**이며 각자 독립 조건으로 렌더된다
+  (⚠️ 래퍼 게이트는 반드시 `buySummary.count > 0 || sellSummary.count > 0` **OR** — 매수 단독 게이트에
+  매도 줄을 넣으면 매수 행이 없는 계좌·'삭제됨' 유령 행에서 매도 요약이 통째로 사라진다).
+- **영속화 신규 지점 0곳**: `App.tsx portfolioStructureKey.taxBaseKey`가 `events`를 **JSON 전문**으로
+  담으므로 신규 필드 `sellPrice`도 자동 포함 → 매도단가만 고쳐도 Drive STATE 저장이 트리거된다.
+  `applyStateData`/`applyBackupData`는 `...p` 스프레드, `updateTaxBaseEvents`는 배열 통째 교체라 무수정.
+- **범위 밖(의도)**: 매도금액 자동 종가 조회(사용자가 그날 종가를 직접 입력 — `stockHistoryMap` 프롭
+  체인 신설 안 함) · 세율 적용 세액 · 선입선출(FIFO) 원가법(이동평균법만 지원).
+
+**매도 실현손익 — '현재 평가 / 실현손익' 열 (⚠️ 회귀 주의 — 기준단가 = 최저가 우선 매칭, 과세열과 통일 금지)**
+
+매수 행이 그 열에 **미실현** 평가손익(현재가 × 수량 − 매입금액)을 보여주는 것과 짝을 이루는
+**실현**손익. 매도 행에 `매도금액 − 매입원가 = (매도단가 − 기준단가) × 매도수량`을 3줄로 렌더한다
+(금액 / 주당손익·수익률 / 그 행에 쓰인 기준단가 + **배정된 매수분**). 사용자 요청 2026-08
+"매도시 얼마의 수익을 냈는지 매수시처럼 표현" → 2026-08 후속 "최저점 매수가격과 매수수량으로
+매도일에 대한 수익을 표시".
+
+- **⚠️ 기준단가 = '최저가 우선(LOFO) 로트 매칭' (2026-08 사용자 확정 — 평균단가로 되돌리지 말 것)**:
+  매도수량을 **그 시점까지 남아 있는 매수분 중 가장 싼 로트부터** 차례로 소진시켜 원가를 구한다.
+  사용자 요청 그대로 — "최저점 매수가격과 매수수량으로 매도일에 대한 수익을 표시. 매수수량을 초과한
+  매도시에는 다음 최저 가격을 기준으로." 실측(2026-08-13): 7/29 761주@7,227 · 7/28 2,113주@7,778 보유
+  중 8/5 630주@8,260 매도 → 기준 7,227 → **+650,790**(평균단가 8,699.20 기준이면 −276,694로 **부호가
+  뒤집힌다**). 3건 합계도 −₩558,749 → **+₩847,164**로 바뀐다.
+  - **⚠️ 이것은 '분석용 원가법'이다 — 세법상 이동평균법이 아니다.** 과세 3열은 종전대로 `avgBuy.value`
+    (현재 시점 포트폴리오 구매단가)를 쓰므로, 같은 행에서 **실현손익 '이익' + 실제 과세 '비과세'가
+    동시에 나오는 것이 정상**이다. 이 사실을 **열 헤더 툴팁 + 각주 두 곳**에 상시 고지한다(#G7이 각주
+    블록만 잘라 단언 — 전역 정규식이면 헤더 툴팁이 대신 통과시켜 각주에서 통째로 사라져도 초록이 된다).
+  - **⚠️ 로트 풀은 `compareTaxEvents` 순서로 순차 소진** — 매도 **시점 이후**의 매수는 풀에 아직
+    없으므로 배정되지 않는다. 그래야 실현손익이 **확정된 과거 사실**로 남는다(러닝 평균 설계가 지키던
+    불변식을 그대로 계승). 한 번 배정된 로트는 소진되어 다음 매도에 다시 쓰이지 않는다.
+  - **⚠️ 같은 단가 로트는 먼저 매수한 것부터**(`seq`) — 원가 합은 같지만 **배정 내역이 화면에 표시**되므로
+    결정적이어야 한다.
+  - **⚠️ 배정 내역을 반드시 노출할 것**(셀 3번째 줄 `기준 7,227.00 07-29` / `기준 7,632.72 2건` + 툴팁의
+    매수일·수량·단가 명세, `lotsDetailText`). 기준단가 숫자 하나만 보이면 **"왜 7,227원인가"를 추적할 수
+    없다** — 이 배정 내역이 기능의 근거 그 자체다(#G13이 호출 2곳 + 포매터 본문을 단언).
+  - **⚠️ `basisDiverged` ⚠는 LOFO 행에서 억제**한다(`basis.source !== 'lofo'` 게이트). 평균단가와
+    벌어지는 것이 **설계상 상시**라 전 행에 ⚠가 뜨면 경보가 죽는다(가드는 위험 상태에서만 발동해야
+    한다). 폴백 행에서는 종전대로 5% 문턱으로 발동한다.
+  - **되돌리면 재발하는 오류 2종**(폴백 경로가 여전히 방어한다): ① 100주@8,000 매수 → 50주@9,000 매도
+    → 100주@12,000 매수에서 참값 +50,000이 현재 평균(10,666.67) 기준으로는 **−83,333**. ② 매도를
+    포트폴리오 표에 반영할 때 **보유수량만 줄이고 투자금액을 그대로 두면** 구매단가가 폭등해
+    (8,000 → 21,621) 이익 매도가 **−8,417,822 손실**로 표시된다(`avgBuy.verify` 경고의 존재 이유).
+- **⚠️ 별도 순수 함수 `computeSellRealized`** (`krEtfTaxHelpers.ts`) — `computeSellTaxRow`에 필드를
+  얹지 말 것(기준단가가 다른 두 계산이 한 함수에 섞이면 47건이 고정한 과세 계약이 흔들린다).
+  반환 `{isSell, soldQty, basis, amount, cost, perShare, profit, rate}`, 미준비면 **전부 `null`**.
+  ⚠️ `priceAmount`(0 클램프)를 재사용하지 말 것 — **손실이 통째로 ₩0**이 된다. 분자는 `snapZero`가
+  적용된 부호 보존 `perShare`. ⚠️ **수익률 분모는 매입원가**(매수 행의 손익 ÷ 매입금액과 같은 규약 —
+  매도금액 분모는 전액 손실에서 −∞로 발산한다). ⚠️ 소수 매도수량을 floor하지 말 것.
+- **⚠️ null 계약** — 기준단가가 없거나(매수 행 매입단가 미입력) 불확실하면 **계산하지 않는다**.
+  0을 곱해 "매도금액 전액이 수익"으로 단언하는 것이 최악의 오적용이다.
+- **⚠️ 로트 매칭은 별도 순수 함수 `buildLofoLotSeries`**(`krEtfTaxHelpers.ts`) — `computeSellRealized`의
+  시그니처는 **손대지 않았다**(가중 기준단가만 넘긴다). 반환은 **이벤트 객체 식별자 키 Map**
+  `{basis, cost, lots, matchedQty, shortfallQty, trusted}` — ⚠️ 인덱스 조인으로 되돌리지 말 것
+  (`buildSortedEventsWithAvg`가 날짜 없는 행을 뒤에 덧붙이는 순간 한 칸씩 밀리고, `evt.id`는 중복·누락 가능).
+  `LOT_QTY_EPS`(1e-9)로 로트 소진을 판정한다 — ⚠️ 없애면 `0.1+0.2` 전량 매도의 잔여(~5.5e-17)가
+  **유령 로트**로 남아 다음 매도에 옛 단가가 섞인다.
+- **⚠️ 기준단가 우선순위 = `lofo` → `running` → `avgBuy`** (`resolveBasis`, #G3이 `indexOf` 순서로 단언).
+  LOFO 게이트는 **3항 전부**(`trusted && shortfallQty === 0 && basis > 0`) 필요하다:
+  - **`shortfallQty > 0`(매수 이력 부족)** — 배정할 매수분이 모자라면 매칭된 몫의 원가를 전체 수량에
+    퍼뜨리지 **않고** 러닝 평균으로 내려보낸다(없는 매수분을 싼값으로 단언 금지). 요약 바에
+    `매수 이력 부족 N건` 앰버 안내 + 셀에 `*`. ⚠️ 부족 행이 **이후 행을 오염시키지는 않는다**
+    (poison 금지 — 그 뒤 정상 매수가 들어오면 LOFO를 그대로 쓴다).
+  - **`trusted`** — 매입단가가 빈 매수 행은 로트를 만들지 못해 그 시점부터 풀 구성이 불완전해지므로
+    `excludedSeen`으로 이후 행을 폴백시킨다.
+  - **⚠️ 무일자 판정은 `undatedTrade`(`change !== 0`) — 매수만 보던 옛 가드로 되돌리지 말 것**
+    (적대적 리뷰 HIGH). **일자 없는 매도**는 `valid` 필터에서 버려져 풀을 소진시키지 못하므로,
+    이미 팔린 최저가 로트가 그대로 남아 이후 매도의 기준단가를 낮추는데도 `trusted:true`로 확정된다
+    (실측: 100주@5,000 매수 → 무일자 100주 매도 → 100주@9,000 매수 → 100주 매도에서 참값 +50,000이
+    **+450,000**, 9배 과대. 게다가 배정 내역 툴팁이 이미 팔린 로트를 근거로 적극 단언한다).
+    ⚠️ `buildLofoLotSeries`와 `buildSortedEventsWithAvg`(러닝 평균) **양쪽에 같은 판정**이 있어야 한다 —
+    한쪽만 고치면 LOFO는 막히는데 러닝 평균 폴백이 같은 오염값(실측 7,000 vs 참값 9,000)을 내보낸다.
+- **⚠️ 폴백 도착지는 사유마다 다르다 — 한 사슬로 뭉뚱그려 서술하지 말 것**(적대적 리뷰 확정):
+  **ⓐ 매수 이력 부족** → 러닝 평균(신뢰도는 살아 있다) / **ⓑ 매입단가·일자 누락** → 러닝 평균도
+  **같은 `excludedSeen`으로 함께 꺼지므로 건너뛰고** `avgBuy.value`. 즉 `running` 폴백은 ⓐ에서만
+  도달 가능하다. 각주·헤더 툴팁·검증 미러(`lofoBasisOf`)가 이 사실을 그대로 반영해야 한다 —
+  ⚠️ 미러가 `row.buyAvgTrusted` 게이트를 빠뜨리면 **도달 불가능한 'running'을 단언**하고, 컴포넌트에서
+  그 게이트를 지워도 통과하는 죽은 가드가 된다.
+- **러닝 평균(2순위 폴백)은 `buildSortedEventsWithAvg`가 평균 과표와 **같은 순회**에서 낸다**(`runningBuyAvg`).
+  ⚠️ LOFO 도입 뒤에도 **지우지 말 것** — 매수 이력 부족·부분 풀에서 `avgBuy`(현재 시점 값)로 곧장
+  떨어지면 위 '부호 뒤집힘' 2종에 그대로 노출된다. 러닝 평균은 같은 이벤트에서 나오고 나중 매수로
+  소급 변경되지 않아 폴백으로서 `avgBuy`보다 안전하다.
+  ⚠️ dead code `computeRunningAvgPurchaseSnapshots`를 쓰지 말 것 — `change === 0` 행 제외 여부가 달라
+  행이 한 칸씩 밀린다. 이동평균법이라 **매도는 평균단가를 바꾸지 않고 수량만 줄인다**. 매입단가가 빈
+  매수 행은 평균에 넣지 않고, 그런 행이 하나라도 있으면(`buyExcludedCount > 0`) 부분 평균이므로
+  `avgBuy.value`로 폴백하며 셀에 `*`를 붙인다.
+  ⚠️ **신뢰도는 '그 행 시점까지'로 판정한다**(`buyAvgTrusted`) — 전역 `buyExcludedCount === 0`으로
+  재면 매도보다 **뒤에 있는** 불완전 매수 행 1건이 그 매도의 완전한 러닝 평균을 폐기시켜 현재 시점
+  `avgBuy`로 폴백하고, **이 기능이 막으려던 부호 뒤집힘이 그대로 재현된다**(실측 +50,000 → −83,333).
+  게다가 그때는 `basis.value === avgBuy.value`라 `basisDiverged` ⚠가 **구조적으로 뜰 수 없다**.
+  `addEvent`가 `purchasePrice` 없이 행을 만들므로 **'행 추가' 후 수량만 입력한 상태**로도 발동한다.
+  일자 없는 매수 행만은 순서를 정할 수 없어 종전대로 **전 구간** 신뢰 불가(`undatedBuy`).
+  `buyExcludedCount`는 종전대로 `resolveAvgBuyPrice`(과세열)의 전역 판정에만 쓴다.
+- **⚠️ 같은 날짜 이벤트는 `compareTaxEvents`(매수 우선)로 결정적 정렬** — `localeCompare`만 쓰면
+  같은 날짜의 비교값이 0이라 `Array.sort`의 안정 정렬이 **배열 삽입 순서**를 채택하는데, 사용자에게
+  행 재정렬 UI가 없어 결정 요인이 화면에 없다. 실측: 같은 날 매수 100@20,000 + 매도 50@12,000에서
+  기준단가 15,000(−150,000) vs 10,000(+100,000)으로 **부호까지 갈렸다**.
+  ⚠️ 러닝 평균·로트 매칭을 만드는 **모든 순회가 이 비교자를 공유**해야 한다 — `buildSortedEventsWithAvg`
+  (계산기 행) · `buildLofoLotSeries`(로트 풀) · `computeRunningAvgSnapshots`(월별 그리드)가 다른 순서를
+  쓰면 **같은 달의 평균 과표가 두 값**이 되고, 같은 날 매수분이 그 매도에 배정될지가 갈린다.
+- **⚠️ 요약 바 래퍼 게이트는 내부 매도 줄 게이트를 전부 포함해야 한다**
+  (`buySummary.count > 0 || sellSummary.count > 0 || sellSummary.excluded > 0`) — 래퍼가 더 좁으면
+  내부 분기가 도달 불가가 된다(매수 0건 + 매도가 전부 미산출이면 '합계 제외 N건' 진단이 통째로 사라진다).
+- **⚠️ 매도 요약은 행별 값을 누적한다**(`Σ realized.cost` / `Σ realized.profit`) — 행마다 기준단가가
+  다를 수 있어 **'평균단가 × 총 매도수량' 상수 곱으로 되돌리면 부호까지 뒤집힌다**. 그리고 그 형태는
+  `computeSellRealized`의 게이트를 우회해 기준단가가 없을 때 매도금액 전액을 '수익'으로 단언한다.
+- **⚠️ 매수 요약의 '손익'과 매도 요약의 '실현손익'을 더하지 말 것** — 매수 요약 손익은
+  `현재가 × 총 매수수량 − 총 매입금액`이라 **이미 매도한 주식까지** 현재가로 평가한 값이다(매도분
+  이중 계상). 각주와 요약 툴팁 **두 곳**이 이를 경고한다(한쪽만 남기면 가드 #G7이 실패한다).
+- **`ISO_DATE` 모듈 상수**(`KrEtfTaxMatrix.tsx`) — 일자 정규식 10곳이 공유한다. ⚠️ 인라인 리터럴을
+  복제하지 말 것: 신규 필터를 손으로 베끼다 **백슬래시가 소실돼**(빌드는 통과한다) 매도 요약이 통째로
+  죽은 이력이 있다. 가드 #G9가 인라인 사용부 0건을 단언한다.
+- **⚠️ 각주에 줄을 끼워 넣을 때 기존 4줄을 덮어쓰지 말 것** — 실현손익 각주를 추가하다 과세 3열 각주
+  (과세 금액 정의 · 실제 과세 min 규약 · 평균단가 폴백 3단계 · ① 현재 시점 값 경고)가 **통째로 삭제된**
+  이력이 있다. `#G7`이 네 문장의 존재를 각각 단언한다(CLAUDE.md의 '각주는 폴백 3단계를 그대로 서술할 것'과 같은 계약).
+- **⚠️ 계산 규약·각주는 `?` 토글로 접혀 있다(기본 접힘, 사용자 요청 2026-08 "평소에는 숨기고 확인이
+  필요할 때만")** — `showTaxHelp`는 **컴포넌트 세션 로컬**이라 **Drive 저장 지점 0곳**(뷰 선호도이고
+  클릭 한 번으로 복구된다 — `hiddenTaxMonths`처럼 계좌 필드로 올리지 말 것).
+  ⚠️ **접힌 상태에서도 '분석용 원가법'이 3중으로 보여야 한다** — ① 토글 줄 우측 요약
+  (`실현손익 = 최저가 우선 매칭 · 분석용(세법상 이동평균법 아님)`) ② 열 헤더 서브라인
+  (`매도 = 실현손익 · 최저가 우선`) ③ 열 헤더 title 툴팁. 각주가 유일한 고지가 되면 접는 순간
+  사용자가 실현손익을 **과세 근거로 오해**한다. #G14가 셋을 각각 단언하고, 각주 본문이 실제로
+  게이트 **안**에 있는지도(`indexOf` 순서) 확인한다.
+- **영속화 신규 지점 0곳** — 실현손익 전 필드가 기존 `events`(change·sellPrice·purchasePrice)에서
+  나오는 **매 렌더 파생값**이다. `taxBaseKey`·`applyStateData`·`applyBackupData` 무수정.
+- **범위 밖(의도)**: 세율 적용 세액 · FIFO/후입선출 원가법 · 원가법 선택 토글(사용자가 LOFO 하나로
+  확정) · 평균법 실현손익의 병기 · 매도 요약의 미실현분 합산(총손익 = 실현 + 미실현 카드는 만들지
+  않는다 — 이중 계상 혼선).
+- 검증: `npm run verify:tax` (94건 — §9 `resolveAvgBuyPrice` · §10 `computeSellTaxRow` · §11
+  `computeSellRealized` · **§13 `buildLofoLotSeries`**(사용자 실측 3건 재현 + 소급 방지·순차 소진·
+  부족·신뢰도·무일자 매도·부동소수 잔여) 참조 구현 미러 + **§12 렌더 배선 소스 텍스트 가드 #G1~#G14**).
+  ⚠️ **`LOT_QTY_EPS` 임계 3곳 중 `matchedQty > LOT_QTY_EPS`는 도달 불가한 방어적 중복**이다(로트는
+  `qty > EPS`인 것만 쓰이고 `rest > EPS`일 때만 집으므로 take는 항상 EPS를 넘는다) — 그래서 그 임계는
+  `break` 임계와 **동시에** 무너뜨릴 때만 테스트가 실패한다. `break` 임계 단독 회귀는 **3번째(더 비싼)
+  로트가 있는 픽스처**라야 잡힌다(로트가 소진돼 루프가 자연 종료되면 임계가 갈리지 않는다 —
+  실제로 처음엔 죽은 단언이었다). 픽스처의 3번째 로트를 지우지 말 것.
+  `src/krEtfTaxHelpers.ts` 본문과 `scripts/verify-kretf-tax.mjs`의 미러를 **항상 1:1 동기화**할 것
+  (**#G11/#G12가 `computeSellRealized`·`buildLofoLotSeries`·`compareTaxEvents` 본문을 문자 단위로
+  대조**해 한쪽만 고친 드리프트를 잡는다 — ⚠️ 파라미터 구조분해 `{ change, ... }`를 본문으로
+  오인하면 어떤 드리프트도 못 잡는다).
+  ⚠️ §12 가드는 **선언이 아니라 사용부**를 단언한다(셀 통째 삭제·값 바꿔치기·색 바인딩 제거를 잡아야
+  한다). 나아가 **'존재'만으로는 부족한 계약 4종은 별도 방식으로 단언한다** — 우선순위는
+  `indexOf` **순서 비교**(#G3), '해서는 안 되는 코드'는 분기 본문을 잘라 **부재**로(#G4의 매도 분기
+  `buyAvg` 재대입, #G3의 `excludedSeen` 갱신), 게이트는 **래퍼⊇내부 포함관계**로(#G6),
+  **문구는 구간을 잘라**(#G7의 `FOOT`/`TH_REALIZED`) 단언한다.
+  ⚠️ **문구 가드를 파일 전역 정규식으로 되돌리지 말 것** — 같은 문장이 열 헤더 툴팁과 각주 양쪽에
+  있어, 전역으로 재면 **각주에서 통째로 사라져도 초록**이 된다(변이 M10·M17로 실증한 죽은 단언).
+  각주는 마우스를 올리지 않는 사용자가 이 값의 성격('분석용 원가법')을 알 수 있는 유일한 자리다.
+  적대적 리뷰가 실증했듯 '존재' 단언만으로는 `resolveBasis` 두 줄 **맞바꾸기**·매도 분기 `buyAvg = 0`
+  **추가**가 전부 통과한다. 변이 **총 32종**(LOFO 도입분 20종 + 리뷰 후속 12종)으로 검출을 실증했으므로,
+  가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+  실패 시 **먼저 정규식이 낡았는지** 확인하고, 계약이 바뀐 게 아니면 정규식을 고칠 것.
+
+### 평균 과표 조정 — 실제 과세금으로 역산해 앵커 고정 (⚠️ 회귀 주의)
+
+**발단(사용자 실측 2026-09)**: 매매 이벤트로 계산한 평균 과표(9,911.31)로 예상한 과세는 ₩422,749인데
+실제 원천징수는 **₩56,050**이었다. 예상이 틀렸다는 것은 곧 **매수 평균 과표가 틀렸다**는 뜻이므로,
+실제 과세금에서 참값을 역산해 평균 과표를 바로잡는다.
+
+```
+평균 과표(역산) = 배당 과표 − (실제 과세금 ÷ 보유주식수)
+               = 9,952.11 − (56,050 ÷ 10,401) = 9,946.72   (계산값 대비 +35.41원/주)
+```
+
+- **⚠️ 사용자 확정 규약 4종(2026-09) — 되돌리지 말 것**:
+  ① **앵커 보정**(그 달 셀만 대체가 아님) — 역산값을 그 시점의 **참값**으로 고정하고 **이후 매매를
+  그 값에서 다시 누적**한다. 평균 과표는 누적값이라 그 달만 고치면 같은 오차가 이후 전 구간에 남는다.
+  ② **과세 ₩0은 하한만**(`kind:'lowerBound'`) — 0원은 `배당과표 ≤ 평균과표`라는 **부등식**만 알려준다.
+  ③ **수량은 월 입금 내역 기준**(10,401주) — 실제 과세가 매겨진 대상이 곧 그 주식수다.
+  ④ **판정 임계 ₩1**.
+- **⚠️ 역산의 전제 2가지 — 하나라도 없으면 계산하지 않고 사유를 표시한다**(조용한 오적용보다
+  명시적 미적용. 적대적 리뷰 3렌즈가 독립적으로 잡은 확정 결함들이다):
+  ① **수량 신뢰**(`obs.qtyTrusted` = 수동 지정 `actualDividendQty` **또는** 세후 분배금 입력).
+  세후를 비우고 과세금만 넣으면 `gross = 세후 + 세금`이 세금뿐이라 수량이 **10,401 → 389주**로
+  줄고(실측), 역산이 **−138.70원/주** 틀린 값을 `kind:'exact'`로 단언한다. 그 앵커를 박으면 다음 달
+  예상 과세가 참값의 **26.7배**가 된다. 게다가 과세금을 얼마로 바꿔도 값이 거의 안 움직여
+  (자기상쇄) 사용자가 이상함을 알아챌 단서가 없다.
+  ② **실제 배당락일**(`dividendExDate[code][ym]`) — **말일로 폴백하지 말 것**. 앵커는 같은 날짜
+  매매보다 **먼저** 적용되므로 말일 앵커는 배당락일~말일 사이 매수를 가중평균에서 **통째로 소각**
+  한다(실측: 8/20 매수 2,000주@10,500 누락 → 9월 예상 과세 ₩1,106,558 과대).
+- **⚠️ 적용 시 그 달의 수동 `avgTaxBase`를 함께 지운다** — 화면 값은
+  `manualAvgVal !== undefined ? manualAvgVal : computedAvgVal`이고 앵커는 `computedAvgVal`만 바꾸므로,
+  안 지우면 **적용해도 평균 과표·예상 과세가 1원도 안 바뀌는데 배지만 `⚑ 조정됨`으로 바뀐다**
+  (억제 조건이 `|adj.value − suggest.value|`만 보기 때문. 실측 9.6배 오차가 그대로 남는다).
+  수동값이 지워진다는 사실은 적용 **전에** 툴팁으로 고지한다.
+- **⚠️ 해제 경로는 연도 무관하게 존재해야 한다** — 월 셀의 `⚑ 조정됨` 해제 버튼은 `monthYms`
+  (올해 12개월) 안에만 렌더되는데 `buildAvgTaxAnchors`는 **연도 무관 전체**를 앵커로 흘려보낸다.
+  해가 바뀌거나 전년 12월 배당락월(1월 지급분)이면 앵커는 계속 작동하는데 해제 수단이 화면에서
+  사라져 **영구히 되돌릴 수 없다**(남는 건 종목 과표 기록 전체 삭제뿐). → 계산기 확장 행의
+  **`⚑ 적용된 평균 과표 조정` 목록**이 그 유일한 탈출구다. 같은 이유로 **전년 배당락월은 월 입금
+  내역에서 제안을 띄우지 않는다**(적용 버튼이 그리드에 없어 "적용은 과표 계산 탭에서"가 거짓이 된다).
+- **⚠️ `updatePortfolioDividendTaxAmount`는 0을 저장한다** — 과거 `if (amount > 0) … else delete`라
+  **0이 곧 삭제**였고, 그래서 규약 ②(과세 0원 = 하한)가 **도달 불가한 죽은 코드**였다. 지금은
+  `null`(미입력)·음수·비유한값만 삭제한다. 짝으로 `commitEdit`의 **국내·해외 두 분기 모두** 빈칸을
+  `0`이 아니라 `null`로 넘겨야 한다 — 안 그러면 손대지 않은 셀이 전부 '비과세 확인'으로 확정된다.
+  소비자는 전부 `> 0` 또는 `|| 0` 게이트라 0 저장의 표시·합계 영향은 없다(`evalCompare`의 세전 역산도
+  `tax > 0`만 채택).
+- **저장 = `taxBaseHistory[code].avgTaxBaseAdj[ym] = { value, kind, exTaxBase, taxAmount, qty, exDate, prevAvg, qtySource, at }`**.
+  ⚠️ **`avgTaxBase`(수동 입력)와 합치지 말 것** — 출처를 구분할 수 없어 툴팁을 띄울 수 없고,
+  사용자가 넣어 둔 값을 조정이 조용히 덮는다. 근거를 함께 박제하는 이유는 나중에 배당락일·분배금
+  입력이 바뀌어도 확정한 앵커가 흔들리지 않게 하기 위해서다.
+- **⚠️ 영속화 배선 2곳이 **둘 다** 화이트리스트 손나열이다 — 하나만 빠져도 조용히 유실**:
+  ① `usePortfolioState._ensureTaxBase`(**재구축기** — 빠지면 배당 과표를 한 글자만 고쳐도 조정이 통째로
+  삭제된다) ② `App.tsx portfolioStructureKey.taxBaseKey`(빠지면 STATE 저장이 스킵된다 —
+  `historyVerifyKey`·`targetAmount`와 동일 버그 클래스). 그 외 영속화 신규 지점 **0곳**.
+- **⚠️ `computeRunningAvgSnapshots(events, anchors?)`의 `anchors`는 선택 인자 — 미전달 시 반환값이
+  종전과 한 바이트도 다르지 않다**(하위호환의 축). 앵커는 **같은 날짜 매매보다 먼저** 적용한다
+  (배당락일 매수는 그 배당 권리가 없고, 이 순서라야 날짜 오름차순이 유지되어 호출부의 `else break`
+  스캔이 성립한다). 마지막 이벤트 **이후** 날짜의 앵커도 반드시 흘려보낼 것(실데이터의 기본 경로).
+- **⚠️ `monthEndOfYm`은 그리드 월말 경계와 **같은 식**이어야 하고, 두 그리드 함수가 그 헬퍼를 호출해
+  구조적으로 일치시킨다** — 한때 `Date.UTC`로 조립했는데 그리드는 `new Date(y, m, 0)`(로컬 자정)이라
+  KST에서 하루 앞당겨진다 → 폴백 앵커가 경계보다 **항상 하루 뒤**가 되어 그 달에 반영되지 않고
+  다음 달부터만 적용됐다(실측 2026-01: 앵커 01-31 vs 경계 01-30). 배지는 '조정됨'인데 값은 그대로라
+  원인을 알 수 없는 증상이었다. 식을 바꾸려면 **세 곳을 함께** 바꿀 것.
+- **⚠️ 앵커는 3소비자에 **모두** 전달**: `computeMonthlyAvgForGrid`(그리드 자동값) ·
+  `buildSortedEventsWithAvg`(계산기 러닝 평균) · `resolveAvgAdjState`(월 입금 내역). 앵커 생성은
+  **`buildAvgTaxAnchors` 공유 함수**로만(손복제 금지). 그 함수의 `exDate` 폴백은 truthy가 아니라
+  **ISO 형식**으로 판정한다 — 손상된 값('bad' 등)은 truthy라 폴백을 건너뛰고 필터에서 앵커가 통째로
+  사라진다(검증이 실제로 잡은 결함).
+- **⚠️ null 계약** — `taxAmount == null`(미입력)과 `0`(과세 없음)은 **다른 사건**이다. `safeNum(null)`이
+  0이므로 이 가드를 지우면 입력한 적 없는 달이 '과세 0원 관측'으로 둔갑해 **가짜 하한 앵커**가 박힌다.
+  배당 과표 없음·수량 0·음수 과세·역산 결과 0 이하도 전부 `null`.
+- **⚠️ 제안 판정의 예상 과세는 화면의 `expected`(monthQty)가 아니라 **관측 수량 기준**이다** — 화면
+  기준으로 재면 조정 적용 후에도 수량 차이 때문에 제안이 **영원히 꺼지지 않는다**. 그 대가로 적용
+  후에도 화면 예상 과세에 잔차가 남으므로(실측 ₩216 = 40주 차이), 툴팁이 그 사실과 **매매 이벤트
+  누락 가능성**을 함께 밝힌다.
+- **⚠️ `stockRows.map` 구조분해에 `avgTaxBaseAdj`를 넣을 것** — 해제 목록이 그 스코프에서 읽는다.
+  빠지면 렌더 중 `ReferenceError`로 과표 계산 탭이 통째로 오류 화면이 되는데, `@ts-nocheck` + esbuild라
+  **빌드도 `undefcheck`도 `scopecheck`도 통과시킨다**(`initTradeRest` 프로덕션 장애와 동일 패턴).
+- **UI**: 월 입금 내역 셀 = **표시만**(`⚑ 과표 9,946.72` / 적용 후 `⚑ 조정 …`), 적용·해제는 **과표
+  계산 탭**. 툴팁 문구는 **`avgAdjTooltip` 공유 포매터**로만 만든다. 통합(compact) 뷰는 조정 UI를
+  렌더하지 않으므로 **계산 자체를 건너뛴다**(`compact ? null : resolveAvgAdjState(...)`).
+- **⚠️ 한 지급월에 2건이 합산된 셀이어도 조정은 지배 소스의 `exYm` 하나만 본다** — 저장 키가 전부
+  배당락월이라 합산과 무관하게 정확하다(툴팁이 그 사실을 밝힌다).
+- **별도 창**: `dividendCall` byId 화이트리스트에 `updateTaxBaseAvgAdj` 필수. `CardWinFeed`가 계좌
+  객체를 통째로 보내므로 `taxBaseHistory`는 자동으로 실린다.
+- **범위 밖(의도)**: 월 입금 내역에서의 직접 적용 · 조정 이력 타임라인 · 해외 계좌 · 자동 적용 ·
+  과표 계산 탭의 전년 12월 컬럼(전년 배당락월은 제안하지 않고, 해제만 조정 목록에서).
+- 검증: `npm run verify:tax` (130건 — §14 참조 미러 `#160~#175` + §15 소스 텍스트 가드 `#G15~#G33`).
+  ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 34종**(화이트리스트 2곳 · 별도 창 등록 ·
+  앵커 미전달 2곳 · 셀 게이트 2곳 · 공유 함수를 손계산으로 · 미러 드리프트 3종 · 앵커 순서 뒤집기 ·
+  미입력을 0원으로 · 임계 확대 · 수동 수량 무시 · exDate 폴백 제거 · 툴팁 손복제 · **수량 신뢰 게이트 ·
+  구조분해 스코프 · 말일 폴백 복귀 · 수동값 제거 삭제 · 해제 목록 삭제 · 전년 억제 제거 · 라이터
+  0-삭제 복귀 · commitEdit 빈칸 0 · UTC 조립 복귀 · 그리드 자체 계산 · compact 가드 제거**)으로
+  **실제 검출을 확인**했다. `src/krEtfTaxHelpers.ts`의 `solveAvgTaxBaseFromTax`·`buildAvgTaxAnchors`·
+  `avgTaxBaseAdjNeeded`·**`resolveActualTaxObservation`** 본문과 미러를 **항상 1:1 동기화**할 것
+  (#G24·#G25·**#G25b**가 문자 단위로 대조한다 — `resolveActualTaxObservation`은 한때 드리프트 가드
+  사각지대라 src만 고쳐도 118건이 그대로 통과했다).
+
+### 메모 달력 (calendarMemos) — 헤더 달력 아이콘 → 날짜별 다중 메모 (⚠️ 회귀 주의)
+
+헤더의 **달력 아이콘**(`AccountTabBar` 액션 아이콘 **우측 끝, 통합 대시보드·개별 계좌 모두
+항상 노출** — `showIntegratedDashboard` 프래그먼트 밖에 배치해 어느 뷰에서든 메모 가능)으로 여는
+**비차단·이동 가능 플로팅 창**(`CalendarModal.tsx`, 구글 캘린더식 월 그리드). 날짜 셀 클릭 →
+사진 형식 메모 패드(핑크 X 취소 / 퍼플 체크 저장 / 날짜 / MEMO 그라데이션 / 줄선 textarea —
+`RebalancingPanel`의 `noteExpandModal` 스타일 복제) → 저장 시 셀에 한 줄 표시, 한 줄 클릭 →
+펼침/편집, 같은 날 **append 누적**(오래된 위 · 새 아래).
+
+- **비차단·이동 가능 (⚠️ 회귀 주의 — FloatingCalculator/WatchlistPopup과 동일 규칙)**: 달력 창과
+  메모 패드 모두 **백드롭 없는 단일 `position:fixed` div**라 아래 앱 클릭·스크롤이 통과한다(창을 열어
+  둔 채 계좌 탭 전환·뷰 이동 가능). 각각 **타이틀 바만 드래그 핸들**(window mousemove/touchmove +
+  뷰포트 클램프, 타이틀 바 100px는 항상 화면 안에 유지)로 **독립 이동**한다. 달력 창=`CAL_Z 1050`,
+  메모 패드=`PAD_Z 1060`(dialog 1000 < 여기 < LoadingOverlay 1100). 드래그 핸들 내 버튼(이전/다음/
+  오늘/닫기, 패드 X/체크)은 `onMouseDown stopPropagation`으로 드래그 시작을 막고 클릭만 처리.
+  **`App.tsx` 최상위 형제로 마운트**(`FloatingCalculator`/`WatchlistPopup` 옆) → 탭/뷰 전환에도
+  언마운트 안 됨(창 내부 상태·위치·열린 패드 유지, 닫기 전까지 지속). 재오픈(open false→true) 시에만
+  이번 달 리셋 + 패드 닫기 + 창 중앙 재배치.
+- **크기 (2026-07-29 확대 — 사용자 요청)**: `CAL_W 1200` / `CELL_H 180` / `CELL_MEMO_H 74`
+  (`CalendarModal.tsx` 모듈 상수, `maxHeight 92vh`·`maxWidth calc(100vw-24px)`는 유지). **세 값은 한 세트**다 —
+  칸이 칩 3줄(LIST/NOTE/STOCK 세로 스택) + 지표 3줄 + 메모 목록을 동시에 담아야 하므로 `CELL_H`를 줄이면
+  칩이 메모를 밀어내고, `CAL_W`를 줄이면 칩의 계좌명이 truncate로 사라진다(칸 텍스트 가용폭 ≈ `CAL_W/7` −
+  padding·border ≈ **160px**). ⚠️ 이전 규약("920/130/50에서 키우지 말 것")은 **폐기** — 그 근거였던 "칸만
+  커지고 빈 공간만 넓어진다"는 칩이 가로 스크롤이던 시절 이야기이고, 1200×180은 1080p 세로에 한 달이
+  그대로 들어온다(6주 달인 경우에만 창 내부 스크롤). **길게 쓰는 건 메모 패드뿐**: 달력 메모 `rows 28`,
+  투자일기(`RebalancingPanel` noteExpandModal) `rows 30`. 패드는 세로가 길어 **고정 오프셋으로 배치하면
+  아래가 화면 밖으로 잘린다** → ① textarea에 `maxHeight: calc(100vh - 160px)` 상한(초과분 내부 스크롤)
+  ② `CalendarModal`은 `padSeq` 증가 → rAF에서 **실제 offsetHeight를 측정해 중앙 배치 + 뷰포트 클램프**
+  (`centerPad` 같은 고정 오프셋 방식으로 되돌리지 말 것). `RebalancingPanel`은 상한이 있어 상단 5vh에서 시작.
+
+- **데이터 모델**: 앱 레벨 `calendarMemos: { [YYYY-MM-DD]: { id, content, createdAt }[] }`
+  (특정 포트폴리오에 종속 안 됨, `intHistory`와 동급). 하루 배열 `push`로 append → 표시 순서가
+  곧 생성 순서(오래된 위/새 아래). 빈 메모는 생성 안 함, 편집 후 비면 삭제, 배열이 비면 날짜 키 제거.
+- **영속화 5지점(⚠️ 신규 저장 필드 추가 시 동일 패턴 필수)**: ① `App.tsx` 저장 payload
+  literal(`const state = {...}`)에 `calendarMemos` 포함 ② **`portfolioStructureKey`에 `JSON.stringify(calendarMemos)`
+  지문 추가 — 없으면 `portfolioUpdatedAt` 미상승 → `useDriveSync` 저장 가드가 STATE 저장을 스킵**
+  (`historyVerifyKey`/`isTest`와 동일 버그류) ③ 저장 effect deps에 `calendarMemos` ④ `applyStateData`
+  (정식 Drive 로드 — 최신값 그대로 복원) ⑤ `applyBackupData`(백업 복원/파일 가져오기 — **sticky 규칙**,
+  아래). localStorage 금지(사용자 데이터 → Drive STATE만, 멀티계정 오염 방지).
+- **⚠️ 모든 STATE 저장 payload는 `{ ...saveStateRef.current, ... }` 스프레드로 구성** (⚠️ 회귀 주의 —
+  필드 손나열 금지): `saveAllToDrive`는 STATE 파일을 통째로 덮어쓰므로(`stateCore` 전체 write) payload에
+  없는 필드는 Drive에서 삭제된다. 과거 **수동 저장 버튼 `handleSave`·`handleDriveSave`가 부분 state를
+  손으로 나열해 `calendarMemos`·`watchlistGroups`·`seenAdminNotifIds`를 누락** → "저장" 누르면 메모 달력이
+  Drive·백업에서 유실됐다. 네 지점(`handleSave`·`handleDriveSave`·`handleDownloadStateFile`·`handleAppClose`)
+  전부 `saveStateRef.current` 스프레드 필수(자동 저장 effect literal은 원본 소스라 예외 — 여기에 모든
+  필드가 모임). 한국 ISP가 vercel.app 차단 → 로컬 파일 백업 의존이라 특히 중요.
+- **⚠️ 복원 sticky 규칙 — `calendarMemos`·`watchlistGroups`는 과거 이력 복원에도 보존** (회귀 주의):
+  메모 달력·관심종목은 포트폴리오 구성과 무관한 앱 레벨 개인 데이터라, **백업/파일 복원이 이를 되돌리지
+  않는다**. `applyBackupData`(in-memory)와 `handleApplyBackup`/`handleImportStateFile`의 Drive write
+  (`_preserveStickyPersonalData`, `useDriveSync.ts`)는 **현재 값이 있으면 유지**하고 **비어 있을 때만**
+  백업/파일 값을 채택한다(신규 기기 이전·유실 후 복구는 가능, 기존 기록 덮어쓰기는 금지). 두 경로가 같은
+  current(`saveStateRef.current` = 복원 직전 in-memory)를 참조해 결과 일치. `applyStateData`(정식 로드)는
+  이 규칙에서 제외 — Drive STATE의 최신값을 항상 그대로 불러온다.
+- **z-index/피드백 제약(⚠️)**: 달력 창 `CAL_Z 1050`·메모 패드 `PAD_Z 1060` 모두 `Z.dialog`(1000)·
+  `ConfirmDialog`(1000)·`notify()` 토스트(z-999)보다 **위**라 창 위에서 confirm/notify는 가려진다.
+  따라서 메모 삭제는 confirm 없이 즉시 삭제(셀에서 사라지는 게 피드백, `RebalancingPanel deleteNote`
+  패턴). 창 내에서 confirm/notify 의존 금지.
+- **UX 세부**: 백드롭이 없어졌으므로 **오클릭 닫기 없음** — 패드는 **X/Esc/저장(체크)** 로만 닫는다
+  (비차단 통과 클릭이 텍스트를 지우지 않아 오히려 안전). Esc는 **패드만** 닫는다(비차단 배경 창을
+  전역 Esc로 통째 닫지 않음 — 닫기는 창 X 버튼). textarea onKeyDown Esc가 `stopPropagation` 후 닫고,
+  포커스가 딴 데 있을 때를 위한 전역 Esc 폴백은 `pad`를 deps에 넣어 클로저로 판별(패드 있을 때만 동작).
+  날짜 키는 `${y}-${pad2(m+1)}-${pad2(d)}`로 직접 조립(TZ 안전, `new Date('YYYY-MM-DD')` UTC 파싱 금지),
+  오늘 판정은 `getTodayKST()`. 주말(일 red/토 blue)·KR 공휴일(`useMarketCalendar` holidays.kr) 색상 +
+  오늘 파란 배지.
+- **날짜별 포트폴리오 스냅샷 표시 (display-derived, ⚠️ persist 무관)**: 각 셀은 날짜 아래 3줄 축약
+  (총자산 억/만·그날 오늘수익 절대액+%·누적수익율), 메모 패드는 MEMO 헤더 아래 밴드에 풀 숫자
+  (`총자산 / 수익 / 수익율 / 환율 / US10Y`)를 표시한다. **그 날짜의 실제 기록**만 표시(기록 없는
+  날·미래는 스냅샷 없음). 손익 색상은 한국식(이익 red / 손실 blue).
+  - **데이터 소스(전부 App.tsx에서 이미 계산됨 → props로 전달만)**: 총자산/오늘수익/누적수익율 =
+    `intMonthlyHistory`(`evalAmount`/`dodAbsChange`+`dodChange`/`monthlyChange`, 날짜 키 = `date`).
+    환율/US10Y = `indicatorHistoryMap.usdkrw`/`.us10y`(날짜→값), 오늘값은 라이브 `marketIndicators.usdkrw`/`.us10y`.
+    비거래일 환율/US10Y는 `resolveOnOrBefore`로 직전 거래일값 carry-forward.
+  - **파생값이라 저장 안 함**: `calendarMemos` 구조·영속화 5지점 **불변**(스냅샷을 메모에 박제하지
+    않음 — 매 렌더 라이브 재계산). 새 저장 필드 추가 아님 → `portfolioStructureKey`도 무관.
+  - **⚠️ 헤더 일치는 `latestRecDate` 기준(getTodayKST 아님)**: '오늘 칸 = 통합 헤더 카드 정확 일치'
+    보장을 위해, `todayReturnRate`(=`intTotals.returnRate`) 누적 오버라이드와 라이브 환율/US10Y는
+    **최신 기록일 셀**(`latestRecDate` = `intMonthlyHistory[0].date` = 헤더의 `todayRec.date` =
+    `effectiveDate` 기준)에 적용한다. `getTodayKST()`(달력상 오늘, 파란 배지 전용)에 걸면 **00:00~07:30
+    KST 구간**엔 `getEffectiveDate()`가 전일을 반환해 둘이 어긋나 → 오늘 칸이 비고 헤더 누적이 어느
+    셀에도 안 뜨는 회귀가 난다(3개 리뷰어 독립 확인). 배지용 `isToday`와 헤더값용 `latestRecDate`는
+    **분리 유지**.
+  - **범위 밖(의도)**: 시세 로드 실패 시 `computedIntHistory` 이상치 가드(eval<전일 10%)가 전일값을
+    carry-forward하면 셀 총자산(전일값)과 헤더(붕괴된 라이브값)가 갈릴 수 있으나, 이는 깨진 로딩
+    상태로 carry-forward가 더 정확 → 미보정.
+
+### 리밸런싱 목표비중 → 메모 달력 자동 기록 (`kind:'rebalTarget'`) (⚠️ 회귀 주의)
+
+리밸런싱 표 **'목표(%)' 열 헤더의 날짜**(`settings.targetDate`)가 가리키는 메모 달력 칸에, 그 시점
+목표 비중 스냅샷을 자동 기록한다. 사용자는 원래 이 날짜 칸에 "목표 비중을 조정한 날"을 손으로
+적어 왔고(그 필드는 코드베이스 다른 어디에서도 쓰이지 않는 순수 기록용), 그 날짜의 달력에
+`종목명 / 목표비중 / 현재수량 / 리밸런싱 후 수량 / 리밸런싱 후 평가금액`이 남기를 원했다.
+
+- **저장 위치 = `calendarMemos` 배열 재사용**(신규 저장 필드 0개). 항목에 `kind:'rebalTarget'`을 달아
+  일반 메모와 구분: `{ id, createdAt, updatedAt, kind, portfolioId, accountName, targetMode, investMode,
+  currency, rows:[{name, code, targetRatio, curQty, expQty, expEval}], totalTargetRatio, totalExpEval, content }`.
+  **영속화 5지점(state 리터럴·지문 `JSON.stringify(calendarMemos)`·저장 effect deps·`applyStateData`·
+  `applyBackupData`)과 복원 sticky 규칙(`_preserveStickyPersonalData`)을 그대로 상속** → 전 지점 무수정.
+  `content`(사람이 읽는 텍스트 사본)는 백업 JSON 가독성 + `firstLine(m.content)` 폴백용이라 **제거 금지**.
+- **upsert 키 = `(dayKey, kind==='rebalTarget', portfolioId)`** — 같은 날 같은 계좌면 덮어쓰기(최신 1건).
+  ⚠️ **교체 시 `id`·`createdAt`을 승계**해야 한다 — 칩 `key` 안정 + 열려 있던 읽기전용 패드(아래 memoId
+  앵커)가 닫히지 않고 새 스냅샷으로 갱신된다. `settings`는 `updateSettingsForType`이 **같은 accountType
+  계좌 전체에 동기화**하므로 `targetDate`가 계좌 간 공유된다 → 하루에 계좌별 기록이 여러 건 쌓이는 것이
+  예외가 아니라 **기본 시나리오**(portfolioId로 분리).
+- **⚠️ '헤더에 보이는 날짜 = 기록 날짜' 불변식 — 오늘로 폴백 금지**: `settings.targetDate`는 어디에서도
+  초기화되지 않아 신규·레거시 계좌는 `undefined`다(헤더에 `날짜 지정` 표시). 그 상태에서 오늘 칸으로
+  폴백하면 사용자가 지정한 적 없는 날짜에 조용히 기록된다 → `buildRebalTargetEntry`는 **커밋하지 않고
+  dirty를 유지**해 날짜를 지정하는 순간 그 날짜에 기록되게 한다. 헤더는 미지정일 때 **앰버 테두리**로
+  "여기에 날짜를 넣어야 기록된다"를 알린다.
+- **⚠️ 날짜 유효성은 `utils.ts isValidIsoDate`(실제 달력 존재) + 연도 1900~2999**: 정규식만으로는
+  `2026-13-45`가 통과하고, `CalendarModal`은 실제 날짜로만 셀을 그리므로 그 기록은 **화면에 영원히 안 보이고
+  삭제도 못 하는 유령**이 된다. 적용 3곳 — `parseDisplayDate`(신규 유입 차단), `buildRebalTargetEntry`
+  (기존 저장 손상값 + 네이티브 피커의 0001년 차단), `normalizeCalendarMemos`(로드 정규화).
+- **목표 날짜 칩 = 세 구역**(⚠️ '단일 클릭=피커 / 더블클릭=직접 입력'으로 되돌리지 말 것):
+  **왼쪽 여백 = 즉시 기록** · **가운데 날짜 = 직접 입력** · **오른쪽 여백 = 달력 피커**.
+  ⚠️ **좌우 구역에 아이콘을 넣지 말 것**(사용자 요청 2026-08 — 넣었다가 되돌렸다): 칩이 커지고 날짜가
+  작아 보인다. 여백은 비우고 **hover 배경**으로만 구역을 알린다(왼쪽 emerald · 오른쪽 회색 · 잠김 앰버).
+  유일한 예외가 잠금 🔒(왼쪽). 날짜 span은 **`shrink-0`** 필수 — 칩이 `overflow-hidden`이라 좁은
+  화면에서 날짜가 잘린다.
+  - **⚠️ PIN 잠금은 `targetMode`와 무관하다**(`dateLocked = !targetEditAuthorized && !isAdmin`) —
+    목표비중 셀의 `isFixedLocked`(고정 모드 전용)와 **다른 조건**이니 합치지 말 것. 날짜는
+    `updateSettingsForType`으로 같은 accountType 전 계좌에 전파되고 기록은 그 날짜의 기존 기록을
+    교체하는데 undo가 없어, 오클릭 한 번의 대가가 다른 셀보다 크다(사용자 요청 2026-08).
+    세 구역 전부 `runDateAction`을 지나며 **fail-closed**(잠겨 있으면 실행 대신 PIN 요구), 인증은
+    세션 단위 `targetEditAuthorized` 공유. ⚠️ PIN 통과 직후의 `showPicker()`는 **try/catch 필수** —
+    사용자 제스처가 만료되면 던진다(그때는 잠금이 이미 풀려 재클릭으로 열린다).
+  과거엔 기록을 남기는 통로가 '날짜를 다시 커밋해 dirty를 세우는' **더블클릭뿐**이었는데, 그 **첫
+  클릭이 네이티브 피커를 열어** 두 번째 클릭이 피커의 날짜 칸에 떨어져 의도한 적 없는 날짜로 바뀌었다
+  (사용자 보고 2026-08). 저장 경로를 왼쪽 구역으로 분리해 없앤 문제다.
+  - **`App.tsx handleTargetSaveNow`**(prop `onTargetSaveNow`) — **dirty 여부와 무관하게** 기록한다.
+    dirty는 '값이 실제 바뀐 편집'에서만 서므로, 목표는 그대로고 시세·수량만 움직인 **지금 상태를
+    남기고 싶을 때 기존 경로로는 아무 일도 일어나지 않는다**. 대기 중인 날짜 디바운스는
+    `flushRebalTargetSnapshot`으로 회수하므로 중복 발화가 없고, 날짜 유효성(`isValidIsoDate` + 연도
+    1900~2999)은 `buildRebalTargetEntry`와 **같은 검사**를 미리 돌려 '헤더 날짜 = 기록 날짜' 불변식을
+    지킨다(오늘 폴백 금지). ⚠️ 빌드 실패(행 0건 등)면 **dirty를 원상 복구**한다 — 명시 저장이
+    실패했는데 dirty만 남으면 나중에 엉뚱한 시점에 기록된다.
+  - **피드백은 칩 텍스트 1.5초 플래시**(`saved`✓기록됨 / `nochange`✓최신 / `nodate`날짜 먼저 /
+    `fail`기록 불가). ⚠️ `notify()` 금지 — 알림 최소화 정책상 성공은 벨에 남기지 않는다(화면 변화가
+    피드백). 타이머는 언마운트에서 정리한다(섹션 접기로 패널이 사라진다).
+  - ⚠️ **칩에 `z-20`을 주지 말 것** — `hideStrip`(z-10)이 덮는 상단 4px이 열 숨기기 스트립의 몫이다
+    (복원 아이콘만 z-20인 이유와 동일).
+- **트리거 = dirty 게이트 + 4계열**(dirty는 App 레벨 ref — 리밸런싱 패널은 섹션 접기로 언마운트된다):
+  ① **계좌 뷰 이탈** — `switchToPortfolioWithSnapshot`/`goIntegratedDashboard` 래퍼(AccountTabBar·
+  IntegratedDashboard prop). ⚠️ `usePortfolioState`에 넘기는 **원본** `setShowIntegratedDashboard`는
+  래핑 금지(계좌 삭제 등 내부 흐름). ② 저장 3핸들러 + ③ `handleAppClose` — payload에 **동기 주입**
+  (`{...saveStateRef.current, calendarMemos: nextMemos}`; `setCalendarMemos`는 비동기라 `saveStateRef`가
+  아직 옛 값). `handleSave`는 기록이 실제 생겼을 때만 `portfolioUpdatedAt`을 올려야 STATE 저장 가드를
+  통과한다(historyVerifyKey 버그와 동류). ④ **목표 날짜 변경** — 800ms 디바운스(피커에서 여러 날짜를
+  연속 클릭하면 클릭한 날짜마다 기록이 잔재. 이전 날짜 기록은 자동 삭제하지 않는 규약이라 필수).
+  타이머에 소유 `pid`를 실어 발화 시 재검증하고, 커밋 지점은 `flushRebalTargetSnapshot`으로 회수한다.
+- **⚠️ '앱 닫기'는 `handleAppClose` 하나가 아니다**: 브라우저 X·탭 닫기·새로고침·로그아웃은 전부
+  `useDriveSync`의 `pagehide`로, alt-tab은 `visibilitychange(hidden)`로, 50분 비활동은
+  `handleInactivityLogout`으로 흐른다. 세 곳이 `saveStateRef.current`만 저장하므로 **커밋 훅이 없으면
+  기록이 영영 생성되지 않는다**(dirty ref는 메모리라 함께 소멸). → `useDriveSync({beforeExitSnapshotRef})`
+  + 내부 `snapForExit()`가 그 3지점을 한 번에 덮는다(훅 미제공 시 동작 100% 동일).
+  ⚠️ 종료 커밋은 **`saveStateRef.current`도 동기 갱신**한다 — 반환값 병합만으로는 부족하다(그 시점에
+  이미 저장 중이면 `saveAllToDrive`가 조기 반환하며 `pendingSaveRef`에 **주입 전** 스냅샷을 담고,
+  언로드라 리렌더가 없어 그대로 유실). **impersonation 탭 종료는 미커버**(`handlePageHide` admin
+  early-return은 오폴더 저장 방지 안전장치라 건드리지 않음) — 관리자 탭은 탭 이동·저장 트리거에 의존.
+- **⚠️ 커밋은 예외 격리 필수**: 저장·앱닫기·탭전환 **임계 경로의 첫 줄**에서 동기 호출되므로, 던지면
+  `window.close()`·`switchToPortfolio`에 도달하지 못해 앱이 멈춘 것처럼 보인다. 3중 방어 —
+  ① `commitRebalTargetSnapshot` 전체 try/catch(`null` 반환, ⚠️ `notify()` 금지 — 알림 최소화 정책)
+  ② upsert `Array.isArray` 가드 ③ `normalizeCalendarMemos` 로드 정규화(`applyStateData`/`applyBackupData`).
+- **⚠️ dirty 해제 규칙**: '내용 동일'이면 해제(무한 재시도 방지), **'날짜 미지정'이면 유지**(지정 시 기록).
+  `sameRebalEntry`는 `content`뿐 아니라 **`rows` JSON + `totalExpEval`까지 비교** — content에는 평가금이
+  없어 평가금만 달라진 스냅샷을 '변경 없음'으로 오판한다.
+- **⚠️ `rebalCommitRef.current = buildRebalTargetEntry`는 effect가 아니라 렌더 중 대입**: blur(setState)와
+  click 사이에 passive effect가 flush된다는 보장에 기대지 않기 위해서다(이 ref는 이벤트 핸들러·타이머
+  에서만 읽힌다). `rebalExitCommitRef`도 동일.
+- **⚠️ 값·순서는 화면 표와 1:1**: `expQty = quantity + action + extraQty`(예상 주식수 셀), `expEval =
+  d.expEval`(예상평가금 셀), `targetRatio = d.effectiveTargetRatio`(목표 셀 `baseVal`). **행 순서도**
+  리밸 정렬이 없을 때 화면과 같이 **카테고리 그룹 재배치**를 재현해야 패드의 '3.'과 표의 '3.'이 일치한다.
+  수량 포맷은 `utils.formatNumber` **공유**(자체 포매터를 두면 펀드 좌수에서 자릿수가 갈린다).
+  예적금(savings)은 수량이 없어 `curQty/expQty = null`(패드 `-`), overseas는 `currency:'USD'`로
+  **원화 환산 금지**(환율 시점이 섞여 가짜 손익).
+  ⚠️ 펀드의 `expEval` 0 문제(`usePortfolioData` `expEval`에 `evalAmount` 폴백 없음)는 **표 TOTAL·
+  퇴직연금 D/S·도넛이 이미 공유하는 선행 버그** — 기록만 폴백시키면 "표=기록" 불변식이 깨지므로 손대지 말 것.
+- **`RebalancingPanel` dirty 통지**: `reportAdminChange(opts)`가 `onAdminTargetChange`(관리자 알림,
+  impersonation 중에만 non-null)와 `onTargetEdited`(달력 기록)를 함께 발화. 목표비중 `onBlur`만 분리 호출 —
+  ⚠️ **변경 판정은 시세 파생 `baseVal`이 아니라 슬롯 원본 `slotVal`**로 한다(라이브 미러에선 `baseVal`이
+  현재 비중이라 포커스~blur 사이 시세가 움직이면 오탐). **미러 이탈**(`override` 최초 박제)은 값이 같아도
+  무조건 변경. `onAdminTargetChange`는 종전대로 **무조건** 호출(세션당 1회 규약 불변).
+  **⚠️ 트리거는 '비중 조정'만이 아니다(2026-08 확장)** — 목표금액 3경로(셀 커밋·↺ 지우기·`(₩)` 미러)도
+  같은 `reportAdminChange()`를 탄다. 금액이 비중을 무효화하는 상위 값이라 금액만 조정한 세션의 기록이
+  비면 추적이 끊기기 때문(목표금액 섹션 참조). 유일한 예외는 **복원 경로**(INV-2).
+- **`CalendarModal` 렌더**: 기록은 **사용자 메모 목록(`CELL_MEMO_H`)과 분리된 전용 세로 스택**에 emerald 칩
+  `LIST {계좌명}`으로 렌더한다 — 한 목록에 섞으면 자동 기록이 사용자 메모를 밀어낸다. 개수 배지는
+  **일반 메모만** 센다. 클릭 → **읽기 전용 표 패드**(`pad.kind==='rebalTarget'`): ⚠️ memo 객체를 값 복사하지
+  말고 **`memoId` 앵커 + 라이브 재조회**(기존 편집 패드와 같은 계약) + 원본 소멸 시 자동 닫힘 effect
+  (⚠️ `if (!open) return null`보다 **위**에 둘 것 — 훅 순서). `savePad`는 rebal이면 early-return, 저장(체크)
+  버튼은 미렌더, `textarea value`는 `?? ''`. 삭제는 칩에 폭이 없어 **패드 안 '기록 삭제'** 버튼으로(창
+  위에선 confirm/notify가 가려지므로 즉시 삭제).
+- **⚠️ `onUpdateMemos`는 `calendarMemosRef`도 함께 갱신**: 미러 ref는 effect로 따라가 한 tick 뒤처질 수
+  있고, 그 사이 커밋이 옛 값 기준으로 통째 교체하면 방금 저장한 메모가 지워진다.
+- **범위 밖(의도)**: 목표 날짜를 바꿔도 **이전 날짜 기록은 자동 삭제하지 않는다**(사용자 선택 — 잘못
+  남은 건 패드에서 직접 삭제). `settings.amount`/`useDepositAmount`/`mode` 변경은 dirty를 만들지 않는다
+  (사용자가 확정한 트리거는 '비중 조정'). 기록 시점과 기록이 걸린 날짜가 다를 수 있어 패드에 `updatedAt`
+  ('… 기록')을 함께 표시한다.
+
+### 과거 목표비중 복원 = 달력 기록 → 현재 표 적용 (읽기 방향) (⚠️ 회귀 주의)
+
+위 섹션의 '쓰기(스냅샷 기록)'에 대응하는 **읽기/적용** 기능. 리밸런싱 표 목표(%) 헤더의
+**날짜 칩 오른쪽 📅 아이콘**(`CalendarClock`) → `RebalanceTargetRestoreModal`(미니 달력 + 기록 목록
++ 미리보기) → 날짜 선택 → `적용`. **교집합만 적용** — 현재 표에 있는 종목만 바꾸고, 기록에만 있는
+종목은 무시, 표에만 있는 종목은 현재 값 유지(사용자 정의).
+
+- **불변식 5개(전부 `npm run verify:rebal-restore` #25~#30이 소스 텍스트로 단언)**:
+  **INV-1** 복원 경로는 `setCalendarMemos`/`onUpdateMemos`를 **절대 호출하지 않는다**(순수 읽기).
+  **INV-2** `reportAdminChange`를 재사용하지 않는다 — `onTargetEdited`까지 발화해 dirty가 서면 INV-3이 깨진다.
+  관리자 공지는 `onAdminTargetChange()`를 **직접** 호출(세션당 1건 래치라 추가 비용 0).
+  **INV-3** dirty는 `handleTargetRestored`가 **헤더 날짜(`settings.targetDate`)가 비어 있지 않고,
+  소스 날짜와 다르며, 그 날짜에 이 계좌 기록이 아직 없을 때만** 세운다(아래 전용 항목).
+  **INV-4** `updateSettingsForType`를 **절대 호출하지 않는다**(같은 accountType 전 계좌에 전파된다).
+  **INV-5** 쓰기는 `setPortfolio`(=`patchActive`, 활성 계좌 전용)로만 — **by-id 라이터를 만들지 말 것**
+  (id 불일치 시 구조적 no-op이 곧 타 계좌 오적용 방어다).
+
+- **⚠️ 기존 날짜 칩(`settings.targetDate`)을 복원 진입점으로 재사용하지 말 것 — 원본이 확정 소실된다**:
+  칩 `onChange`(`RebalancingPanel.tsx`) → `reportAdminChange({date})` → `handleTargetEdited`가
+  `if (!date) return`**보다 위**에서 dirty를 세우고 → 800ms 뒤 `commitRebalTargetSnapshot(그 과거 날짜)`
+  → `findIndex`가 `(kind, portfolioId)`만 보고 그 기록의 `rows`를 **전면 교체**한다. `sameRebalEntry`는
+  `rows` JSON·`totalExpEval`까지 비교하므로 **절대 못 거른다**(복원의 전제가 '과거≠현재'), `flushRebalTargetSnapshot`
+  이 있어 800ms 회피도 불가능하다. 게다가 `updateSettingsForType`이 같은 accountType 전 계좌에 그 과거
+  날짜를 전파해 **다른 계좌 기록까지 연쇄 파괴**한다. → 칩은 손대지 않고 **옆에 별도 아이콘**을 둔다.
+
+- **⚠️ 복원은 '헤더 날짜에 기존 기록이 없을 때만' 기록한다 — 이게 이 기능의 최중요 안전장치**:
+  커밋은 **소스 날짜가 아니라 헤더 날짜**(`buildRebalTargetEntry`의 `dayKey = overrideDate || settings.targetDate`)에
+  쓰이고, upsert는 `(kind, portfolioId)`만 보고 그 날짜 기록을 **통째로 교체**한다. 그런데 기록은 언제나
+  헤더 날짜에 만들어지므로 **'헤더 날짜에 기록이 있다'가 기본 상태**다. 여기서 dirty를 세우면 과거 기록을
+  하나 불러올 때마다 **헤더 날짜의 다른 기록이 복원값 + 오늘 수량·평가금으로 덮여**, "그날 이 비중을
+  목표로 삼았다"는 **거짓 이력**이 남는다(alt-tab의 `visibilitychange` → `rebalExitCommitRef`만으로도 발화).
+  `calendarMemos`는 백업 복원 sticky라 **복구 불가**. → `handleTargetRestored`가 `calendarMemosRef.current[headerDate]`에
+  이 계좌의 `rebalTarget`이 있으면 **dirty를 세우지 않는다**(표만 바뀌고 달력은 무변). 이력으로 남기려면
+  사용자가 헤더 날짜를 **기록 없는 날**로 바꾸면 된다('헤더에 보이는 날짜 = 기록 날짜' 불변식 그대로).
+  ⚠️ 모달 경고는 반드시 **이 조건**(`byDay.has(targetDate)`)에 붙여야 한다 — 과거엔 `targetDate === sel.dayKey`
+  (파괴가 **일어나지 않는** 안전한 경우)에만 경고가 떠서 정반대였다.
+- **⚠️ `handleTargetRestored`는 기존 dirty를 지우지 않는다**(App.tsx): 지우면 복원과 무관한 **대기 중
+  편집**(blur로 dirty만 서고 아직 커밋 전)까지 소각돼 그 날짜 기록이 영영 안 생긴다(`commitRebalTargetSnapshot`
+  첫 줄 `if (!dirty[pid]) return null`). 대기 중인 날짜 디바운스 타이머(`rebalDateTimerRef`)도 폐기하지 말 것.
+  잔여 위험(복원 후 사용자가 **셀을 직접 고쳐** dirty가 서면 헤더 날짜 기록의 수량·평가금이 오늘 값으로
+  갱신)은 **복원 기능이 없어도 존재하던 기존 동작**이며(헤더 날짜를 그대로 두고 목표를 고치면 항상 그렇다),
+  모달이 앰버로 함께 고지한다.
+
+- **⚠️ 슬롯은 스냅샷의 `targetMode`가 아니라 '현재' `settings.targetMode`**: `effectiveTargetRatio`가
+  현재 모드 슬롯만 읽으므로(`usePortfolioData.ts`) 스냅샷 모드 슬롯에 쓰면 **화면이 1픽셀도 안 바뀐다**
+  (=고장으로 보임). 모드를 맞추려 `updateSettingsForType`을 부르는 것은 INV-4 위반. 불일치는 **앰버 배너**로만.
+
+- **⚠️ `overrideField = true`를 미러 상태와 무관하게 **항상** 쓴다 — 수동 blur와 의도적으로 다르다**:
+  수동 blur는 `mirror==='on'`일 때만 override를 세운다. 복원에 같은 규칙을 쓰면, settings가 같은
+  accountType 전 계좌 공유라 **형제 계좌에서 (%) 미러를 켰다 끄는 것만으로** 이 계좌의 override 없는
+  슬롯이 `cycleMirror`의 `on→off` 분기에서 **현재 비중으로 영구히 덮어써진다**. 수동 입력값은 다시 치면
+  되지만 복원값은 사용자가 의도적으로 채택한 과거 목표라 그 사고에서 보호해야 한다. 부작용은 리셋
+  아이콘(`alwaysShowReset`) 상시 노출뿐이고, 그 툴팁('수동 편집됨')은 오히려 상태를 정확히 설명한다.
+
+- **매칭 = `(code, name)` 2패스 + 1:1 유일성 강제**(`utils.ts matchRebalTargetRows`). 스냅샷 `rows[]`에
+  **`id`가 없다**(`buildRebalTargetEntry`). ① 코드 `trim().toUpperCase()` 유일 일치 → ② 실패분만 이름
+  `NFC + 소문자 + 공백정규화` 유일 일치(+ **`curQty === null` ⟺ 예적금** 타입 힌트로 savings↔stock 분리).
+  ⚠️ **인덱스·순서 폴백 금지** — 스냅샷은 카테고리 재배치 순, 현재 표는 정렬 상태 순이라 서로 다르다
+  (검증 #17이 rows를 뒤집어 단언). ⚠️ 애매하면(같은 코드·이름 2행) **임의 선택 대신 보류** —
+  조용한 오적용보다 명시적 미적용이 낫다. ⚠️ 값 검증에 **`Number()`를 쓰지 말 것** — `Number(null)`/
+  `Number('')`/`Number(false)`/`Number([])`가 전부 0이라 손상 행이 **목표비중 0%로 조용히 적용**된다.
+  `typeof === 'number'` 선행 검사 필수(검증 #14). ⚠️ `normalizeCalendarMemos`는 `rows`를 검증하지 않으므로
+  방어는 **소비 측에서만** — 로드 정규화를 강화하면 손상 판정된 기존 기록이 영구 삭제된다.
+
+- **⚠️ 합계를 100%로 재정규화하지 말 것**: 합계<100%는 이 앱의 정상 상태다(`liveRatio` 분모
+  `totals.totalEval`에 예수금 포함). 스케일링하면 패드의 `38.00%`와 표의 `39.42%`가 갈려
+  **"기록 = 화면 1:1"** 불변식이 깨진다. tfoot 앰버 `diff`가 이미 차이를 표시한다.
+
+- **⚠️ PIN 게이트**: 고정 모드는 `isFixedLocked`를 그대로 통과해야 한다(`onRequestPin` → 기존
+  `RebalanceTargetPinModal`). 분기는 **fail-closed** — `if (locked) { if (onRequestPin) onRequestPin(cb); return; }`.
+  `locked && onRequestPin`으로 묶으면 prop 하나만 빠져도 잠금이 통째로 열린다(검증 #32).
+  PIN 모달에는 Esc 핸들러가 없으므로 복원 모달은 `pinPending`일 때 Esc·백드롭 닫기를 막는다 — 안 막으면
+  뒤에서 창만 닫히고, 이어 PIN을 입력하면 **사용자가 취소했다고 믿은 복원이 그대로 적용**된다.
+- **⚠️ z-index: 복원 1070 < PIN 1080, 둘 다 비차단 플로팅 창 위**: 메모 달력 1050(폭 **1200px**)·
+  메모 패드 1060·관심종목/계산기 1050·투자기록 패드 1000/1010 **위**, `LoadingOverlay` 1100 아래.
+  과거 560/600이었는데, 그러면 메모 달력을 열어 둔 채(비차단이라 계좌 전환에도 유지된다) 아이콘을 눌러도
+  **창이 통째로 가려져 "아무 일도 안 일어난다"**. 특히 `CalendarModal` 목표비중 패드가 이 아이콘을 안내하므로
+  그 경로가 정확히 이 조합이다. PIN < 복원이 되면 잠금이 사실상 우회된다. 검증 #30·#31이 두 값을 뽑아 비교.
+- **⚠️ 미리보기 라벨은 원인 중립으로**: `matchRebalTargetRows`의 `skipped`에는 `missing`뿐 아니라
+  `ambiguous`(현재 표에 **있는데도** 중복이라 보류)·`bad-value`·`bad-row`·`blank-key`가 섞인다.
+  헤더를 '기록에만 있는 종목'으로 단언하면 사용자가 **미적용을 놓친다**(undo가 없어 미리보기가 유일한
+  안전망이다). → `미적용 (N) · 기록에 있으나 적용하지 못한 행` + 항목별 사유 + `missing` 외에는 앰버 강조.
+  반대편 `untouched`도 '기록에 없어서'가 아니라 단순 `현재 목표비중 그대로`로 쓴다(ambiguous 짝이 섞인다).
+
+- **영속화 신규 지점 0곳**: 목표비중 4필드(`targetRatio`/`targetRatioVar`/`targetRatioOverride`/
+  `targetRatioVarOverride`)가 이미 `portfolioStructureKey`(`App.tsx`)에 있어 복원 write만으로
+  `portfolioUpdatedAt` 상승 → Drive STATE 저장이 자동 트리거된다(검증 #28이 4필드 잔존을 단언).
+  `settings`·`calendarMemos`·state 리터럴·저장 effect deps·`applyStateData`·`applyBackupData`·
+  `_preserveStickyPersonalData`·새 창 브릿지 **전 지점 무수정**. 같은 스냅샷을 두 번 적용하면 지문
+  문자열이 동일해 저장이 재트리거되지 않는다(정상).
+
+- **되돌리기(undo) 미제공(의도)**: 사용자가 '미리보기 후 적용'을 택했다. undo 상태를 두면 Drive 폴링
+  (`applyStateData`)이 타 기기 편집을 받아온 뒤 눌렸을 때 그 최신값을 낡은 값으로 덮고, 패널이
+  언마운트되는 조건(`!sectionCollapsed.rebalancing || !sectionCollapsed.donut`)에서 무음 소멸한다.
+  미리보기가 안전망이다.
+
+- **범위 밖(의도)**: ① 메모 달력 목표비중 패드의 '적용 버튼'(안내 문구만 — 달력은 비활성·삭제 계좌 기록도
+  보여주고, 별도 브라우저 창은 종목 정보를 안 받아 무반응이며, 창 위에선 PIN·확인창이 가려진다)
+  ② 별도 브라우저 창에서의 복원 ③ 비활성 계좌 복원 ④ `ambiguous` 행 수동 매핑 UI ⑤ `rebalExtraQty` 초기화
+  ⑥ 목표비중 열을 숨기면 진입점도 사라짐(그 상태에선 목표 편집 UI 자체가 없으므로 일관).
+- **모달 내부 규약**: 보고 있는 달은 **파생값 + 덮어쓰기(`viewOv`)** — state 초기값을 상수로 두고
+  effect에서 고치면 열 때마다 엉뚱한 달이 한 프레임 번쩍인다(이 컴포넌트는 `open` 토글만 되고
+  언마운트되지 않아 첫 렌더가 옛 값으로 커밋된다). 날짜 폴백은 `getTodayKST()`(로컬 TZ `new Date()` 금지),
+  날짜 키는 직접 조립(`new Date('YYYY-MM-DD')` UTC 파싱 금지). 열 때 패널에 포커스를 옮기고 닫을 때
+  되돌린다 — 안 하면 Tab이 **백드롭 뒤에 가려진 목표비중 입력**으로 들어가 수시변경 모드(잠금 없음)에서
+  보이지 않는 셀을 편집하게 된다.
+- 검증: `npm run verify:rebal-restore` (참조 구현 미러 #1~#24 + 소스 텍스트 가드 #25~#32).
+  ⚠️ 가드는 `RebalancingPanel.tsx`만 **주석을 남긴 원본**으로 읽는다 — 구간 경계가 `// #verify:` 주석이라
+  `stripComments`가 지우면 구간을 못 찾는다. 따라서 **센티넬 구간 안에는 금지 토큰**(`onTargetEdited`·
+  `reportAdminChange`·`updateSettingsForType`·`setCalendarMemos`)**을 언급하는 주석을 두지 말 것**
+  (설명 주석은 시작 센티넬 위에).
+
+### 목표금액(targetAmount) — 비중 대신 금액으로 수량 지정 (⚠️ 회귀 주의)
+
+리밸런싱 표 **목표비중 바로 오른쪽**에 종목별 목표 평가금액 열을 둔다.
+`수량 = Math.trunc((목표금액 − 현재평가금) ÷ 종목가격)` (양수 매수 / 음수 매도).
+⚠️ `trunc`(0 방향 버림)이지 `floor`가 아니다 — 기존 비중 경로와 같은 규약을 쓰되, 이 열은 **매도(음수)가
+상시 발생**하는 경로라 둘의 차이가 실제로 드러난다(소수 좌수 펀드는 목표 0원에도 1좌 미만 단수가 남는다).
+
+- **⚠️ 적용 여부는 '투자선택'(`settings.mode`) 모드가 정한다 — 행별 자동 우선 아님**:
+  `settings.mode = 'rebalance' | 'accumulate' | 'targetAmount'`(헤더 우측 상단 드롭다운, 3번째가 신설).
+  **`'targetAmount'`일 때만** 금액이 수량을 만든다. **리밸런싱·적립식에서는 금액이 입력돼 있어도
+  무시되고 목표비중이 적용된다**(사용자 확정 규약 2026-08). 과거엔 '행에 금액이 있으면 모드와 무관하게
+  금액 우선'이었는데, 그러면 리밸런싱으로 돌아와도 그 행만 비중이 안 먹어 혼란스러웠다.
+- **⚠️ 목표비중 슬롯이 투자선택별로 분리돼 있다 — `utils.resolveTargetSlots`가 유일한 결정 지점**:
+  적립식은 `targetRatioAcc`/`targetRatioAccVar`(+ `…Override` 2개, 미러 `targetMirrorAccFixed`/
+  `targetMirrorAccVar`), 리밸런싱·목표금액은 **기존 슬롯**(`targetRatio`/`targetRatioVar`…)을 쓴다.
+  적립식은 '이번 적립금을 어떻게 나눌지'라 '자산 전체 목표 배분'과 의미가 달라서다.
+  ⚠️ **값을 실제로 0으로 지우는 방식으로 되돌리지 말 것** — undo가 없고 달력에 기록해 둔 적 없는
+  비중은 영구 소실된다. ⚠️ 슬롯을 손으로 다시 고르지 말 것(`usePortfolioData` 계산 / `RebalancingPanel`
+  셀 편집·미러·복원 4곳이 같은 함수를 공유해야 화면과 계산이 안 갈린다).
+  ⚠️ **미러 상태도 반드시 함께 분리** — 공유하면 리밸런싱에서 켠 라이브 미러가 적립식 슬롯까지 현재
+  비중으로 추종한다.
+  ⚠️ **영속화**: 신설 항목 필드 4개를 `App.tsx portfolioStructureKey`에 **전부** 넣어야 한다(하나만
+  빠져도 그 슬롯 편집이 조용히 저장 안 됨). 미러 2개는 `settings` 안이라 `settings: p.settings`로 자동 포함.
+
+- **⚠️ 읽기는 폴백, 쓰기는 현재 슬롯 하나 — `utils.readTargetRatio` (2026-08 신설, 회귀 주의)**:
+  `resolveTargetSlots().readFields`가 우선순위 리스트(현재 슬롯 → 같은 투자선택의 반대 목표모드 →
+  반대 투자선택 …)를 주고, `readTargetRatio(item, slots)`가 **처음 '설정됨'인 슬롯**을 채택한다.
+  **쓰기는 절대 폴백하지 않는다**(항상 `slotField`) — 저장값 무수정이라 잘못돼도 되돌릴 수 있다.
+  - **⚠️ 도입 사유(실제 사고)**: 2026-08-03 슬롯 분리 배포(`ed78d5e`)가 `targetRatioAcc`를 신설하면서,
+    이미 적립식이던 계좌들의 기존 목표비중(`targetRatio`)이 **사용자 조작 0회로** 화면에서 0%가 됐다.
+    당시 이 문서는 그것을 "배포 직후 동작(의도) — 모드를 리밸런싱으로 바꾸면 복귀"로 적어 뒀는데,
+    실사용에서는 **관리자가 며칠 전 입력한 목표가 통째로 사라진 것으로 보였다**. 게다가
+    `RebalancingPanel`의 마운트 effect가 레거시 `mode:'deposit-only'`를 **조용히 `'accumulate'`로**
+    바꾸고 같은 accountType 전 계좌에 전파하므로, 사용자가 드롭다운을 만질 필요조차 없다.
+  - **⚠️ 0%는 '미설정'이 아니라 '전량 매도' 지시다** — 리밸런싱 모드에서
+    `action = trunc((overallExp×0 − curEval)/price)`. 빈 슬롯이 0%로 보이는 것은 표시 문제가 아니라
+    **매매 지시가 뒤집히는 문제**다. 게다가 그 0%가 `buildRebalTargetEntry`로 달력 스냅샷에 박제되면
+    (upsert 키 = dayKey·kind·portfolioId) **유일한 복구 기록까지 잃는다**(`calendarMemos`는 백업 복원 sticky).
+  - **⚠️ `hasRatio`(타입 기반)로만 '미설정'을 판정한다** — `cleanNum(x) || 0`으로 재면 '미설정'과
+    '사용자가 명시적으로 넣은 0%'가 같아져 **0% 목표가 폴백에 조용히 덮인다**(목표금액의
+    `hasRawTargetAmount`와 같은 규약). 그래서 폴백은 값이 **아예 없는** 슬롯에서만 발동한다.
+  - **⚠️ 셀 blur는 값이 그대로면 아무것도 쓰지 않는다**(`RebalancingPanel` 목표비중 셀, 목표금액
+    `commitAmt`와 같은 규약). 무조건 쓰면 ① 이어받은 값이 칸을 Tab으로 지나가기만 해도 현재 슬롯에
+    박제돼 폴백 링크가 끊기고 ② `portfolioStructureKey`가 바뀌어 Drive 전량 저장이 헛돈다.
+    그리고 **`changed` 판정 기준(`slotVal`)은 반드시 폴백을 반영한 값**이어야 한다 — raw 슬롯으로
+    되돌리면 이어받은 행이 **항상 '변경됨'**으로 오판돼, 칸을 클릭했다 나가기만 해도 dirty가 서고
+    헤더 날짜의 달력 기록이 덮인다.
+  - **알려진 한계(의도)**: 두 슬롯에 **서로 다른 값**이 들어 있으면 축을 바꿀 때마다 각자의 값이
+    보인다(그 계좌는 실제로 나눠 쓴 계좌다). 폴백은 한쪽이 **비어 있을 때만** 개입한다.
+  - **범위 밖(미적용)**: 투자선택 전환 확인창 · `cycleMirror`/`applyReset`의 시세 미확보 0% 박제 방지 ·
+    달력 기록이 0% 스냅샷으로 덮이는 것 방지 · `resolveTargetSlots` 검증 미러 신설.
+    ⚠️ `scripts/verify-rebal-restore.mjs`는 `resolveTargetSlots`·`readTargetRatio`를 **미러하지 않는다**
+    (슬롯 분리·폴백은 현재 무검증) — 이 로직을 고칠 때 게이트가 잡아 주지 않으니 주의할 것.
+- **⚠️ 자금 축은 리밸런싱과 동일**(`isLevelMode = mode==='rebalance' || mode==='targetAmount'`):
+  총평가금 기준 · **예수금 전액** 사용, '사용할 예수금' 입력 미노출. 적립식만 `사용예수금 + 적립금` 축이다.
+  `RebalancingPanel`의 자금 분기(헤더 패널 라벨·`headerDepositForBuy`·`headerInvestable`·
+  `applyRemainingToDeposit`·요약 바 `depositLabel`)는 **전부 `isLevelMode`로 묶여 있다** —
+  새 분기를 추가할 때 `=== 'rebalance'`로 손복제하면 목표금액 모드에서만 예수금이 빠져 잔액이 어긋난다.
+- **⚠️ 금액 미입력 행은 '목표금액' 모드에서도 **리밸런싱과** 수량이 정확히 같다**: `effectiveTargetAmount`가
+  힌트(=비중대로 매매하면 도달하는 평가금)로 폴백하고 그 식이 리밸런싱 식과 대수적 항등이기 때문이다.
+  즉 **리밸런싱 → 목표금액** 전환은 금액을 안 넣으면 표가 1주도 변하지 않는다(안전한 전환).
+  ⚠️ **적립식 → 목표금액**은 다르다 — 적립식은 '증분'(`allocBase×비중÷가격`), 목표금액은 '레벨'
+  (`(목표−평가금)÷가격`)이라 수량이 전면 재산출된다. 이건 **적립식 → 리밸런싱 전환과 똑같은 정상 동작**
+  이지 결함이 아니다. 여기서 수량이 변하는 걸 보고 `isLevelMode`/`isLevelBase` 극성을 되돌리지 말 것
+  (되돌리면 목표금액 모드가 적립식 자금축을 써서 예수금이 통째로 빠진다).
+- **⚠️ `usePortfolioData`의 비-금액 분기는 `=== 'rebalance'` 그대로 둘 것**: 마이그레이션 전 레거시
+  값(`'deposit-only'`)이 기존처럼 적립식 식으로 떨어지게 하는 폴백 극성이다(`isAccumulate` 같은 반대
+  극성으로 바꾸면 그 한 렌더 동안 수량이 달라진다).
+
+- **저장 = 종목 필드 `item.targetAmount`**(Drive STATE 영속, `targetRatio`와 같은 등급).
+  ⚠️ **`App.tsx portfolioStructureKey`의 항목 화이트리스트에 `targetAmount: item.targetAmount` 필수** —
+  이 지문은 필드를 **손나열**하므로 빠뜨리면 목표금액만 고친 세션에서 `portfolioUpdatedAt`이 오르지
+  않아 `useDriveSync`의 STATE 저장 가드가 저장을 통째로 스킵한다(historyVerifyKey·investmentNotesKey·
+  calendarMemos와 **동일 버그 클래스** — 화면은 정상이라 며칠 뒤 조용한 세션에서만 재현된다).
+  로드·정렬·계좌전환은 `...p`/`...item` 스프레드라 무수정.
+- **⚠️ 커밋은 `handleUpdate`가 아니라 `setPortfolio` 직접** (`RebalancingPanel` 목표금액 셀):
+  `handleUpdate`는 `cleanNum(value)`를 거쳐 **빈칸을 0으로** 만든다. 그러면 '미입력'과 '목표 0원
+  (=전량 매도)'을 구분할 수 없어 둘 중 하나를 영영 표현하지 못한다. 저장값은 `''`(미입력) 또는 숫자이고,
+  판정(`hasTargetAmount`)은 **저장 원시값의 타입**으로 한다(`number`면 `Number.isFinite`, `string`이면
+  숫자 포함 여부). ⚠️ `String(x).trim() !== ''`만 쓰면 손상된 Drive 값(`true`·객체·`'abc'`)이 전부
+  '입력됨'으로 통과하고 `cleanNum`이 그걸 0으로 만들어 **조용히 전량 매도**가 된다.
+- **⚠️ 값이 그대로면 아무것도 쓰지 말 것**(`commitAmt` 조기 return): 빈 칸을 Tab으로 지나가기만 해도
+  `targetAmount: ''`가 새로 박혀 지문이 바뀌고 **Drive 전량 저장이 돌며** `portfolio` 참조가 갈려 표
+  전체가 재계산된다. blur마다 무조건 `setPortfolio`를 부르는 형태로 되돌리지 말 것.
+- **⚠️ 힌트는 '비중대로 매매하면 도달하는 평가금액'** (`targetAmountHint`, `usePortfolioData`):
+  **레벨 모드(리밸런싱·목표금액 = `isLevelBase`)** `overallExp × 비중`, **적립식** `curEval + allocBase × 비중`.
+  두 모드의 기존 action 식이
+  **레벨(목표 도달) vs 증분(이번 투입금 배분)** 으로 축이 다르기 때문이다. 이 정의라야 **힌트를 그대로
+  입력해도 수량이 1주도 바뀌지 않는다**(양 모드 대수적 항등 — 표시값은 읽기 편하도록 반올림하므로
+  정수 경계에서 1주 어긋날 수 있다). 적립식에 레벨 힌트(`overallExp × 비중`)를 쓰면 회색 값을 옮겨 적는
+  순간 수량이 전혀 달라져 "금액을 넣으면 값이 튄다"가 된다. **예적금은 매매 자체가 없어 두 모드 모두
+  힌트 = `curEval`**(비중을 곱하면 닿을 수 없는 금액이 Σ목표금액에 섞여 합계가 과대 표시된다).
+- **⚠️ `price > 0` 가드는 분기 바깥에 유지**: 기준가 미로드 펀드(price 0)에서 Infinity/NaN이
+  `cost`→`expEval`→`headerTotalBuy/Sell`→`rebalBalance`→`maxAdd`→`maxAddLink` effect의 `floor(pool/price)`를
+  타고 **`rebalExtraQty`에 박히고**, 그 값은 계좌 전환에도 `accountRebalExtraQtyRef`에 보존된다.
+- **⚠️ 예적금(savings)은 조기 반환 분기 그대로** — 시세·수량이 없어 매매 대상이 아니다(`action:0`,
+  `expEval = curEval` 이월). 셀은 회색 참고값만 렌더하되 **반드시 `td[tabIndex=0]`** 로 둘 것:
+  `utils.getRowFocusables`가 행 내 **위치 인덱스**로 ←/→ 이동을 계산하므로, 한 행만 포커서블 수가
+  다르면 그 행부터 좌우 이동이 한 칸씩 어긋난다(`extraQty`의 savings 분기가 같은 이유로 `td[tabIndex=0]`).
+- **⚠️ `action`은 `rebalExtraQty`를 참조하지 말 것**: `maxAddLink` 유지 effect의 pool은
+  `잔액 + Σ_linked extra×price`인데, 이 pool이 **연동 행 자신의 extra에 불변**이라는 성질이 고정점
+  보장(진동·무한루프 차단)의 근거다. action이 extra를 참조하는 순간 그 불변성이 깨진다.
+- **열 추가 시 고칠 곳 = 4군데뿐**: `RB_COLS`(index 8, 미등록 시 열을 숨기면 **복원 칩이 없어 영구 소실**)
+  + thead/tbody/tfoot **각 1셀씩**(tfoot을 빠뜨리면 TOTAL 행이 통째로 한 칸 밀린다).
+  colSpan을 쓰는 곳은 이제 없다(아래 '같이 고친 표 결함' 참조 — 하단 요약·퇴직연금 바가 표 바깥으로
+  나가면서 `retirementColSpan`·`absorbedCount`가 **삭제**됐다. 다시 만들지 말 것).
+  `data-col="targetAmount"` + `handleTableKeyDown(e,'targetAmount')` 필수
+  (안 바꾸면 ↑/↓가 목표비중 칸으로 튄다).
+- **⚠️ 입력 초안(`editingTargetAmount`)에 계산값을 넣지 말 것**: 표시값은 `formatNumber`(콤마)인데
+  onFocus 초안을 `String(effAmt)`(콤마 없음)로 넣으면 문자열이 달라져 React가 커밋에서 `node.value`를
+  다시 쓰고, 그 대입이 **방금 건 전체선택을 풀어 캐럿을 끝으로 보낸다** → `1,000,000`에 `5`를 치면
+  `10000005`가 된다. `e.target.value`(DOM 값 그대로)를 담아야 재대입이 없다(목표비중 셀과 동일 패턴).
+- **⚠️ 안 쓰는 열은 '화면에서만' 자동으로 접고, 되살려도 편집은 잠근다**:
+  `modeHiddenKey` = 목표금액 모드면 `targetRatio`, 그 외면 `targetAmount`. `H(k)`가
+  **저장 숨김 ∪ 모드 숨김**을 반환하고, 칩 클릭은 `toggleColumnSmart`가 라우팅한다 —
+  모드 숨김 열은 **저장 목록을 건드리지 않고 컴포넌트 로컬 `revealedCols`만 토글**하고,
+  사용자가 직접 숨긴 열은 기존대로 `onToggleColumn`(Drive 저장)으로 간다.
+  ⚠️ **모드 전환 시 `hiddenColumnsRebalancing`을 쓰지 말 것** — 사용자의 수동 숨김 설정을 덮어쓰고,
+  `settings`는 같은 accountType 전 계좌 공유인데 `hiddenColumns`는 계좌별이라 두 축이 어긋난다.
+  되살린 뒤에도 `ratioDisabled`/`amountDisabled`는 그대로라 **보이되 읽기 전용**이다(사용자 요구).
+  ⚠️ 모드 비활성은 **PIN 잠금(`cellLocked`)과 다르다** — 풀 수 있는 잠금이 아니므로 클릭해도 PIN 모달을
+  띄우지 않는다(`cellLocked && !ratioDisabled`로 게이팅). 목표비중이 비활성이면 **(%) 미러 버튼도 잠근다**.
+  단 **📅 복원 아이콘은 살려 둔다** — 복원이 금액까지 되돌리므로 목표금액 모드에서도 필요하다.
+- **표시 규약 = '지금 어느 열이 실제로 먹고 있는가'를 항상 보이게 한다**:
+  ① **목표금액 모드**: 목표비중 열 전체가 `opacity-40` + 읽기 전용.
+  ② **리밸런싱·적립식 모드**: 반대로 목표금액 열이 `opacity-40` + 읽기 전용이고 헤더·tfoot이 회색으로
+  강등되며 tfoot 부제가 `비중 기준 · 미적용`이 된다.
+  ③ **복원 모달의 `목표금액 우선` 배지는 `investMode` prop으로 게이팅** — 리밸런싱 모드에서는
+  복원이 정상 적용되므로 배지를 띄우면 거짓말이 된다.
+- **과거 목표비중 불러오기 = 비중 + 목표금액**: 스냅샷 `rows[]`에 `targetAmount`를 **명시 입력한 행만**
+  기록하고(미입력 행은 비중 파생 힌트라 저장하면 사용자 지정과 구분 불가 → `null`),
+  복원 시 함께 되돌린다. `matchRebalTargetRows`가 `amount`/`prevAmount`를 실어 보낸다 —
+  ⚠️ 이 함수는 `verify:rebal-restore`가 **참조 구현으로 미러링**하므로 본문을 고치면
+  `scripts/verify-rebal-restore.mjs`도 **같은 줄로** 고칠 것. 모달은 기록의 투자선택을 칩·경고로 표시하고,
+  현재 투자선택과 다르면 "값은 현재 투자선택의 목표비중 열에 적용된다"를 앰버로 고지한다.
+  `CalendarModal` 목표비중 패드 표도 5열 → **6열**(목표금액)로 함께 넓혔다(구버전 기록은 `-`).
+  tfoot Σ목표금액은 각 행의 도달 평가금(입력값 또는 힌트) 합이다. 행 집합은 목표비중 TOTAL과 **동일**
+  (예적금 포함·예수금 미포함)이나 예적금 몫만 비중이 아니라 평가금 그대로 들어간다.
+- **달력 스냅샷 `investMode`는 3값**(`App.tsx buildRebalTargetEntry` ↔ `CalendarModal` 라벨 매핑).
+  ⚠️ 한쪽만 고치면 '목표금액'으로 남긴 기록이 패드에 **'적립식'으로 표시**된다.
+- **⚠️ 과거 목표비중 복원과의 상호작용**: 금액이 지정된 행은 비중을 복원해도 **수량이 1주도 안 바뀐다**
+  (금액 우선). 이 기능은 undo가 없고 미리보기가 유일한 안전망이므로,
+  `RebalanceTargetRestoreModal`이 해당 행에 앰버 **`목표금액 우선` 배지**를 띄운다. ⚠️ 이 플래그를
+  `matchRebalTargetRows`(utils.ts)에 실어 보내지 말 것 — 그 함수는 `verify:rebal-restore`가 **참조 구현으로
+  미러링**하므로 본문을 고치면 스크립트도 함께 고쳐야 한다. 모달은 `currentRows`(=`rebalanceData`)에서
+  직접 파생한다(복원 불변식 INV-1~INV-5 무영향 — 달력 쓰기·dirty·settings에 손대지 않는다).
+- **해외계좌**: `rebalanceData`의 `curEval`/`currentPrice`가 **USD(native)** 이고 `overallExp`도
+  `nativeTotalEval + settings.amount`라 목표금액도 **USD**로 입력한다(헤더에 `($)` 표기, 툴팁에 원화 환산).
+  ⚠️ 원화로 환산해 저장하지 말 것(환율 시점이 섞여 가짜 손익이 생긴다).
+- **영속화 무관**: `hasTargetAmount`/`targetAmountHint`/`effectiveTargetAmount`는 전부 매 렌더 파생값이다
+  (`rebalanceData` 내부). 저장되는 것은 `item.targetAmount` 하나뿐.
+- **⚠️ 관리자 공지 + 메모 달력 기록을 **함께** 발화 (2026-08 사용자 요청 — 되돌리지 말 것)**:
+  목표금액 **3경로**(셀 커밋 `commitAmt` · ↺ 지우기 · `(₩)` 미러 버튼 `cycleAmtMirror`)가 전부
+  목표비중과 **같은 등급**으로 `reportAdminChange()`를 호출한다(= `onAdminTargetChange` +
+  `onTargetEdited`). 목표금액은 목표비중을 무효화하는 상위 값이라 ① "관리자가 금액으로만 조정하고
+  나가면 통지 0건" ② "목표금액만 조정한 세션은 헤더 날짜 칸에 기록이 한 건도 안 남아 언제 무엇을
+  얼마로 바꿨는지 추적 불가" 둘 다 있어선 안 된다. 값이 실제로 바뀐 커밋만 여기 도달한다
+  (`commitAmt`의 조기 return 2개가 '한 글자도 안 침'·'같은 값'을 걸러낸다 → 탭으로 지나가기만 하면
+  dirty도 안 선다). 스냅샷 `rows[]`에 이미 `targetAmount`가 실리고(`buildRebalTargetEntry`)
+  `sameRebalEntry`가 `rows` JSON을 비교하므로 **금액만 바뀐 변경도 기록된다**(`content`는 동일).
+  ⚠️ **예외는 복원 경로 하나뿐** — `applyRestoredTargets`(센티넬 구간)는 여전히 `onTargetEdited`
+  금지다(dirty가 서면 헤더 날짜의 원본 기록이 덮인다 — 복원 섹션 INV-2). 과거엔 이 규약이 목표금액
+  3경로에도 걸려 있었으나, 그건 '복원'이 아니라 '사용자 편집'이라 근거가 달랐다.
+- **⚠️ 셀 색 = 목표비중 열과 동일 규약 (2026-08 — "구분이 안 된다" 사용자 보고)**: 미러 추종
+  `text-emerald-300/80 italic` / **사용자 지정 & 매매 필요 `text-red-400`** / 사용자 지정 & 목표 도달
+  `text-green-400` / 미입력 `text-gray-400`. 과거엔 미러 추종(`emerald-300/80`)과 수동 지정
+  (`emerald-300`)이 사실상 같은 색이라 **`(₩)`를 켠 뒤 자기가 고친 종목을 화면에서 식별할 수 없었다**
+  (이탤릭 차이뿐). ⚠️ **판정 문턱은 `Math.max(itemPrice, 0.5)` = 1주 값** — `action = trunc((목표금액 −
+  평가금) ÷ 가격)`이라 차이가 1주 값 미만이면 실제 매매가 0이다. 절대 epsilon(1원)으로 두면 시드
+  직후 시세 한 틱에 전 행이 빨강이 되어 신호가 죽는다(목표비중 열의 `threshold 0.05`와 같은 역할).
+- **범위 밖(의도)**: ① 펀드에서 `curEval`이 `evalAmount` 폴백인 경우(수량·기준가 미로드) `expEval`에는 폴백이 없어
+  예상평가금이 목표금액과 어긋나고 보유 초과 매도가 나올 수 있다 — CLAUDE.md가 '손대지 말 것'으로 못 박은
+  **선행 버그**라 산식을 고치지 않는다. ② 목표금액 열을 숨기면 저장된 값은 계속 수량을 지배하는데, 단서는
+  흐려진 목표비중 셀뿐이다(두 열을 동시에 숨기면 단서가 없다).
+  ③ **PIN 잠금(`cellLocked`) 미적용 — 사용자 결정(2026-08)**. 고정 모드에서 목표비중 셀이 잠겨 있어도
+  목표금액 칸은 열려 있고, 금액이 비중을 무효화하므로 **잠금은 실질적으로 우회 가능**하다. 그럼에도
+  열어 두는 근거: 이 PIN은 접근 통제가 아니라 오조작 방지 마찰이고(같은 로그인 PIN 해시를 다시 확인할
+  뿐), **고정/수시변경 select에는 원래 PIN 게이트가 없어** 한 번의 클릭으로 목표비중 칸 자체를 여는
+  기존 우회로가 이미 있다. 잠금을 붙이려면 그 select부터 막아야 한다 — 목표금액에만 붙이는 것은
+  방어가 아니라 불편만 준다.
+
+**목표금액 라이브 미러 `(₩)` — 목표금액을 현재 평가금에 연동 (⚠️ 회귀 주의)**
+
+목표금액 헤더의 **`(₩)` 버튼**(해외계좌는 `($)`)이 목표비중의 `(%)`와 **같은 3단 사이클**로 돈다:
+`off` →클릭→ `seeded`(현재 평가금을 목표금액에 복사) →클릭→ `on`(라이브 미러 — 목표금액 = 현재
+평가금이라 **매매 수량이 전 행 0**) →클릭→ `off`(그 시점 평가금을 박제하고 해제). "현재 상태에서
+출발해 필요한 종목만 금액을 고친다"가 이 기능의 용도다.
+
+- **저장 2필드**: `settings.targetAmountMirror`(`'off'|'seeded'|'on'`) + 종목별 이탈 플래그
+  `item.targetAmountOverride`. ⚠️ **`resolveTargetSlots`처럼 모드별로 나누지 않는다** — 금액 슬롯은
+  `item.targetAmount` 하나뿐이라 고정/수시변경·적립식 분리가 없다.
+  **영속화**: `settings`는 `portfolioStructureKey`에 통째로 들어가 자동, `targetAmountOverride`는
+  **항목 화이트리스트에 추가 필수**(빠뜨리면 그 필드만 바뀐 세션이 조용히 저장 안 됨).
+- **⚠️ `isAmountMode`를 반드시 함께 본다**(`usePortfolioData`): `isAmtLiveMirror = isAmountMode &&
+  mirror==='on' && !item.targetAmountOverride`. 모드 게이트를 빼면 리밸런싱·적립식에서도
+  `hasTargetAmount`가 전 행 true가 되어 **달력 스냅샷(`buildRebalTargetEntry`)이 '사용자가 지정한
+  목표금액'으로 현재 평가금을 박제**하고, 그 기록을 나중에 복원하면 실제 지정값이 덮인다.
+  판정은 `rebalanceData`가 실어 보내는 `isAmtLiveMirror`를 화면이 그대로 쓴다(손계산 금지 —
+  표시와 수량 계산이 다른 기준을 읽는다).
+- **⚠️ 시드/해제 write는 시세가 확보된 행에만**(`mirrorEvalOf` → `null`이면 금액은 건드리지 않고
+  override만 정리): `qty>0`인데 현재가 0(펀드는 저장 평가금까지 0)인 행에 0을 박으면 **나중에 시세가
+  들어온 순간 '목표 0원 = 전량 매도'** 가 된다. 라이브 미러(`on`) 자체는 매 렌더 재계산이라 안전하고,
+  위험한 것은 **write뿐**이다. 헤더 버튼에도 `(%)`와 같은 `totals.totalEval <= 0` 가드를 둔다.
+- **⚠️ 저장값은 `roundMirrorAmt`로 정리**(원화 1원 / 외화 1센트)하고, 셀 커밋 비교 기준(`prevNorm`)은
+  저장 원시값이 아니라 **화면에 보이던 문자열**(`cleanNum(baseAmtText)`)이다. `formatNumber`가 소수
+  3자리로 반올림하므로 시세 파생 실수를 원시값과 비교하면 **한 글자도 안 치고 탭으로 지나가기만 해도
+  '변경'으로 오판**돼 라이브 미러에서 조용히 이탈한다.
+- **셀 규약**: 미러 추종 행은 `text-emerald-300/80 italic`(비중 미러와 동일) + 지울 값이 없으므로
+  ↺ 리셋 아이콘 숨김. 직접 입력하면 그 종목만 `targetAmountOverride: true`로 **수동 고정**, 비우면
+  `false`로 되돌아 **미러 복귀**(이탈 행은 값이 없어도 ↺를 남겨 복귀 경로를 준다).
+  ⚠️ **수동 고정 행은 반드시 미러와 다른 색**(빨강/초록 — 위 '셀 색' 항목). 둘 다 에메랄드로 두면
+  미러를 켠 상태에서 자기가 고친 종목을 식별할 수 없다. 툴팁도 `수동 고정 — 라이브 미러에서 이탈한
+  종목입니다 (↺로 평가금 연동 복귀)`로 분리한다.
+  tfoot 부제는 미러 중이면 `평가금 연동 중 · 수동 N종목`(전 행이 `hasTargetAmount`라 '금액 지정
+  N종목'이 의미를 잃는다).
+- **⚠️ `cycleAmtMirror`도 `reportAdminChange()`를 호출한다**(2026-08 변경 — `onAdminTargetChange`만
+  부르던 것에서 전환): 3전이가 전부 **금액을 실제로 write**하거나(seed·해제 박제) 수량을 만드는 축을
+  바꾸므로 목표비중 `cycleMirror`와 같은 등급이다 → 관리자 공지 + 메모 달력 기록을 함께 발화.
+  ⚠️ 이 예외 금지는 이제 **복원 경로(`applyRestoredTargets`) 하나뿐**이다(INV-2).
+- **⚠️ PIN 게이트를 붙이지 말 것** — 위 ③(목표금액 축 잠금 미적용)와 같은 근거. 셀은 열려 있는데
+  미러만 잠그면 방어가 아니라 불편만 준다. 대신 `amountDisabled`(=목표비중 기준 모드)일 때는
+  회색·no-op으로 잠근다.
+- **⚠️ 복원(`applyRestoredTargets`)은 금액에도 `targetAmountOverride: true`를 함께 쓴다** — 미러가
+  켜져 있으면 복원값이 곧바로 현재 평가금에 덮여 **"복원했는데 화면이 1픽셀도 안 바뀐다"** 가 된다
+  (비중 슬롯의 `overrideField`를 항상 true로 두는 것과 같은 근거). 센티넬 구간(`#verify:restore-apply-*`)
+  안이므로 금지 토큰(`onTargetEdited`·`reportAdminChange`·`updateSettingsForType`·`setCalendarMemos`)을
+  주석에도 넣지 말 것.
+- **알려진 한계(의도)**: `settings`가 같은 accountType 전 계좌 공유라 **미러 상태도 공유**된다
+  ((%) 미러와 동일). 첫 클릭(`seeded`)이 그 계좌의 기존 목표금액을 현재 평가금으로 덮어쓰는 것도
+  (%)와 같고 undo가 없다 — 툴팁이 "클릭 1: 현재 평가금을 목표금액에 복사"로 미리 고지한다.
+  형제 계좌의 항목을 쓰지는 않는다(`setPortfolio`=`patchActive`는 활성 계좌 전용).
+
+**같이 고친 표 결함 3건 (⚠️ 회귀 주의)**
+
+- **하단 요약(투자가능금액·매수 금액·잔액)과 퇴직연금 D/S 바를 표 바깥으로 이동**.
+  요약은 원래 **'실 구매비용' 열의 `<td colSpan>` 안**에 있어서 ① 그 열을 숨기면 **요약이 통째로
+  사라졌고** ② 열이 많아 가로 스크롤이 생기면 오른쪽으로 밀려 화면에서 사라졌다. 퇴직연금 바도
+  colSpan 행이라 같은 문제였다. 둘 다 `overflow-x-auto` 컨테이너 **밖의 일반 `<div>`** 로 옮겨
+  **열 구성·가로 스크롤과 완전히 무관**해졌다. tfoot TOTAL 행에는 각 열의 빈 `<td>`만 남는다.
+  ⚠️ 다시 tfoot 안으로 되돌리지 말 것 — 두 결함이 그대로 재발한다. ⚠️ 이 이동으로 `retirementColSpan`·
+  `absorbedCount`(그리고 `H('cost')`일 때 4개 빈 td를 채워 주던 보정 분기)가 전부 필요 없어져 삭제됐다.
+
+- **표 헤더가 앱 상단바 위로 새어 나오던 문제** → 표 스크롤 래퍼(`overflow-x-auto`)에 **`isolate`**.
+  원인은 sticking이 아니라 **페인트 순서**다: 앱 상단바가 `sticky top-0 z-30`(`App.tsx`)인데 이 표의
+  좌측 고정 헤더도 `z-30`이라, 동률에서는 **DOM 뒤쪽인 표가 위에** 그려졌다(스크롤 중 `종목명` 헤더가
+  상단바를 뚫고 보임). `isolate`가 래퍼에 스태킹 컨텍스트를 만들어 표 내부 z를 통째로 격리하면서도
+  **내부 서열(고정 헤더 z-30 > 일반 헤더 z-20 > 본문 z-5)은 그대로** 유지한다.
+  ⚠️ **개별 th의 z를 낮추는 방식으로 되돌리지 말 것** — 고정 헤더를 z-20으로 내리면 가로 스크롤 시
+  DOM 뒤쪽의 일반 헤더(z-20)와 동률이 되어 종목명 헤더가 가려진다(세로 스크롤만 테스트하면 못 잡는다).
+  ⚠️ `isolate`는 **표 래퍼에만** — 카드 div에 걸면 그 안의 요소까지 갇힌다(모달 4종은 이 래퍼 밖이라 무관).
+- **'추가' 칸에 마이너스를 못 치던 문제** → 문자열 초안 `editingExtra` 도입. `parseInt('-')`가 `NaN → 0`이
+  되고 controlled value가 즉시 `''`로 되돌려 **부호를 찍는 것 자체가 불가능**했다(도움말에는 "음수 입력
+  가능"이라고 적혀 있었는데 실제로는 안 됐다). ⚠️ `rebalExtraQty`에 저장하는 값은 **반드시 number** —
+  문자열로 두면 `(수량 + action + extraQty) * price`가 문자열 결합이 되어 예상평가금·매수/매도 합계·
+  추가가능 풀이 전부 오염된다(타입체크 없는 빌드라 컴파일러가 못 잡는다).
+  ⚠️ onChange는 **유니코드 마이너스류(`−`·`–`·`—`·`－`)를 ASCII `-`로 먼저 정규화**한다 — 안 하면
+  붙여넣은 `−5`에서 부호만 사라져 **매도가 매수로 뒤집힌다**. 연동(`maxAddLink`) 토글 시에는 초안을
+  폐기해야 연동으로 채운 값이 낡은 초안에 가려지지 않는다.
+
+### 리밸런싱 '추가' 수량 · '추가 가능' 연동 = 계좌별 Drive 영속 (⚠️ 회귀 주의 — 세션 스크래치로 되돌리지 말 것)
+
+리밸런싱 표의 **'추가'**(수동 매매 수량)와 **'추가 가능' 칸 클릭으로 켜는 연동**은 앱을 닫았다 열어도
+유지된다(사용자 보고 2026-09 — "목표비중·목표금액은 저장되는데 추가 수량은 안 된다. 관리자가 사용자
+비중을 조정할 때 추가 수량도 함께 조정한다"). 과거엔 수량이 App state(계좌 전환용 ref 보존뿐), 연동이
+`RebalancingPanel` 로컬 state라 **저장 경로가 아예 없었다**.
+
+- **저장 = `chartPrefs.rebalExtraQtyMap` `{ [pid]: { [itemId]: 정수 } }` + `chartPrefs.rebalMaxAddLinkMap`
+  `{ [pid]: { [itemId]: true } }`**. App이 두 맵을 state로 소유하고(`rebalanceSortConfigMap`과 같은 구조),
+  소비자(`usePortfolioData`·`RebalancingPanel`·달력 스냅샷 `buildRebalTargetEntry`)는 종전과 같은
+  '활성 계좌 한 장'(`rebalExtraQty` / `rebalMaxAddLink`)을 받는다. 계좌 전환 저장·복원 ref
+  (`accountRebalExtraQtyRef`)는 **삭제**됐다 — 되살리면 두 메커니즘이 전환 때 서로를 덮는다.
+- **⚠️ 저장 트리거는 '의도 지문' `rebalExtraIntentKey` 하나**(`portfolioStructureKey` + 저장 effect deps):
+  연동되지 **않은** 행의 수량 + 연동된 행 id만 담는다. **연동 행의 수량은 절대 넣지 말 것** — 유지 effect가
+  시세·잔액이 바뀔 때마다 다시 채우므로 넣는 순간 **시세 갱신마다 Drive 저장이 폭주**한다. 원시 맵을
+  구조 지문이나 deps에 넣는 것도 같은 결과다. 연동 행의 수량은 로드 후 그 effect가 현재 잔액으로 다시 계산한다.
+  ⚠️ `chartPrefsUpdatedAt`이 아니라 **구조 지문**에 두는 이유: VERSION 파일이 올라가야 관리자
+  impersonation 편집을 사용자의 열린 앱이 폴링으로 받아 간다(chartPrefs만 올리면 `saveVersionFile`이
+  호출되지 않는다). 지문 함수는 **절대 던지지 않는다**(저장 effect 첫 블록에서 계산된다).
+- **⚠️ setter는 `utils.updateRebalAcctMap` 공유 리듀서** — 함수형 updater를 지원하고, updater가 같은
+  참조(prev)를 돌려주면 **맵도 같은 참조**를 반환한다. 패널의 연동 유지 effect가 `rebalExtraQty`를
+  deps에 두고 '변화 없으면 prev'로 수렴하므로, 새 객체를 만들면 매 렌더 재실행 루프가 된다.
+  빈 슬라이스는 모듈 상수 `EMPTY_REBAL_ROW`(고정 참조)로 폴백한다(렌더마다 `{}` 금지 — 같은 이유).
+  계좌 id가 없으면(통합 대시보드) 아무것도 쓰지 않는다.
+- **⚠️ 로드 정규화 필수**(`normalizeRebalExtraQtyMap` / `normalizeRebalLinkMap`): 수량은 유한한 number만
+  (0 방향 버림, 0은 버림), 연동은 `=== true`만. 문자열 `'3'`을 통과시키면 `(수량 + action + extra) × 가격`이
+  **문자열 결합**이 되어 리밸런싱 표 전체가 오염된다. 부팅(`applyStateData`, 뷰 비보존)은 필드가 없어도
+  **비운다**(같은 탭에서 다른 계정 STATE를 적용하면 이전 사용자의 맵이 그 사용자 STATE로 저장된다 —
+  다중 계정 오염 방지). 폴링 재적용(preserveView)과 백업 복원은 필드가 있을 때만 적용한다.
+- **⚠️ 패널은 `maxAddLink`/`setMaxAddLink` prop을 우선 쓰고, 미전달이면 로컬 state로 폴백**한다
+  (`const maxAddLink = maxAddLinkProp || localMaxAddLink`). 앱 탭에서 로컬 전용으로 되돌리면 섹션을 접거나
+  앱을 다시 열 때마다 연동이 풀린다.
+- **영속화 지점**: `chartPrefs` 2필드(payload 리터럴) · 구조 지문 · 저장 effect deps · `applyStateData` ·
+  `applyBackupData`. 수동 저장 4핸들러는 `saveStateRef` 스프레드라 무수정.
+- **범위 밖(의도)**: 카드 별도 창(`card=rebalancing`·`card=ladder`)은 이 맵을 받지 않는다 — 창의 '추가'·연동은
+  종전대로 **창 로컬 스크래치**다(창에서 고쳐도 저장되지 않는다). '추가'만 바꾼 편집은 관리자 공지·메모 달력
+  목표비중 dirty를 세우지 않는다(트리거는 종전대로 목표비중·목표금액). 삭제된 종목·계좌의 맵 키는 정리하지
+  않는다(값이 변하지 않아 무해). **매매를 실행한 뒤 '추가'를 비우는 것은 사용자 몫**이다 — 옛 동작처럼 앱을
+  다시 열면 저절로 사라지지 않는다.
+- 검증: `npm run verify:rebal-extra` (직접 import `#1~#22` + 배선 가드 `#G1~#G12`). **변이 19종 + 음성 대조
+  1종으로 검출을 실증**했다(구조 지문 제거 · 구조 지문/deps에 원시 맵 · payload 누락 · deps 제거 · 정규화 제거 ·
+  부팅 비우기 제거 · 백업 복원 누락 · 빈 슬라이스 새 객체 · setter 손복제 · prop 미전달 · 패널 로컬 복귀 ·
+  토글 로컬 setter · 연동 행 수량 지문 포함 · 리듀서 새 객체 · 문자열 통과 · pid 가드 제거 · 0 저장 ·
+  truthy 연동 통과).
+
+### 메모 달력 = 5종 기록 허브 (칩 버튼) (⚠️ 회귀 주의 — 파생 3종을 calendarMemos에 복사 금지)
+
+날짜 칸에 **버튼식 칩** 4종(+사용자 메모 줄)을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).
+
+칩은 **세로로 1줄씩**(위→아래) 쌓이고 순서·라벨이 고정이다(2026-07-29 사용자 확정) — 종류가 항상 같은
+줄 위치·같은 라벨로 오므로 칸을 훑을 때 한눈에 구분된다. 패드 헤더 라벨도 같은 이름을 쓴다.
+
+| 순서 | 칩 라벨 | 종류 | 소스 | 성격 |
+|---|---|---|---|---|
+| 1 | `목표비중` emerald | `rebalTarget` | `calendarMemos[date]` | **스냅샷**(위 섹션). 그 시점 시세·수량을 사후 재현할 수 없어 유일하게 복사 저장 |
+| 2 | `투자기록` amber | `note` | `portfolios[].investmentNotes` | **라이브 파생** — 보기·편집·새 작성 |
+| 3 | `수량변경` violet | `qty` | `portfolios[].holdingSnapshots` 인접 diff | **라이브 파생** — 읽기 전용 |
+| 4 | `종목이관` cyan | `transfer` | `portfolios[].depositHistory(2)`의 `transfer` 태그 | **라이브 파생** — 읽기 전용(아래 '종목 계좌 간 이관') |
+| — | (라벨 없음) sky | (kind 없음) | `calendarMemos[date]` | 기존 사용자 메모 — 칩이 아니라 아래 텍스트 줄 목록 |
+
+- **⚠️ 라벨은 전부 한글이다(2026-09 사용자 요청 — 영문 약어로 되돌리지 말 것)**: `LIST`/`NOTE`/`STOCK`/
+  `MOVE`/`BUDGET`은 **무슨 표시인지 알아볼 수 없다**는 보고를 받고 바꿨다. 새 칩을 추가할 때도 한글로.
+- **⚠️ 패드 헤더 라벨은 칩 라벨과 동일**(`CalendarModal` `pad.kind` 맵): `rebalTarget:'목표비중'` ·
+  `note:'투자기록'` · `qty:'수량변경'` · `transfer:'종목이관'` · `ledger:'가계부'` · `pick:'선택'` ·
+  **`detail:'자산현황'`**(칩이 아니라 칸의 자산 스냅샷에서 연다 — 아래 전용 섹션) · 사용자 메모 `'메모'`.
+  두 곳(`CHIP_LABEL` 상수 · 패드 헤더 인라인 맵)이 **문자 그대로 같아야** 어느 칩에서 연 패드인지
+  대응이 끊기지 않는다(`verify:transfer #27d`가 `transfer` 라벨의 2회 출현으로 그 쌍을 단언한다).
+  이모지(📊📝🔄🔁)는 **패드 본문·pick 목록에만** 남기고 칸의 칩에서는 뺐다(텍스트 라벨과
+  중복이고 폭을 ~14px 먹는다).
+  ⚠️ **라벨은 4자 이내로** — 칸 텍스트 가용폭이 ≈160px(`CAL_W/7` − padding·border)이고 라벨은
+  `shrink-0`이라, 길어지면 계좌명(`flex-1 truncate`)이 통째로 잘려 어느 계좌 기록인지 알 수 없게 된다.
+  한글 4자 10px ≈ 40px으로 옛 `BUDGET`(6자 ≈ 39px)과 사실상 같아 이번 변경은 폭에 영향이 없다.
+- **칩 4줄이 되면 칸이 빡빡하다**(지표 3줄 + 칩 4줄 + 메모 74px ≈ CELL_H 180). 칸은 `minHeight`라
+  넘치면 늘어나고, 4종이 한 날에 모두 뜨는 것은 드문 경우다. 5번째 칩을 더 늘린다면 `CELL_H`를 함께 올릴 것.
+
+- **⚠️ 파생 3종(note·qty·transfer)을 `calendarMemos`에 복사하지 말 것** — 복사하면 리밸런싱 패널 '투자 기록'
+  메모장·자산검증 스냅샷·입출금 원장과 갈라져 두 화면이 다른 값을 보인다. 반드시 원본에서 매 렌더 재조회한다
+  (`notesByDate`/`qtyChangesByDate`/`transfersByDate` `useMemo`, **`open`일 때만 계산** — `portfolios`는
+  시세 갱신마다 새 배열).
+- **⚠️ 삭제 계좌(`deletedAt`)를 파생에서 제외하지 말 것**: 달력은 라이브 뷰가 아니라 **과거 기록 뷰**이고
+  같은 칸의 📊 칩은 `calendarMemos`라 삭제와 무관하게 남는다. 제외하면 한 셀 안에서 규칙이 모순되고
+  계좌 하나 삭제로 과거 몇 달치 칩이 소급 증발한다. → **포함하되 칩 색만 회색으로 강등**.
+  (`qty`만 `cur.date >= deletedAt` 컷오프 — 삭제일 이후 기록 동결 규약)
+- **⚠️ 수량 변경 diff는 `kind:'manual'`을 반드시 인지할 것**: 스냅샷 종류는 baseline/auto 둘이 아니라
+  **`manual`(자산검증 `VerifyEvalModal.withManualSnapshot`)이 더 있고 과거 임의 날짜에 삽입**된다.
+  cur 배제 조건은 **① 인덱스 0 ② `cur.kind==='baseline'` ③ `cur.date <= baselineDate`의 OR**.
+  ⚠️ ②만 쓰면 안 된다 — baseline 당일을 편집하면 그 kind가 `manual`로 덮여 baseline이 사라진다.
+  `origin:'manual'`은 매매가 아니라 수량 정정이므로 패드에 그 사실을 명시한다.
+- **칩 압축(⚠️ 되돌리지 말 것)**: 종류당 **1건이면 계좌명, 2건 이상이면 건수**(`LIST 3건`)로 접고 클릭 시
+  `pick` 선택 패드를 띄운다. 셀 텍스트 가용폭이 **≈160px**(CAL_W 1200 → 7열 → padding/border/라벨 차감)
+  뿐이라 계좌 수만큼 칩을 늘리면 칸 높이가 계좌 수에 비례해 터진다. `targetDate`가 같은 accountType끼리
+  공유되므로 하루 다건은 예외가 아니라 기본 시나리오.
+- **PICK → 상세는 '한 단계 뒤로'(2026-08 사용자 확정)**: 목록을 거쳐 연 상세 패드는 `pad.backPick`
+  (= 되돌아갈 `pickKind`)을 달고 열리고, **핑크 ✕ / Esc가 그 목록으로 복귀**한다(핑크 버튼 글리프도
+  `X` → `ChevronLeft`로 바뀌어 "닫힘"이 아님을 알린다). 1건 칩에서 바로 연 상세·PICK 자신·사용자
+  메모는 `backPick`이 없어 **종전대로 완전 닫기**.
+  ⚠️ **✕와 Esc는 반드시 같은 `dismissPad`를 공유할 것** — 갈라지면 같은 취소 제스처가 두 결과를 낸다.
+  ⚠️ 되돌아갈 목록은 값 복사가 아니라 **`pickPad(dayKey, pickKind)`로 재구성**한다 — note·qty·transfer는
+  라이브 파생이라 목록 스냅샷을 들고 뒤로 가면 원본이 바뀐 뒤 목록만 옛 값으로 갈라진다(패드 앵커 계약 동일).
+  ⚠️ **저장(퍼플 체크)·삭제·앵커 소멸 자동 닫힘은 '완료' 동작이라 그대로 완전 닫기** — 여기 묶지 말 것
+  (삭제 후 목록으로 돌아가면 항목이 0건인 빈 상자만 남는다). `note` 패드의 ①②③ 전환·drafts 규약도 무영향
+  (`setPad(prev => ({...prev, …}))` 스프레드가 `backPick`을 그대로 보존).
+- **⚠️ 칩 컨테이너를 `overflow-x-auto`(가로 스크롤)로 되돌리지 말 것**: 세로 스택 이전 설계였는데,
+  칩이 2개만 넘어가도 나머지는 6px 스크롤바로만 닿을 수 있어 사실상 숨겨졌다(사용자가 직접 지적).
+  컨테이너는 `flex flex-col gap-0.5 shrink-0`, 칩은 `w-full` + 라벨 `shrink-0` / 계좌명 `flex-1 min-w-0 truncate`.
+- **⚠️ `savePad`는 allow-list(default deny)**: kind가 늘어날 때 읽기 전용 패드가 사용자 메모 저장 경로로
+  새면 `memoId`를 `calendarMemos`에서 못 찾아 **조용히 닫히며 편집이 유실**된다. `note`와 `mode:'new'+
+  newKind:'note'`만 통과시키고 나머지 kind는 전부 `setPad(null)`. 저장 버튼도 `(!kind || kind==='note')`에만 렌더.
+- **투자기록 패드의 `val` 계약**: `val === null` = 미편집 → **라이브 본문 표시**(`padTextValue`).
+  본문을 비우면 삭제(메모 패드 규약 동일).
+  ⚠️ 같은 날 다건일 때 헤더 ①②③ 전환은 **탐색이지 취소가 아니다** — 떠나는 기록의 미저장 편집을
+  `pad.drafts[noteId]`에 담아 두고 `saveNotePad`가 **누적 draft를 한 번에 커밋**한다. `val:null`로만
+  리셋하면 "2번 흘긋 보려다 1번 편집이 경고 없이 증발"한다(창 위에선 confirm/notify가 가려져 사후
+  경고도 불가). 취소 의미가 명시적인 핑크 X/Esc만 draft까지 폐기한다. `drafts`는 패드 로컬 state라
+  영속화 지점 무관.
+- **⚠️ 수량 변경 패드의 예수금은 계좌 통화로 표기**(`padQty.currency`): 해외계좌는 `depositAmount`
+  **자체가 USD**다(`calcPortfolioEvalDetail`의 deposit 분기가 fxRate를 곱하는 대상). ₩로 하드코딩하면
+  $2,000이 ₩2,000으로 보여 약 1,390배 어긋난다. 원화 환산은 금지(환율 시점이 섞인다 — 해외계좌 규약).
+- **📊 패드는 같은 날·같은 계좌의 투자기록을 함께 표시**(사용자 요구: "리밸런싱 내역을 클릭하면 계좌의
+  리밸런싱 내용과 투자 기록에 남긴 내역을 볼 수 있어야"). ⚠️ 거기서는 **읽기 전용** — 편집은 📝 칩에서만
+  (저장 경로가 둘로 갈리지 않게).
+- **⚠️ 선행 버그 3건 동시 수정(회귀 시 재발)**:
+  ① `RebalancingPanel.addNewNote`가 `new Date().toISOString()`(UTC) → 한국 **00:00~09:00에 쓴 기록이
+  '어제' 칸**에 꽂혔다. `getTodayKST()`로 통일(달력 `dayKey`도 KST 로컬 조립).
+  ② `App.tsx investmentNotesKey`가 `id:date`만 담아 **본문만 고치면** `portfolioUpdatedAt`이 안 올라
+  Drive STATE 저장이 스킵됐다 → JSON 전문 포함. ⚠️ 길이 해시 절충안 금지(동일 길이 편집을 놓친다).
+  ③ `App.tsx holdingSnapshotsKey`가 `date:kind:개수`만 담아 **같은 날짜 스냅샷의 수량만 재편집**하면
+  저장이 스킵됐다 → `snapshotCompositionKey(s.items)` 포함(시세는 제외라 갱신이 저장을 유발하지 않음).
+- **비활성 계좌 편집**: `usePortfolioState.updateInvestmentNotesFor(portfolioId, notes)` — `patchActive`는
+  활성 계좌 전용이라 달력에서 다른 계좌 기록을 고칠 수 없다. 기존 `updateInvestmentNotes`(활성)와 병존.
+- **영속화 무수정**: `investmentNotes`·`holdingSnapshots`는 계좌 내부 필드라 `...p` 스프레드로 자동 보존.
+  `_preserveStickyPersonalData`(calendarMemos·watchlistGroups 전용) 대상이 **아니다** — 백업 복원이
+  계좌 데이터를 되돌리는 것이 맞다.
+- **알려진 한계(수량 변경)**: KR 계좌 스냅샷은 21:00 이후 **내일 날짜**로 찍혀(`getBackfillBoundaryKR`)
+  밤 매매가 하루 뒤 칸에 뜬다(자산검증 규약이라 변경 금지). 같은 날 여러 번 고치면 스냅샷이 덮어써져
+  **그날의 순변화만** 보인다. 예적금은 수량이 없어 `investAmount`(적립 원금) 변화로 대신 본다.
+
+### 종목 계좌 간 이관 (transfer) — 원장 3행 구성 (⚠️ 회귀 주의 — 종목만 옮기지 말 것)
+
+포트폴리오 표 종목 행의 **이관 아이콘**(휴지통 왼쪽, `PortfolioTable` 인라인 `TransferIcon`)으로
+종목 + 그 종목에 귀속된 계좌별 기록을 다른 계좌로 옮긴다. 진입점은 `StockTransferModal`
+(**미리보기 후 적용** — undo 없음, z **1070**: 메모 달력 1050·패드 1060 위 / LoadingOverlay 1100 아래).
+
+- **⚠️ 이 기능의 위험은 UI가 아니라 회계다.** 종목만 옮기면 이관일에 원계좌는 평가액 전액이 **가짜 손실**,
+  대상계좌는 **가짜 이익**으로 찍히고, 수익률 라인이 누적 TWR(곱셈 체인)이라 그 하루가 **이후 전 구간에
+  영구 고정**된다. 그래서 이관을 "원계좌 출금 + 대상계좌 입금"이라는 **실제 자금 이동**으로 원장에 기록한다.
+- **원장 3행 (⚠️ `utils.buildTransferLedgerRows` — 조합을 바꾸지 말 것)**. M=시가, C=매입원가, G=M−C:
+
+  | 계좌 | 원장 | amount | principalDeducted | principal 필드 |
+  |---|---|---|---|---|
+  | 원계좌 | 출금 | **M** | **C** | `−= C` |
+  | 대상계좌 | 입금 | **M** | — | `+= C` |
+  | 대상계좌 | 출금 | **0** | **G** | 변동 없음 |
+
+  출금 행은 `principalDeducted`로 "흐름 M · 원금 C" 분리를 네이티브 지원하지만 **입금 행에는 대응 필드가
+  없어** amount 하나가 둘을 동시에 결정한다 → 입금은 M으로 넣고 차액 G를 **금액 0 · principalDeducted=G**
+  행으로 상쇄한다. 금액이 0이라 흐름에 전혀 기여하지 않고(`externalFlowInRange`·통합 ①의 `v>0/v<0` 어느
+  분기에도 안 걸린다) `cumDepositsUpTo`만 G를 빼 원금이 M−G=C가 된다. G=0이면 행을 만들지 않는다.
+  ⚠️ **보정 행을 `amount: -G`(음수 출금)로 되돌리지 말 것** — 이익 포지션에서는 유입 C+G=M으로 맞지만
+  **손실 포지션(G<0)에서는 양수 출금**이 되어 유입 C·유출 |G|로 갈라진다. 순흐름은 M이라 일간 '손익'은
+  맞지만 일간 '수익률' 분모가 `전일V+M`이 아니라 `전일V+C`가 되어 이익/손실 규약이 갈리고 TWR에 고정된다.
+  ⚠️ `noPrincipal`을 쓰지 말 것 — 입금의 noPrincipal은 흐름 IN에서도 빠지고(배당·이자 규약), 출금의
+  noPrincipal은 원금에서만 빠져 흐름엔 전액 남는다. 둘 다 이관 의미와 다르다.
+- **이 구성이 지키는 것**: 원금 산출 4경로(`finalChartData` epochBase 역산 / `computeEffectivePrincipal` /
+  `overseasPrincipalAt` / `useIntegratedData effectivePrincipal`)의 **과거 값 전부 불변**, 통합
+  effectivePrincipal의 원계좌 +G와 대상계좌 −G가 **정확히 상쇄**, 이관일 일간 손익 = 개별 시장분만 / 통합 0.
+- **⚠️ 기록일 = `getBackfillBoundaryForAccount(accountType)`** (자동 스냅샷 효과가 쓰는 그 날짜).
+  `getTodayKST`·`effectiveDateKey` state 금지 — 원장/스냅샷/평가액이 같은 날 함께 움직여야 한다.
+  21:00 이후 KR 이관을 오늘로 찍으면 그날 `bookDelta=0` vs 흐름 −M → 오탐 보류 → **다음 날 이월이 한 번 더
+  차감돼 부호가 뒤집힌다**(CLAUDE.md '고친 결함 (A)' 재현).
+- **⚠️ 이관 금액 M = 수량 × '직전 기록일 종가'**(`App.tsx buildTransferPlan` → `calcPortfolioEvalDetail`).
+  화면의 실시간 평가금액이 아니다 — 장중 이관이면 그 종목은 당일 V에서 통째로 빠지므로 마지막 기여분이
+  직전 기록일 종가다. 실시간가를 쓰면 그날 장중 등락분이 양쪽에 반대 부호의 가짜 손익으로 남는다.
+  ⚠️ **해외계좌는 `calcPortfolioEvalDetail`이 내부에서 그 날짜 환율로 원화 환산**하므로 `r.total / r.fxRate`로
+  USD를 되돌려야 한다(원장·principal·`bookCostOf`가 전부 USD — 안 하면 약 1,390배).
+- **⚠️ 원가 C는 `bookCostOf`** — `buildBookCostSeries`가 관측하는 장부액과 **같은 정의**라야
+  `shouldHoldDailyMetrics`의 흡수 판정(bookDelta vs 흐름)이 맞물린다. 해외·금은 `costBasisOnly: true` 필수.
+- **데이터 이동/복제/유지**: 코드별 **분배금 맵 8종 + `taxBaseHistory`는 이동**(금액성 — 복제하면 통합
+  분배금 표에서 이중 계상). **`manualPriceOverrides[code]`는 복제**(원계좌의 과거 스냅샷에 그 종목이 남아
+  있어 과거 평가액 재계산에 계속 필요 — ⚠️ 원계좌에서 지우지 말 것). `history`·`holdingSnapshots`는
+  **무수정**(자동 스냅샷 효과가 양쪽에 새 스냅샷을 만들어 과거가 자동 보존된다).
+- **⚠️ 쓰기는 단일 `setPortfolios`** — `portfolios[]`가 단일 소스이고 `patchActive`/`setPortfolio`는 활성
+  계좌 전용이라 대상계좌에 닿지 못한다. **id 생성은 updater 밖**(StrictMode 이중 호출 방어), updater 안에서
+  `prev`의 항목 존재를 재확인해 **멱등**. 원본 항목은 반드시 `portfolios[]`의 raw item — `PortfolioTable`에
+  넘어가는 `totals.calcPortfolio` 행은 investAmount/evalAmount에 **환율이 이미 곱해져** 있다.
+- **⚠️ 양쪽 계좌의 `dividendHistoryUpdatedAt` 갱신 필수** — `dividendHistory`·`dividendExDate`·
+  `dividendTaxAmounts`·`actualDividendQty`는 `portfolioStructureKey` 지문에 직접 없어서, 이걸 빠뜨리면
+  Drive STATE 저장이 통째로 스킵된다(`deletePortfolioDividendData`와 동일 이유). 그 외 **영속화 신규 지점 0곳**
+  (`depositHistory(2)`·`principal`·항목 화이트리스트·`taxBaseKey`·`manualPriceOverrides`는 이미 지문에 포함).
+- **대상 계좌 게이팅(fail-closed)**: 현금성(simple/matong)·금현물·삭제 계좌 제외, **통화 불일치**
+  (해외↔국내)·**시장 불일치**(crypto↔그 외) 차단, savings→dc-irp만·fund→dc-irp/pension만.
+  부적격 계좌는 목록에서 지우지 않고 **사유를 달아 노출**한다.
+
+### 동일 코드 = '병합 이관' (2026-09, ⚠️ 회귀 주의 — '이미 보유' 차단으로 되돌리지 말 것)
+
+대상 계좌가 같은 종목을 이미 보유하면 과거엔 `reason = '이미 보유'`로 **통째 차단**했다. 그 가드는 둘을
+동시에 놓쳤다: ① 두 계좌에 나뉜 같은 종목을 합칠 방법이 영영 없었다(사용자 요구 — TEST 계좌의 GPIQ를
+본계좌로 옮기려는데 유일한 후보가 회색이었다. **`isTest`는 이관을 한 줄도 막지 않는다** — 그 계좌들이
+막혀 보인 진짜 이유는 `gold`(KrxGoldTable에 `onTransfer` 자체가 없다)·현금성(개별 뷰 진입 차단)이라는
+**계좌 타입**이다) ② 가드가 `p.portfolio` 행만 봐서 대상에서 그 종목을 **삭제해 '삭제됨' 유령 행만 남은**
+계좌는 통과시켰는데, 라이터가 `[code]`를 **통째 교체**해 가드가 막으려던 조용한 소실이 정확히 그
+경로에서 일어났다. 아래 규칙은 **병합 여부와 무관하게 항상** 적용해 ②도 함께 닫는다.
+
+- **⚠️ 별도 행 추가(같은 코드 2행) 금지 — 반드시 한 행으로 합친다.** `DividendSummaryTable`의
+  `expectedRows`(:410)·`actualRows`(:479)가 `pf.portfolio.forEach`로 행을 만들고 **행마다**
+  `actualDividend[code][ym]`을 다시 읽으므로, 2행이면 월·연 합계와 종목별 분배율이 정확히 2배가 된다.
+- **판정의 단일 소스 = `utils.analyzeTransferMerge(srcItem, srcPf, tgtPf)`** — 화면(`transferTargets`)과
+  라이터가 **같은 함수**를 쓰고, 라이터는 사전 + updater 안에서 **두 번** 재확인한다(그 사이 다른 창이
+  대상 계좌를 바꿨을 수 있다. `blocked`면 아무것도 쓰지 않는다 — fail-closed).
+  차단 사유 3종: **예적금 병합 불가**(이율·기간·적립 트랜치가 계좌 고유) / **항목 타입 불일치** /
+  **과표 이력 충돌**(⚠️ events·purchases·sales를 concat하면 대상 계좌의 **과거** 월별 평균 과표와 LOFO
+  매도 기준단가가 소급 변경된다 — '과거 불변' 원칙 위반. 한쪽만 있으면 그대로 이동).
+- **⚠️ 코드 비교는 `transferCodeKey`(trim + 대문자)인데 맵 키는 원문**이다 → 병합에서는 반드시
+  **대상 항목의 `code`를 정본**(`tgtCode`)으로 삼아 대소문자만 다른 두 표기가 한 키로 수렴하게 할 것.
+- **코드별 맵 병합 규칙(⚠️ `[code]` 통째 교체 금지)**:
+  **합산(`TRANSFER_SUM_MAPS`)** = `actualDividend`·`actualDividendUsd`·`actualDividendQty`·
+  `dividendTaxAmounts`·`actualAfterTaxUsd`·`actualAfterTaxKrw` — 전부 "그 계좌가 실제로 받은 금액/수량/
+  세액"이라 ym별로 더하는 것이 의미상 옳다. **대상 유지(`TRANSFER_KEEP_MAPS`)** = `dividendHistory`·
+  `dividendExDate` — 주당 분배금·배당락일은 계좌 무관한 시장 데이터라 ⚠️ **합산하면 '월 예상 분배금'이
+  정확히 2배**가 된다. `manualPriceOverrides`도 keep(대상 우선 — 그 계좌에서 손으로 고친 종가를 원계좌
+  값으로 덮으면 과거 평가액이 조용히 달라진다). `taxBaseHistory`는 대상에 데이터가 있으면 보존(위 차단).
+- **⚠️ 원가 불변식 — 병합으로 늘어난 대상 장부액(`bookCostOf`)이 원장의 원금 이동액 C와 같아야 한다**
+  (아니면 일간 지표 흡수 판정 `bookDelta vs 흐름`이 그날을 보류로 잠그거나 가짜 손익을 남긴다):
+  · **해외**: 저장 필드가 `investAmountUsd`(사용자 입력)이고 `purchasePrice`가 파생 미러 →
+  두 저장값을 더하고 미러를 다시 깐다. ⚠️ `qty > 0 && Number.isFinite`일 때만(0으로 나누면 Infinity가
+  저장되고 JSON 직렬화가 `null`로 만들어 원가가 **영구 소실**된다).
+  · **그 외**: `bookCostOf`가 `investAmount`를 우선하므로 **두 항목의 장부액 합**을 쓴다. ⚠️
+  `investAmount`끼리 단순히 더하면, 대상의 `investAmount`가 0이고 매입가×수량으로 잡혀 있던 계좌에서
+  그 원가가 통째로 사라진다.
+- **⚠️ 병합은 대상 행을 교체한다(id 유지)** — `markedPortfolioRows`·정렬·목표비중/목표금액이 보존된다.
+  **소스의 목표 계열은 승계하지 않는다**(다른 계좌 분모 기준이라 의미가 뒤바뀐다). 펀드만 `evalAmount`도
+  합산한다(수량·기준가가 없을 때 그 값이 평가액의 권위값).
+- **⚠️ 병합 후보는 자동 선택하지 않는다** — `transferTargets`가 병합 후보를 정상 후보 **뒤로** 정렬하고
+  (`rank`), 모달의 초기 선택은 `!t.blocked && !t.merge`다. 두 보유가 합쳐지는 것은 되돌릴 수 없어
+  사용자가 직접 골라야 한다. 목록에 '병합' 배지 + 대상 보유수량, 미리보기에 `병합 후 보유`·합산되는
+  분배금 개월 수·주당분배금 차이 개월 수를 표시한다.
+- **영속화 신규 지점 0곳** — 바뀌는 필드(`quantity`·`investAmount`·`investAmountUsd`·`purchasePrice`·
+  코드별 맵·`dividendHistoryUpdatedAt`)가 전부 이미 `portfolioStructureKey` 지문에 있다.
+- **메모 달력 표시**: 원장의 `transfer` 태그에서 **라이브 파생**(`utils.collectTransferRows` →
+  `CalendarModal transfersByDate` → **종목이관 칩**). 원계좌(→ 나감)·대상계좌(← 들어옴) **양쪽 칸**에 뜨고
+  패드는 읽기 전용(종목명·수량·방향·이관금액·매입원가·평가차익). ⚠️ `calendarMemos`에 복사 금지.
+  ⚠️ `role:'gain'`(원가 보정 행)은 `collectTransferRows`가 제외한다 — 같은 이관이 한 칸에 두 번 뜬다.
+  별도 브라우저 창은 `calWinAccounts`가 **transfer 태그 행만 투영**(원장 전량 복제 금지)하고
+  `calWinAccountsKey` 지문에 `collectTransferRows`를 포함해야 갱신된다.
+- **종목 삭제 확인창**: 이관 버튼 바로 옆이라 오클릭이 쉬워 `handleDeleteStock`을 async + `confirm`으로
+  바꿨다(주식·펀드·예적금이 같은 `onDelete`를 쓰므로 한 곳이면 셋 다 보호).
+- **⚠️ 원계좌를 '비우는' 이관은 평가액 0이 실제로 시계열에 박혀야 한다 (2026-08 실측 버그 — 회귀 주의)**:
+  이관은 대상계좌 쪽만 즉시 반영되고 **원계좌는 종목을 옮긴 날부터 평가액이 0으로 내려가야** 이중 계상이
+  없다. 그런데 재구성 파이프라인이 **'평가액 0'을 '데이터 없음'으로 취급**해 직전 구성을 carry-forward로
+  살려두는 바람에, 종목을 전부 옮긴 계좌가 과거 평가액을 영구히 유지했다(실측: 이관일 통합 총자산
+  ₩877,810,911 = 정상 ₩765,299,368 + 이관액 ₩112,511,543. 원금은 이관이 반영돼 ₩0인데 평가액만 남아
+  수익률 0.00%로 표시됐다). **오늘 행은 라이브 합계로 덮어써져 정상**이라, 그날이 '어제'가 되는 순간
+  드러나는 지연 발현형이다. 막는 배선 4개 — 하나라도 되돌리면 재발한다(`verify:transfer` #30~#33):
+  ① `utils.buildCloseEvalSeries` — `hasAnyPrice=false`라도 **평가 대상 detail이 0건이면 exact 0**
+  (이월 금지). '가격을 못 구함'과 '평가할 포지션이 없음'은 다른 사건이다.
+  ② `utils.evalSeriesDates`(신규) — 평가 날짜 = **기록일 ∪ 구성 변경일(`holdingSnapshots`)**. 비운 계좌는
+  `currentEval === 0`이라 `useHistoryBackfill` 효과#1이 그날 라이브 기록을 만들지 않아, 기록일만 평가하면
+  '비운 날' 자체가 시계열에서 빠진다. **통합(`marketSeries`)·개별 차트(`activeCloseEvalByDate`)·추이 표
+  (`HistoryPanel displayEvalByDate`) 3곳이 같은 함수를 공유**해야 세 화면이 갈리지 않는다.
+  ③ `useIntegratedData marketSeries` — `if (v > 0) map.set(...)` **금지**. 재계산이 권위값을 냈으면 0도
+  넣어야 `computedIntHistory`의 `lastVal` carry-forward가 0으로 갱신된다. 같은 이유로 계좌 편입일
+  (`firstSeenById`)은 `dates[0]`이 아니라 **평가액이 0을 넘는 첫 날짜**(0 날짜가 d0가 되면 편입 유입이
+  0으로 잡혀 나중에 값이 생기는 날의 ΔV가 통째로 가짜 수익이 된다).
+  ④ `App.tsx` 자산검증 P1 스냅샷 효과 — `items.length === 0`은 **baseline 부트스트랩에서만** 막는다
+  (`items.length === 0 && snaps.length === 0`). 예수금 행조차 없이 완전히 빈 계좌가 되면 스냅샷이 아예
+  안 남아 `resolveHoldings`가 영원히 직전(종목 보유) 스냅샷을 돌려준다.
+  **일간 지표는 자동 정합** — 이관 원장(원계좌 출금 M / 대상계좌 입금 M)이 ΔV와 정확히 상쇄하므로 그날
+  '일간 손익'은 시장 변동분만 남는다(전일대비 %의 하루 희석은 아래 '알려진 한계 ①' 그대로).
+  **이미 어긋난 과거 기록은 재조회 없이 자동 교정된다**(저장 `evalAmount`가 아니라 스냅샷 재계산이
+  권위값이므로). 다만 `useHistoryBackfill` gap-fill이 비운 계좌의 주말 칸에 낡은 양수를 계속 써 넣는
+  것은 그대로다 — 표시는 재계산이 이기므로 무해(저장값 오염만 남음).
+- **⚠️ 통합 뷰에서는 이관 쌍을 흐름에서 상쇄한다(2026-08 — 옛 '알려진 한계 ①' 해소)**: 이관일 통합
+  '전일대비 %'가 `(V+M)/(V_prev+M)−1`로 희석되던 문제를 `useIntegratedData` ①-c에서 없앴다(그 절 참조).
+  **개별 계좌 뷰는 무변경**(그 계좌 기준으로는 자산이 실제로 나갔다). 검증 `verify:transfer` #34~#41e.
+- **알려진 한계(의도)**: ② 수익률 +100% 초과 포지션은 흡수 판정(원가 vs 시가,
+  50% 문턱)에서 그날이 `'-'`로 보류될 수 있다(기존 '알려진 한계 ③'과 동일 원인) ③ 이관 원장 행을
+  `DepositPanel`에서 편집하면 프로라타 재계산이 `principalDeducted`를 덮어써 정합이 깨진다(`[이관]` 메모
+  태그로 식별만 제공) ④ 부분 이관·해외↔국내 이관·펀드/예적금 행의 이관 버튼은 **미지원**(핸들러는 지원하나
+  진입점을 주식 행에만 둠) ⑤ 원계좌 `principal`이 매입원가보다 작으면 0으로 클램프된다(데이터 이상 상황)
+  ⑥ **금현물(`gold`) 계좌는 이관 진입점이 없다** — `App.tsx:4351`이 gold에 `KrxGoldTable`을 렌더하는데
+  그 컴포넌트는 `onTransfer`를 받지 않는다(대상으로도 `reason = '금현물'`로 차단). 현금성(matong/simple)
+  계좌도 개별 뷰 진입 자체가 막혀 있어 표에 도달할 수 없다 ⑦ 병합 후 과표 매매 이벤트가 한 풀이 되면
+  LOFO 기준단가가 바뀌므로, 양쪽에 과표 이력이 있으면 아예 차단한다(위 규약).
+- 검증: `npm run verify:transfer` (113건 — 참조 구현 미러 #1~#16 + **통합 뷰 이관 쌍 상쇄 #34~#41e** +
+  소스 텍스트 가드 #17~#29(**병합 배선 #25~#25j**) + **'비운 계좌
+  평가액 0' 배선 #30~#33** + **파트⑤ 동일 코드 병합 #42~#51f**). `utils.ts`의
+  `buildTransferLedgerRows`·`collectTransferRows` 본문과 **항상 1:1 동기화**할 것. #30~#33은 미러가
+  아니라 정규식으로 배선을 단언하므로, 실패 시 **먼저 정규식이 낡았는지 확인**하고 계약 자체가 바뀐
+  게 아니면 정규식을 고칠 것.
+  ⚠️ **파트⑤는 미러가 아니라 `src/utils.ts` 직접 import**다(병합 규칙은 산술이 전부라 미러를 두면
+  src/미러 한쪽만 고친 변경이 둘 다 통과한다). 가드는 **선언이 아니라 사용부**를 단언하며 **변이 18종**
+  (병합 판정 무시 · 맵 통째 교체 · keep 극성 뒤집기 · sum을 유지로 · 국내 원가 단순 합산 · qty>0 가드
+  제거 · 과표/예적금 차단 제거 · 코드 정규화 제거 · 라이터 재확인 2곳 제거 · App 배선 제거 · 정렬 랭크
+  제거 · 모달 자동 선택 · 배지 삭제 · 맵 키 되돌림 · 과표 덮어쓰기 · 음성 대조 1)으로 **실제 검출을
+  확인**했다. ⚠️ `#25h`는 처음에 **죽은 단언**이었다 — `mergeTransferMapEntry` 문자열 '존재'만 봐서
+  `const merged = carried[k] || …`로 통째 교체를 되살려도 통과했다(변이 M2). 지금은 대입식 전체와
+  사용부(`next[k] = { ...cur, [tgtCode]: merged }`)를 함께 본다. 되돌리지 말 것.
+
+### 현금(예수금) 계좌 간 이관 — 종목 이관의 특수 케이스 (2026-09, ⚠️ 회귀 주의)
+
+포트폴리오 표 **예수금(CASH) 행 오른쪽 이관 아이콘**(`onTransferCash`, 자물쇠 왼쪽)으로 여는
+`CashTransferModal`(미리보기 후 적용, z **1070**). 분배금처럼 계좌에 쌓인 현금을 다른 계좌로 옮긴다.
+발단은 사용자 시나리오다 — COVERD 예수금 4,550,000을 CMA로 옮기면서, 그것을 원장에 '출금'으로만
+적으면 그날 평가액 추이가 통째로 보류('-')가 됐다.
+
+- **⚠️ 원장 3행 구성을 복제하지 말 것 — `buildTransferLedgerRows`를 그대로 재사용한다.** 현금은
+  시가 = 원가라 종목 이관의 **`cost`만 사용자가 고르는** 특수 케이스다:
+
+  | 선택 | cost | G = M − cost | 원장 | 결과 |
+  |---|---|---|---|---|
+  | 원금도 함께 이동(기본) | **M** | 0 | 2행(보정 행 없음) | 양쪽 원금 ±M · **두 계좌 수익금 불변** |
+  | 원금은 그대로 | **0** | M | 3행(`amount 0` · `principalDeducted M`) | 양쪽 원금 불변 · **수익금이 M만큼 이동** |
+
+  (amount, principalDeducted) 조합이 이 기능의 유일한 회계 불변식이라, 두 벌로 나뉘면 한쪽만 고친
+  드리프트가 곧 **원금 라인 소급 이동**이 된다. `itemType: 'cash'` 분기는 라벨·보정 행 문구 2곳뿐이고
+  **그 밖에서는 종전 결과를 한 글자도 바꾸지 않는다**(하위호환의 축, 검증 #59f).
+  ⚠️ 현금 보정 행 문구에 '평가차익'을 쓰지 말 것 — 현금엔 차익이 존재할 수 없어 거짓말이 된다.
+- **⚠️ 이 기능의 유일한 새 위험 = "원장만 쓰고 예수금을 안 옮기는 것".** 그러면 그날 ΔV는 0인데
+  흐름만 M이라 흡수 판정이 그 행을 보류로 잠그고, 이월이 다음 행에서 한 번 더 차감돼 **부호가
+  뒤집힌다**(일간 지표 절 '고친 결함 (A)·(B)'). `DepositPanel`이 `portfolio`를 참조하지 않아 원장
+  입력만으로는 평가액이 변하지 않는 것이 바로 이 사용자가 겪은 증상이다 →
+  **예수금 · 원금 · 원장을 하나의 `setPortfolios` 안에서 함께 옮긴다**(검증 #62~#62d).
+  그래서 이관일 손익은 개별·통합 모두 시장 변동분만 남고, 통합에서는 `holdTransfer`가 쌍을 상쇄해
+  그날 %도 희석되지 않는다(#58c~#58e).
+- **⚠️ '원금 반영 여부'는 사용자가 매번 고른다(2026-09 사용자 확정 — 한쪽으로 고정하지 말 것).**
+  분배금 이관은 '수익을 옮기는 것'이라 원금이 따라가면 안 되는 경우가 있고, 계좌를 옮겨 담는
+  이관은 따라가야 한다. **흐름은 두 모드에서 완전히 같다**(#55) — 원금 선택이 일간 수익률 분모를
+  바꾸면 누적 TWR(곱셈 체인)에 그 차이가 영구 고정된다.
+- **⚠️ 대상 자격의 정본은 `utils.cashTransferBlockReason` 하나** — 화면과 라이터가 같은 함수를 써야
+  "목록에는 보이는데 눌러도 아무 일이 없다"가 구조적으로 생기지 않는다(fail-closed, #65).
+  종목 이관과 달리 **시장(crypto·gold) 구분은 보지 않는다** — 현금은 통화만 맞으면 같은 돈이다.
+  차단은 마통(한도·사용액이라 '보유 현금'이 아니다)·통화 불일치(**달러 → 국내만** — 원화는 해외계좌의 원화 예수금으로도
+  간다, 2026-10 '원화 예수금 = 통합 원화 투자원금' 절)·삭제 계좌 3종. 통화는 세 번째 인자 `currency`로 넘긴다.
+  현금성 계좌는 **소스로 쓸 수 없다**(예수금 행도 원장 UI도 없고 개별 뷰 진입 자체가 막혀 있다).
+- **⚠️ 직접입력(simple) 대상은 평가액이 곧 현금이다** — 예수금 행이 없어 `evalAmount`·`history`를
+  함께 올린다. **원금 보정 행은 쓰지 않는다**(그 계좌의 원금은 원장이 아니라 평가액에서 파생되므로
+  보정할 대상이 없고, 남기면 아무것도 고치지 않는 행이 원장에 박제된다 — #66c).
+  원금이 따라오지 않는 이관이면 **`principalManual`을 세운다** — 안 세우면
+  `updateSimpleAccountField`가 다음 평가액 편집에서 `principal = evalAmount`로 되덮어 사용자가 고른
+  '원금 미이동'을 조용히 취소한다(#66b).
+- **⚠️ 버튼은 첫 예수금 행에만** — 라이터(`depositRowOf`)가 계좌의 **첫** 예수금 행을 옮기므로,
+  다른 행에 두면 누른 행과 실제로 줄어드는 행이 갈린다(#69). 모달의 '전액'도 같은 행의 잔액을 쓴다(#70b).
+  열 개수는 그대로 1칸이고, 버튼이 없으면 종전 자물쇠 셀 그대로다(#69b).
+- **⚠️ 대상 목록은 모달을 열었을 때만 계산한다**(#70c) — `portfolios`는 시세 갱신마다 새 배열이라
+  상시 계산하면 안 쓰는 사용자가 매번 그 비용을 치른다(`btActive`·`transfersByDate`와 동일 게이팅).
+- **계좌 타입 짧은 라벨은 모듈 상수 `ACCOUNT_TYPE_SHORT_LABEL` 하나를 두 이관 모달이 공유**한다
+  (손복제하면 같은 계좌가 두 모달에서 다른 이름으로 뜬다, #71).
+- **영속화 신규 지점 0곳** — 예수금(`depositAmount`)·`principal`·`depositHistory(2)`가 이미
+  `portfolioStructureKey` 지문에 있어 이관 한 번이 반드시 `portfolioUpdatedAt`을 올린다(#72).
+  ⚠️ 다만 **`evalAmount`·`principalManual` 2필드를 지문에 추가**했다(#72b) — 직접입력 계좌는 그 둘만
+  바뀌는 경로가 실재하고(`principalManual`이 선 계좌의 평가액 편집 = **이 기능 이전부터 있던 잠복
+  유실**), 두 필드는 `updateSimpleAccountField`·`transferCashToPortfolio`만 쓰므로 시세 갱신으로는
+  변하지 않는다(저장 폭주 없음).
+- **메모 달력**: 원장의 `transfer` 태그에서 라이브 파생되므로 **종목이관 칩에 그대로 뜬다**(무수정).
+  `itemType: 'cash'`가 메타에 실려 종목 이관과 구분된다(#59e).
+- **범위 밖(의도)**: 마통 계좌(한도 상환은 의미가 다르다) · 달러 ↔ 원화 **환전** 기록(원화 출금 + 달러 입금 두 행을
+  손으로 — 해외↔국내 **원화** 이관은 2026-10부터 지원) · 예약/반복 이관 ·
+  되돌리기(undo) · 카드 별도 창에서의 실행(`PortfolioTable`은 App에서만 렌더된다).
+  **알려진 한계**: 대상이 직접입력·TEST 계좌면 통합 ①이 그 원장을 읽지 않아 **쌍 상쇄가 일어나지
+  않는다** — TEST 대상은 통합에서 돈이 실제로 빠지는 것이 맞고(그날 손익 0으로 정확), 직접입력
+  대상은 ②가 잔액 차분을 유입으로 잡아 그날 %만 희석된다(수동으로 옮길 때와 동일한 기존 동작).
+- 검증: `npm run verify:transfer` (**파트⑥ 현금 이관 원장 회계 #52~#59p**(#59g~#59p = 원화 ↔ 해외 원화 예수금, 2026-10) +
+  **파트⑦ 배선 가드 #60~#72b** + **파트⑧ 원화 예수금 이관 배선 #73~#77b** + **드리프트 가드 #51g**(실제 `src/utils.ts`를 직접 import해 미러와
+  108조합 대조 — 파트①·⑥이 미러로 회계를 단언하므로 이 가드가 없으면 src만 고친 변경이 통과한다)).
+  ⚠️ **파트②의 `tfn` 슬라이스 끝 경계는 `const transferCashToPortfolio`다** — 옛 경계
+  (`const handleAddStock`)로 자르면 두 라이터가 한 덩어리가 되어 #17(setPortfolios 1회)이 무너진다.
+  가드는 **선언이 아니라 사용부**를 단언하며 **변이 28종 + 음성 대조 1종**(예수금 감소·증가 제거 ·
+  원금을 항상/절대 이동 · 기록일을 getTodayKST로 · id 생성을 updater 안으로 · 라이터 자격 재확인 제거 ·
+  현금성 소스 차단 제거 · updater 재확인 제거 · simple 대상에 보정 행 추가 · principalManual 제거 ·
+  setPortfolios 2회로 분할 · utils cash 라벨/메모 분기 제거 · 마통·통화 차단 제거 · 모달 초과 게이트/
+  즉시 파싱/원금 옵션 · 버튼을 모든 행에/삭제 · App 배선·게이트·전액 소스 · 라벨 손복제 · 지문에서
+  evalAmount 제거 · 화면 자격 판정 손복제)으로 **실제 검출을 확인**했다.
+
+### 메모 달력 자산 스냅샷 클릭 → 날짜별 '계좌별 현황'(자산현황 패드) (⚠️ 회귀 주의)
+
+날짜 칸의 **자산 스냅샷 3줄 블록**(총자산 / 일간손익 / 누적%)을 누르면 그날의 계좌별 현황이 뜬다 —
+통합 대시보드 '평가액 추이'에서 날짜를 눌렀을 때와 **같은 표**(계좌·투자원금·평가금액·비중·예수금·
+수익·수익률 7열 + 소계). 사용자 요청 2026-08. 칩이 아니라 스냅샷 블록이 진입점이고, 나머지 칸 여백은
+종전대로 '클릭하여 메모 추가'다(⚠️ `stopPropagation` 필수 — 없으면 메모 패드가 즉시 덮는다).
+
+- **⚠️ 행 산출은 `utils.buildHistDetailRows` 단일 소스**. 원래 `IntegratedDashboard`의 `histDetailRows`
+  useMemo 본문이었고, 대시보드는 이제 그 함수를 **직접 import해** 호출한다(prop 아님 — prop으로 두면
+  전달을 빠뜨렸을 때 '배선 끊김'과 '그날 자산 없음'이 화면상 동일해지는 fail-open 표면이 생긴다).
+  ⚠️ 어느 화면에서도 다시 손계산하지 말 것 — 같은 날짜에 두 화면의 소계가 갈리면
+  "달력 칸 총자산 = 팝업 소계 = 추이 차트 그날 값" 불변식이 깨진 걸 아무도 알아채지 못한다.
+- **⚠️ 파생값(`weight`·`totalProfit`·`totalReturnRate`)도 그 함수가 낸다** — 두 렌더러가 '순수
+  포매팅'만 하게 되어 비중 분모·소계 산식을 한쪽만 바꾸는 사고가 구조적으로 불가능해진다.
+  누적 3개(`totalEval`/`totalPrincipal`/`totalDeposit`)는 반드시 `rows.push`와 **같은 분기 안**에서
+  올린다(사후 reduce로 바꾸면 제외된 계좌가 분모에 섞여 tfoot '100%'가 조용히 깨진다).
+- **⚠️ null 계약 — `weight`·`totalReturnRate`는 산출 불가 시 null**(0.00%로 단언 금지).
+  값 셀뿐 아니라 **색 판정도 같은 계약**을 따라야 한다 — `?? 0`으로 뭉뚱그리면 산출 불가(`'-'`)가
+  이익(빨강)으로 색칠되고 같은 날짜의 자산현황 패드(회색)와도 갈린다(가드 #G2b, 변이로 실증).
+  ⚠️ 도달 경로가 실재한다: `effPrincipal = Math.max(0, 원금 − 미래입금 + 미래출금)`이라 그 날짜
+  **이후** 입금이 원금 대부분인 초기 날짜는 전 계좌가 0으로 클램프돼 `totalPrincipal === 0`인데
+  `evalAmt > 0`이라 행은 남고 tfoot이 렌더된다(검증 #16이 이 픽스처를 고정한다).
+- **⚠️ 표 포매터는 두 화면이 공유한다 — `utils.formatCurrency` / `utils.formatPercent`**.
+  '같은 표'라고 고지해 놓고 손실 계좌가 `-₩1,234,567`(대시보드) vs `₩-1,234,567`, 수익률이
+  `12.34%` vs `+12.34%`로 갈리면 안 된다. ⚠️ `CalendarModal`의 `fmtPct`(칸·밴드용, `+` 부호)를
+  이 표에 쓰지 말 것 — 표기가 갈릴 뿐 아니라 **null-safe가 아니다**(`null >= 0`이 true라
+  `null.toFixed`로 던진다). ⚠️ 반대로 `formatPercent`는 `cleanNum`이 null을 `0.00%`로 만들므로
+  **null 가드는 `pctCell`이 진다**(달력 표의 모든 % 출력이 이 헬퍼를 지난다 — 가드 #G12).
+  ⚠️ `fmtPct` 본문을 널 안전으로 바꾸지 말 것(기존 호출부 4곳의 인자는 전부 number라 이득 없이
+  `'-'`가 예상치 못한 자리에 새는 실패 모드만 늘어난다). 0의 색만은 달력 규약(`pnlColor` = 회색)을
+  유지한다 — 대시보드는 `>= 0`이라 빨강이지만, 이 파일의 칸·밴드가 이미 회색 규약이다.
+- **⚠️ 인앱 `padDetail`도 `try/catch`로 감싼다** — 손상된 Drive 값(예: `h.date`가 문자열이 아닌 기록)이
+  정렬 비교에서 던지면 예외가 `<ErrorBoundary label="메모 달력">`까지 올라가 **달력이 통째로 오류
+  박스로 래치**된다(닫았다 열어도 복구 안 됨). App 쪽 두 호출부와 방어 수준을 맞춘다.
+- **패드 인프라 재사용(kind `'detail'`)**: z=PAD_Z(1060, 달력 1050 위)·드래그·`padSeq` 실측 중앙배치·
+  `dismissPad`(✕/Esc)·`savePad` default-deny(`if (pad.kind) { setPad(null); return; }`)·저장 버튼 자동
+  숨김·page 모드를 **수정 0줄로** 상속한다. 폭만 `PAD_W_DETAIL(760)`로 파생 — 7열 통화 표가 576px에선
+  줄바꿈된다(배치·클램프는 `padRef.offsetWidth` 실측이라 무수정).
+- **⚠️ `padDetail` useMemo에 `open` 게이트 필수**(deps에도 `open`) — 달력을 닫아도 `pad`는 남고
+  (재오픈 리셋 effect는 `open===true`에서만 돈다) `CalendarModal`은 App 최상위 형제라 항상 마운트돼
+  있어, 게이트가 없으면 닫은 뒤에도 시세 갱신마다 전 계좌 시계열을 영구히 재계산한다
+  (`notesByDate`·`qtyChangesByDate`·`transfersByDate`와 동일 규약).
+- **⚠️ 신규 훅 3개(`padDetail` memo·구독 effect·재측정 effect)는 반드시 `// 패드는 전부 앵커` 주석
+  **아래** · `if (!open) return null` **위**에 둔다**. `verify:transfer #27b`가 `const transfersByDate`
+  ~ 그 주석 구간에 `setPad` 부재를 단언하는데, 그 정규식은 **`setPadSeq`도 매치**한다.
+- **⚠️ 자동 닫힘 effect에 `detail` 분기를 넣지 말 것** — 앵커가 날짜뿐이라 삭제될 원본이 없고, 행
+  0건은 정상 상태다. 넣으면 별도 창의 '불러오는 중' 프레임에서 곧바로 닫힌다.
+- **별도 브라우저 창 = 구독형 브릿지**(그 창은 App을 마운트하지 않고 잘린 원장만 받아 스스로 계산
+  불가): 창→앱 `calendar:wantDetail {date|null}` / 앱→창 `calendar:detail {date, rows, …}`.
+  - ⚠️ **`CalendarWindow`의 수신 화이트리스트에 `'calendar:detail'` 추가 필수** — 앱은 `'calendar:'`
+    접두사 검사인데 창은 **열거형**이라 비대칭이다. 빠뜨리면 앱이 완벽해도 응답이 조용히 폐기돼
+    '영원히 로딩'이 되고 컴파일러·`undefcheck` 어느 것도 못 잡는다(이 변경의 최대 지뢰).
+  - ⚠️ **`calendar:detail` 수신에서 `markGotData()`를 절대 부르지 말 것** — `writable = linked &&
+    gotData`라 accounts/live 도착 전에 쓰기가 열리면 그 시점 `memos`는 `{}`이고, 저장 한 번이 앱의
+    `setCalendarMemos({})`로 흘러 저장된 메모 **전량**을 지운다(`calendarMemos`는 백업 복원 sticky라
+    복구 불가). 다른 분기와 '통일'하려는 리팩토링이 정확히 이걸 되돌린다.
+  - ⚠️ **App 쪽 분기는 입양 게이트(`e.source !== calWinRef.current`) 뒤**에 둔다 — 입양되지 않은
+    창·iframe이 임의 날짜의 계좌별 자산을 뽑아가는 통로가 되면 안 된다(ping만 그 앞이 의도된 예외).
+  - ⚠️ **응답은 핸들러 안에서 즉시 전송**한다(지문 게이팅 effect로 만들면 같은 날짜 재클릭 시
+    지문이 같아 재발화하지 않아 응답이 영영 안 온다). 반대로 **`calendar:live` payload에는 얹지
+    말 것** — 그쪽 deps에 `marketIndicators`가 있어 패드가 닫혀 있어도 시세 틱마다 전 계좌 행이 복제된다.
+  - ⚠️ **1회성 스냅샷이 아니라 구독**이다: App은 `buildHistDetail` identity가 바뀔 때마다(=표가
+    달라질 수 있는 유일한 시점) 구독 중인 날짜를 **다시 밀어 준다**. 얼려 두면 같은 패드 상단의
+    지표 밴드(`metricsByDate`, `calendar:live`로 갱신)와 40px 거리에서 총자산이 두 값으로 보인다.
+    날짜가 곧 상관 키라 늦게 온 옛 응답은 `d.date !== detailDateRef.current`로 폐기된다(reqId 불필요).
+  - ⚠️ **해제(`date:null`)도 반드시 전송**한다 — `requestDetail`이 post 전에 조기 반환하면 앱의
+    `calWinDetailDateRef`가 마지막 날짜를 든 채 남아, 패드를 닫아도(창을 닫아도) 앱이 시세 갱신마다
+    전 계좌 시계열을 재계산하고 아무도 읽지 않는 행을 계속 보낸다(App의 null 처리 분기가 죽은 코드가
+    된다). 짝으로 App의 푸시 effect는 **생존 확인(`w.closed`)을 계산 앞**에 둔다 — 브라우저 X로
+    닫힌 창은 해제 메시지를 보낼 수 없기 때문이다. 가드 #G18·#G18c.
+  - ⚠️ **재구독 트리거는 `linked` 엣지 + `calendar:accounts` 수신 2원**이다. `linked` 엣지만으로는
+    **앱 탭 새로고침을 잡지 못한다** — 리로드 중에도 opener가 살아 있어 post가 성공하고, 리로드가
+    `LINK_TIMEOUT_MS`(13초) 안에 끝나면 `linked`가 한 번도 false로 떨어지지 않는다. 그런데 앱의
+    구독 ref는 리로드로 비어 있어 밴드만 갱신되고 표는 옛 값에 영구히 언다. `calendar:accounts`는
+    재입양(nonce 증가)·계좌 지문 변경 시에만 오므로 그 수신 카운터를 트리거로 쓴다(가드 #G18b).
+    ⚠️ **앱의 nonce 값을 비교하지 말 것** — 앱이 새로고침되면 그 카운터도 0부터 다시 시작해 같은
+    값이 재사용되므로 '변했는지'로는 판별할 수 없다. ⚠️ 메시지 핸들러 안에서 `requestDetail`을
+    직접 부르지 말 것(그 effect는 deps `[]`라 선언보다 위에 있다) — 카운터를 올려 effect로 넘긴다.
+    ⚠️ `linked` 엣지 경로는 opener 소멸 복구용이라 **지우지 말 것**(`status !== 'ready'` 조건도
+    넣지 말 것 — 이미 ready인 표만 옛 값으로 영영 남는다).
+  - ⚠️ **응답 확정 시 `padSeq`를 한 번 더 올린다** — 배치 effect는 rAF 1회만 `offsetHeight`를 재는데
+    별도 창은 '불러오는 중'(≈120px) → 표(≈550px) **2단계 렌더**라 재측정이 없으면 패드 하단이 화면
+    밖으로 밀리고(fixed + maxHeight라 내부 스크롤도 안 생긴다) 소계를 볼 방법이 없다.
+  - 상태 4종을 구분해 표시한다: `loading`(불러오는 중) / `offline`(연결 끊김) / `timeout`(4초 무응답
+    + 다시 시도) / `ready`. ⚠️ '연결 끊김'을 '데이터 없음'으로 뭉뚱그리지 말 것.
+- **⚠️ `<CalendarModal>`을 App·CalendarWindow **양쪽 모두** `<ErrorBoundary label="메모 달력">`으로
+  감싼다** — 한쪽만 감싸면 격리 없는 쪽에서 전체 화면이 죽는다. 특히 별도 창은 `main.tsx`의 루트
+  경계가 **label 없음**이라 `isSection=false` → 창 전체가 오류 페이지로 대체된다(BacktestWindow 선례).
+- **표시 정합 2종(값을 통일하려 들지 말 것 — 라벨·배너로만 분리)**:
+  ① **시세 미로드 이상치 날**: `computedIntHistory`가 `intTotals.totalEval < 전일 × 10%`면 그날을
+  전일값으로 되돌리므로 칸·밴드 총자산은 **직전 거래일 값**인데 팝업 소계는 라이브 합이다 →
+  `rawMetric.flowSuspect`를 읽어 앰버 배너로 고지한다(숫자는 손대지 않는다).
+  ② **밴드 '수익율' vs tfoot '수익률'**: 밴드는 `effectivePrincipal`(startDate 게이트·오늘 원금 폴백
+  포함) 대비, tfoot은 **표에 포함된 계좌의 원금 합** 대비라 과거 날짜에서 부호까지 갈릴 수 있다 →
+  tfoot `title` + 각주로 근거를 명시한다. 두 산식은 각각 추이 차트 costAmount·100% 비중 분모와
+  짝이라 어느 한쪽을 바꾸면 그 화면이 통째로 어긋난다.
+- **`hideAmounts` 적용(범위 확장 — 의도)**: 새 팝업뿐 아니라 **칸 스냅샷 3줄·패드 밴드**에도 적용한다.
+  팝업만 마스킹하면 3cm 위 칸은 실금액이라 '금액 숨기기'가 반쪽이 되어 지금보다 나쁘다. 금액만
+  가리고 `%`는 노출한다(대시보드 팝업과 동일 범위). 되돌리려면 그 지점들의 `hideAmounts ?` 삼항만
+  제거하면 된다. `calendar:live` payload와 deps **양쪽에** `hideAmounts`를 넣을 것.
+- **⚠️ 예수금 열 = '그날의 기록값'(자산검증 모달과 같은 소스) — 라이브로 되돌리지 말 것 (2026-08)**:
+  평가금액은 진작부터 그날 값이었는데 **예수금만 `summary.depositAmount`(오늘의 라이브)**라, 과거
+  어느 날짜를 눌러도 오늘 예수금이 떴다(사용자 보고). 정본은 그 날짜의 보유 스냅샷이다 —
+  `snapshotItemsFromPortfolio`가 `depositAmount`를 보존하고 `snapshotCompositionKey`가 그 필드를 담아
+  **예수금을 편집하면 그 날짜 스냅샷이 생기므로**(App.tsx 자산검증 P1 효과), 자산검증 모달이 화면에
+  보여주는 값과 정확히 같은 값을 팝업도 쓸 수 있다.
+  - **소스는 `accountSeriesById[].depositMap` 하나** — `marketSeries`(useIntegratedData)가 평가액
+    `map`을 만들 때 **같은 루프·같은 계산**에서 함께 채운다. `intAccountSeriesById`가 series 객체를
+    통째로 넘기므로 **두 렌더러 + 별도 창 브릿지까지 신규 배선 0곳**이다(호출부 인자 추가 없음).
+  - **⚠️ 평가액과 '짝'으로 이월할 것**: `buildCloseEvalSeries(..., opts.depositOut)`가 exact 날짜엔
+    `depositEvalOf(r.items)`를, 이월 날짜엔 **직전 exact 날짜의 예수금**을 넣는다. 두 시계열을
+    독립으로 만들면 "주말에 예수금만 갱신 → **예수금 > 평가금액**"이 난다. 읽기도 마찬가지로
+    `buildHistDetailRows`가 평가액을 고른 **같은 커서 `lastDate`** 로 조회한다(`date`로 재조회 금지).
+  - **⚠️ 해외계좌는 평가액을 만든 `calcPortfolioEvalDetail` **그 호출의 `r.items`** 에서 뽑는다**
+    (`depositEvalOf` — 이미 **그날 환율**로 원화 환산됨). `summary.depositAmount`는 **라이브 환율**이라
+    되돌리면 예수금만 프레임이 갈린다. 환율식을 손으로 재현하는 것도 금지(폴백이 3단이라 조용히 갈린다).
+  - **⚠️ 오늘 행(`isRealtimeDate`)만은 라이브가 정답** — 평가액도 `summary.currentEval`이라 같은
+    프레임이고, KR 계좌는 21:00 이후 스냅샷이 **내일 날짜**로 찍혀 스냅샷을 쓰면 어제 값이 된다.
+  - **⚠️ `depositAmountAt`은 `kind === 'live'`(스냅샷 0건)면 `null`** — 그때 `resolveHoldings`가 주는
+    items는 과거 구성이 아니라 `p.portfolio`(오늘)라, 쓰면 고치려던 버그가 그대로 살아남는다.
+  - **하위호환**: `depositMap` 미제공/그 커서에 값 없음 → 종전대로 `summary.depositAmount` 폴백.
+    `opts` 미전달 시 `buildCloseEvalSeries`의 동작은 1바이트도 다르지 않다. 폴백 판정은 **`!= null`**
+    (`||` 금지 — 예수금 0은 유효한 기록인데 라이브로 되돌아간다).
+  - **현금성(matong·simple)은 무변경** — 예수금=평가액=원금이라 이미 그날 스냅샷 값이다.
+  - **알려진 한계(의도)**: pre-baseline 날짜(`BASELINE_DEFAULT_DATE` 이전)는 `resolveHoldings`가
+    baseline 스냅샷을 돌려주므로 그 구간의 예수금이 **한 값으로 고정**된다(자산검증 모달의 🟡 추정과
+    같은 값·같은 한계). 그 구간은 평가액도 저장 `evalAmount` 폴백이라 '예수금 ⊆ 평가금액'이 보장되지
+    않는다 — 라이브 값을 쓰던 종전보다는 엄격히 낫지만 정확하지는 않다. 캡을 씌우지 말 것(조용한 오적용).
+- **영속화 지점 0곳** — `pad`는 컴포넌트 세션 로컬, 행은 매 렌더 파생값이다. `depositMap`도 `marketSeries`
+  memo의 파생값이라 저장 대상이 아니다. `portfolioStructureKey`·`applyStateData`·`applyBackupData`·
+  저장 effect deps·`_preserveStickyPersonalData` **전 지점 무수정**.
+- **범위 밖(의도)**: ① 두 수익률 산식 통일 ② `buildHistDetailRows`에 startDate 게이트 추가(원금
+  산식이 바뀌어 100% 분모가 흔들린다) ③ `futureDeposits`의 `noPrincipal` 필터(과거 수익률 소급 변경)
+  ④ 이상치 날짜의 값 정합(배너로 고지만) ⑤ 상세 패드에서의 편집·삭제·확인창(z-1060 위에서는
+  `ConfirmDialog`·토스트가 가려진다) ⑥ 과거 날짜의 별도 창 실시간 갱신은 구독으로 자동 처리되나
+  인앱/별도 창 동시 사용은 기존 절충 그대로.
+- 검증: `npm run verify:cal-detail` (63건 — 참조 구현 미러 #1~#19b + **예수금 = 그날의 기록값
+  #20~#26** + **교차검증 #X1~#X3**(달력 칸
+  총자산 = 팝업 소계 = 차트 그날 값) + **드리프트 가드 #D1~#D2**(실제 `src/utils.ts`를 import해
+  미러와 대조 — utils.ts는 import가 하나도 없어 Node가 타입만 벗겨 실행할 수 있다) + 소스 텍스트
+  가드 #G0~#G18c·**#G19~#G25**(공급측 배선 — 미러로는 표현 불가)).
+  ⚠️ `#D1` 픽스처에 **`depositMap`이 실린 케이스가 반드시 있어야** 한다(`seriesD` 헬퍼) — 없으면
+  그 가드가 새 분기에 눈이 멀어 커서를 `date`로 되돌려도 드리프트 0건으로 통과한다(죽은 단언).
+  ⚠️ `seriesD`/새 케이스를 만들 때도 **`series()`·`mkBase()`는 고치지 말 것**(아래 #19 경고와 동일 이유).
+  ⚠️ 예수금 계약은 **변이 11종**(팝업·미러 양쪽 커서를 `date`로 되돌림 · `||` 폴백 · 라이브 복귀 ·
+  짝 이월 제거 · 이월 시 `depositOut` 미설정 · `depositOut` 미전달 · series에서 `depositMap` 제거 ·
+  해외를 summary 프레임으로 · 저장값 폴백 짝 제거 · `closeVal = 0` 분기 삭제)으로 **실제 검출을 확인**했다.
+  ⚠️ `verify:transfer #30`의 정규식은 `depositOut` 도입으로 그 줄이 블록이 되면서 갱신됐다
+  (계약은 불변 — 빈 포지션은 이월이 아니라 exact 0).
+  ⚠️ 가드는 전부 **선언이 아니라 사용부**를 단언하고, **변이 21종**(화이트리스트 삭제·`markGotData`
+  추가·입양 게이트 순서 뒤집기·`open` 게이트 제거·`pctCell`→`fmtPct`·즉석 계산 부활·prop 삭제·
+  `stopPropagation` 제거·null 계약 0으로 변경·`status !== 'ready'` 부활·마스킹 제거·열 삭제·센티넬
+  구간 침범·**해제 메시지 조기 반환·재입양 재구독 무력화·생존 확인 뒤로 이동·tfoot 색 `?? 0` 복귀·
+  activeHistory 분기 삭제(src/미러 양쪽)**)으로 **실제 검출을 확인**했다. 그중 tfoot 색 계약은
+  처음에 **죽은 단언**이었고 변이로 발견해 #G2b를 신설했다 — 가드를 손볼 때 같은 변이가 여전히
+  잡히는지 반드시 다시 확인할 것.
+  ⚠️ '금지 토큰 부재' 가드는 **주석을 걷어낸 뒤**(줄 주석 + `{/* */}` 블록) 본다 — 이 저장소는 금지
+  이유를 바로 그 자리 주석에 적으므로 원문으로 재면 가드가 영구히 실패한다.
+  ⚠️ #19/#19b(`activeHistory` 분기)를 만들 때 **`mkBase()`를 고치지 말 것** — #1~#18이 그 픽스처의
+  값(1200/500/700)을 하드코딩하고 있어 소계 기대치가 통째로 어긋난다. 덮어쓰기로 케이스를 만든다.
+
+### 메모 달력 별도 브라우저 창 (`/?calendarWindow=1`) — postMessage 브릿지 (⚠️ 회귀 주의)
+
+인앱 달력 창 헤더의 **⧉ 버튼**(`onOpenWindow`)으로 달력을 **별도 브라우저 창**에 띄운다(듀얼 모니터·
+최대화용). 새 창에서 저장하면 앱 탭을 경유해 기존 Drive STATE 저장 경로로 흐른다.
+
+- **⚠️ 새 창은 App을 마운트하지 않는다 — 절대 '앱 통째 부팅'으로 바꾸지 말 것**: `main.tsx`가
+  `CALENDAR_WINDOW_BOOT`(URL 파라미터)를 보고 `<App/>` 대신 `<CalendarWindow/>`를 렌더한다.
+  앱을 부팅하면 ① `saveAllToDrive`가 STATE 파일을 **통째로 덮어쓰므로** 두 창이 서로의 편집을
+  지우고(payload 스프레드 규약으로도 못 막는다 — 그건 한 창 안의 필드 누락 대비다) ② `window.open`은
+  noopener를 안 쓰면 sessionStorage가 복제돼(`?adminPortal=1`이 동작하는 원리) 새 창이 **자동 재인증
+  → 두 번째 writer**가 되며 세션 충돌 감지에도 걸린다. **writer는 끝까지 앱 탭 하나**다.
+- **⚠️ `window.open`에 `noopener` 금지**(impersonation 탭과 **정반대** 규칙): opener 브릿지가 이 기능의
+  전부다. 클릭 제스처 직후 **동기** open이라야 팝업 차단을 피한다(차단 시 `calWinBlocked` → 인앱 창은
+  그대로 두고 헤더 안내만). `screen.availWidth/Height`로 화면을 꽉 채워 연다.
+- **⚠️ 렌더는 `CalendarModal` 한 컴포넌트를 공유**한다(`variant='page'`). 그리드·패드·파생 인덱스를
+  새 창용으로 복제하면 두 화면이 갈라진다. page 모드는 바깥 chrome(드래그·중앙 배치·둥근 모서리·
+  `maxHeight 92vh`)만 끄고 `position:fixed; inset:0`로 채운다.
+- **⚠️ page 모드 칸 높이는 CSS `fr`이 아니라 JS 역산**(`viewportH` state + resize 리스너):
+  `cellH = max(CELL_H, (viewportH − PAGE_CHROME_H) / 주수)`. 높이가 불확정인 컨테이너 안에서는
+  `gridAutoRows: minmax(X, 1fr)`의 fr이 늘어나지 않아(그리드 fr 트랩) 칸이 CELL_H에 머문다.
+  `CELL_H` 하한은 유지 — 그 아래로는 칸 내용(지표 3줄+칩 3줄+메모)이 어차피 안 들어간다.
+- **브릿지 프로토콜**(전부 `e.origin === location.origin` 검사 통과분만):
+  창→앱 `calendar:ping{need}` (5초) · `calendar:memos{memos}` · `calendar:notes{portfolioId,notes}` /
+  앱→창 `calendar:accounts` (무거움) · `calendar:live` (가벼움) · `calendar:pong`.
+  - **⚠️ 초기 전송의 유일한 트리거는 `ping.need`** — `window.open` 직후 보내면 새 창이 아직
+    about:blank라 메시지가 버려진다. 새 창은 데이터를 받을 때까지 `need:true`를 실어 보낸다
+    (`gotDataRef` — 핑 타이머는 마운트 시 한 번 만들어져 state를 못 보므로 **ref 미러 필수**).
+  - **재입양**: 앱 탭이 새로고침되면 `calWinRef`가 비는데, 살아 있는 새 창의 핑에서 `e.source`를
+    다시 입양하고 nonce를 올려 전량 재전송한다. 없으면 새 창이 영영 낡은 데이터를 든다.
+  - **쓰기는 입양된 창만**(`e.source === calWinRef.current`). `ping`만 입양 전에도 받는다.
+- **⚠️ 전송은 지문(fingerprint)으로 게이팅**: `portfolios`는 시세 갱신마다 새 배열이라 그대로 보내면
+  보유 스냅샷 전량이 수십 초마다 복제된다. `calWinAccountsKey`에 **투자기록 본문 + `snapshotCompositionKey`**
+  까지 담아야 '본문만 수정'·'같은 날짜 스냅샷 수량만 수정'이 새 창에 반영된다(`portfolioStructureKey`와
+  동일 클래스의 버그). 그 지문은 **새 창이 한 번이라도 붙은 뒤(nonce>0)에만** 계산한다.
+- **끊김 = 읽기 전용**: opener 소멸 또는 `LINK_TIMEOUT_MS` 무응답이면 `readOnly` — 셀 클릭(신규 메모)·
+  저장 버튼·삭제 버튼을 전부 숨기고 **textarea도 `readOnly`**로 만든다. ⚠️ 저장 버튼만 숨기면 사용자가
+  한참 쓴 뒤 아무 데도 저장되지 않고 사라진다(창 위에선 notify/confirm이 가려져 사후 경고도 불가).
+- **낙관적 반영**: 새 창은 자기 state를 먼저 갱신하고 앱 탭에 보낸다(왕복 대기 없음). 앱 탭이 적용 후
+  `calendar:live`로 되돌려 보내 수렴한다.
+- **영속화 무수정**: 새 창은 저장 필드를 만들지 않는다 — 앱 탭의 `setCalendarMemos`/
+  `updateInvestmentNotesFor`를 그대로 태우므로 `portfolioStructureKey`·`applyStateData`·
+  `applyBackupData`·저장 effect deps 전 지점 무관.
+- **알려진 한계(의도)**: 인앱 창과 새 창을 **동시에** 열어 두면 `calendarMemos` 전체 객체를 각자
+  자기 기준으로 통째 교체하므로 이론상 마지막 쓰기가 이긴다. 다만 `calendar:live` 에코가 즉시 돌아와
+  두 창의 base가 1틱 안에 수렴하고, ⧉로 새 창을 열면 인앱 창을 닫으므로(`setShowCalendarModal(false)`)
+  실사용에서 겹치는 구간은 1초 미만이다. 편집자가 한 사람이라는 전제 위의 절충.
+- **범위 밖(의도)**: 새 창은 관심종목·계산기 등 다른 플로팅 창을 띄우지 않는다. impersonation 탭에서
+  연 새 창은 그 탭이 닫히면 읽기 전용이 된다(관리자 탭은 원래 세션을 영속하지 않음).
+
+### 자금 흐름도(flowMaps) — 계좌 관계 다이어그램 (⚠️ 회귀 주의)
+
+상단바 **흐름도 아이콘**(`UserInfoBar` — 퀵 링크 설정과 계산기 **사이**, 인라인 SVG `FlowIcon`)으로
+여는 캔버스. 둥근 사각형·원 도형을 만들고 자유롭게 선으로 연결하며, 선 위에 라벨을 단다. 도형에는
+날짜·이름·금액·메모를 넣고, **계좌를 연결하면 계좌명·현재 평가액이 라이브로 표시**된다.
+
+- **기본 동작 = 별도 브라우저 창**(`/?flowWindow=1`). 아이콘 클릭 → `openFlowWindow`가 새 창을 연다.
+  **팝업이 차단되면 인앱 보드로 폴백**(`setShowFlowBoard(true)` + `headerNotice` 안내)하므로 최악의
+  경우가 기존 동작이다. 두 경로 모두 **같은 `FlowBoard` 컴포넌트**를 쓴다(`variant='page'|'overlay'`) —
+  새 창용 캔버스를 복제하면 두 화면이 갈라진다.
+- **⚠️ 새 창은 App을 마운트하지 않는다**(`main.tsx`가 `FLOW_WINDOW_BOOT`을 보고 `<FlowWindow/>`를 렌더).
+  앱을 부팅하면 ① `saveAllToDrive`가 STATE를 통째로 덮어써 두 창이 서로의 편집을 지우고 ② sessionStorage
+  복제로 자동 재인증돼 **두 번째 writer**가 된다. **writer는 끝까지 앱 탭 하나**.
+  `window.open`에 **`noopener` 금지**(opener 브릿지가 기능의 전부 — impersonation 탭과 정반대 규칙),
+  클릭 제스처 직후 **동기** open이라야 팝업 차단을 피한다.
+- **브릿지**(전부 `e.origin === location.origin` 검사 통과분): 창→앱 `flow:ping{need}`(5초)·`flow:maps`
+  / 앱→창 `flow:accounts`(무거움, 지문 게이팅)·`flow:live`(maps+summaries+hideAmounts)·`flow:pong`.
+  **초기 전송의 유일한 트리거는 `ping.need`** — `window.open` 직후 보내면 about:blank라 버려진다.
+  앱 탭 새로고침 시 살아 있는 창의 핑에서 **재입양**(nonce 증가 → 전량 재전송). 쓰기는 입양된 창만.
+  끊김(opener 소멸·무응답) = **`readOnly`** — 저장 버튼만 숨기면 한참 그린 뒤 아무 데도 저장되지 않는다.
+  `flow:accounts`는 계좌를 **투영**해 보낸다(id·name·accountType·deletedAt·isTest + dc-irp 예적금 항목만).
+
+- **핵심 결정: 데이터는 `portfolios[]` 밖 앱 레벨**(`calendarMemos`·`watchlistGroups`와 동급).
+  ⚠️ 계좌 객체 안(`p.flowMap`)에 넣지 말 것 — `patchActive`가 `portfolios` 참조를 바꿔
+  `portfolioSummaries`·`marketSeries`·`computedIntHistory`·`rebalanceData`·`useHistoryBackfill` 효과#1
+  (사전체크/map 미러링 불변식이 깨지면 **렌더/저장 무한 루프**) 등 11개 파이프라인이 매 제스처
+  재실행된다. 앱 레벨이면 이 전부가 무관해진다.
+- **계좌 연결 = `portfolioId` 참조 + 라이브 재조회**(복사 금지 — CalendarModal의 note/qty 파생과 동일 계약).
+  자동으로 채워지는 것은 **계좌명·평가액 2개뿐**. ⚠️ **계좌 레벨 만기 필드는 코드베이스에 존재하지
+  않는다**(유일한 만기는 dc-irp 전용 예적금 항목의 `item.endDate`이고 계좌당 여러 개) → 날짜·금액계획·
+  메모는 전부 사용자 입력 필드이고, dc-irp 예적금 보유 계좌에만 만기 '제안' 칩을 띄운다(자동 채움 아님).
+  `accountNameSnapshot`은 **바인딩 시점 1회만** 기록하는 표시 폴백(purge된 계좌용) — 갱신 금지.
+- **영속화 7지점(하나라도 빠지면 조용한 유실)**: `App.tsx` ① `useState` ② 지문 `flowFingerprint(flowMaps)`
+  ③ 저장 payload 리터럴 ④ 저장 effect deps ⑤ `applyStateData`(`normalizeFlowMaps`) ⑥ `applyBackupData`
+  (sticky) + `useDriveSync.ts` ⑦ `_preserveStickyPersonalData`.
+  ⚠️ **App 레벨 미러(`flowMapsRef`)를 두지 말 것** — 종료 커밋의 값 소스는 `FlowBoard`의 `localRef`
+  (`flowFlushRef` 경유)이지 App state가 아니다. 미러를 두면 로드 경로와 동기화할 의무만 생기고 실제로는
+  읽히지 않아 "stale-write를 막는다"는 잘못된 안전감만 준다(`calendarMemosRef`는 커밋이 App에서
+  일어나므로 사정이 다르다). 검증 #29/#29b가 이 계약을 단언한다.
+- **⚠️ sticky 판정은 `flowMapsHaveContent` 공유 함수**(`flowMap.ts`). `length > 0`으로 재지 말 것 —
+  보드를 **열기만 해도** 빈 맵 1장이 생겨 백업으로 흐름도를 되살릴 길이 영구히 막힌다(`calendarMemos`는
+  빈 항목이 생길 수 없어 length 기준으로도 안전했다). App.tsx와 useDriveSync가 **같은 함수**를 써야
+  in-memory와 Drive write가 갈리지 않는다(판정식 손복제 금지).
+- **⚠️ 지문은 `flowFingerprint`(화이트리스트 투영 + try/catch)**. raw `JSON.stringify(flowMaps)`로
+  되돌리지 말 것 — 런타임 필드가 하나라도 순환이면 던지고, 그 지문 계산은 저장 effect의 첫 블록이라
+  **그 세션의 Drive 저장이 통째로 멈춘다**. 길이·개수 해시 절충안도 금지(`investmentNotesKey`·
+  `holdingSnapshotsKey`가 그걸로 "동일 길이 편집을 놓치는" 버그를 냈다). `updatedAt`은 지문에서 제외.
+- **⚠️ 저장 폭주 방지 = 로컬 사본 + idle 승격**: 편집은 `FlowBoard`의 로컬 사본에 모으고 **2.5초 idle ·
+  보드 닫기 · 종료/수동저장 커밋 · 언마운트** 시점에만 App state로 승격한다. 제스처마다 승격하면
+  ① `portfolioStructureKey`가 전 계좌를 매번 재직렬화하고 ② 800ms 디바운스는 사람 손 간격(1~3초)보다
+  짧아 매번 만료되어 **제스처마다 STATE+VERSION+STOCK+MARKET = HTTP 8회 + 종목 2년치 일봉 전량
+  재업로드**가 나간다(도형 40개 배치 = 320 요청 + 수십 MB). 회수 경로: `App.tsx flowFlushRef` ←
+  FlowBoard가 마운트 시 등록하고 **언마운트 시 null**. 미승격 편집이 없으면 커밋은 **반드시 null 반환**
+  (항상 truthy면 alt-tab마다 4파일 write 강제). 언마운트 시에는 상위로 **승격**한다(그냥 사라지면 유실).
+- **⚠️ 종료 커밋은 `exitCommitRef` 합성**: `useDriveSync`의 `beforeExitSnapshotRef` 슬롯이 하나뿐이라
+  리밸런싱(`rebalExitCommitRef`)과 흐름도(`flowExitCommitRef`)를 App에서 합친다. 반환 키가 겹치지 않아
+  순서는 무관하나 **둘 다 없으면 null**을 반환해야 한다. 수동 저장 4핸들러(`handleSave`·`handleDriveSave`·
+  `handleDownloadStateFile`·`handleAppClose`)도 `flushFlowSnapshot()` **동기 주입 필수** —
+  `saveStateRef` 스프레드만으로는 '방금 blur 커밋한 값'이 안 실린다(`flushRebalTargetSnapshot`와 동일 이유).
+- **⚠️ z-index 990** — `ConfirmDialog`(1000)보다 **아래**여야 도형 삭제 확인창이 보드 위에 뜬다.
+  1050대(메모 달력·계산기·관심종목)에 두면 그 기능들이 겪은 "창 위에선 confirm/notify가 가려진다"를
+  재현하고 결국 확인 없는 즉시 삭제로 후퇴하게 된다. **알려진 한계(수용)**: 벨 알림 팝업(z-999)·
+  리밸런싱 투자기록 창(z-1000/1010)·관리자 공지 모달(z-300, 보드가 가림)은 이 층 관계의 결과다.
+- **⚠️ 인스펙터 draft는 'id 앵커 + 대상변경·언마운트 flush'**(`ownerRef` + `useLayoutEffect`).
+  `onBlur`만 믿고 **현재 선택**(`selNode`)에 커밋하면 두 가지가 조용히 깨진다:
+  ① 도형 A 이름을 타이핑하다 캔버스에서 B를 클릭하면 `pointerdown → onSelect(B)` 리렌더가 blur보다
+  **먼저** 처리돼(discrete 이벤트 동기 flush) A의 입력값이 **B에 기록**된다.
+  ② 배경 클릭으로 선택이 해제되면 패널이 **언마운트**되는데, 제거된 DOM에는 브라우저가 blur/focusout을
+  발화하지 않아 메모 전체가 **아무 데도 저장되지 않고 사라진다**.
+  → `FlowBoard`는 `patchNodeById`/`patchEdgeById`(**id 기준**)만 노출하고, 리셋 effect는 **passive가
+  아니라 `useLayoutEffect`**여야 한다(passive는 Scheduler 태스크라 blur보다 뒤처진다).
+  ⚠️ App의 종료 커밋(`flowFlushRef`)은 이걸 **못 덮는다** — 그건 `FlowBoard`의 `localRef`만 회수하고
+  미커밋 draft는 `FlowInspector` 로컬 state에만 있다.
+- **⚠️ 키 입력·활동 감지**: 보드 루트 `onKeyDownCapture`는 보드 키를 먼저 처리한 뒤 **실제로 소비한
+  키(Escape·Delete·Backspace)에만** `stopPropagation` 한다. 무조건 끊으면 React 18이 root에 붙인 캡처
+  리스너에서 네이티브 이벤트가 멈춰 하위의 bubble `onKeyDown`이 전부 죽고, 인스펙터의 **Enter 커밋이
+  먹통**이 된다(사용자는 커밋했다고 믿은 채 다른 도형을 눌러 위 ①을 직접 유발한다).
+  그리고 `App.tsx` 비활동 감지 리스너는 **document 캡처 단계 + `pointerdown` 포함**으로 등록한다 —
+  버블이면 이 `stopPropagation`에 막혀 "도형 배치·장문 메모"만 하는 세션이 활동으로 집계되지 않아
+  50분 뒤 로그아웃 모달이 튀어나온다.
+- **⚠️ 보드는 열 때 시드하되, 아직 dirty하지 않으면 늦게 도착한 App state를 채택한다**.
+  `LoadingOverlay`는 로드 완료와 무관하게 20초 뒤 자동 해제되므로, 느린 회선에서 Drive의 flowMaps가
+  도착하기 전에 보드를 열면 '빈 맵 1장'으로 시드되고, 도형 하나만 그려도 2.5초 뒤 승격이 **저장돼 있던
+  흐름도 전체를 빈 맵으로 대체**한다(복구 불가). 편집 중(dirty)에는 채택하지 않는다(의도된 last-writer-wins).
+- **⚠️ 금액 표시는 항상 원화**. `portfolioSummaries[].currentEval`은 해외계좌도 **원화 환산값**이라
+  `accountType === 'overseas'`에 `$`를 붙이면 약 **1,390배**로 오표시된다.
+- **⚠️ 순수성**: 노드/엣지 생성(`generateId`)·선택 변경·ref 대입을 `setState` **업데이터 안에서** 하지
+  말 것. StrictMode 개발 모드의 업데이터 이중 호출에서 서로 다른 id가 만들어지고(React는 두 번째 결과만
+  채택) 첫 호출의 부수효과가 남아 선택이 어긋난다. `localRef`가 로컬 사본의 단일 소스다.
+- **삭제/TEST 계좌**: 삭제 계좌는 `liveAmount = null`(⚠️ `portfolioSummaries.currentEval`은 삭제
+  계좌에서도 **실수치를 그대로 반환**한다 — 제외는 소비처 `intTotals`에서만 일어나므로 여기서 명시적으로
+  null 처리해야 '삭제 계좌 = 라이브 완전 제외' 불변식이 지켜진다) + `(삭제됨)` 접미. TEST 계좌는
+  **금액을 그대로 표시**하고 이탤릭·반투명 강등만 한다(통합 표도 평가금액은 표시하고 평가비중만 `-`).
+  `accountType`은 반드시 `portfolios`에서 읽는다(summary는 시장 계좌를 전부 `'portfolio'`로 납작하게 만듦).
+  **purge된 계좌를 가리키는 노드는 자동 삭제하지 않는다** — 앰버 테두리 + '연결 끊김' 배지로만 알린다.
+- **게이팅 = 승인 시트 K열 `flowEnabled`**(index 10). Apps Script 6지점(`check`·`listUsers`·
+  `getFeatureLabels` E1:K1·`setUserFeature` colMap·`addUser` appendRow·`setupSheet` K1/E2:K100) +
+  프론트(`LoginGate` `UserFeatures`/`EMPTY_FEATURES`/`pickFeatures`, `App.tsx` 초기값·`flowAccess`,
+  `AdminPage` 라벨·featureDefs, `AccountTabBar` `canAccessFlow`).
+  ⚠️ **배포 순서는 프론트 먼저 → Apps Script 나중**. 반대로 하면 `getFeatureLabels`가 7개를 반환하는데
+  구 프론트의 `length === 6` 가드가 응답을 통째로 거부해 **기존 커스텀 라벨 6개가 제네릭으로 회귀**한다
+  (그래서 가드를 `>= 6` + 인덱스 머지로 바꿨다 — `=== 7`로 되돌리지 말 것).
+  ⚠️ `flowAccess = isAdminUser || userFeatures.flowEnabled` — `effectiveUserFeatures`(feature1/2/3만
+  강제하는 별개 경로)에 얹지 말 것. 이게 없으면 관리자 본인이 영구 접근 불가다(AdminPage 토글은
+  `!isAdminUser` 조건이라 관리자 행에 렌더조차 안 됨).
+- **⚠️ 새 필드 나열 지점은 3곳뿐**: `LoginGate`의 `UserFeatures` / `EMPTY_FEATURES` / `pickFeatures`.
+  과거엔 3개 로그인 경로(무음 재인증·impersonation·수동 로그인)가 각자 필드를 손나열해, 하나만 빠뜨려도
+  그 경로에서만 기능이 사라지는 재현 불가 버그가 났다(@ts-nocheck + esbuild라 컴파일러가 못 잡는다).
+- **impersonation은 읽기 전용**(`readOnly={!!adminViewingAs}`) — 목표비중과 달리 흐름도는 undo도 없고
+  sticky라 백업 복원으로도 되돌릴 수 없어 무통지 편집을 허용하지 않는다.
+- **⚠️ 외부 npm 의존성 0**: 캔버스는 순수 SVG + Pointer Events 자체 구현이다. `package-lock.json`이
+  없어 Vercel이 매 배포마다 `npm install`을 재해석하고, 정확히 그 원인으로 프로덕션 흰 화면이 났던
+  이력이 있다. lucide 아이콘도 **저장소에서 이미 쓰는 것만** 사용하고 새 아이콘은 인라인 SVG로 만든다
+  (`AccountTabBar`의 `FlowIcon` — `Workflow`/`Share2`/`Network`가 이 버전에 있다는 근거가 없다).
+- **소프트 상한**: 시트 20 / 노드 150 / 엣지 300(≈85KB). 백업 22본·관리자 포털 순차 로드로 복제되므로
+  무한 증식만 막는다. 상한 도달 시 툴바 배너로 알린다.
+  ⚠️ **`MAX_FLOW_MAPS`를 낮추지 말 것** — `normalizeFlowMaps`가 초과분을 `slice(0, MAX_FLOW_MAPS)`로
+  **잘라 버려** 그 뒤 시트가 다음 로드에서 조용히 영구 삭제된다(undo 없음 + sticky 대상이라 백업으로도
+  못 되살린다). 올리는 방향은 데이터 손실이 없다. 가드 `#87`이 관계(≥20)로 단언한다.
+
+**시트(다중 흐름도) — 엑셀식 탭 바 (2026-09 사용자 요청, ⚠️ 회귀 주의)**
+
+`flowMaps`는 처음부터 **배열**이었지만 화면이 `maps[0]` 하나로 고정돼 있었다. 이제 보드 하단 탭 바로
+시트를 **추가·복제·이름변경·순서이동·삭제**한다("자금 계획에 따라 여러가지를 만들고 저장·불러오기").
+배열 변형은 전부 `flowMap.ts`의 순수 함수(`addFlowMap`·`duplicateFlowMap`·`removeFlowMap`·
+`renameFlowMap`·`moveFlowMap`)를 쓰고 **변경이 없으면 원본 배열 참조를 그대로 반환**한다
+(FlowBoard의 `commit`이 `next === prev`면 dirty를 세우지 않으므로, 이 계약이 곧 "아무 일도 없는
+클릭에는 Drive 저장이 나가지 않는다"는 보장이다).
+
+- **영속화 신규 지점 0곳** — 시트 순서는 **배열 순서**가 곧 저장값이고(`order` 필드를 만들지 말 것)
+  `flowFingerprint`가 배열을 순서대로 투영하므로 순서 변경만으로도 저장이 트리거된다. App.tsx 7지점·
+  sticky 복원·별도 창 브릿지가 배열을 통째로 나른다(관심종목 그룹 순서 드래그와 같은 규약).
+- **⚠️ 복제는 노드 id를 전부 새로 만들고 엣지 `from`/`to`를 그 새 id로 다시 잇는다** — 얕은 복사로
+  되돌리면 사본의 엣지가 **원본 시트의 노드 id**를 가리키고, `normalizeFlowMaps`의 고아 엣지 제거가
+  **다음 로드에서 사본의 연결선을 전부 조용히 삭제**한다(도형은 남고 선만 사라져 원인 추적 불가,
+  지문에도 안 잡힌다). 원본이 이미 고아 엣지를 들고 있으면 사본에는 만들지 않는다(정규화 결과와 미리 일치).
+- **⚠️ 편집·팬줌 커밋은 활성 시트 **id 기준**(`activeIdRef`)** — `prev[0]`으로 되돌리면 2번 시트를
+  보면서 그린 도형이 1번 시트에 꽂힌다. 대상이 사라졌으면 조용한 no-op이 되는 것도 이 방식의
+  안전장치다(`patchNodeById`와 같은 규약).
+- **⚠️ 시트 전환 순서가 곧 계약**: ① 떠나는 시트의 미승격 화면을 **먼저** 커밋(`activeIdRef`를 바꾸기
+  전에) ② 활성 id 교체 + 선택·연결 초기화 ③ 새 시트의 저장 화면을 **`setViewport`**(`applyViewport`
+  아님)로 복원하고 `vpTouchedRef`를 내린다. `applyViewport`로 되돌리면 '탭을 눌렀을 뿐인데 Drive 저장'이
+  되고, 리셋을 빼먹으면 복원값이 곧바로 새 시트에 다시 기록된다.
+- **⚠️ 활성 시트 선택은 세션 로컬**(저장하지 않는다) — 인앱 보드와 별도 창이 같은 `flowMaps`를
+  공유하므로, 저장하면 한쪽에서 시트를 바꿀 때 다른 쪽 화면이 따라 움직인다. 보드는 항상 첫 시트로 연다.
+- **⚠️ 늦게 도착한 Drive 배열에 활성 시트가 없으면 첫 시트로 되돌린다** — 시드가 만든 임시 시트 id는
+  그 배열에 없다. 안 고치면 화면은 1번 시트를 보여주는데 커밋은 `findIndex` 실패로 전부 조용한
+  no-op이 된다(그리는데 아무것도 안 남는다).
+- **⚠️ 캔버스는 `key={map.id}`로 remount** — 드래그·리사이즈·hover 로컬 상태가 노드 id를 들고 있어
+  시트를 바꿀 때 비우지 않으면 다른 시트의 노드를 가리킨다.
+- **⚠️ 삭제는 확인창 또는 인라인 2단계** — 도형·선이 통째로 사라지고 undo가 없다. overlay는
+  `ConfirmDialog`(z-1000 > 보드 990), **별도 창은 App이 없어 확인창이 안 뜨므로 인라인 2단계**로
+  되받는다(백테스트·가계부 별도 창과 같은 근거). 확인 없는 즉시 삭제로 후퇴하지 말 것.
+  **마지막 한 장은 지우지 않는다**(엑셀과 같은 규약) — 0장이 되면 보드 시드가 빈 맵을 새로 만들어
+  "지웠는데 초기화된 시트가 남는" 혼란이 되고, 그 사이 승격이 끼면 `flowMapsHaveContent`가 false가
+  되어 sticky 복원 경로까지 흔들린다.
+- **⚠️ 툴바 좌측 상단 제목 = 활성 시트 이름이고, 고쳐 쓰면 하단 탭이 함께 바뀐다 (2026-09 사용자
+  요청)**. 하드코딩 `자금 흐름도` span 으로 되돌리지 말 것 — 시드 시트 이름이 마침 `자금 흐름도`라
+  화면상 구분이 안 되지만, 되돌리면 "제목을 사용자가 정한다"는 요구가 통째로 사라진다.
+  커밋은 탭과 **같은 `commitRename` → `renameFlowMap`**(단일 쓰기 경로)이고, 탭 클릭이 '전환'이라
+  더블클릭인 것과 달리 제목은 다른 동작이 없어 **한 번 클릭**으로 연다. `readOnly`는 span.
+  ⚠️ **편집 위치 판별자 `renameWhere`('tab'|'title')를 지우지 말 것** — 두 입력이 같은 `renameId`를
+  공유하므로, 없으면 제목과 탭이 **동시에 마운트**돼 한 시트 이름을 두 칸에서 고치게 되고 어느 쪽
+  blur가 이기는지 브라우저가 정한다. `startRename(m, where)`의 기본값이 'tab'이라 기존 호출부
+  (탭 더블클릭·✏️ 버튼)는 한 글자도 바뀌지 않는다.
+- **⚠️ 이름 입력(더블클릭·✏️)의 Escape는 자기 핸들러가 처리** — 보드의 `onKeyDownCapture`가 일반
+  `typing` 분기로 흘려보내면 Escape가 `target.blur()`를 먼저 불러 그 blur가 커밋이 되고 '취소'가
+  오히려 저장이 된다(`data-flow-sheet-rename` 분기로 먼저 걸러낸다). 취소 판정은 **ref 플래그**로
+  한다 — 입력이 언마운트될 때 브라우저가 blur를 발화하지 않는 경우가 있어 상태로는 판정할 수 없다.
+- **범위 밖(의도)**: 활성 시트 영속화 · 탭 드래그 재정렬(◀▶ 버튼만) · 시트 간 도형 복사·이동 ·
+  시트별 접근 권한 · **별도 창의 `document.title` 동기화**(`FlowWindow`는 앱 이름 `자금 흐름도`로
+  고정 — 브라우저 탭에서 그게 어떤 앱인지 알아보는 이름이라 시트 이름을 따르게 하지 않는다).
+  **알려진 한계**: 보드를 닫았다 열면 항상 첫 시트다(탭 한 번이면 돌아간다).
+
+**팬/줌(마지막 화면)도 저장한다 — `map.viewport` (2026-09, ⚠️ 회귀 주의)**
+
+닫았다 열면 마지막으로 보던 위치·배율로 돌아온다(사용자 보고: "다시 열면 작성한 위치가 아니라
+엉뚱한 데를 보고 있다"). **저장 위치는 `FlowMap.viewport` 안** → App.tsx 7지점·sticky·별도 창
+브릿지가 이미 flowMaps를 통째로 실어 나르므로 **영속화 신규 지점이 0곳**이다.
+- **⚠️ chartPrefs로 옮기지 말 것** — 그쪽은 계좌가 0개면 저장 effect가 조기 반환하고
+  `saveVersionFile`도 부르지 않아 타 기기에 반영되지 않는다.
+- **⚠️ `normalizeFlowMaps`가 반드시 보존**해야 한다. 그 함수는 화이트리스트 재구축기라 필드를
+  빠뜨리면 **별도 창 저장 경로**(`flow:maps` → `normalizeFlowMaps`)와 Drive 로드에서 마지막 화면이
+  매번 조용히 삭제된다(`makeBtConfig`·`_ensureTaxBase`와 동일 버그 클래스). 짝으로
+  `flowFingerprint`에 `vp`가 없으면 '화면만 옮긴 세션'이 `portfolioUpdatedAt`을 못 올려 **STATE
+  저장이 통째로 스킵**된다(`historyVerifyKey`·`targetAmount`와 동일 클래스).
+- **⚠️ `dirtyRef`가 아니라 `vpDirtyRef`를 세운다(최대 회귀 지점)** — `dirtyRef`는 '늦게 도착한
+  Drive 데이터 채택'을 막는 가드다. 화면을 훑기만 해도 그게 서면, 로딩 중 연 보드가 시드한 **빈 맵이
+  저장된 흐름도를 덮는다**(복구 불가 — FlowBoard가 명시적으로 막아 둔 바로 그 경로).
+- **⚠️ 사용자가 실제로 움직였을 때만 커밋**(`vpTouchedRef`) — 복원값·구버전 자동 맞춤은 커밋하지
+  않는다. 아니면 '보드를 열기만 해도 Drive 저장'이 되고, 자동 맞춤 결과가 동의 없이 박제된다.
+- **⚠️ `flush`가 dirty 판정 **전에** 현재 화면을 먼저 반영**한다 — 디바운스(900ms)가 안 터진 채
+  닫아도 위치가 남는다. `commit`이 `localRef`를 동기 갱신하므로 바로 아래에서 읽어도 최신값이다.
+  ref 순환(`flush → commitViewport → commit → flush`)은 `commitViewportRef`로 끊는다.
+- **⚠️ 저장 직전 `normalizeFlowViewport`를 통과**시킨다 — 휠 줌이 만드는 `1.3310000000000004`가
+  지문에 새면 화면을 훑을 때마다 저장이 나간다. 줌 한계(`FLOW_MIN/MAX_SCALE`)는 캔버스 휠 핸들러와
+  **같은 상수**를 쓴다(손복제하면 캔버스에선 만들 수 있는데 저장 시 잘리는 배율이 생겨 화면이 튄다).
+- **구버전 데이터(저장된 위치 없음)는 `fitFlowViewport`로 1회 자동 맞춤** — '맞춤' 버튼과 **같은
+  함수**를 공유한다(손계산으로 되돌리면 같은 데이터인데 두 경로가 다른 화면을 준다).
+- **알려진 한계(의도)**: 인앱 보드와 별도 창이 같은 위치를 공유한다(창 크기가 다르면 마지막 쓰기가
+  이긴다 — 기존 last-writer-wins 절충 그대로). `readOnly`(impersonation·연결 끊김)에서는 복원만 되고
+  저장되지 않는다.
+
+**연결선·도형 색을 사용자가 고른다 — 엑셀식 팔레트 (2026-09)**
+
+`FlowInspector`의 **`ColorPicker` 한 컴포넌트**를 도형 채우기와 연결선 색이 공유한다(손복제 금지 —
+갈리면 두 곳의 팔레트가 달라진다). 자주 쓰는 8색 + **테마 색 6×10 + 표준 색 10**(사용자가 보내온
+엑셀 화면과 같은 Office 2007 테마) + `#RRGGBB` 직접 입력.
+- **저장 필드는 기존 `edge.stroke` / `node.fill`** — 지문·정규화·복원에 이미 들어 있어 **영속화
+  신규 지점 0곳**. 값은 `sanitizeHexColor`로 검증하고, ⚠️ **대소문자를 바꾸지 말 것**(저장돼 있던
+  `#2E75B6`을 소문자로 만들면 기존 도형이 전부 '변경됨'이 되어 원본 참조 보존 계약이 깨진다).
+- **⚠️ 화살촉은 색깔마다 `<marker>`를 만든다** — marker의 `fill`은 참조 요소의 stroke를 물려받지
+  않아 단일 marker로는 선만 빨갛고 화살촉은 파란 상태가 된다. `fill="context-stroke"`(SVG2)로
+  대체하지 말 것(구형 WebKit에서 무시된다). **기본색을 marker 집합에 반드시 포함**할 것 —
+  빠뜨리면 `stroke`가 없는(=기본색) 선의 화살촉이 통째로 사라진다.
+- **⚠️ 선택된 연결선에 후광(halo)을 그린다** — 색을 바꿀 수 있게 되면서 '어느 선을 고르고 있는지'를
+  색으로는 알 수 없게 됐다(라벨 없는 선은 종전에 선택 피드백이 **아예 없었다**).
+- **⚠️ 도형 글자색은 채우기 밝기를 따른다**(`readableTextColor`) — 팔레트에 흰색·옅은 톤이 들어와
+  흰 글자가 배경에 묻히는 것을 막는다. 문턱 0.45는 **기존 8색이 전부 흰 글자를 유지**하도록 잡은
+  값이다(가장 밝은 `#A5A5A5` = 0.376) — 낮추면 사용자가 이미 칠해 둔 도형의 글자색이 배포만으로 바뀐다.
+- **⚠️ 팔레트를 부동 팝오버로 만들지 말 것** — 인스펙터가 `overflow-y-auto`라 absolute 팝오버가
+  잘린다(`CustomDatePicker`가 같은 이유로 body 포털 + fixed 좌표를 써야 했다). 접이식으로 두어
+  그 문제 자체를 만들지 않는다. 테마 6단은 하드코딩 60색이 아니라 `shiftHex` 비율로 계산한다.
+- **⚠️ 기본색 되돌리기는 필드를 지운다**(`onPick(null)` → `undefined`) — 기본색 hex를 저장값으로
+  박으면 나중에 기본색을 바꿔도 그 도형만 옛 색에 남는다.
+- **범위 밖(의도)**: 도형 **테두리** 색 선택, 선 굵기, 그라데이션, 최근 사용 색 기록.
+
+**화살촉 위치 = 자금 흐름 방향 — `FlowArrow`에 `'from'` 추가 (2026-09)**
+
+선은 `from` 노드에서 `to` 노드로 그려지고, **화살촉이 어느 끝에 붙는지가 곧 사용자가 표현하려는
+돈의 방향**이다. 종전 '한쪽'은 `'to'`(끝) 하나뿐이라, 도형을 이어 그린 순서와 실제 흐름이 반대인
+경우(흔하다) **선을 지우고 반대로 다시 긋는 것 말고는 방법이 없었다**. 선택지를 4개로 나눴다:
+`끝 →`(`'to'`, 기본) / `← 시작`(`'from'`) / `양쪽 ↔`(`'both'`) / `없음`(`'none'`).
+- **⚠️ `normalizeFlowArrow`가 저장 경로의 단일 판정 지점**이다. `normalizeFlowMaps`가 화이트리스트
+  재구축기라, 새 값을 그 함수에 등록하지 않으면 사용자가 고른 방향이 **Drive 로드·별도 창 저장
+  왕복마다 `'to'`로 되돌아간다**(`viewport`와 같은 버그 클래스).
+- **⚠️ 어느 끝에 그릴지는 `arrowHeads` 한 함수가 단독 판정**하고 캔버스 렌더와 인스펙터 안내 문구가
+  그것을 **공유**한다. 캔버스에서 `e.arrow === 'both'` 식으로 직접 비교하면 화면에 그려진 방향과
+  패널이 설명하는 방향이 조용히 갈린다.
+- **⚠️ `arrow` 미설정 레거시 선은 `'to'`로 본다** — 종전 렌더가 정확히 그랬다. 여기를 바꾸면 기존
+  흐름도의 화살표가 통째로 사라지거나 반대로 뒤집힌다.
+- **⚠️ 인스펙터가 도형 **이름**으로 방향을 풀어 쓴다**(`자금 흐름: CMA 2 → COVERD 4`). 선을 그은
+  순서를 사용자가 기억할 리 없어서, 이름이 없으면 '시작/끝'이 어느 쪽인지 화면 어디에도 없다.
+  이름은 `FlowBoard`가 `edgeEnds`로 넘기는 **라이브 파생값**이다(저장하지 않는다 — 노드 이름을
+  선에 복사하면 계좌명이 바뀔 때 갈리고 지문이 시세마다 흔들린다).
+  ⚠️ 그 문구는 반드시 `arrowHeads`에서 파생시킬 것 — 문구 안에서 `arrow` 값을 다시 비교하면
+  "설명이 캔버스와 갈리지 않게 한다"는 존재 이유를 정면으로 부순다.
+- **영속화 신규 지점 0곳** — 저장 필드는 기존 `edge.arrow`이고 지문(`e?.arrow ?? ''`)에 이미 있다.
+- **범위 밖(의도)**: 선의 `from`/`to` 자체를 맞바꾸는 '방향 뒤집기'(곡선 앵커까지 바뀐다 — 화살촉
+  방향과는 다른 동작이다), 화살촉 모양·크기 선택.
+
+**선 종류 7종 × 굵기 3종 — `dashed:boolean` → `lineStyle`/`lineWidth` (2026-09, ⚠️ 회귀 주의)**
+
+종전 실선/점선 2택을 엑셀 테두리 스타일처럼 넓혔다: `solid`·`dot`·`dash`·`longDash`·`dashDot`·
+`dashDotDot`·`double` × `thin`·`normal`·`thick`. 저장 필드는 `edge.lineStyle`/`edge.lineWidth`이고
+레거시 `edge.dashed`는 **입력 전용**으로 남는다.
+- **⚠️ `resolveFlowLineStyle(lineStyle, dashed)`가 레거시를 흡수하는 단일 지점**이다. 소비처에서
+  `e.lineStyle`을 직접 읽으면 **사용자가 점선으로 그려 둔 기존 선이 전부 실선**이 된다.
+  `normalizeFlowMaps`가 로드·백업 복원 시 `dashed:true → lineStyle:'dash'`로 **1회 이관하고 그
+  필드를 지운다**(두 소스 공존 금지). 이관은 멱등이라 두 번째 정규화는 원본 참조를 돌려준다.
+- **⚠️ 기본값(`solid`/`normal`)은 저장하지 않는다**(생략 = 기본값). 저장하면 기존 선이 전부
+  '변경됨'이 되어 원본 참조 보존 계약이 깨지고 폴링마다 재저장 + 보드 로컬 사본이 갈아엎어진다.
+  `onAddEdge`도 새 선에 기본값을 넣지 않는다.
+- **⚠️ 지문에는 raw `dashed`가 아니라 **해석된** 값을 담는다** — raw를 담으면 이관만으로 지문이
+  달라져 **사용자가 아무것도 안 고쳤는데 저장이 나간다**. 굵기도 반드시 지문에 넣을 것(빠지면
+  굵기만 바꾼 세션이 STATE 저장 스킵).
+- **⚠️ 파선 패턴은 px가 아니라 **굵기의 배수**다** — px 고정이면 굵은 선에서 점선이 뭉개진다.
+  `dash`의 `[3, 2]`는 굵기 `normal`(2)에서 정확히 `'6 4'`, 즉 **종전 렌더와 픽셀 동일**하다.
+  기존 점선 흐름도의 모양이 배포만으로 바뀌지 않게 하는 값이니 건드리지 말 것.
+- **⚠️ `flowLineRender` 하나를 캔버스와 인스펙터 미리보기가 공유**한다. 미리보기가 dasharray를
+  손으로 적으면 '고른 모양 ≠ 그려지는 모양'이 되어 미리보기의 존재 이유가 사라진다.
+- **⚠️ 이중선은 굵은 선 위에 `FLOW_CANVAS_BG`로 가운데를 덮어 만든다** — 그 색이 캔버스 배경과 한
+  글자라도 다르면 선 한가운데에 다른 색 띠가 생긴다(그래서 배경색을 공유 상수로 뽑았고, 미리보기
+  버튼 배경도 같은 값이다). **화살촉은 안쪽 path에 단다** — marker는 `markerUnits="strokeWidth"`가
+  기본이라 바깥(3배 굵기)에 붙이면 화살촉만 3배로 커진다.
+- **⚠️ 선택 후광 굵기는 선 굵기에서 파생**시킨다 — 고정값이면 '굵게' 선에 묻혀 선택 표시가 사라진다.
+- **영속화 신규 지점 0곳**(둘 다 `FlowEdge` 안).
+- **범위 밖(의도)**: '없음'(선 안 보임 — 지워진 줄 알고 같은 연결을 다시 긋는다. 안 그릴 선은
+  삭제가 맞다), 굵기 자유 입력, 선 끝모양(linecap), 곡선/직각 라우팅.
+**연결선 합치기(번들) · 도형 정렬 스냅 · 선 위 라벨 (2026-09 사용자 요청, ⚠️ 회귀 주의)**
+
+사용자 보고: "CMA1에서 4개 계좌로 나가는 선이 각자 뻗어 복잡하다. 같은 방향이면 한 줄로 합쳐졌다가
+분기해야 한다 / 도형을 대충 놓아도 열이 맞아야 한다(단 모서리 근처면 가운데로 강제 정렬 금지) /
+합쳐진 선이 갈라질 때 메모가 잘 보여야 하고, 자리가 없으면 점 + 호버로."
+
+- **⚠️ 트렁크(합쳐지는 구간)는 공유 레이어에 그룹당 **하나만** 그린다.** 선마다 각자 그려 좌표가
+  겹치게 하는 방식으로 되돌리지 말 것 — ① 이중선(`double`)은 가운데를 `FLOW_CANVAS_BG`로 덮으므로
+  겹친 트렁크에서 **배경색 지우개**가 되고(어느 쪽이 이기는지는 사용자가 선을 그린 순서가 정한다)
+  파선도 공유 구간에서만 패턴이 사라진다 ② 선택 후광과 클릭 히트박스가 공유 구간을 덮어 **선 하나를
+  골랐는데 뭉치 전체가 선택된 것처럼** 보이고 특정 선을 집을 수 없다 ③ 도착 뭉치에서 화살촉이 같은
+  앵커에 여러 개 겹친다. 공유 레이어 하나면 셋 다 **구조적으로** 사라진다.
+- **⚠️ 하위호환의 축 = `edgePath`에 번들 인자를 주지 않으면 `q0 === p0`·`q3 === p3`가 되어 **같은 코드**가
+  종전 값을 낸다.** 별도 return으로 쪼개지 말 것(쪼개는 순간 두 경로가 드리프트할 표면이 생긴다).
+  검증 `#103`이 **번들 도입 이전 본문**(커밋 `0c8a58c`)을 그대로 들고 12,000건을 대조한다 — 그 블록의
+  `legacyEdgePath`는 `edgePath`를 고칠 때 **절대 따라 고치지 말 것**(따라 고치면 단언이 통째로 죽는다).
+  짝으로 `#103b`가 '번들 인자가 실제로 경로를 바꾼다'를 단언한다(죽은 인자 방지).
+- **그룹 키 = `노드id · 확정된 변 · 역할(from|to) · 그 끝 화살촉 유무 · 색 · 선종류 · 굵기`**.
+  ⚠️ **역할은 위상**(`edge.from`인가 `edge.to`인가)이지 화살표가 아니다 — `arrow`로 정하면 같은 앵커에서
+  출발하는 선들이 다른 그룹이 되어 같은 자리에 트렁크가 두 번 그려진다. ⚠️ **화살촉 한 비트**를 넣지
+  않으면 공유 트렁크 뿌리에 모순되는 화살촉이 생겨 뭉치 전체가 반대 방향으로 읽힌다(렌더에서 억제하는
+  방식으로 우회 금지 — 사용자가 고른 방향을 조용히 지우는 것은 이 저장소가 반복해 금지해 온 패턴이다).
+  ⚠️ **색·선종류·굵기**를 빼면 위 ①이 재발한다. 사용자가 색으로 구분해 둔 선은 **의도적으로 구분한 것**
+  이므로 합치지 않는 쪽이 옳다(툴바 툴팁이 그 사실을 밝힌다).
+- **⚠️ 그룹 키 구분자는 `JSON.stringify([...])`다. `\0`(NUL)로 되돌리지 말 것** — 소스에 실제 NUL
+  바이트가 박혀 **git이 그 파일을 바이너리로 취급**하고 `grep`·`git log -S`가 통째로 막힌다(실측으로
+  15바이트가 유입됐다가 걷어냈다. 메모리에 같은 사고 기록이 있다).
+- **⚠️ 한 (도형, 변)에는 트렁크가 최대 하나**(구성원이 많은 쪽, 동점이면 키 사전순). 나가는 뭉치와
+  들어오는 뭉치가 같은 변에 동시에 서면 두 트렁크가 **문자 단위로 같은 선분**이 되고 화살촉이 반대
+  방향으로 같은 자리에 찍힌다.
+- **⚠️ 트렁크 길이 = `min(구성원 축 투영) × 0.45`, 상한 96, 하한 16 미만이면 만들지 않는다.**
+  `min`이라야 가장 가까운 목적지를 지나치지 않고(평균·최대를 쓰면 가까운 가지가 되돌아오는 갈고리가
+  된다 — 사용자 화면이 정확히 그 배치다), 비율이 1 미만이라 **오버슈트가 구조적으로 불가능**하므로
+  하한 클램프(`Math.max`)를 두지 말 것. 하한 16은 '9px짜리 트렁크'라는 중간 상태를 없앤다.
+- **⚠️ `pull`은 분기 구간(`q0↔q3`)으로 잰다** — `p0↔p3`로 재면 트렁크가 축 방향 여유를 다 쓴 뒤에도
+  컨트롤 포인트가 그대로라 분기 곡선이 자기 트렁크로 되감긴다.
+- **시트 토글 `FlowMap.bundleEdges`** — 기본 켜짐, **`false`일 때만 저장**하고 지문에도 **끈 경우에만**
+  토큰(`nb`)을 싣는다(항상 실으면 배포 직후 전 시트의 지문이 달라져 아무것도 안 고친 세션에서 저장이
+  나간다). ⚠️ **켤 때는 `true`를 쓰지 말고 필드를 지운다** — `true`를 저장하면 정규화가 그것을 생략형으로
+  되돌리려 매 로드 재구축 경로로 떨어지는데 지문은 같아 그 정리가 영영 저장되지 않는다(무한 churn).
+  ⚠️ `normalizeFlowMaps`의 **재구축 push 리터럴**에 등록하지 않으면 정규형일 때는 원본 참조라 살아남고
+  `mapChanged`가 서는 순간 **조용히 사라진다**("가끔 잊어버린다"로 보인다). `flowMapsHaveContent`에는
+  넣지 않는다(넣으면 '토글만 끈 빈 시트'가 내용 있음이 되어 백업 복원 경로가 영구히 막힌다).
+- **연결 위치(`fromSide`/`toSide`) UI 신설** — 이 필드는 원래 있었는데 **UI가 0곳**이었다. 자동 판정
+  (`autoSides`, 두 도형 중심의 `|dx| >= |dy|`)만으로는 대각선에 가까운 배치에서 한 선만 다른 변으로
+  빠져 뭉치가 갈라진다(실측: 사용자 화면의 CMA1→연금저축600이 가로 520 · 세로 525로 경계에 걸려 '아래'로
+  판정). 인스펙터에서 같은 변으로 못 박으면 확실히 합쳐진다. ⚠️ **'자동'은 값을 저장하지 않는다**
+  (`'auto'`를 저장하면 결과는 같은데 지문만 달라진다). ⚠️ 정규화가 4방위 외 값을 **생략형으로** 만든다 —
+  검증 없이 통과시키면 손상값이 그대로 side로 쓰여 `anchorPoint`의 default('아래')로 떨어져 그 선만
+  이유 없이 도형 아래에서 뻗는다.
+- **⚠️ 정렬 스냅 후보는 '같은 종류끼리만'**(왼↔왼·가운데↔가운데·오른↔오른). 왼↔오른(도형 붙이기)을
+  넣지 말 것 — 두 도형이 간격 0으로 붙어 그 사이 선의 길이가 0이 되고 **선 위 라벨이 도형 뒤에 통째로
+  묻힌다**(요구 ③과 정면 충돌). 사용자가 요구한 것은 '같은 열에 배열'이지 '붙이기'가 아니다.
+- **⚠️ 후보는 가산점 없는 평면 집합이고 x·y를 독립 판정한다.** 중심에 우선권을 주지 않는 것만으로
+  사용자가 명시적으로 거부한 '모서리 근처인데 가운데로 끌려감'이 **구조적으로** 발생하지 않는다
+  (가장 가까운 후보가 이기므로 모서리 근처면 모서리가 이긴다). 2D 최근접 앵커 하나로 합치면 코너
+  스냅이 되어 '한 축만 맞추고 다른 축은 자유'라는 정상 사용이 불가능해진다.
+- **⚠️ 정렬이 걸린 축에는 격자 스냅을 다시 적용하지 않는다(축별 독립).** `DEFAULT_NODE_W = 180`이
+  `mod 8 === 4`라 기본폭 도형의 오른쪽 모서리는 **항상** 격자 중간에 떨어지고, 정렬 결과에 격자를 다시
+  걸면 **100% 4px 어긋난다**(폭 60~300 구간의 88%가 같은 증상). 정렬이 안 걸린 축은 **종전 그대로**
+  (미리보기 raw · 커밋 격자)다 — 둘을 통일하면 드래그가 8px 계단이 되고 그 계단은 스냅을 꺼도 남는다.
+- **⚠️ `startDrag`가 `drag.resolved`를 반드시 시드한다.** `liveNode`가 그 값을 읽으므로 비워 두면 도형을
+  **클릭만 해도**(pointermove 0회) 렌더 중 TypeError가 나 보드가 통째로 오류 화면이 된다.
+- **⚠️ 임계값은 화면 px**(`SNAP_TOL_PX / scale`). 캔버스 고정값이면 축소(0.25배)에서 캡처 폭이 2px가 되어
+  물리적으로 못 맞추고 확대(2.5배)에서는 20px가 되어 확대의 목적인 미세 배치가 불가능해진다.
+  `scale`이 유한 양수가 아니면 1로 떨어뜨린다(`tol = Infinity`면 도형이 화면 밖 먼 노드로 순간이동).
+  스냅 해제는 **`pointermove`의 `altKey`/`metaKey`**(keydown 리스너 금지 — SVG에 tabIndex가 없다)와
+  툴바 토글. 툴바 토글은 **세션 로컬**(저장 지점 0곳 — 뷰 선호도이고 클릭 한 번으로 복구된다).
+- **⚠️ 라벨은 충돌이 실제로 있을 때만 옮긴다**(첫 후보가 오프셋 0). 무조건 재배치하면 번들을 꺼도 선이
+  1개뿐인 관계의 라벨까지 움직여 하위호환의 축이 깨진다. 전부 막히면 **점**으로 접고 호버로 전문을
+  보여 준다. ⚠️ 장애물에 **도형 박스를 반드시 포함**(라벨은 도형보다 아래 레이어라 겹치면 가려진다).
+  ⚠️ 점도 같은 충돌 검사를 통과한 자리에만 놓는다(무시하면 라벨보다 더 잘 숨는다).
+- **⚠️ 라벨 레이어는 선 그룹 뒤 · 노드 그룹 앞**이다. 노드보다 뒤에 두면 라벨 히트박스가 도형의
+  `onPointerDown`을 가로채 도형 드래그·리사이즈·연결이 통째로 죽는다. **정상 라벨은 종전대로
+  `pointerEvents="none"`**이고 포인터를 받는 것은 점뿐이다(켜면 최대 수백 px짜리 상자가 남의 선 위에
+  얹혀 그 선의 클릭을 가로챈다).
+- **⚠️ 폭은 `approxLabelWidth`(전각 1em · 그 외 0.55em)** — 종전 `label.length * 12`는 한글/영문 혼용에서
+  최대 2배까지 틀렸다. **canvas `measureText` 실측은 도입하지 않았다** — SVG의 실제 font-family를 알아야
+  하는데 첫 렌더에서는 ref가 null이라 폰트 문자열이 비고, 그러면 측정 경로가 **무음으로 죽어** 근사가
+  유일한 경로가 된다. 같은 이유로 **배율별 라벨 강등**(축소하면 전부 점으로)과 **말줄임**도 뺐다
+  (전자는 '맞춤' 버튼 한 번에 모든 라벨이 사라지고, 후자는 지금 넘쳐서라도 전문이 보이는 것을 잘라낸다).
+- **영속화 신규 지점 0곳** — 새 저장 필드는 `FlowMap.bundleEdges` 하나이고 `flowMaps` 안이라 App.tsx
+  7지점·sticky·별도 창 브릿지가 통째로 실어 나른다. 등록은 `normalizeFlowMaps`(비교 + 재구축 리터럴)와
+  `flowFingerprint` **두 곳뿐**(`makeFlowMap`에 기본값을 넣지 말 것 — 새 시트가 곧바로 '변경됨'이 된다).
+- **범위 밖(의도)**: 리사이즈 스냅 · 여러 도형 일괄 정렬 · 트렁크 색을 따로 고르기 · 라벨을 선 위 임의
+  지점으로 드래그 · 터치에서의 스냅 해제(수식 키가 없다).
+  **알려진 한계**: 같은 변에 뭉치가 둘이면 하나만 합쳐진다(나머지는 종전대로) · 자동 방향 판정이
+  `|dx| == |dy|` 경계에서 이산적으로 바뀌므로 도형을 그 경계 너머로 끌면 한 선이 뭉치에서 빠진다
+  (연결 위치를 못 박으면 해결된다) · 두 도형이 완전히 포개지도록 스냅될 수 있다(스냅 이전에도 가능했다).
+- 검증: `npm run verify:flow` **460건** — 미러 `#103~#123b`(하위호환 12,000건 대조 · 그룹핑 · 트렁크
+  길이 · 토글 영속화 · 연결 위치 · 스냅 · 라벨) + 드리프트 `#130~#134i` + 소스 가드 `#G130~#G161c`.
+  ⚠️ **파트①은 미러만 본다** — src만 고친 변경은 파트③에서만 잡히는데, 그 무작위 픽스처가 특정 분기를
+  **밟지 않을 수 있다**(실측: '같은 변의 in/out 뭉치'·'스냅 OFF'·'점 강등' 세 계약이 무작위 400세트를
+  전부 통과했다) → 분기마다 **결정적 픽스처**(`#134~#134i`)를 따로 둔다.
+  **변이 51종으로 검출을 실증**했고(음성 대조 2종 포함) 그 과정에서 **죽은 단언 3건**을 잡았다:
+  `#115b`의 픽스처가 격자 배수라 '정렬 축에 격자 미적용'이 무의미했던 것, `#G132d`가 바깥 path에
+  marker를 **추가**해도 통과했던 것(연결선 렌더 `#76c`와 같은 함정), 슬라이스 끝 앵커를 **JSX 주석**으로
+  잡아 `stripComments` 후 구간을 못 찾던 것. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+  ⚠️ `buildFlowBundles`의 `a === b`(self edge) 가드는 **도달 불가한 방어적 중복**이다(`proj > 0`이 이미
+  덮는다 — 지워도 결과가 한 건도 달라지지 않는다). 의도를 드러내려고 남긴 것이니 '죽은 코드'로 보고
+  지우지 말 것.
+
+**메모 팝업 · 도형 안 표 (2026-09 사용자 요청 2단계, ⚠️ 회귀 주의)**
+
+사용자 보고: "도형에 기입할 내용이 많은데 메모란이 작아 불편하다. 메모를 클릭하면 팝업으로 크게
+쓰고 싶다. 단순 메모가 아니라 총액에서 지출 소계를 빼는 목록이면 엑셀처럼 표를 넣어 깔끔하게
+보고 싶다. 표의 선은 보이게도 안 보이게도 고를 수 있어야 한다."
+
+- **⚠️ 메모 편집 경로는 팝업 **하나뿐**이다.** 인스펙터의 메모 칸은 **읽기 전용 미리보기 + 진입점**
+  으로 바꿨고 그쪽 draft(`EMPTY_DRAFT`·`draftOf`·`flushDraft`의 `memo`)는 **제거**했다. 되살리지 말 것 —
+  같은 값을 두 곳에서 편집하면 팝업에서 쓴 뒤 인스펙터의 미커밋 draft가 나중에 flush되며 **방금 쓴
+  메모를 옛 값으로 덮는다**(인스펙터 flush는 대상 변경·언마운트에서 도는데 **팝업 닫힘은 그 트리거가
+  아니다**). 가드 `#G170`이 그 세 식별자의 부재를 단언한다.
+- **⚠️ 팝업 대상은 매 렌더 **id로 다시 찾는다****(`editorNode`). 노드 스냅샷을 들면 편집 중 폴링·다른
+  창이 바꾼 값이 화면에 안 붙고, 도형이 지워졌을 때 사라진 대상에 계속 쓴다. 대상이 없어지면 팝업을
+  **조용히 닫는다**.
+- **⚠️ 팝업의 커밋은 `idRef` 기준 + `useLayoutEffect` 언마운트 flush**다(인스펙터와 같은 규약).
+  passive effect는 discrete 이벤트인 blur보다 뒤처지고, 제거된 DOM에는 브라우저가 blur를 발화하지
+  않는다. 커밋 전 `normalizeFlowTable`을 반드시 통과시킨다(상한·손상값이 저장에 새지 않게).
+- **⚠️ 팝업 안의 키는 보드의 `onKeyDownCapture`가 `data-flow-node-editor`로 판별해 처리한다**
+  (2026-09 정정 — 옛 서술 "Escape는 팝업이 먼저 소비한다"는 **거짓이었다**). 보드가 캡처 단계에서
+  Escape 전파를 끊으므로 React 18에서는 팝업 자신의 bubble `onKeyDown`까지 이벤트가 **도달하지 않는다** —
+  그 핸들러는 죽은 코드였고, 실제로는 팝업 버튼에 포커스가 있을 때 Esc가 **선택 해제 → 보드 전체 닫기**,
+  Backspace가 **편집 중인 도형 삭제 확인창**이 됐다. 지금은 그 분기가 보드 단축키보다 **먼저** 와서 Esc =
+  팝업 닫기, Delete/Backspace = 전파만 끊고 `return`한다(`#G176~#G176e`). 팝업에 Escape 핸들러를
+  되살리지 말 것(`#G173c`가 부재를 단언).
+- **표 계산 규칙은 딱 둘이고 그 이상 늘리지 말 것**:
+  `소계 = 직전 구분선 이후의 item 합` · `잔액 = Σtotal − Σitem`.
+  ⚠️ 잔액을 `Σtotal − Σsubtotal`로 바꾸지 말 것 — 소계를 안 쓰는 표에서는 잔액이 총액 그대로가 되고,
+  한 구역만 소계를 단 표에서는 나머지 항목이 통째로 빠진다(`#143`·`#143b`가 값으로 고정). `Σitem`이라야
+  소계 유무와 무관하게 같은 뜻이고, 사용자가 화면에서 **눈으로 검산**할 수 있다 — 그게 이 표의 존재 이유다.
+- **⚠️ 숫자로 읽히지 않는 값은 합계에서 빼고 원문 그대로 보여 준다.** 0으로 떨어뜨리면 '약 3억'이라
+  적은 행이 조용히 0원으로 계산에 들어가고 화면에서도 `0`이 된다.
+- **⚠️ `parseFlowNumber`는 `cleanNum`을 쓰지 않는다** — 그 함수는 빈 문자열을 0으로 만들어 **'값 없음'과
+  '0'을 구분할 수 없게** 한다(이 표에서는 둘이 다른 사건이다). 그리고 정규식(`^[+-]?\d+(\.\d+)?$`)을
+  `Number.isFinite` 가드로 대체하지 말 것 — `Number()`가 관대해서 `0x1A`(→26)·`1e5`·`.5`를 조용히
+  받아들인다(`#140f`가 그 셋을 고정. 실측으로 죽은 단언이었다).
+- **⚠️ 영속화 등록 3곳** — `makeFlowNode`(값이 있을 때만 필드 생성) · `normalizeFlowMaps` **노드 비교**
+  (`sameFlowTable` — 객체라 `!==`로는 판정 불가) · `flowFingerprint` 노드 투영. 비교를 빼면 '표가
+  사라진다'가 아니라 **손상된 표가 교정되지 않고 남는다**(다른 필드가 정규형이면 `mapChanged`가 서지
+  않아 원본 노드가 그대로 push된다 — `#149d`·`#149e`가 그 경로를 잰다). 지문을 빼면 '표만 고친 세션'의
+  STATE 저장이 통째로 스킵된다. 표가 없는 도형은 지문 자리가 `null`이라 **기존 흐름도의 지문이 배포만으로
+  달라지지 않는다**. `flowMapsHaveContent`에는 넣지 않는다(도형·선 유무로 판정하는 계약 그대로).
+- **⚠️ 빈 표는 필드를 만들지 않는다**(`normalizeFlowTable`이 행 0건이면 `undefined`). 빈 표를 남기면
+  지문만 흔들리고 화면에는 아무것도 나타나지 않는다.
+- **⚠️ 구분선 행은 라벨·값을 버린다** — 가지면 화면에 안 보이는 유령 텍스트가 저장에 남는다.
+- **⚠️ 도형 안 표와 팝업이 같은 `computeFlowTable`을 쓴다.** 어느 한쪽이 합을 다시 구하면 편집기가
+  보여 준 값과 도형에 그려진 값이 갈린다. 표 선 색은 **글자색과 같은 규칙**(`darkText`)을 따른다 —
+  하드코딩하면 밝은 채우기에서 사라진다.
+- **범위 밖(의도)**: 셀 병합 · 3열 이상 · 열 너비 조절 · 정렬 선택 · 수식(`=SUM(...)`) · 표 안 색 지정 ·
+  표를 도형 위에서 직접 편집(입력은 팝업에서만) · 메모의 서식(굵게·색).
+  **알려진 한계**: 도형이 작으면 표가 잘린다(도형을 키우면 된다) · 붙여넣기는 **항상 이어붙이기**다
+  (대체하려면 기존 행을 지운다) · 소계는 바로 위 구분선까지만 보므로 중첩 소계는 만들 수 없다.
+- 검증: `verify:flow` **556건** — 미러 `#140~#151g`(값 파싱·계산 규칙·정규화·붙여넣기, 사용자 화면
+  CMA 1 구조를 픽스처로 고정) + 드리프트 `#135~#135t` + 소스 가드 `#G170~#G175f`.
+  **변이 48종으로 검출을 실증**(음성 대조 2종 포함)했고 그 과정에서 **죽은 단언 5건**을 잡았다 —
+  전부 **파트③ 픽스처가 그 분기를 밟지 않아서**였다(행 상한·행 종류 목록·'내용은 같은데 참조가 다른'
+  표·16진수 표기). 파트①은 미러만 보므로 **src만 고친 변경은 파트③에서만 잡히는데, 무작위·정규형
+  픽스처는 경계와 폴백을 밟지 않는다**. 새 계약을 넣을 때마다 결정적 픽스처를 함께 넣을 것.
+  ⚠️ 단언이 **던지면** 스크립트가 죽어 요약 줄이 안 나오고, 변이 하네스가 그것을 '비정상 종료'로 세어
+  검출/죽은단언을 구분할 수 없게 된다 → 표를 파고드는 단언은 반드시 옵셔널 체이닝으로 쓸 것.
+
+**표 항목의 실행 체크 · 취소선 · 기울임 + 팝업 이동 (2026-09 사용자 요청 3단계, ⚠️ 회귀 주의)**
+
+사용자 요청: "표에서 항목 이름에 취소선·기울임 기능을 추가한다. 적어 놓은 계획을 실제로 실행했는지
+표시하기 위해서다. 항목 이름 오른쪽에 체크 박스를 만들어 실행한 것을 표시한다. 그리고 메모가 브라우저
+가운데에 고정인데, 열 때는 가운데에 뜨되 사용자가 원하는 곳에 옮길 수 있어야 한다."
+
+- **저장 = `FlowTableRow`의 `done` · `strike` · `italic`(전부 선택 필드)**. 세 표시는 **서로 독립**이다
+  (체크한다고 취소선이 자동으로 붙지 않는다 — 사용자가 '진행 중=기울임' 같은 자기 규약을 쓸 수 있게).
+- **⚠️ 전부 `true`일 때만 저장한다(생략 = false)** — `false`를 저장하면 기존 표가 전부 정규화에서 '변경됨'이
+  되어 원본 참조 보존 계약이 깨지고 지문도 배포만으로 달라진다. 판정은 **`=== true`**(truthy 손상값
+  `'yes'`·`1`을 받아들이면 켠 적 없는 표시가 저장에 굳는다).
+- **⚠️ 실행 체크는 `item` 행 전용, 취소선·기울임은 `rule`만 뺀다** — 정규화가 그 밖의 표시를 버린다
+  (구분선이 라벨·값을 버리는 것과 같은 '유령 상태 금지' 규약). 팝업은 항목 외 행에서 체크 칸을 **같은 폭의
+  빈 칸**으로 두어 열을 맞추고, 구분선에서는 S/I 버튼을 잠근다.
+- **⚠️ 표시는 계산에 한 줄도 참여하지 않는다** — 실행한 계획도 금액은 그대로 소계·잔액에 들어간다(`#154e`가
+  표시를 모두 뗀 표와 숫자가 같음을 단언). 표시를 합계 규칙에 섞으면 "계산 규칙은 딱 둘" 계약이 깨진다.
+- **⚠️ 영속화 등록 4곳**(신규 지점은 0곳 — 전부 `flowMaps` 안):
+  ① `normalizeFlowTable`(**빠지면 재구축 경로에서 표시가 조용히 사라진다**) ② `sameFlowTable`(**빠지면 체크만
+  바꾼 편집이 팝업 flush에서 '변경 없음'으로 걸러져 저장되지 않고**, 로드에서는 손상값이 교정되지 않는다 —
+  raw `!==` 비교라야 `'yes'`와 생략을 구분한다) ③ `flowFingerprint`(표시가 **있을 때만** 행 토큰 4번째 칸
+  `flowTableRowFlags` — 항상 붙이면 배포 churn, 빼면 '체크만 한 세션'의 STATE 저장 스킵. `#156`·`#136k`가
+  표시 없는 행이 **종전 3칸**임을 단언) ④ `computeFlowTable` 출력(`done`/`strike`/`italic`) — 도형 안 표가
+  원본 행을 **인덱스로 다시 읽지 않게** 계산 결과에 실어 보낸다(손상 행을 건너뛰면 인덱스가 밀린다).
+- **⚠️ 실행 현황은 `flowTableCheckStats` 하나를 팝업·도형·인스펙터가 공유**한다(각자 세면 세 화면의 숫자가
+  갈린다). 팝업 표 도구줄·인스펙터 표 칸에 `실행 N/M`.
+- **⚠️ 도형 안 체크 칸은 `done > 0`인 표에서만 그린다**(한 항목이라도 체크 = 체크리스트로 쓰기 시작한 표).
+  체크한 적 없는 표까지 빈 칸을 그리면 **기존 흐름도의 모양이 배포만으로 바뀐다**. 체크 칸은 이름 오른쪽 ·
+  값 왼쪽, 색은 `currentColor`(글자색 규칙을 따라 밝은 채우기에서도 보인다).
+- **팝업 이동**: 어두운 백드롭을 **없앴다**(옮기는 이유가 뒤의 흐름도를 보며 쓰기 위해서라 화면을 덮으면 옮길
+  이유가 사라진다 — 되살리지 말 것, `#G177`). 닫기는 X와 Esc. 제목 줄을 끌어 옮기고 **더블클릭하면 가운데로**.
+  - **⚠️ 위치의 정본은 보드 state `editorPos`(세션 로컬, `null` = 가운데)**이고 **팝업이 닫히면 effect 한 곳에서
+    초기화**한다(닫는 경로가 X·Esc·대상 소멸·보드 닫기로 여럿이라 경로마다 넣으면 하나가 빠진다). 그래서 다음에
+    열면 다시 가운데이고, 열린 채 다른 도형의 메모를 열면(팝업 `key`가 바뀌어 다시 마운트돼도) 옮긴 자리를 지킨다.
+  - **⚠️ 끄는 동안의 좌표는 팝업 로컬 state에만** 두고 **놓을 때 한 번** `onPosCommit`으로 알린다 — 프레임마다
+    보드 state를 바꾸면 보드 전체가 포인터 이동마다 다시 그려진다(`#G177i`). 놓는 순간의 값은 렌더된 state가 아니라
+    **`dragRef.last`**(pointermove의 setState는 연속 우선순위라 discrete인 pointerup보다 늦게 커밋될 수 있다).
+  - **⚠️ 드래그 출발점은 `getBoundingClientRect` 실측**이다 — 가운데 정렬(`translate(-50%,-50%)`) 상태의 좌표로
+    출발하면 잡는 순간 팝업이 튄다(`#G177f`). 버튼·입력에서는 드래그를 시작하지 않는다(`NO_DRAG_SELECTOR`).
+  - **⚠️ 클램프는 `clampFlowEditorPos` 공유 함수** — 가로 최소 `FLOW_EDITOR_GRIP_PX`(120), 세로 제목 줄
+    `FLOW_EDITOR_HEADER_PX`(40)가 항상 화면에 남는다(완전히 밀어내면 다시 잡을 곳이 없다). 하한을 상한으로
+    묶지 않으면 좁은 팝업+좁은 창에서 상한을 넘는다(`#158h`). 창 크기가 바뀌면 다시 묶는다.
+**표 값 칸 계좌 연결 (2026-10 사용자 요청, ⚠️ 회귀 주의)**
+
+항목·총액 행의 금액은 **직접 입력** 또는 **계좌 연결**(그 계좌의 현재 평가액) 중 고른다. 팝업 값 칸 왼쪽
+드롭다운: `직접 입력` / `전체 계좌 합계`(예약 id `FLOW_TABLE_LINK_ALL`, TEST·삭제 제외 = 통합 합산과 같은 집합) / 각 계좌.
+
+- **저장 = `FlowTableRow.portfolioId`(항목·총액 전용, 생략 = 직접 입력)**. 금액은 저장하지 않고 매 렌더
+  `flowLinkedAmount`로 라이브 재조회(노드 계좌 연결과 같은 계약 — 삭제 계좌는 summary 실수치를 쓰지 않고 null).
+- **⚠️ 연결해도 `value`(직접 입력값)를 지우지 않는다** — 연결을 풀면 그대로 되살아난다.
+- **⚠️ 값을 못 구하면 null → `-` 표시 + 합계 제외**(0으로 단언 금지). 해석 함수 미전달도 같다.
+- **⚠️ 계좌 평가액은 원 단위로 반올림**(`flowLinkedAmount`의 `Math.round`) — 해외계좌는 환율 환산으로 소수점이 남아 표에 `193,422,333.429032`처럼 찍혔다(2026-10 사용자 보고). 계좌마다 반올림하므로 전체 합계 = 화면 행의 합. 직접 입력값은 그대로 둔다.
+- **⚠️ 등록 4곳**: `normalizeFlowTable`(빠지면 재구축 경로에서 소실) · `sameFlowTable`(빠지면 '연결만 바꾼 편집'이
+  flush에서 걸러짐) · `flowFingerprint`(**있을 때만** 행 토큰 5번째 칸 — 없는 행은 종전 3칸/4칸) · `computeFlowTable(table, linkedValueOf?)`.
+- **⚠️ 캔버스와 팝업은 보드의 `tableLinkValue` **한 함수**를 공유**한다(갈리면 두 화면의 숫자가 다르다).
+- 연결 행이 있는 표는 도형 위에서 '금액 숨기기'를 따른다(연결 행 + 소계·잔액을 가림).
+- **영속화 신규 지점 0곳**(전부 `flowMaps` 안). 검증: `verify:flow` `#160~#164b`·`#137~#137h`·`#G181a`·`#G182~#G182e`.
+
+**표 계산식 — 총액·소계·잔액에 더하기/빼기 (2026-10 사용자 요청, ⚠️ 회귀 주의)**
+
+소계·잔액은 기본 계산(소계 = 구역 항목 합 / 잔액 = Σ총액 − Σ항목)을 유지하되, 사용자가 **행을 골라
++ / − / 제외**를 정하면 그 식으로 대체된다. 총액은 값 출처 드롭다운의 **'항목 계산'**으로 같은 식을 쓴다.
+
+- **저장 = `FlowTableRow.formula`(키 = 대상 행 `id`, 값 `'+'|'-'`) + `FlowTableRow.id`**. 소계·잔액은 비면
+  필드 생략(= 기본 계산), 총액은 객체가 있으면(비어도) '항목 계산' 모드이며 계좌 연결을 버린다.
+- **⚠️ 행 id는 계산식을 처음 쓸 때만 편집기가 붙인다(`withIds`)** — 모든 표에 붙이면 기존 흐름도가 배포만으로
+  '변경됨'이 된다. 정규화는 id를 trim·중복 제거만 한다.
+- **⚠️ 참조 가능 = 항목 + 계산식 없는 총액뿐**(소계·잔액·계산 총액 참조는 순환 위험 → 정규화가 버림).
+  편집기의 `canRefRow`와 flowMap `applyFlowTableFormulas`가 **같은 규칙**이어야 고른 항이 저장에서 사라지지 않는다.
+- **⚠️ 참조 값이 없으면(숫자 아님·연결 실패·삭제된 행) 그 항만 건너뛴다**(0 단언 금지). 계산 순서는
+  기본 값 → 계산 총액 → 소계·잔액(순환 없음).
+- **⚠️ 행 종류를 바꾸면 계산식을 버린다** — 잔액→총액 전환이 조용히 '항목 계산' 모드로 둔갑하는 것 방지.
+- 등록 3곳: `normalizeFlowTable`(2단계) · `sameFlowTable`(id·`flowTableFormulaKey`) · `flowFingerprint`(**있을 때만**
+  6·7번째 칸). **영속화 신규 지점 0곳**. 검증: `verify:flow` `#170~#175b`·`#138~#138h`·`#G183~#G183g`.
+
+**도형 간 표 참조 — 선으로 이어진 도형의 표 행 전체 (2026-10 사용자 요청, ⚠️ 회귀 주의)**
+
+항목·총액 행의 값 출처 드롭다운에 **'이어진 도형 · {이름}'** 묶음이 생긴다. 선으로 이어진(방향 무관) 도형의
+**구분선을 뺀 모든 행**(항목·총액·소계·잔액 — 사용자 확정 "모선의 항목 전체")을 고르면 그 값을 그대로 가져온다.
+숫자가 아닌 항목(메모성 값)을 고르면 `-`.
+
+- **저장 = `FlowTableRow.nodeRef = { nodeId, rowId }`**(항목·총액 전용). 계좌 연결과 공존하지 않고(정규화가
+  계좌 연결을 버린다) 계산 총액이 되면 버려진다. 대상 행의 `id`는 **고를 때만** 보드의 `ensureNodeRowId`가
+  붙인다(읽기 전용이면 붙이지 않는다).
+- **⚠️ 해석은 `makeFlowNodeRowResolver(nodes, linkedValueOf)` 하나** — 보드가 시트 단위로 한 번 만들어
+  캔버스(`tableOfNode`)와 팝업(`nodeRefValueOf`)이 공유한다. `computeFlowTable(table, linkedValueOf, nodeRefValueOf)`.
+- **⚠️ 순환은 '정적으로' 판정**한다(의존 그래프 DFS). 계산 중 방문 표시로 끊으면 그리는 순서에 따라 같은
+  데이터가 다른 숫자가 된다. 순환에 걸린 도형으로 들어가는 참조는 전부 `-`(자기 자신 참조 포함).
+- **⚠️ 참조는 선이 있어야 '고를' 수 있지만, 선을 지워도 값은 계속 해석된다**(조용히 끊지 않는다). 대상 도형·행이
+  사라지면 `-` + 드롭다운 '(도형 연결 끊김)'.
+- **⚠️ 시트 복제(`duplicateFlowMap`)는 시트 안 참조를 새 노드 id로 다시 잇는다** — 안 하면 사본 참조가 전부 `-`.
+- 계산 결과 행에 `id`·`value`(숫자 또는 null)가 실린다(참조 해석용).
+- 등록: `normalizeFlowTable` · `sameFlowTable`(`flowNodeRefKey`) · `flowFingerprint`(**있을 때만** 8번째 칸).
+  **영속화 신규 지점 0곳**. 검증: `verify:flow` `#180~#185b`·`#139~#139h`·`#G184~#G184e`.
+
+**구름선 그룹 — 도형 몇 개를 테두리로 묶어 표시 (2026-10 사용자 요청, ⚠️ 회귀 주의)**
+
+툴바 **구름선** 버튼 → 캔버스 빈 곳에서 드래그로 묶을 도형들을 감싸면 **가운데가 들어간 도형**이 묶인다.
+테두리를 고르면 오른쪽에 **구름선 속성**(이름 · 선 색 · 선 종류 = 구름선 + 연결선과 같은 7종 · 굵기 · 묶인 도형
+체크리스트 · 삭제) 패널이 뜬다. 테두리나 이름을 끌면 묶인 도형이 함께 움직인다.
+
+- **⚠️ 테두리 좌표를 저장하지 않는다 — 저장 = `FlowMap.groups[] = { id, label, nodeIds, stroke?, lineStyle?, lineWidth? }`**.
+  테두리는 매 렌더 `flowGroupBounds`(소속 도형 + 여백, 이름이 있으면 위쪽 추가)로 계산한다 — 사용자 요구
+  "도형 위치에 따라 크기가 유연하게". 좌표를 저장하는 방식으로 되돌리지 말 것(도형을 옮기면 테두리가 남는다).
+- **생략 = 기본값**: `lineStyle` 생략 = 구름선, `lineWidth` 'normal' 생략, `stroke` 기본색 생략, 그룹이 없으면
+  `groups` 필드 자체를 생략(마지막 그룹을 지우면 필드를 지운다 — 빈 배열 저장 금지).
+- **⚠️ 등록 5곳**: `normalizeFlowMaps`(**노드 정규화 뒤** `normalizeFlowGroups(m.groups, seenNodeIds)` + 재구축
+  리터럴) · `flowFingerprint`(**있을 때만** `gr` 키 — 없는 시트 지문 불변) · `removeNode`(소속에서 빼고 비면 그룹 제거)
+  · `duplicateFlowMap`(새 그룹 id + 새 도형 id로 다시 잇기) · 캔버스 렌더. **영속화 신규 지점 0곳**.
+- **그룹 안쪽 면도 잡아 끌 수 있다(2026-10 사용자 요구 "구름선 자체를 클릭해서 이동")** — 단 구름선 그리기·
+  그룹 이동 모드에서는 포인터를 놓는다(그 안에서 사각형을 그려야 한다). 그 대가로 그룹 안 빈 곳의 왼쪽 드래그는
+  화면 이동이 아니라 그룹 이동이 된다 → **우클릭(·가운데) 드래그 = 화면 이동**이 어디서나 대신한다.
+  그룹 끌기는 시작 시점 소속을 고정하고, 격자 스냅 후 움직임이 없으면 커밋하지 않는다.
+- **그룹 이동(CAD MOVE) 모드** — 툴바 '그룹 이동'(구름선 그리기·연결과 배타). 빈 곳 드래그 = 선택 사각형(가운데가
+  든 도형), 선택된 도형을 끌면 선택 전체가 함께 이동, 선택 밖 도형을 끌면 그 하나만. 다중 선택은 **캔버스 세션
+  로컬**(저장 지점 0곳, 모드를 끄면 비운다). 이동은 구름선 끌기와 **같은 `gdrag` 경로**(미리보기·격자·헛커밋 방지 공유)
+  이고 커밋은 `onNodesChange` 한 번이라 연결선·구름선은 도형을 따라 모양 그대로 유지된다.
+- **⚠️ 우클릭 화면 이동이 도형·선 위에서도 되려면** 도형·선·핸들의 pointerdown이 **왼쪽 버튼이 아니면 전파시켜야**
+  한다(`if (e.button !== 0) return;` — stopPropagation 앞). svg `onContextMenu` preventDefault 필수.
+- 색 선택기는 도형·연결선과 **같은 `ColorPicker`**(검증 `#56`이 3곳을 센다).
+- 범위 밖(의도): 그룹 중첩·그룹 간 연결선·테두리 직접 리사이즈(소속 도형이 정한다)·그룹 접기.
+- 검증: `verify:flow` `#190~#195`·`#139i~#139q`·`#G190~#G193f`·`#56d`.
+
+- **범위 밖(의도)**: 체크 → 취소선 자동 연동 · 도형 위에서 직접 체크(도형 내용은 `pointerEvents="none"`이라 입력은
+  팝업에서만) · 메모 탭 서식 · 팝업 크기 조절 · 위치 영속화.
+- 검증: `verify:flow` **640건** — 미러 `#152~#158h` + 드리프트 `#136~#136n` + 소스 가드 `#G173c`·`#G176~#G181`.
+  **변이 54종 + 음성 대조 2종으로 검출을 실증**했다(src 49종 · 미러 5종). 클램프의 '좁은 팝업 + 좁은 창' 분기는
+  처음 픽스처(팝업이 넓다)로는 밟히지 않아 `#158h`·드리프트 케이스를 보강했다.
+
+- **범위 밖(의도)**: undo/redo(Drive 폴링이 타 기기 편집을 받아온 뒤 undo가 최신값을 덮는다 —
+  `RebalanceTargetRestoreModal`이 같은 이유로 포기), PNG 내보내기, 자동 레이아웃,
+  계좌 삭제 시 노드 캐스케이드 정리.
+  **알려진 한계**: 인앱 보드와 새 창을 동시에 열면 이론상 마지막 쓰기가 이긴다(아이콘이 새 창을 열 때
+  인앱 보드를 닫으므로 실사용에서 겹치는 구간은 짧다 — 메모 달력 창과 동일 절충).
+  계좌가 0개면 저장 effect가 조기 반환해 흐름도가 저장되지 않는다(chartPrefs와 동일한 기존 한계).
+- 검증: `npm run verify:flow` (640건 — 미러 #1~#26 + **팬/줌 #38~#44b** + **색 #45~#48b** +
+  **화살촉 방향 #58~#62d** + **선 종류 #67~#74c** + **시트 #80~#86c** + 소스 텍스트 가드
+  #27~#36·**#49~#57c**·**#63~#66b**·**#75~#79**·**#87~#93b**·**#94~#94i**(툴바 제목) + JSX 주석 #37
+  + **파트③ 실모듈 드리프트 가드 #95~#102b**).
+  참조 구현은 `flowMap.ts`의 `normalizeFlowMaps`·`flowMapsHaveContent`·`flowFingerprint`·`edgePath`·
+  `removeNode`·`pruneOrphanEdges`·`roundNode`·`resolveFlowNodeView`·`countDanglingNodes`·
+  `sanitizeHexColor`·`readableTextColor`·`normalizeFlowViewport`·`sameFlowViewport`·`fitFlowViewport`·
+  `normalizeFlowArrow`·`arrowHeads`·`resolveFlowLineStyle`·`normalizeFlowLineWidth`·`flowLineRender`·
+  **`makeFlowMap`·`nextFlowMapName`·`addFlowMap`·`duplicateFlowMap`·`removeFlowMap`·`renameFlowMap`·
+  `moveFlowMap`** 본문과 **항상 1:1 동기화**할 것. 가드는 영속화 배선을 정규식으로 단언하므로, 실패 시
+  **먼저 정규식이 낡았는지 확인**하고 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+  ⚠️ **파트③(#95~)은 `src/flowMap.ts` 실모듈을 임시 폴더에 복사해 import한 뒤 미러와 대조하는
+  드리프트 가드다**(verify:backtest #450 선례) — 파트①이 **미러만** 검사하므로, 이 가드가 없으면
+  src에만 반영한 변경이 그대로 통과한다(실측: 시트 조작 변이 5종이 미러 테스트를 전부 뚫었고
+  이 가드를 넣은 뒤 5종 모두 잡혔다). 생성 id는 양쪽이 다르므로 **등장 순서 토큰**으로 정규화해
+  비교한다 — 위치 기반으로 뭉개면 '사본이 원본 노드 id를 그대로 쓰는' 얕은 복사 회귀가 지워져
+  죽은 단언이 된다. 지원하지 않는 런타임에서는 명시적으로 건너뛴다고 출력한다.
+  ⚠️ 시트 가드도 **변이 18종 + 음성 대조 1종**(patchMap·commitViewport를 `prev[0]` 고정으로 ·
+  전환 순서 뒤집기 · 전환 복원을 `applyViewport`로 · touched 리셋 삭제 · 복제 얕은 복사 ·
+  마지막 시트 삭제 허용 · 시트 상한 무시 · 순서 이동 경계 삭제 · 빈 이름 허용 · 캔버스 `key` 제거 ·
+  늦은 배열의 활성 id 복구 삭제 · 확인 없는 즉시 삭제 · 이름 입력 키 분기 삭제 · 상한 5로 되돌림 ·
+  탭 바 렌더 삭제 · 손 splice · 삭제 버튼 잠금 해제)으로 **실제 검출을 확인**했다.
+  ⚠️ 툴바 제목 가드(#94~#94i)도 **변이 8종 + 음성 대조 1종**(제목을 하드코딩 span 으로 되돌림 ·
+  클릭 편집 제거 · 키 분기 속성 제거 · `onBlur` 커밋 제거 · 제목/탭 판별자 각각 제거 ·
+  `readOnly` 분기 제거 · `startRename` 이 편집 위치 무시)으로 검출을 실증했다.
+  ⚠️ **`#94b`는 처음에 죽은 단언이었다** — `{map?.name || '자금 흐름도'}`가 편집 버튼과 readOnly
+  span **두 분기**에 있어, '한 번이라도 등장하는가'로 재면 버튼 쪽만 하드코딩으로 되돌려도 span이
+  대신 통과시킨다. 지금은 `…</button>`·`…</span>` 두 형태를 각각 단언한다(전역 존재 검사로
+  되돌리지 말 것).
+  ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 28종 + 음성 대조 1종**(정규화가 viewport를
+  삼킴 · 지문에서 viewport 누락 · 레거시를 매번 변경으로 판정 · 배율 클램프 제거 · hex 소문자화 ·
+  글자색 문턱 하향 · 선 색 정규화 제거 · seed 복원 삭제 · 복원이 touched를 세움 · 늦은 데이터의
+  화면 미채택 · viewportOnly가 dirtyRef를 세움 · 채택 가드가 vpDirtyRef까지 봄 · flush가 화면을
+  먼저 반영 안 함 · flush가 화면만 바뀐 세션을 버림 · touched 가드 제거 · 커밋 전 정규화 제거 ·
+  no-op인데 새 객체 · 맞춤 손계산 복귀 · 캔버스에 비제스처 경로 전달 · 단일 marker 복귀 · marker에서
+  기본색 제외 · 선 색 무시 · 선택 후광 제거 · 글자색 흰색 고정 · 줌 한계 손복제 · 선 색 선택기 삭제 ·
+  기본색 되돌리기가 hex 박제)으로 **실제 검출을 확인**했다.
+  ⚠️ 그 과정에서 **자기 테스트의 결함 2건**을 잡았다: (a) `#42f`가 옵셔널 체이닝 없이 `.viewport.scale`을
+  읽어 변이 시 **스크립트가 죽으면서 전 변이가 '검출'로 위장**됐다 (b) `#56d`가 raw 소스를 봐서
+  `ColorPicker` **주석 안의 `onPick(null)`**에 걸린 죽은 단언이었다 → 새 가드는 전부 `stripComments`를
+  거친 사본(`boardNC`/`canvasNC`/`inspNC`)을 본다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+  ⚠️ 화살촉 방향 가드도 **변이 12종 + 음성 대조 1종**(정규화가 `'from'`을 버림 · `arrowHeads`가
+  `'from'` 무시 · 레거시 미설정 렌더 변경 · 옛 3값 비교로 복귀 · 캔버스가 arrow 직접 비교 ·
+  `markerStart` 미렌더 · 선택지 삭제 · 옛 `edge.arrow || 'to'` 비교 · 안내 문구가 `arrowHeads` 대신
+  직접 비교 · 시작 화살촉인데 순서 안 뒤집음 · 문구 렌더 삭제 · `edgeEnds` 미전달)으로 검출을 실증했다.
+  ⚠️ **개수 세는 가드는 파일 전역으로 재지 말 것** — `#64`가 처음에 `{ k: 'none'`을 금액 출처
+  선택지에서도 세어 4 대신 5가 나왔다. 반드시 `ARROW_CHOICES` 구간을 잘라서 본다.
+  ⚠️ 선 종류 가드도 **변이 23종 + 음성 대조 1종**(레거시 흡수 제거 · 파선 패턴/기본 굵기 변경 ·
+  패턴을 px 고정으로 · 이중선 안쪽 굵기 · 정규화가 필드 삼킴 · 기본값 박제 2곳 · 레거시 계속 저장 ·
+  지문이 raw dashed 로 복귀 · 지문에서 굵기 누락 · 캔버스가 옛 dasharray/고정 굵기 · 이중선 덮는
+  색 변경 · 바깥 path 에 화살촉 · 후광 고정 굵기 · 미리보기가 손계산/자체 dasharray · 선택지 축소 ·
+  옛 2택 토글 복귀 · 레거시 해석 없이 읽기 · 새 선에 dashed 재삽입)으로 검출을 실증했다.
+  ⚠️ **연결선 렌더는 두 분기(이중선/일반선)라 파일 전역 정규식이 죽은 단언이 된다** — 같은 문자열이
+  양쪽에 있어 한쪽만 되돌리는 변이가 통과한다. 실측으로 죽은 단언 **3건**(일반선 굵기 고정 · 바깥
+  path 에 화살촉 추가 · `markerStart` 제거)을 이렇게 잡았다 → `doubleBranch`/`singleBranch`
+  슬라이스를 공유하고 필요한 쪽을 각각 단언한다.
+  ⚠️ **구간 슬라이스의 끝 앵커로 JSX 주석을 쓰지 말 것** — `stripComments`가 지워 구간을 못 찾고
+  그 가드들이 통째로 실패한다(실측). 코드에 남는 토큰(`stroke="transparent"` 등)을 쓴다.
+  ⚠️ 변이 하네스의 앵커도 **들여쓰기까지 포함해 고유하게** 잡을 것 — `...(stroke ? { stroke } : {}),`는
+  `makeFlowNode`(4칸)와 `edges.push`(8칸)에 둘 다 있어, 구분하지 않으면 `replace`가 엉뚱한 쪽을 잡아
+  **스크립트가 죽고 그게 '검출'로 위장**된다.
+
+### 분할매수/매도 계산기(`LadderTradeModal`) — 앵커는 '수량'이 아니라 '금액' (⚠️ 회귀 주의)
+
+리밸런싱 표의 **현재가 셀 클릭**으로 여는 호가 사다리 계산기(z-1050, 드래그 이동). 매수(+)·매도(−)
+모두 같은 컴포넌트가 `side`로 방향만 바꿔 연다(`dir = isSell ? 1 : -1`). 여는 시점의 방향은 리밸런싱이
+지시하는 쪽이고, 그 뒤로는 **계산기 안의 매수/매도 토글**이 바꾼다(아래 '방향은 사용자가 고른다' 절).
+
+- **⚠️ 1급 계약 — 사다리는 금액을 고정하고 수량을 푼다. 절대 되돌리지 말 것**:
+  리밸런싱이 정하는 1차값은 '이 종목을 ₩N만큼 늘린다/줄인다'(증가분·부족분)이고, 표의 수량은
+  그 금액의 **파생값**이다(`usePortfolioData` `action = Math.trunc((목표금액 − 현재평가금) / price)`).
+  따라서 사다리도 `targetAmount = |totalAction| × itemPrice`를 앵커로 삼고 수량을 푼다 —
+  **호가를 올려 팔면 같은 금액에 더 적은 수량이, 호가를 내려 사면 같은 금액에 더 많은 수량이** 필요하다.
+  - **과거 버그(매도)**: 매도만 수량을 `sellTarget = |action|`으로 고정한 채 호가를 올려 팔아
+    **목표금액을 초과 매도**했다(실측: 목표 ₩7,961,800 → 매도 ₩9,227,400, **+15.9%**. 8,470원 ·
+    호가 100 · 배수 4 · 940주). 금액 앵커로 바꾸면 같은 조건에서 **819주 / ₩7,961,030**(121주 절약).
+  - 매수는 원래도 금액 앵커(`maxAffordableQty(fund)`)라 **의미 변경이 없다** — 아래 폭주 케이스를
+    빼면 새 솔버와 결과가 1주도 다르지 않다(전 조합 대조 완료).
+- **⚠️ `solveQtyForAmount`가 그 구현체이고 매수·매도가 `doRegenerate`의 **같은 한 줄**을 쓴다** —
+  `isSell ? sellTarget : …` 삼항으로 되돌리지 말 것(검증 #49가 `sellTarget` 식별자 부재까지 단언).
+  총액이 목표금액을 넘지 않는 **최대 수량**을 이분탐색으로 푼다. 술어
+  `P(Q) = (총액 ≤ 목표 ∧ 사다리 안 잘림)`는 Q에 단조감소라 이분탐색이 성립한다(모든 행 가격 > 0이라
+  총액은 Q에 단조증가, 잘림은 한 번 나면 계속 난다).
+- **⚠️ 허용 오차는 `1e-6` 부동소수 여유가 아니라 '가격 격자 1칸'**(`amountTolOf` = 원화 1원 / 달러 $0.01).
+  목표금액은 **원시 현재가**로 계산되는데(`|action| × price`) 사다리는 **격자에 스냅된 가격**으로만
+  거래하므로(`buildLadder`의 `roundTo`), 격자가 가격을 **올려** 반올림하면 1주조차 목표를 넘겨
+  `Q=0` **빈 사다리**가 된다. 실측: 펀드 기준가 1,234.56 · action −1 → 첫 호가 1,235 > 목표 1,234.56
+  → 매도 계산기가 통째로 빈 채로 열렸다(소수부 ≥ 0.5인 가격 + `|action|=1` 전부 해당. 펀드 NAV는
+  `api.ts`가 소수 2자리를 캡처하므로 구조적 정상값이다). 스냅 상승폭은 최대 격자의 절반이라
+  격자 1칸이면 항상 덮이고, 그래서 **`baseQty >= 1`이면 `Q >= 1`이 보장된다**(검증 #74·#75).
+  `action = trunc(금액/가격)`이 이미 1주분을 버리므로 이 여유는 그 안에 묻힌다 — 실측상 정수 가격·
+  달러 전 조합에서 **실제 초과액은 0원**이고, 오차는 `Q=0` 경계를 구제할 때만 쓰인다(경계: 검증 #70).
+- **⚠️ 빈 사다리는 반드시 이유를 밝힌다** — 잔여 줄은 `totalCost > 0`, 푸터는 `totalQty > 0`으로
+  게이팅돼 있어 `Q=0`이면 화면에 `0주 / — / —`만 남아 **계산기가 고장 난 것처럼 보인다**.
+  표 본문에 안내 행(`!rows.length`)을 둔다(검증 #79).
+- **⚠️ 잘린 사다리(Σ수량 < Q)는 거부한다** — 매수는 호가를 내리다 가격 하한에 닿으면 `buildLadder`가
+  남은 행을 버리는데, 그러면 총액이 더 늘지 않아 ① 옛 **선형탐색**이 `cost > fund`에 영영 걸리지 않아
+  상한 100000까지 폭주했고(실측: 현재가 1,000 · 호가 50 · 목표 100,000원 → 100000 반환, 정답 210),
+  그 탐색이 **렌더 이펙트에서 동기 실행**돼 화면이 수 초간 멈췄다 ② `targetQty`가 실제 배치 수량보다
+  커져 요약의 '수량'이 거짓이 된다. 선형탐색으로 되돌리지 말 것(검증 #66).
+- **⚠️ `baseQty`(= `|totalAction|`)는 비교 기준일 뿐 사다리 수량을 정하지 않는다** — 화면 푸터의
+  `기준 N주 → M주`와 절약/추가 수량 표시에만 쓴다. 여기에 사다리를 고정하면 그게 곧 옛 버그다.
+
+**수량 직접 입력 = 사다리의 새 시작점 (`seedLadder`) (⚠️ 회귀 주의 — 옛 `redistribute`로 되돌리지 말 것)**
+
+사용자가 어느 행의 수량을 직접 넣으면 **그 값이 그 아래 호가의 출발점**이 된다: 10주를 넣었으면 다음
+호가는 11주, 그 다음은 12주(배수 m이면 +m씩). 행 수·총수량은 **목표 금액**이 다시 푼다.
+발단(사용자 보고 2026-09): 10주를 넣었는데 다음 호가가 1주로 되돌아가고 총수량이 49주 그대로였다.
+
+- **⚠️ 폐기된 옛 규약**: `redistribute(rows, targetQty, mult)`는 총수량을 `targetQty`에 **고정**하고
+  행 수를 그대로 둔 채 잠금 이후를 `1,2,3…`으로 **다시 깔았다**. 그래서 시드가 사다리에 이어지지 않고,
+  사용자가 무엇을 넣든 총수량이 변하지 않았다. 이 함수는 **삭제**됐다(가드 #130이 식별자 부재를 단언).
+- **규칙 한 줄**: 각 행의 수량 = `직전 잠금 행의 수량 + 배수 × 그 행까지의 거리`. 잠금이 없으면
+  **가상 시작점 0**에서 출발하므로 `m, 2m, 3m…` — 종전 사다리와 같은 식이 된다.
+- **⚠️ 잠금이 하나도 없으면 레거시 경로(`solveQtyForAmount` + `buildLadder`)에 그대로 위임한다**
+  (하위호환의 축). 탐욕 배분은 그 둘과 대수적으로 같지만(실측 1,512조합 전부 일치), 위임이 있어야
+  "수량을 건드리지 않으면 종전과 1주도 다르지 않다"가 논증이 아니라 **구조**로 보장된다
+  (`applyPins`의 조기 반환과 같은 규약). 위임 없이 재구현하면 **수량 상한(`MAX_LADDER_QTY`)과 금액
+  허용오차 경계에서 실제로 갈렸다**(실측 20조합).
+- **⚠️ 예산은 '자동 호가'(현재가 ± i×호가간격)로 잰다 — 지정 단가(핀)로 재지 말 것**: 핀으로 재면
+  단가 입력 한 번이 사다리 크기를 통째로 좌우한다(핀이 100배면 첫 행에서 예산이 말라 **사다리가
+  1행으로 붕괴**한다 — 사용자 스크린샷이 정확히 그 상태였다). `doRegenerate`도 `solveQtyForAmount`를
+  **핀 적용 전** 가격으로 부르므로(`applyPins`는 그 뒤) 이쪽이 기존 규약과 같다. 표시 가격은 호출부의
+  `recalcAllPrices`가 핀 기준으로 다시 깐다(그래서 `commitLadder`가 그 함수를 반드시 거친다).
+- **⚠️ 잠금 행은 예산과 무관하게 유지한다** — 사용자가 명시적으로 넣은 값이고, 수동 편집이 목표금액을
+  넘을 수 있다는 것은 이 계산기의 기존 계약이다(넘으면 요약이 '초과'로 경고한다). 잠금 분기에 예산
+  조건을 달면 **예산이 마른 뒤의 잠금 행이 조용히 증발**한다(#129b가 그 경우만 잡는다 — 잠금 1개짜리
+  #129로는 안 잡히는 죽은 단언이었다).
+- **⚠️ `targetQty`는 이제 사다리가 정한다** — `commitLadder`가 새 합으로 갱신한다. 옛 값으로 두면
+  요약이 `배분 N주`(`qtyGap`)로 **있지도 않은 미배분**을 단언한다.
+- **⚠️ 행 수 상한(`MAX_LADDER_ROWS`)과 수량 상한(`MAX_LADDER_QTY`)을 둘 다 건다** — 옛 경로는 수량
+  상한이 행 수까지 간접적으로 묶었지만(mult=1에서 ~450행), 이 함수는 '예산이 남는 동안' 행을 이으므로
+  예산이 크고 호가가 촘촘하면 행이 무한정 늘어난다.
+- **⚠️ `unlockRow`도 같은 경로를 탄다** — 함수형 `setRows(prev => …)`로 되돌리지 말 것. 같은 커밋에서
+  `targetQty`도 갱신해야 하는데, updater 안에서 setState를 부르면 StrictMode 이중 호출에서 부수효과가
+  두 번 돈다(`handleRowQtyChange`와 같은 규약: 렌더 스코프의 `rows`를 읽는다).
+- **범위 밖(의도)**: 단가(핀) 편집은 종전대로 **행 수를 다시 풀지 않는다**(수동 단가 편집이 목표금액을
+  넘을 수 있다는 기존 계약 유지). 잠금 이전 행의 수량도 건드리지 않는다(그 위는 종전 램프 그대로).
+- **화면 규약**: 옛 `현재가 기준`/`리밸런싱 자금` 라벨은 **`목표 금액`**으로 통일(양쪽이 같은 뜻이 됐다).
+  매매 금액 아래 **`잔여`**(목표 − 실제)를 노출하고 목표의 1%를 넘으면 앰버로 강조한다 —
+  호가가 지나치게 넓어 사다리가 가격 하한에 먼저 닿으면 목표금액을 크게 못 채우는데(실측: 8,470원에
+  호가 400 → 목표의 9%만 매수) 그걸 숨기면 안 된다. 푸터는 금액 우위(`uplift`)가 아니라 **수량 이득**
+  (`qtyDiff = totalQty − baseQty`)을 보여 준다 — 금액이 고정됐으니 이득은 이제 수량으로 나타난다.
+- **⚠️ 순수 함수 구간의 상수 위치**: `verify:ladder`는 이 파일의 **`function tri` ~ 컴포넌트 선언 직전**
+  구간만 잘라 평가하므로 `MAX_LADDER_QTY`/`MAX_LADDER_ROWS`/`QTY_EPS`/`AMOUNT_EPS`는 반드시 그 안에 있어야 한다
+  (위로 올리면 테스트가 ReferenceError로 죽는다). 같은 이유로 **그 구간 안 주석에 컴포넌트 선언
+  키워드를 그대로 적지 말 것** — `sliceFns`가 거기서 구간을 끊는다(실제로 한 번 그랬다. `lastIndexOf` +
+  이름 존재 검사로 명시적 실패로 바꿔 뒀다).
+- **호가별 등락률 열 = '전일 종가' 기준 (⚠️ 회귀 주의 — 현재가 대비로 바꾸지 말 것)**:
+  각 행의 `매수(매도)단가` 오른쪽에 그 호가가 **전일 종가** 대비 몇 %인지 표시한다(요약의 현재가격·
+  평균단가 아래에도 같은 기준의 작은 줄). 목적은 "전일 대비 오늘 얼마나 더 비싸게 팔 수 있는가(매도)
+  · 더 싸게 살 수 있는가(매수)"를 리밸런싱 표의 **등락률 열과 같은 축**에서 읽는 것 — 매도는 호가를
+  올릴수록 현재가 등락률보다 커지고, 매수는 내릴수록 작아진다(실측: 11,260 ▲6.56% · 호가 10 →
+  매도 32단계 ▲9.49% / 매수 32단계 ▲3.63%). **현재가 대비 %로 바꾸면 이 목적이 통째로 사라진다.**
+  - **⚠️ 전일 종가를 가격 격자로 반올림하지 말 것**: `prevCloseFrom = 현재가 ÷ (1 + 등락률/100)`인데
+    `changeRate`가 소수 2자리로 반올림돼 들어오는 경우가 많아 정수에 딱 떨어지지 않는다. 여기서
+    스냅하면 **현재가 행의 등락률이 표의 등락률과 갈린다**(예: 7,215 ▲2.19% → 스냅하면 2.20%.
+    실측 조합의 약 22%). 검증 #80·#81(변이 실증)·#81b.
+  - **⚠️ 현재가와 같은 호가는 '왕복 계산'이 아니라 등락률 **원값**(`baseRate =
+    normalizeChangeRate(changeRate)`)을 그대로 쓴다**: `p → p/(1+c/100) → 다시 %`의 왕복은 ±1e-15
+    오차를 남기는데, `c`가 소수 3자리 이상이고 `.xx5` 경계면(예: 6.565) 그 오차가 `toFixed(2)`를
+    갈라 **표는 ▲6.57%, 계산기는 ▲6.56%**가 된다. `api.ts`의 미국 주식 경로는 `changeRate`를
+    **반올림 없이** 넘기므로 실제로 도달 가능한 경로다. 원값을 쓰면 '대수적 보장'이 아니라
+    **같은 값**이라 어떤 자릿수에서도 문자열까지 일치한다. 적용 2곳 — 요약 `curRate`,
+    표의 `rowRate`(`row.price === currentPrice`일 때). 검증 #99·#99b(변이 실증)·#99c.
+  - **⚠️ 툴팁의 전일 종가는 단언이 아니라 근사 표기**(`prevLabel = 전일 종가 ≈ …(등락률에서 복원한
+    추정값)`): 툴팁 숫자는 표시용으로 격자에 반올림되므로 그 값으로 되계산하면 옆에 찍힌 등락률이
+    재현되지 않는다(원화 1,000 · ▼30.00% → '1,429' → 되계산 −30.02%. 저가 USD는 65% 조합에서 발생).
+    계산은 반올림하지 않는데 문구만 스냅값을 근거로 단언하면 모순이라 `≈`로 표기한다.
+    **3개 툴팁이 이 한 문자열을 공유**한다 — 손복제 금지. 검증 #100.
+  - **⚠️ null 계약 — 모르는 값을 0.00%로 단언하지 않는다**: 등락률 미확보(null/undefined/빈 문자열/
+    손상값)면 **열 자체를 렌더하지 않는다**(일간 지표 `dodAbsChange` 규약과 동일). 판정은 **타입까지**
+    본다 — `Number('')`·`Number([])`·`Number(false)`가 전부 0이라 손상값이 '변동 없음'으로 통과한다.
+    `changeRate ≤ −100`(전일 종가 복원 불가)·현재가 0 이하도 미표시. 검증 #85~#91.
+  - **⚠️ 표의 열 수는 단일 파생 상수 `colCount = showRate ? 6 : 5`** — thead th·tbody td·빈 사다리
+    `colSpan` **세 지점**이 갈리면 그 행부터 표 정렬이 통째로 깨진다(분배금 표 '렌더 지점 23곳'과
+    동일 클래스). th·td 모두 `showRate` 게이트 안에 있어야 한다. 검증 #93·#98.
+  - **⚠️ 가드는 선언이 아니라 '사용부'를 단언할 것**: 옛 가드는 `const rowRate = …` **선언만** 봐서
+    ① 등락률 td 통째 삭제 ② `showRate` 래퍼만 제거 ③ `rateText(rowRate)` → `rateText(curRate)`
+    바꿔치기 **세 변이가 전부 1153건 초록으로 통과**했다(적대적 리뷰가 실행으로 실증).
+    #94·#98은 렌더 지점을 직접 매칭한다. `verify:backtest` #259g와 같은 규약.
+  - **⚠️ 모달 폭 440 ↔ 가로 클램프 456 · 요약 높이 ↔ 세로 클램프 560은 짝**
+    (`RebalancingPanel`의 `window.innerWidth - 456` / `window.innerHeight - 560`).
+    폭·요약 줄 수를 바꾸면 같이 고칠 것 — 안 그러면 화면 가장자리 종목에서 모달이 잘린다. 검증 #97.
+  - 값 전달은 `RebalancingPanel`의 `ladderChangeRate`(라이브 파생) 하나 — 표의 등락률 열과
+    **같은 소스**라 두 화면이 갈리지 않는다. 해외계좌는 USD 가격의 등락률이라 환산이 없다.
+
+**모달 props는 스냅샷이 아니라 '살아 있는 행' — 열 때 현재가를 재조회한다 (⚠️ 회귀 주의)**
+
+현재가 셀을 눌러 계산기를 열면 **그 종목의 현재가를 즉시 재조회**한다(`onRefreshPrice` =
+App의 `handleSingleStockRefresh`). 목표 금액이 현재가에서 파생되므로 낡은 가격으로 열면 사다리
+전체가 낡는다(사용자 요청 2026-08).
+
+- **⚠️ `ladderModal` state는 `{ itemId, pos, side }` **셋만** 담는다 — 가격·수량·목표금액·등락률·
+  통화·환율을 복사해 들고 있으면 **재조회한 새 가격이 화면에 영영 닿지 않는다**. 게다가 목표 금액의
+  분자인 `action`은 `usePortfolioData`가 포트폴리오 전체 목표에서 재계산하는 값이라 모달 안에서는
+  되돌릴 수 없다(재조회가 돌려주는 것은 price 하나뿐) → `rebalanceData.find(d => d.id === itemId)`로
+  **매 렌더 다시 읽는다**. 파생식은 `renderRow`의 그것과 **문자 그대로 같아야** 한다.
+- **⚠️ `side`는 여는 시점에 박제하고, 그 뒤로는 **사용자의 명시적 토글로만** 바뀐다 — 라이브 파생
+  금지**: '추가' 칸은 같은 표에서 사용자가 편집하고 `maxAddLink` 유지 effect가 자동으로도 채우므로,
+  열어 둔 채 `totalAction`이 0이 되거나 부호가 뒤집힐 수 있다. 라이브로 파생하면 그 순간
+  분할**매도** 계산기가 제목·색·`dir`까지 통째로 분할**매수** 계산기로 뒤집힌다(사용자가 연 적 없는 창).
+  ⚠️ 열림 게이트(`ladderOpenable = itemPrice > 0`)는 `renderRow`에만 있어 **모달 렌더 경로를 막지 못한다**.
+  대신 부호가 어긋나면 **명시적으로 미적용**한다 — `ladderSignOk`가 false면 목표 금액·기준 수량을
+  0으로 넘기고 `emptyReason`으로 사유를 밝힌다. ⚠️ 이때 빈 사다리 기본 문구('목표 금액이 1주 값보다
+  작습니다')를 재사용하면 **거짓 설명**이 된다(실제 원인은 1주 값 미만이 아니다).
+- **⚠️ `key={ladderModal.itemId}` 필수** — 없으면 A종목 계산기를 연 채 B종목 현재가를 눌렀을 때
+  같은 인스턴스가 재사용돼 A의 지정 단가·호가·배수가 **B의 사다리에 그대로 적용**된다(8천원대 핀이
+  55,000원 종목에 박힌다).
+- **부수효과는 `handleSingleStockRefresh` 그대로** — `PortfolioTable`의 '클릭하여 현재가 새로고침'과
+  **같은 함수**라 종목명·현재가·등락률 갱신과 `stockHistoryMap` 스탬프가 함께 일어난다(리밸런싱 표의
+  현재가 셀이 '읽기 전용'이 아니게 된 것은 의도된 변화다).
+
+**방향은 사용자가 고른다 · 목표 금액은 직접 입력할 수 있다 (2026-09, ⚠️ 회귀 주의)**
+
+계산기 안 **매수/매도 토글**로 방향을 직접 고르고, **목표 금액 칸**에 금액을 직접 넣을 수 있다
+(사용자 요청 2026-09: "현재가를 누르면 매도매수기가 활성화되고, 매도할지 매수할지를 선택하고
+매도 매수 계산기를 사용할 수 있게"). 그 결과 **수량 0인 종목**(리밸런싱이 지금 매매를 지시하지
+않는 종목)에서도 계산기를 열어 "얼마어치 나눠 살까"를 따져볼 수 있다.
+
+- **⚠️ 열림 게이트는 `ladderOpenable = itemPrice > 0` 하나다** — 옛 `totalAction !== 0`으로 되돌리면
+  방향·금액을 고를 수 있게 된 지금도 **리밸런싱이 매매를 지시하는 종목에서만** 계산기에 닿을 수 있어,
+  이 기능의 절반이 진입점 없이 죽는다. **가격 0인 행(예적금·기준가 미로드 펀드)만은 계속 막는다** —
+  호가 격자가 없어 사다리가 원리적으로 만들어지지 않는다.
+- **⚠️ `side`의 소유자는 끝까지 **호출부**다 — 모달이 자체 state로 들지 말 것.** 모달은
+  `onSideChange(next)`로 **요청만** 하고 커밋은 부모가 한다(인앱 = `setLadderModal(m => ...)`,
+  별도 창 = 창 로컬 `ladderSide`). 모달이 자기 state를 들면 부모의 `ladderModal.side`와 갈려
+  ⧉ 확장·'열려 있는 창' 표시가 화면과 **다른 방향**을 가리킨다. 미전달이면 토글을 **렌더하지 않는다**
+  (`onExpand`·`onSaveLog`와 같은 규약 — 눌러도 아무 일이 없는 죽은 버튼을 두지 않는다).
+- **⚠️ 별도 창의 `WIN_ID`는 URL의 `SIDE`로 **고정**한다** — 창 안에서 방향을 바꿔도 그 값은 그대로다.
+  라이브 `ladderSide`로 파생시키면 같은 종목의 창이 방향을 바꿀 때마다 **다른 창으로 인식**돼 앱의
+  '열려 있는 창' 표시와 어긋난다. (알려진 한계: 그래서 앱 쪽 표시는 창을 연 시점의 방향으로 남는다.)
+- **⚠️ 1급 계약은 그대로다 — 사다리는 여전히 '금액을 고정하고 수량을 푼다'.** 바뀐 것은 그 앵커의
+  **출처**가 '리밸런싱 파생' 하나에서 **'파생 또는 사용자 입력' 둘**로 늘어난 것뿐이다.
+  구현은 prop을 `targetAmount: autoTargetAmount`로 받고 내부에서
+  `const targetAmount = manualAmount ?? autoTargetAmount;`로 되돌린다 → **아래 사용부 전체**
+  (재생성 effect·잔여·이득·기록 payload·effect deps)가 **무수정**이고, 그래서 `#53`의
+  `[currentPrice, tickSize, targetAmount, side, mult]` 계약도 그대로 성립한다.
+- **⚠️ 빈 칸이 곧 '자동값 사용'(`null`)이다 — 0이 아니다.** 0·음수·문자도 전부 자동값으로 떨어뜨린다:
+  0을 앵커로 받으면 사다리가 통째로 비는데 그 상태는 '0원어치 사겠다'가 아니라 '아직 안 정했다'이다.
+  `applyAmount`가 **입력칸을 커밋값으로 되돌리므로**(`applyTick`과 같은 규약) 무효 입력이 자동값으로
+  떨어진 사실이 화면에 그대로 드러난다.
+- **⚠️ 커밋은 blur/Enter뿐이다** — `onChange` 커밋으로 되돌리지 말 것. `targetAmount`가 재생성 effect의
+  deps라 **타이핑 한 글자마다**(`1` → `10` → `100` …) 사다리가 다시 깔려 그때마다 수량 편집(`locked`)과
+  단가 초안이 날아간다.
+- **⚠️ 방향을 바꾸면 금액이 그 방향의 자동값으로 되돌아간다**(`useEffect(..., [side])`). 승계하면
+  매수 30만을 넣고 매도로 뒤집었을 때 그 금액이 유지돼 매도 자동값(리밸런싱이 실제로 지시한 금액)이
+  조용히 무시된다. ⚠️ 그 deps에 `autoTargetAmount`를 넣지 말 것 — 계산기는 열 때와 ⟳에서 현재가를
+  재조회하므로 자동값이 미세하게 바뀌고, 그때마다 사용자가 방금 넣은 금액이 날아간다.
+- **⚠️ 기준 수량(`baseQty`)은 직접 입력한 금액에서 **재계산**한다** — 정의가 '이 목표 금액을 현재가로
+  한 번에 거래하면 몇 주인가'라서다(자동값일 때는 `trunc(금액 ÷ 현재가)`인 `totalAction`과 정확히 같다).
+  옛 값을 그대로 두면 요약의 '기준 N주'와 푸터 툴팁('같은 목표 금액을 한 번에 거래하면 N주')이
+  **지금 화면에 없는 옛 금액**을 근거로 말한다.
+- **⚠️ 빈 사다리 안내에서 호출부의 사유(`emptyReason`)는 **자동값을 쓰는 동안만** 참이다** —
+  `(manualAmount === null && emptyReason) || 기본문구`. 사용자가 금액을 직접 넣어 비었다면 원인은 그
+  금액이 1주 값보다 작은 것이지 방향이 아니다(그대로 두면 방금 입력한 사람에게 거짓 설명을 한다).
+- **⚠️ 호출부의 사유 문구에서 '닫고 현재가를 다시 누르세요'는 이제 **거짓**이다** — 토글과 금액 입력이
+  생겨 **창을 닫지 않고** 그 자리에서 해결된다. 인앱·별도 창 **양쪽** 문구가 그 탈출구를 가리켜야 한다.
+- **토글 옆 한 줄(`sideHint`)이 '지금 이 금액이 어디서 왔는가'를 밝힌다**(직접 입력 / 리밸런싱 지시 /
+  직접 입력하세요). 자동값이 0인데 아무 말도 없으면 사용자는 빈 사다리만 보고 계산기가 고장난 줄 안다.
+- **영속화 지점 0곳** — `amountInput`·`manualAmount`·`ladderSide`는 전부 세션 로컬이고, `ladderModal.side`도
+  종전대로 저장되지 않는다. 기록(💾)에는 그 시점의 `targetAmount`·`baseQty`가 담기므로 직접 입력한 금액이
+  그대로 이력에 남는다(`buildLadderTrade` 무수정).
+- **범위 밖(의도)**: 방향·금액의 Drive 영속, 종목별 기본 방향 기억, 목표 금액의 비중(%) 입력.
+
+**사용자가 입력한 단가(핀)는 호가·배수·현재가가 바뀌어도 살아남는다 (⚠️ 회귀 주의)**
+
+옛 `doRegenerate`는 `buildLadder` 결과를 그대로 `setRows` 해서 사용자가 넣은 단가를 통째로 지웠고,
+그래서 호가를 한 칸만 고쳐도 "내가 입력한 매수단가가 이전 가격으로 되돌아가는" 버그가 났다(사용자 보고 2026-08).
+
+- **저장은 `pinnedPrices`(rowId → price)** — `handleRowPriceBlur` 커밋에서만 심고 `unlockRow`에서
+  지운다(⚠️ 지우지 않으면 '잠금 해제'가 다음 재생성에서 되살아나 아무 일도 하지 않은 것처럼 보인다).
+  ↺ 초기화는 핀을 통째로 비운다.
+- **⚠️ 핀은 재생성 effect deps에 넣지 말 것** — 단가를 하나 커밋할 때마다 사다리가 통째로 다시 만들어져
+  그 순간 수량 편집이 날아가고 스크롤도 튄다. effect는 `pinnedRef.current`로만 읽고 deps는
+  `[currentPrice, tickSize, targetAmount, side, mult]` **그대로** 유지한다.
+- **⚠️ 수량 편집(`handleRowQtyChange`가 세우는 `locked`)은 일부러 보존하지 않는다** — 배수·호가 간격이
+  수량 배분 자체를 재정의하는 값이라, 옛 수량을 들고 가면 새 배수와 정면으로 모순된다.
+- **⚠️ 핀이 사다리 반대편으로 넘어가면 적용하지 않는다**(`pinFits` = `dir * (pin − price) >= 0`):
+  핀은 절대 가격이라 현재가 재조회·호가 변경으로 base가 옮겨지면 반대편으로 넘어갈 수 있고, 그대로
+  앵커로 삼으면 **같은 가격이 두 행에 찍힌다**(실측: 매수 base 9,700 · 호가 100 · 핀 r2=9,900 →
+  9,700/9,600/9,900/9,800/9,700/9,600 — r0과 r4, r1과 r5가 같은 값 = 같은 가격에 두 개의 주문).
+  이 상태는 사용자가 만든 적이 없고 **base 이동이 자동으로 만든다**.
+  ⚠️ 방향 **안쪽**의 비단조(사용자가 r2를 r1보다 비싸게 지정)는 막지 않는다 — 직접 입력해 만든
+  상태이고, 수동 편집이 목표금액 초과까지 허용하는 것이 이 계산기의 기존 계약이다.
+  ⚠️ 적용하지 못한 핀을 `pinnedPrices`에서 **지우지는 않는다**(시세가 잠깐 튀었다 돌아오면 되살아나야
+  한다 — 사라진 인덱스의 핀과 같은 규약). 대신 모달 안 **앰버 안내 띠**가 미반영 건수와 ↺ 탈출구를
+  알린다(z-1050이라 `notify()`·`ConfirmDialog`가 가려지므로 피드백은 반드시 모달 내부 인라인).
+  **알려진 한계(의도)**: 매수 사다리에 현재가보다 **높은** 단가를 직접 입력하면 그 세대에는 적용되지만
+  다음 재생성에서 방향 게이트에 걸려 빠진다(안내 띠가 그 사실을 알린다).
+- **⚠️ 핀이 0건이면 `applyPins`가 `built`를 그대로 반환한다** — `recalcAllPrices`(핀 0개)는
+  `buildLadder` 출력과 대수적으로 같지만, 조기 반환이 있어야 "핀이 없으면 종전과 1원도 다르지 않다"가
+  논증이 아니라 **구조로 보장**된다(하위호환의 축).
+- **⚠️ `solveQtyForAmount`는 종전대로 핀을 보지 않는다** — 수동 편집이 목표금액을 넘으면 기존처럼
+  '초과'로 경고한다(기존 계약 유지). 핀 키는 **행 인덱스**(`r0`,`r1`…)라, 호가·배수를 바꿔 행 수가
+  달라지면 사라진 인덱스의 핀은 조용히 무시되고 다시 길어지면 되살아난다(사용자 시나리오는 r0).
+
+**Enter로 커밋 (⚠️ 회귀 주의)**
+
+매수단가·수량 칸은 blur뿐 아니라 **Enter**로도 반영된다(사용자 요청 2026-08 — 그전에는 마우스로 다른
+곳을 클릭해야만 단가가 반영됐다).
+- **⚠️ Enter는 `blur()`만 부른다** — 호가·배수 칸처럼 '커밋 후 blur'로 쓰면 이어지는 blur 핸들러가
+  **stale 클로저의 초안**으로 한 번 더 커밋한다(값은 같지만 `setRows`가 두 번 돌아 재앵커가 중복된다).
+  커밋 경로는 `onBlur` 하나로 유지한다.
+- **⚠️ JSX 속성 위치에는 어떤 주석도 넣을 수 없다** — 근거 주석은 `<td>`의 children 위치에 `{/* */}`로 둔다.
+
+- **영속화 지점 0곳** — 사다리는 계산기일 뿐 아무것도 저장하지 않는다(호가·배수·행 편집·지정 단가 전부
+  모달 로컬 state). `portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps 전 지점 무관.
+  ⚠️ 단 **현재가 재조회는 예외가 아니라 기존 경로 재사용**이다 — `handleSingleStockRefresh`가 하는
+  `setPortfolio`(currentPrice·changeRate·name)와 `stockHistoryMap` 스탬프는 `PortfolioTable`의 현재가
+  클릭과 완전히 동일하다.
+- **범위 밖(의도)**: 실제 주문 전송, 호가단위 규정(가격대별 틱) 자동 적용, 수수료·세금, 부분 체결 추적,
+  핀 적용 후 수량 재산출(목표금액 초과는 종전대로 '초과' 경고로만).
+- 검증: `npm run verify:ladder` (참조 구현 미러 #1~#45 + **금액 앵커 #58~#77** + **전일 대비 등락률
+  #80~#91·#99b·#99c** + **지정 단가 보존·방향 게이트 #101~#107·#115~#116** + **수량 시드 #19·#40~#42·
+  #120~#129b** + 배선 가드 #46~#57·#72~#73·#78~#79·**#92~#100**·**#108~#114·#117~#119·#130~#134** +
+  **방향 선택·목표 금액 직접 입력 #180~#187**).
+  ⚠️ **방향 선택 가드는 변이 15종 + 음성 대조 1종**(열림 게이트 옛것으로 복귀 · 모달이 side를 자체
+  state로 · 토글을 `onSideChange` 없이도 렌더 · 인앱 전환 배선 삭제 · 별도 창이 URL SIDE로 고정 복귀 ·
+  `WIN_ID`를 라이브 side로 파생 · 목표 금액 읽기 전용 복귀 · 금액을 `onChange`로 즉시 커밋 · 직접 입력이
+  자동값에 밀림 · 금액 null 계약 파괴(0도 채택) · 방향 전환 시 금액 리셋 삭제 · 기준 수량 옛 정의 ·
+  빈 사다리 안내 옛 문구 복귀 · 직접 입력 중에도 호출부 방향 사유 사용 · 토글 옆 출처 안내 삭제)으로
+  **실제 검출을 확인**했다.
+  ⚠️ **변이 하네스는 파일마다 줄바꿈을 따로 잡아야 한다** — `LadderTradeModal.tsx`만 CRLF이고
+  `RebalancingPanel.tsx`·`CardWindow.tsx`는 LF다. 한 종류로 통일해 적용하면 여러 줄 앵커가 조용히
+  '앵커 없음'으로 빠져 그 변이가 검증되지 않는다(실측 2건).
+  ⚠️ **수량 시드 가드는 변이 13종**(총수량 고정 복귀·레거시 위임 삭제·시드 무시하고 램프 재시작·예산을
+  지정 단가로 잼·행 수/수량 상한 제거·잠금 행이 예산에 걸려 사라짐·`recalcAllPrices` 생략·`unlockRow`
+  함수형 updater 복귀·배수 미전달·나머지 흡수 제거·시드 갱신 삭제·거리 리셋 삭제)**과 음성 대조 1종**
+  (주석만 변경 → 미검출)으로 **실제 검출을 확인**했다. ⚠️ 변이 앵커를 `const price = roundTo(basePrice +
+  dir * i * tickSize, decimals);`로 잡으면 **첫 일치가 `buildLadder`**라 아무것도 검증하지 못한다(실제로
+  그랬다) — `seedLadder` 쪽 루프까지 포함한 앵커를 쓸 것.
+  ⚠️ 등락률 가드는 변이 8종(td 삭제·게이트 제거·값 바꿔치기·왕복 복귀·툴팁 단언 복귀·폭/클램프 복귀)으로,
+  **현재가 재조회·핀 보존·Enter 커밋 가드는 변이 14종**(side 라이브 파생 복귀·`key` 제거·방향 게이트
+  제거·재생성이 핀을 버림·Enter 제거·재조회 제거·스냅샷 복귀·`emptyReason` 제거·안내 띠 제거·부호 게이트
+  제거·핀 커밋 제거·잠금 해제가 핀을 안 지움·조기 반환 제거·App 배선 제거)으로 **실제 검출을 확인**했다.
+  가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+  ⚠️ `#115b`는 **게이트를 뺀 코드가 실제로 중복 가격을 만드는지**를 함께 단언한다 — 지우면 #115가
+  동어반복이 된다.
+  ⚠️ 호출 개수를 상수로 못 박지 말 것(#48은 `=== 2`에서 '선언을 뺀 **모든** 호출이 dir을 넘긴다'로
+  강화됐다). 그리고 그 카운트는 반드시 `stripComments`를 거친다 — 이 저장소는 금지 근거를 바로 그
+  자리 주석에 적으므로, 원문으로 세면 주석 속 함수 이름이 유령 호출로 잡혀 가드가 영구히 실패한다.
+  ⚠️ prop **순서(인접성)** 를 단언하지 말 것(#92는 그 형태였다가 신규 prop 하나로 우연히 통과했다).
+  ⚠️ 미러는 `LadderTradeModal.tsx` **원문에서 순수 함수 구간을 잘라** 평가하므로 별도 동기화가 필요 없다.
+  단 `dir`·`side`·앵커를 컴포넌트가 실제로 넘기는지는 산술로 표현할 수 없어 **정규식 가드**가 맡는다 —
+  실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+
+**사용 이력(`kind:'ladderLog'`) · 별도 창(`card=ladder`) (2026-09, ⚠️ 회귀 주의)**
+
+계산기 타이틀바에 **기록(💾)** 과 **확장(⧉)** 버튼을 더했다. 기록은 그 사다리를 **오늘 날짜의 계산기
+이력**으로 남기고, 리밸런싱 표 목표 열의 **📅(과거 목표비중 불러오기)** 창이 목표비중 스냅샷과 **같은
+날짜 리스트**에서 보여 준다. 확장은 계산기를 별도 브라우저 창으로 연다.
+
+- **사용자 확정 규약 4종(2026-09 — 되돌리지 말 것)**: ① 기록은 **버튼을 눌렀을 때만**(자동 기록 금지 —
+  계산기는 '얼마에 사면 될까'를 훑어보는 탐색 도구로도 자주 열려, 자동이면 열어보기만 한 종목이 쌓여
+  정작 주문한 사다리를 못 찾는다) ② 표시는 **같은 날짜 리스트에 통합**(계산기만 쓴 날짜도 리스트에
+  나오고, 그 행은 '적용' 버튼이 잠긴다) ③ 같은 날 같은 종목·같은 방향은 **최신 1건 덮어쓰기**
+  ④ **메모 달력 칩은 띄우지 않는다**(그 기록은 📅에서만 본다).
+- **저장 = `calendarMemos`에 `kind:'ladderLog'` 재사용 → 영속화 신규 지점 0곳**(rebalTarget 선례).
+  지문(`portfolioStructureKey`의 `JSON.stringify(calendarMemos)`)·로드 정규화·백업 sticky·별도 창
+  브릿지가 전부 자동으로 따라온다. 앱 레벨 새 필드로 옮기지 말 것 — 영속화 7지점을 새로 만들어야 하고
+  하나만 빠지면 조용히 유실된다(가드 #164가 앱 레벨 `useState`/`setLadderLogs` 부재를 단언).
+  - **⚠️ 그 대가 — `CalendarModal`의 사용자 메모 필터는 `!m.kind`여야 한다.** 옛 필터
+    (`kind !== 'rebalTarget'`)는 새 kind를 전부 사용자 메모 줄로 렌더해 달력 칸에 `content` 첫 줄이
+    텍스트로 샌다(사용자가 칩 미노출을 택했으므로 특히 어긋나 보인다). 앞으로 kind를 추가해도 이
+    필터는 손댈 필요가 없다(가드 #165).
+  - 엔트리 = `{kind, portfolioId, accountName, currency, trades[], content}`, upsert 키
+    `(dayKey, kind, portfolioId)` + 그 안에서 `trade.key = (코드 또는 이름)|방향`.
+    ⚠️ 코드·이름이 둘 다 없으면 `ladderTradeKey`가 `''`를 돌려 **기록 자체를 막는다** — 빈 키로
+    저장하면 다음 기록이 종목과 무관하게 그것을 덮어쓴다.
+  - **⚠️ 날짜는 `getTodayKST()`** — `new Date().toISOString()`(UTC)은 한국 00:00~09:00에 **어제 칸**에
+    꽂힌다(`RebalancingPanel.addNewNote`가 실제로 그 버그를 냈다). 별도 창이 보낸 날짜도 믿지 않는다
+    (앱 탭이 정한다 — 조작된 URL로 연 창이 임의 날짜에 기록을 심지 못하게, 가드 #174b).
+  - **⚠️ 총수량·총액·평균단가는 `buildLadderTrade`가 `rows`에서 다시 계산한다** — 화면이 계산한 요약을
+    받아 적으면 나중에 rows만 손댄 호출부에서 둘이 갈린다. 상한은 종목 60 / 행 60(STATE는 백업 22본으로
+    복제된다), 초과분은 **오래된 것부터** 버린다.
+  - **⚠️ `at`(기록 시각)은 동일성 비교에서 제외**한다 — 아니면 같은 버튼을 두 번 누를 때마다 Drive
+    저장이 헛돈다.
+- **⚠️ 관리자 접속(impersonation) 중에는 기록·삭제 버튼을 노출하지 않는다** — 목표비중 기록은 관리자가
+  목표를 조정하는 정식 기능의 부산물이지만(공지까지 나간다), 계산기 기록은 관리자가 사용자 달력에 남길
+  이유가 없고 `calendarMemos`는 백업 복원 sticky라 되돌릴 수 없다(흐름도·백테스트 읽기 전용과 같은 근거).
+- **복원 창 통합(`RebalanceTargetRestoreModal`)**: 리스트는 `mergeRestoreSources(스냅샷, 계산기이력)`
+  합집합이고, 진입 버튼 게이트도 그 합집합이다(계산기만 쓴 계좌에서도 열려야 한다 — 그 창이 이력을
+  보는 유일한 경로다).
+  - **⚠️ 헤더 날짜 경고(`headerHasRecord`)는 목표비중 기록만 본다**(`targetDays`). 합집합(`byDay`)으로
+    재면 계산기만 쓴 날짜에서 "기록되지 않습니다"라고 경고해 놓고 **실제로는 기록되는 거짓 경고**가 된다
+    (App의 `handleTargetRestored`는 `kind === 'rebalTarget'`만 검사한다).
+  - **⚠️ 경고 전체가 `selMemo` 게이트 안**이어야 한다 — `sel`만 보면 계산기만 쓴 날짜에서
+    `modeMismatch`가 `'fixed' !== targetMode`가 되어 수시변경 모드에서 **거짓 경고**를 내고
+    `snapInvest`도 '적립식'으로 지어내진다.
+  - **⚠️ 이 창은 목표비중 기록에 대해서는 여전히 순수 읽기다**(INV-1 · `verify:rebal-restore #26`이
+    `calendarMemos` 토큰 부재를 단언). 삭제는 **계산기 이력 전용** 콜백(`onDeleteLadderTrade`)으로만
+    흐르고, 달력 칩이 없으므로 여기가 **유일한 삭제 경로**다(z-1070이라 확인창이 가려져 인라인 2단계).
+    ⚠️ 날짜를 바꾸면 `delKey`도 푼다 — 종목 키라 다른 날짜의 같은 종목 행이 확인 상태로 뜬다.
+  - 표는 사용자 요구대로 **목표금액 · 수량(기준 대비) · 평균단가 · 호가 · 배수 · 단계**를 싣고, 사다리
+    행 상세는 툴팁으로 뺀다(종목당 수십 행이라 펼치면 리스트가 묻힌다). 표 위에 **"적용은 목표비중만
+    되돌린다"**를 밝힌다 — 없으면 계산기 값까지 복원되는 것으로 읽는다.
+- **별도 창 = 새 창 종류가 아니라 카드 창 인프라 재사용(`card=ladder`)**: 계산기 값(목표금액·기준수량·
+  등락률)은 전부 `rebalanceData`의 그 종목 행에서 파생되는데, 카드 창은 이미 **원자재를 받아 스스로
+  파생을 계산**한다(INV-2). 새 창 종류를 만들면 앱이 파생값을 push해야 해서 그 불변식을 깬다.
+  - URL `/?cardWindow=1&card=ladder&pid=…&item=…&side=…`, winId·창 이름은 **`ladderWinId` 공유 헬퍼**
+    (App 레지스트리·패널 열림 표시·창 자기 id가 같은 문자열이라야 '열려 있는데 닫힘 표시'가 안 난다).
+  - **⚠️ `CARD_WINDOW_SUPPORTED`에는 넣지 않는다** — 그 목록은 **카드 헤더의 확장 버튼**을 렌더할
+    카드다. 넣으면 리밸런싱 카드 헤더에 계산기 확장 버튼이 떠 종목 없는 빈 창이 열린다. 그래서
+    `CardWindow`의 ladder 분기는 `isCardWindowSupported` 가드보다 **앞**에 있어야 한다(가드 #172b).
+  - **⚠️ 창에서 `window.open`을 직접 부르지 말 것** — 새 창의 opener가 **그 창**이 되어 앱 탭과 영영
+    연결되지 않는다(읽기 전용으로 굳는다). `card:cmd` op `openLadderWindow`로 앱 탭에 위임한다
+    (`calendar:openLedger` 선례). 기록도 같은 이유로 `saveLadderLog` op을 지난다.
+  - **⚠️ 창이 실제로 떴을 때만(`=== true`) 인앱 팝업을 닫는다** — 팝업이 차단됐는데 닫으면 계산기를
+    통째로 잃는다. 그래서 `openLadderWindow`가 boolean을 반환한다.
+  - `variant='page'`는 fixed·드래그·닫기 버튼만 끄고 나머지는 인앱과 **같은 컴포넌트**다. popup 폭
+    440은 종전 그대로(패널의 열림 위치 클램프 456과 짝 — `#97`).
+  - **알려진 한계(의도)**: `rebalExtraQty`('추가' 수량)는 앱 탭에서는 Drive에 저장되지만
+    (`chartPrefs.rebalExtraQtyMap` — '리밸런싱 추가 수량' 절) 창은 그 값을 받지 않는 **창 로컬 스크래치**라
+    계산기 창에서는 항상 0이다(그 창에 입력 UI가 없다). 앱 탭에서 넣은 '추가'는 반영되지 않는다.
+- **범위 밖(의도)**: 메모 달력 칩·패드(사용자가 미노출을 택함) · 계산기 이력의 '표에 다시 적용'(사다리는
+  주문 계획이지 목표가 아니다) · 이력 CSV/엑셀 · 계산기 창에서의 '추가' 수량 입력.
+- 검증: `npm run verify:ladder` 파트 **#140~#152f**(`src/utils.ts` 직접 import — 키·빌드·upsert·목록·
+  삭제·합집합) + **#160~#175**(배선 가드). ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 36종 +
+  음성 대조 1종**(달력 필터 되돌림 · 헤더 경고를 합집합으로 · 경고 게이트를 `sel`로 · 리스트를
+  `snapshots`로 · 진입 게이트 되돌림 · `entries` 미전달 · 기록 날짜를 UTC로 · 관리자 게이트 제거 ·
+  기록 버튼 삭제 · payload를 요약으로 · 빈 사다리 체크 제거 · 플래시 타이머 정리 삭제 · name/code 미첨부 ·
+  popup 스타일 분기 제거 · ladder 분기를 가드 뒤로 · 창이 `window.open` 직접 호출 · `CARD_OPS`에서 op 제거 ·
+  winId 손조합 · upsert가 누적 · `at` 비교 포함 · 상한 제거 2종 · delete가 원본 반환 ·
+  `CARD_WINDOW_SUPPORTED`에 ladder 추가 · 창이 스냅샷 파생 · 삭제 버튼 삭제 · 표 항목 축소 · 창 날짜 신뢰 ·
+  앱 레벨 state 도입 · 확장 게이트 제거 · `openLadderWindow` 무반환 · `delKey` 잔존 · 확장 버튼 삭제 ·
+  page 드래그 유지)으로 **실제 검출을 확인**했다.
+  ⚠️ **`LadderTradeModal.tsx`는 CRLF**다 — 여러 줄 앵커로 변이를 만들 때 `\n`만 쓰면 앵커가 안 맞아
+  조용히 건너뛴다(하네스가 '앵커 없음'을 반드시 출력하게 할 것).
+
+### 리밸런싱 백테스트(backtestScenarios) — 분배락 전 리밸런싱 시뮬레이터 (⚠️ 회귀 주의)
+
+상단바 **백테스트 아이콘**(`UserInfoBar` — 자금 흐름도 **바로 오른쪽**, 인라인 SVG `BacktestIcon`)으로
+여는 별도 페이지. 기간·초기투자금·종목·목표(금액/비중)·리밸런싱 정책을 넣으면 앱에 저장된 일별 종가와
+계좌 분배금 이력으로 월별 매매일지를 재현한다. 설계 원본은 사용자가 제공한
+"커버드콜 포트폴리오 실전 리밸런싱 백테스트" PDF다.
+
+- **일정 규칙 = PDF에서 역산**(요청서 서술과 하루 차이가 나므로 반드시 이쪽): 지급기준일 = 월중
+  **15일** / 월말 **말일**(휴장이면 직전 영업일) → **분배락 = 기준일 −1영업일** → **리밸런싱 =
+  분배락 −1영업일 = 기준일 −2영업일**(분배금을 받을 수 있는 마지막 매수일, T+2 결제) → **지급 =
+  기준일 +2영업일**. 2026 KRX 캘린더로 돌리면 PDF의 리밸런싱일 **14개 중 12개가 정확히 일치**하고,
+  어긋나는 2개(3/29·6/28)는 **PDF가 일요일을 쓴 오류**다. 오프셋 3개는 화면에서 조정 가능.
+- **⚠️ 최대 발견 — 구조 변경 매매는 '리밸런싱 차익'에 계상하지 않는다**: PDF 4월 합계
+  `25,859,200`이 산술적으로 안 맞아 보이지만 **회색 음영 3행(4/21 종목 재편)을 빼면 정확히 일치**한다
+  (`2,068,000 + 1,286,200 + 22,505,000`). → `BtTrade.structural` 플래그로 분리해 `tradeNet`(정기)와
+  `structuralNet`(재편)을 따로 집계한다. 재편 잔돈(매도 152,963,200 − 신규매수 150,000,000 =
+  2,963,200)은 현금으로 편입된다. **합치지 말 것.**
+- **PDF 자체 오류 3건**(엔진은 정확히 계산): ① 2월 누적 분배금이 1월분을 빠뜨려 7월까지 전파
+  (최종 `36,815,305` → 정답 `42,417,182`) ② 3/29·6/28이 일요일 ③ 4/28 TIGER만 유일하게 반올림
+  (다른 19건은 전부 내림) + 매도금액 500원 불일치.
+- **⚠️ `rounding:'floor'`는 `Math.floor`가 아니라 `Math.trunc`(0 방향)**: 매도(음수)에 `Math.floor`를
+  쓰면 `−594.66 → −595`가 되어 매도량이 1주 늘고 이후 전 구간 수량이 어긋난다. PDF 20건 중 19건이
+  trunc로 정확히 재현된다.
+
+- **⚠️ 분배 일정과 리밸런싱 일정은 완전히 독립**(`buildDividendSlots`는 `config.policy`를 절대 보지
+  않는다): 리밸런싱을 월말로 몰아도 월중 분배 종목은 여전히 15일 기준으로 분배받는다. 한 함수로
+  합치면 `policy:'allEom'`에서 월중 종목의 분배락이 통째로 월말로 밀린다.
+- **⚠️ 월별 오버라이드는 `rebalDate`만 옮긴다** — 분배락·지급일은 시장이 정하는 값이라 사용자가
+  옮기면 권리 확정 수량이 실제와 달라진다.
+- **⚠️ tfoot의 평가액 합계 2열은 '같은 종목이 그 달에 2회 이상 거래되면' 비운다(`dupTraded`)**:
+  `evalBefore`/`evalAfter`는 그 거래 시점의 **포지션 전체 평가액(레벨)** 이라 거래 단위로 더하면
+  같은 종목이 중복 계상된다. 재편 이벤트와 정기 리밸런싱이 겹친 달에서 **실측 2.17배**
+  (PDF 픽스처 4월 ₩975,044,100 vs 실제 월말 ₩450,022,400), 일부 종목만 거래된 달은 0.67배로 과소.
+  첨부 PDF도 정확히 그런 달(4월)의 합계를 `-`로 비워 뒀다 — 그 규약을 따른다. **화면 tfoot과
+  `downloadCsv`의 `{ym} 합계` 행이 같은 판정을 공유**해야 한다(검증 #75·#78·#80).
+  ⚠️ '종목별 마지막 거래만 합산'으로 고치지 말 것 — 그 달에 거래가 없던 종목이 빠져 여전히 틀린다.
+- **⚠️ 거래·분배가 없어도 `m.holdings`가 있으면 그 달을 렌더한다**: 월 블록 조기 반환은
+  `!rows.length && !orphans.length && !m.holdings.length`여야 한다. `downloadCsv`는 `result.months`를
+  **무조건** 돌므로, 화면에서만 스킵하면 "CSV엔 있는데 화면엔 없는 달"이 생긴다(검증 #77·#79).
+- **월별 표의 '조정 후 평가액'과 '월말 보유 현황'은 성격이 다르다 — 합치지 말 것**:
+  전자는 `BtTrade.evalAfter`(= 조정 후 수량 × **그 리밸런싱일** 종가)라 종목마다 날짜가 다를 수 있고,
+  후자는 `BtMonth.holdings`로
+  **그 달 마지막 영업일(`BtMonth.lastDate`) 종가에 전 종목을 같은 시점으로 평가**한 값이라
+  `Σ evalAmount = evalEnd` · `evalEnd + cashEnd = totalEnd`가 성립한다. 시점 정합이 필요한 곳에는
+  반드시 `holdings`를 쓸 것.
+  ⚠️ **`holdings`는 그 달에 매매가 없던 종목도 포함**해야 한다 — 리밸런싱 표에는 그 달 거래된 종목만
+  행이 생기므로, 빼면 "이번 달에 안 건드린 종목이 몇 주인지" 확인할 방법이 사라진다(검증 #69).
+  ⚠️ 월말 수량은 **러닝 누적 맵(`runQty`)** 으로 구한다 — 달마다 처음부터 다시 더하면 O(월²×거래)다.
+  `m.trades`를 누적한 **뒤에** 평가해야 그 달 거래가 반영된다(검증 #72).
+  ⚠️ `lastDate`는 **기간 끝(`endBiz`)으로 캡**한다 — 안 하면 조회기간 밖 종가로 마지막 달을 평가한다(#73b).
+- **⚠️ 표는 분배락월 / 현금은 지급월**: `BtMonth.dividends`·`divAccrued`는 **분배락 기준 월**(PDF의
+  '지급 분배금' 열이 리밸런싱 행 옆에 붙는 형식, 앱 전체 `dividendHistory` 저장 키 규약과 동일),
+  예수금은 `divPaid`(지급일 기준)로만 움직인다. 월말 분배는 지급일이 다음 달 초라 **한 달 어긋나는
+  것이 정상**이다. 하나로 합치면 PDF 재현(1월 5,601,877)이 깨지거나 현금 흐름이 틀린다.
+- **⚠️ 비중 모드 초기매수의 분모만 예외로 투입 자본**: 평소 분모(종목 평가액 합계)를 그대로 쓰면
+  그 시점 평가액이 0이라 목표가 전부 0 → **아무것도 사지 않는다**(비중 모드가 통째로 죽는다).
+- **⚠️ 매도/매수 분할은 실행 전에 확정**(`plans` 배열): 실행 중 다시 판정하면 방금 매도해 목표에
+  맞춰진 종목이 매수 패스에 또 걸리고, 재원이 마련되기 전에 매수가 예수금 한도에 막혀 조용히
+  목표 미달로 끝난다(PDF 4/21 재편이 정확히 이 형태다).
+- **⚠️ `shiftBusinessDays(s, 0)`은 `onOrBefore`**(onOrAfter 아님) — 오프셋 0 설정에서 백테스트가
+  미래 종가를 당겨 쓰지 않게 하는 보수적 기본값(`priceAt`의 carry-back 금지와 같은 원칙).
+- **⚠️ `priceAt`은 carry-forward만**(직전 종가 이월). carry-back을 허용하면 백테스트가 미래 정보를 쓴다.
+
+- **⚠️ 조회한 종가를 `stockHistoryMap`에 절대 병합하지 말 것**: 그 맵은 `buildCloseEvalSeries`(보유
+  평가액 재계산)와 `useAutoConfirmHistory` 데이터완비 가드의 권위 소스라, 백테스트용 수정주가/펀드
+  NAV가 섞이면 보유+백테스트 중복 코드의 과거 평가액이 **영구히 오염**된다(WatchlistPopup 불변식과
+  동일). 조회 결과는 App의 **`btFetched` 로컬 맵**에만 담는다(`src/backtestFetch.ts` 상단 주석).
+  `btPrices = {...stockHistoryMap[c], ...btFetched[c]}` — **조회분이 우선**(사용자가 ⟳로 고친 값이
+  낡은 저장값에 가려지면 안 된다).
+- **⚠️ 편집은 로컬 사본 + 2.5초 idle 승격**(FlowBoard와 동일): 목표금액·기간을 타이핑할 때마다
+  `setBacktestScenarios`를 하면 **글자마다** `portfolioStructureKey`가 전 계좌를 재직렬화하고
+  STATE+VERSION+STOCK+MARKET 4파일 write가 나간다. 회수는 `App.tsx backtestFlushRef` ←
+  BacktestPage가 마운트 시 등록·**언마운트 시 null**. 미승격 편집이 없으면 커밋은 **반드시 null 반환**.
+- **⚠️ 종료 커밋 합성 3원**: `exitCommitRef`가 리밸런싱·흐름도·백테스트를 합친다. 반환 키가 겹치지
+  않아 순서는 무관하나 **셋 다 없으면 null**을 반환해야 alt-tab마다 4파일 write가 강제되지 않는다.
+  수동 저장 4핸들러(`handleSave`·`handleDriveSave`·`handleDownloadStateFile`·`handleAppClose`)도
+  `flushBacktestSnapshot()` **동기 주입 필수**.
+- **영속화 7지점**: `App.tsx` ① `useState` ② 지문 `backtestFingerprint(backtestScenarios)` ③ 저장
+  payload 리터럴 ④ 저장 effect deps ⑤ `applyStateData`(`normalizeBacktestScenarios`) ⑥
+  `applyBackupData`(sticky) + `useDriveSync.ts` ⑦ `_preserveStickyPersonalData`.
+  sticky 판정은 **`backtestScenariosHaveContent` 공유 함수**(length 금지 — 페이지를 열기만 해도 빈
+  시나리오가 생겨 백업 복원 경로가 영구히 막힌다). `backtestFingerprint`는 화이트리스트 투영 +
+  try/catch로 **절대 던지지 않는다**(던지면 그 세션 Drive 저장이 통째로 멈춘다).
+  ⚠️ **`BtConfig`에 시세 시계열을 넣지 말 것** — STATE는 백업 22본으로 복제된다. 코드 참조만 저장.
+
+- **⚠️ 파생 memo는 `btActive`(페이지를 연 뒤)에만 계산**: `btDividends`·`btNameByCode`·`btCatalog`는
+  deps에 `portfolios`·`stockHistoryMap`이 있어 시세 갱신마다 전 계좌 스냅샷과 전 종목 일봉을 훑는다.
+  백테스트를 안 쓰는 사용자가 그 비용을 치를 이유가 없다(FlowBoard를 `flowAccess` 안에 둔 것과 동일).
+- **⚠️ `holidays` prop에 `marketHolidays?.kr || []`를 직접 넘기지 말 것** — 매 렌더 새 배열이라
+  결과 `useMemo` 의존성이 매번 깨져 **시세 갱신마다 백테스트 전 구간이 재계산**된다(`btHolidays` memo).
+- **⚠️ 주당 분배금 셀은 로컬 draft 입력**(`DivInput`): 표시값이 220ms 디바운스된 계산 결과라
+  onChange로 곧장 커밋하면 controlled value가 옛 값으로 되돌아가 `"170"`을 치면 `"1"`만 남는다.
+- **⚠️ lucide 아이콘은 저장소에 이미 쓰는 것만**: `package-lock.json`도 `node_modules`도 없어 새
+  아이콘이 0.577.0에 실재하는지 확인할 수단이 없고, 없으면 undefined 컴포넌트 렌더로 페이지가 죽는다.
+  특히 **`AlertTriangle`은 lucide 0.4x에서 `TriangleAlert`로 개명**됐다 → `AlertCircle`을 쓴다.
+  상단바 아이콘은 `UserInfoBar`의 인라인 SVG `BacktestIcon`(FlowIcon과 동일 근거).
+
+- **PDF 저장 = 브라우저 인쇄**(외부 npm 의존성 0 — `package-lock.json` 부재로 의존성 추가가
+  프로덕션 흰 화면을 낸 이력). **⚠️ `createPortal(content, document.body)` 필수** — 인쇄 규칙
+  `body > *:not(.bt-shell){display:none}`이 성립하려면 두 모드(새 창/오버레이) 모두에서 `.bt-shell`이
+  body 직계 자식이어야 한다. visibility 토글로 우회하면 숨겨진 앱 본문이 자리를 차지해 **빈 페이지
+  수십 장**이 딸려 나온다. 인쇄 CSS는 다크 테마를 **검정 글씨+흰 배경으로 뒤집고** 손익 색만
+  진한 인쇄색으로 되살린다(그대로 인쇄하면 흰 종이에 밝은 회색 글씨라 판독 불가).
+- **별도 브라우저 창** `/?backtestWindow=1` — `main.tsx` `BACKTEST_WINDOW_BOOT`. 흐름도 창과 **완전히
+  같은 규약**(App 미마운트 · `noopener` 금지 · `ping.need`가 초기 전송의 유일한 트리거 · 재입양 ·
+  끊기면 `readOnly`). 프로토콜: 창→앱 `backtest:ping{need}`·`backtest:scenarios`·`backtest:want{code,data,force}`
+  / 앱→창 `backtest:data`(카탈로그·분배금·휴장일, 지문 게이팅)·`backtest:live`(시나리오·시세·조회중)·`backtest:pong`.
+  시세는 **교체가 아니라 병합**(지문 게이팅 때문에 부분 전송이 정상 경로).
+- **게이팅 = 승인 시트 L열 `backtestEnabled`**(index 11). Apps Script 6지점(`check`·`listUsers`·
+  `getFeatureLabels` E1:L1·`setUserFeature` colMap·`addUser` appendRow·`setupSheet` L1/E2:L100) +
+  프론트(`LoginGate` `UserFeatures`/`EMPTY_FEATURES`/`pickFeatures` **3곳만**, `App.tsx` 초기값·
+  `backtestAccess`, `AdminPage` 라벨·featureDefs, `UserInfoBar` `canAccessBacktest`).
+  ⚠️ **배포 순서는 프론트 먼저 → Apps Script 나중**(`loadFeatureSettings`의 `>= 6` 인덱스 머지가
+  구버전 응답을 우아하게 처리한다). ⚠️ `backtestAccess = isAdminUser || userFeatures.backtestEnabled` —
+  없으면 관리자 본인이 영구 접근 불가(AdminPage 토글은 `!isAdminUser` 조건이라 관리자 행에 미렌더).
+- **impersonation은 읽기 전용**(`readOnly={!!adminViewingAs}`) — 흐름도와 같은 근거(undo 없음 + sticky).
+- **소프트 상한**: 시나리오 10 / 종목 20 / 이벤트 40 / 오버라이드 120.
+- **범위 밖(의도)**: 세금·거래수수료·슬리피지·해외종목(원화 단일 통화)·undo/redo.
+  **알려진 한계**: 인앱 오버레이 인쇄는 앱 본문 높이만큼 빈 페이지가
+  뒤에 붙을 수 있다(주 경로인 별도 창은 깨끗하다). 인앱과 새 창을 동시에 열면 마지막 쓰기가 이긴다.
+- **⚠️ 월별 표는 12열이다** — 열을 더하거나 뺄 때 `thead`·정상 거래 행·**orphan 행(colSpan 4 포함)**·
+  `tfoot`(colSpan 3 포함) **네 곳을 모두** 고쳐야 한다. 한 곳만 놓치면 그 행부터 표 정렬이 통째로
+  어긋난다(분배금 표 '렌더 지점 23곳' 사고와 동일 클래스). CSV 헤더(13열)와 모든 `rows.push` 길이도
+  같이 맞출 것 — 짧으면 엑셀에서 열이 조용히 밀린다.
+- **화면 레이아웃 규약 (2026-08 사용자 요청 — 되돌리지 말 것)**:
+  - **설정 섹션은 기본이 '닫힘'**(`Section`의 `defaultOpen = false`). 대신 접힌 상태에서도 무엇으로
+    설정돼 있는지 보이도록 호출부가 `badge`에 **현재 값을 요약**해 넘긴다 — 안 그러면 '숨은 설정'이 되어
+    사용자가 이유를 모르는 결과를 본다. ⚠️ 비교 뷰의 '비교할 시나리오 고르기'만 `defaultOpen`(그 패널의
+    유일한 내용이라 닫으면 빈 화면이 된다).
+  - **⚠️ `Section` 헤더는 div + 내부 토글 버튼**이다. 헤더 자체를 `<button>`으로 되돌리면 `?`(`Hint`)가
+    **버튼 중첩**(잘못된 DOM)이 된다.
+  - **⚠️ `Section` 루트에 `shrink-0` 필수**(2026-08 사용자 보고 "브라우저를 확대하면 항목이 겹친다"):
+    설정 스크롤 영역이 `flex flex-col`이라 내용이 패널 높이를 넘으면 flex 기본값 `flex-shrink:1`이
+    각 섹션을 자연 높이 아래로 눌러 버리고, 루트가 `overflow-hidden`이라 눌린 만큼 제목 줄이 잘려
+    위아래와 겹쳐 보인다(확대할수록 CSS px 뷰포트가 짧아져 심해진다). 새 직계 자식을 추가할 때도
+    같이 붙일 것. 검증 #154.
+  - **상세 안내는 `?` 호버 팝오버(`Hint`)로만** 띄운다. ⚠️ 팝오버는 반드시 `position: fixed` +
+    `getBoundingClientRect` — 설정 패널이 `overflow-y-auto`인데 CSS는 한 축만 지정해도 **다른 축이 auto로
+    계산**되므로 일반 absolute 툴팁은 패널 안에서 잘려 아예 안 보인다. 스크롤·리사이즈에는 즉시 닫는다.
+    ⚠️ `?` 버튼에 네이티브 `title`을 달지 말 것(브라우저 툴팁이 팝오버 위에 겹친다).
+    ⚠️ **높이 상한(`pos.maxH`) + 내부 스크롤 필수** — 없으면 확대 화면(= 짧은 CSS px 뷰포트)에서 긴
+    설명이 화면 밖으로 흘러 아래가 통째로 잘린다. 그 짝으로 **스크롤 캡처 리스너에 팝오버 내부
+    예외**(`closest('[data-bt-pop]')`)를 둔다 — 없으면 안에서 스크롤하는 순간 닫혀 끝까지 읽을 수 없다.
+    배치 스타일은 `Hint`·`SummaryCard`가 **`popStyle` 한 함수를 공유**(손복제 금지). 검증 #155.
+    ⚠️ **결과 하단 각주는 예외 — 접지 않는다**. PDF만 받아 본 사람이 계산 규약을 확인할 유일한 자리다.
+  - **⚠️ 팝오버 지연 닫기 4경로는 한 세트다**(`useHoverPop`, `POP_GRACE_MS` 140ms — 검증 #259g,
+    아래 부속 4가지도 같은 가드가 지킨다):
+    팝오버는 앵커의 **형제**라 마우스를 올리는 순간 앵커 `onMouseLeave`가 뜬다 → 옛 코드에서는
+    팝오버 위로 갈 수가 없어 위의 '내부 스크롤 예외'가 **마우스 경로에서 死코드**였다(내용이 `maxH`를
+    넘으면 읽을 방법이 아예 없었다). ① `open()`이 대기 타이머를 **먼저 취소**(카드 간격이 8px이라
+    스쳤다 되돌아오는 왕복이 흔한데, 안 지우면 '호버 중인데 닫힌 채'로 남는다) ② 팝오버
+    `onMouseEnter` → `enter`(cancel) ③ 팝오버 `onMouseLeave` → `leave`(**재예약** — 빠지면 z-1200
+    패널이 영구 고착돼 아래 표의 클릭을 삼킨다) ④ scroll/resize·`onBlur`·`Hint` 클릭·언마운트는
+    `closeNow`(**즉시** — 좌표가 낡은 채 140ms 남으면 안 된다).
+    부속 4가지(전부 적대적 리뷰가 변이 테스트로 실증한 실결함이다):
+    ⚠️ **열린 팝오버는 하나뿐**(모듈 스코프 `closeOpenPop` — `open()`이 직전 것을 즉시 닫고
+    언마운트에서 등록 해제). 없으면 인접 카드로 옮기는 상시 동작에서 두 장이 140ms 겹친다.
+    ⚠️ **`onBlur`는 `blur`**(= `overRef`가 서 있으면 무시) — 앵커가 `tabIndex={0}`이라 카드를 한 번
+    클릭하면 포커스가 잡히고, 그 상태로 팝오버 안을 mousedown 하면 focusout이 떠서 팝오버가 즉시
+    사라진다(드래그 선택·복사 불가). ⚠️ `popStyle`에 **`overscrollBehavior: 'contain'`** — 없으면
+    끝까지 스크롤한 다음 틱이 조상으로 체이닝되고 그 scroll 이벤트가 읽던 팝오버를 닫는다.
+    ⚠️ 가드는 **사용부**를 단언해야 한다 — 상수 선언·존재 여부만 보면 `<col>`을 퍼센트로 되돌리거나
+    `off` 핸들러를 지연 close로 되돌려도 375/375가 그대로 통과하는 **죽은 단언**이 된다.
+  - **⚠️ 2열 계산식 표(`formula`)의 값 셀은 `whitespace-nowrap`이라 긴 문장을 넣지 말 것**: auto 레이아웃
+    이라 그 열이 고유폭을 전부 요구하고 라벨 열이 최소폭으로 압축돼 **한글이 글자 하나당 한 줄**로
+    무너지고 값은 팝오버 밖으로 잘린다(2026-08 사용자 보고 — 시그널 체결 카드). 값은 `₩` 한 덩어리여야
+    하고, 가변 길이 사유는 **왼쪽 라벨에 붙인다**(연간 증액 카드가 같은 조건이라 함께 고쳤다).
+    사건 목록처럼 문장이 본체인 카드는 `SummaryCard`의 **`popRender(w)`** 탈출구를 쓴다 —
+    `popWidth`(시그널 980)로 폭을 키우고 **측정된 실폭에서 px로 계산한 `table-fixed` colgroup**으로
+    그린다(퍼센트 금지: 좁아지면 날짜 열이 61px 아래로 떨어져 `2026-\n01-\n16`이 재현된다).
+    폭이 `SIG_WIDE_MIN`(720) 미만이면 **표를 포기하고 사건별 블록**으로 떨어진다(블록 흐름은 어떤
+    폭에서도 안 무너진다 — 이 페이지는 좁은 폭을 정식 지원한다). 문장은 `sigLabel`·`sigRefText`·
+    `sigOutcomeText` 공유 포매터 그대로, 종목명은 **평문**(팝오버 안 버튼은 Tab 이동 시 앵커 `onBlur`가
+    먼저 언마운트시켜 포커스가 날아간다). ⚠️ `popRender` 카드는 `formula`를 넘기지 않으므로
+    `(formula || [])` 방어가 **필수**다(무방비 `.map`은 호버 순간 화면 전체가 오류 페이지가 되는데,
+    `@ts-nocheck`+텍스트 가드라 어떤 게이트도 못 잡는다). ⚠️ 목록은 24건으로 자르되 **합계는 전 건**으로
+    낸다. ⚠️ 열 폭 합에서 **세로 스크롤바 자리(`POP_SCROLLBAR_RESERVE`)를 빼야** 한다 — 이 앱의
+    스크롤바는 오버레이가 아니라 자리를 차지하고(`src/index.css` `::-webkit-scrollbar{width:6px}`),
+    이 팝오버는 스크롤되는 것이 기본 경로라, 여유가 0이면 스크롤바가 뜨는 순간 가로로 넘쳐
+    마지막 열이 잘린다(그 가로 스크롤바는 팝오버 밖에서 닿을 수도 없다). 검증 #259f.
+  - **설정 패널 접기**(`settingsOpen`, 상단 바 버튼 + 패널 헤더 '숨기기'): 넓은 화면은 왼쪽으로, 좁은
+    화면(세로 배치)은 위로 접히고 얇은 띠만 남는다. ⚠️ **언마운트가 아니라 `hidden` 클래스**로 감춘다 —
+    언마운트하면 각 섹션의 펼침 상태와 스크롤 위치가 매번 초기화된다. 세션 로컬 state라 **Drive 저장
+    지점 0곳**(chartPrefs 5지점 무수정).
+  - **표 크기는 화면/인쇄가 다르다**: 화면 `TBL/TH/TD`(13px·넉넉한 행 높이) ↔ 인쇄는 print CSS의
+    `.bt-tbl` 규칙이 10px/3px 6px로 되돌린다. ⚠️ 그 두 줄을 지우면 **12열 월별 표가 A4 가로에서 잘려**
+    판독 불가가 된다. 표를 추가할 때 `TBL`(=`bt-tbl` 포함)을 쓰지 않으면 인쇄에서 그 표만 커진다.
+  - **종목명·종목코드 클릭 = 상세 페이지 새 탭**(`stockUrl`/`StockLink` — WatchlistPopup·CompStockChips와
+    같은 판정). ⚠️ ⑥ 종목의 **이름 칸은 사용자가 고치는 `<input>`이라 링크로 만들 수 없다** — 코드와
+    ↗ 아이콘이 진입점이다. 결과 표(Phase 0·월별·월말 보유·기말 보유)의 종목명은 링크다.
+  - **`SummaryCards`는 `summary`가 아니라 `result`를 받는다** — 기말 예수금 분해 계산식에 `initialCashAfter`가
+    필요하고, 그 값은 summary에 없다. 호버 팝오버의 각 항은 **result/summary의 같은 필드를 그대로** 읽는다
+    (설명에서 값을 다시 계산하면 카드 숫자와 설명이 갈린다). 투입 원금은 `finalTotal − profit`으로 역산한다
+    (`summary.initialCapital`은 추가 예수금을 빼고 담아 카드 값과 어긋난다).
+- **목표 기준 2종 — 비중의 분모는 '종목 평가액 합계' **하나로 고정** (⚠️ 회귀 주의 — 분모 선택 부활 금지)**:
+  사용자 정의(2026-08). **목표 금액** = 종목마다 직접 적어 넣은 금액(A 1,000만 · B 2,000만)에 맞춘다.
+  **목표 비중 %** = 사용자가 직접 정한 비율(A 50% · B 50%)을 **종목 평가액 합계**에 곱한다 —
+  **예수금·매매차익·누적 분배금은 분모에 넣지 않는다**(현금 잔고에 따라 사용자가 정한 비율이
+  흔들리면 안 되므로). '종목 수로 균등 분배' 버튼은 두 모드 모두 유지.
+  - ⚠️ 옛 분모 4종 선택 드롭다운(`ratioBase`: equity/total/initial/**totalWithDiv**(하락 시 되메우기))은
+    **타입·엔진·화면·지문에서 통째로 제거**됐다. 되살리지 말 것(소스 가드 #151·#152가 식별자 부재를 단언).
+    저장돼 있던 레거시 값은 `makeBtConfig`가 새 객체를 만들면서 조용히 버려진다(검증 #109·#109b).
+  - ⚠️ **분모 0 자기잠금 방지 = `targetBaseAt`의 현금 부트스트랩**: 보유가 하나도 없으면 분모가 0 →
+    목표 0 → 매매 0 → 보유 0 으로 **스스로 잠겨 한 주도 못 산다**. 실제로 걸리는 경로가 둘 —
+    ① 전 종목이 기간 중간 편입 ② ⑦ 이벤트의 전면 교체(1단계 전량 매도가 4단계 분모 산출보다 먼저).
+    그래서 `eq > 0 ? eq : max(0, cash)`로 그 시점 가용 현금을 쓴다(초기 매수가 투입 자본을 쓰는 것과
+    같은 원리이고 그 시점 cash와 값이 같다). ⚠️ **평가액이 있으면 현금은 절대 섞이지 않는다** —
+    `eq + cash` 형태로 바꾸지 말 것(검증 #106·#108·#108d, 소스 가드 #151).
+  - ⚠️ **초기 매수만은 분모가 투입 자본**(`initialCapital + extraCash`)이다 — 그 시점 평가액이 0이라
+    평소 분모를 쓰면 목표가 전부 0이 되어 아무것도 사지 않는다(검증 #43).
+  - ⚠️ **비중 합이 100%가 아닌 것의 뜻이 달라졌다** — 1회성 현금 버퍼가 아니라 리밸런싱 **때마다**
+    그 차이만큼 사고파는 지시다(80%면 매번 20%씩 팔아 평가액이 복리로 줄고, 120%면 매번 예수금을
+    헐어 더 산다). 오타가 조용히 그렇게 돌면 안 되므로 **엔진이 경고**한다(`checkRatioSum`, 1회).
+    현금은 분모가 아니지만 **매수 재원은 된다** — 이 둘을 헷갈리지 말 것.
+    - ⚠️ 판정은 **그 시점 살아 있는 종목**의 합이다. `config.assets` 정적 합으로 재지 말 것 —
+      ① 편입 기간이 갈린 정상 구성(A 100% → B 100%)이 정적 합 200%로 **상시 오탐**하고
+      ② ⑦ 이벤트가 런타임에 바꾼 비중(`p.targetRatio` 덮어쓰기)의 진짜 오타는 **영영 미탐**이다
+      (검증 #107e·#107f). 호출 지점은 초기 매수 직전 + 각 리밸런싱 슬롯(편입 처리 **뒤**).
+    - ⚠️ **합 0%에 `sum > 0` 게이트를 두지 말 것** — 목표 금액 → 비중 모드로 전환하면 비중 칸이
+      전부 비는 흔한 상태인데, 피해가 가장 큰(아무것도 안 삼) 그 경우만 정확히 건너뛴다.
+      별도 문구로 알린다(검증 #107g).
+    - ⚠️ 허용 오차 `RATIO_SUM_TOL = 0.05`는 반올림 잔차용(33.33×3=99.99)이다. 더 넓히면 진짜
+      오타 가드가 죽는다. 대신 **생산자 쪽**(`splitEven`)이 잔여를 마지막 종목에 흡수시켜 합을
+      정확히 100%로 만든다 — 앱 자신의 버튼이 앱의 경고를 띄우면 안 된다(검증 #156).
+  - ⚠️ **매월 목표 증액은 비중 모드에서 집행되지 않는다** — 목표가 '평가액 합계 × 비중'이라 늘릴
+    대상이 없다(그걸 유일하게 반영하던 분모 `'initial'`이 사라졌다). `contrib` 스텝 조기 반환 +
+    슬롯 준비 블록에서 경고 1회. ⚠️ 행·'누적 증액' 카드만 찍고 매수는 0인 **'실행한 척'으로
+    되돌리지 말 것** — 경고를 놓친 사용자가 결과를 정반대로 읽는다(검증 #90·#91·#91b·#153).
+- **예수금 = `cashTrade` / 적립 분배금 = `cashDiv` — 사용자 정의(2026-08, ⚠️ 회귀 주의)**:
+  '**예수금**'은 `매매차익 + 초기 매수 잔여 + 추가 예수금`만 가리킨다. **분배금은 예수금에 합산하지
+  않고** `cashDiv`에 별도로 누적한다. 둘 다 현금이라 총자산에는 함께 들어가지만(총자산 = 평가액 +
+  예수금 + 적립 분배금 3항), 화면·CSV의 '예수금'이라는 **이름은 매매 몫만** 가리켜야 한다.
+  ⚠️ '월말/기말 예수금'을 `cashEnd`/`finalCash`(합계)로 되돌리지 말 것 — 그 순간 분배금이 예수금에
+  합산돼 사용자 정의와 정면으로 어긋난다(옛 화면이 `합계 (매매 A · 분배금 B)`로 표시했다).
+- **기말 현금 원천별 분해 — 항등식 **2개** (⚠️ 검증 #110·#304b)**:
+  - `finalCashTrade = 초기 매수 후 잔여(+추가 예수금) + 누적 매매차익 + 종목 재편 순현금
+    + 분배금 재투자 매수 + **cumDivDrawn**`
+  - `finalCashDiv = cumDivPaid − **cumDivDrawn**`
+  두 식을 더하면 종전 항등식(`finalCash = initialCashAfter + cumTradeNet + cumStructuralNet +
+  cumReinvestNet + cumDivPaid`)이 그대로 복원된다 — 그래서 #110·#304가 계속 성립한다.
+  `cumDivDrawn`(= Σ `BtMonth.cashUsedDiv`)이 **두 식을 잇는 유일한 항**이고, 예수금 쪽에 `+`로
+  들어가는 이유는 "분배금이 대신 낸 매수 대금만큼 예수금이 덜 나갔다"이다. 기말 보유 표와 CSV가
+  이 분해를 **두 그룹**으로 그대로 렌더하므로 깨지면 소계가 안 맞는다.
+  ⚠️ 분배금은 반드시 **`cumDivPaid`(지급 기준)** — `cumDivAccrued`(분배락 기준)에는 지급일이
+  종료일 이후라 아직 현금이 되지 않은 몫이 섞여 있어 항등식이 깨진다(검증 #110b가 이를 단언).
+  두 값이 다르면 화면에 `(분배락 기준 ₩N)`을 병기한다.
+  ⚠️ 원천징수 세금은 **어느 그룹에도 항으로 더하지 않는다**(애초에 입금되지 않은 돈이라 더하면
+  두 항등식이 동시에 깨진다 — 분배금 항을 '세후'로 라벨링만 한다, 가드 #245).
+- **두 주머니 구현 (⚠️ 불변식: `cashTrade + cashDiv === cash`)**:
+  매도(+)는 `cashTrade`로, 매수(−)는 `cashTrade → cashDiv` 순으로 꺼낸다(`applyCash`).
+  분배금 지급은 `cashDiv`로만 들어간다(`applyDividend`).
+  - ⚠️ `cash += …`를 직접 쓰지 말 것 — 두 헬퍼를 우회하면 불변식이 조용히 깨진다(검증 #105·#108c).
+  - **매수 대금의 출처를 월별로 기록한다**(`drawByYm` → `BtMonth.cashUsedTrade`/`cashUsedDiv`).
+    ⚠️ **누적 매매차익이 마이너스인 달**에는 "이 매수를 무엇으로 충당했는가"가 화면에 없으면
+    사용자가 추적할 수 없다(실제 문의 사례: 09월 순매수 −₩743,340). 월 요약에
+    `이 달 매수 대금 = 예수금(매매차익) + 누적 분배금` 줄을 띄운다.
+    항등식: `Σ cashUsedDiv = max(0, −(초기잔여 + 누적매매차익 + 재편순현금))`(검증 #112),
+    `cashUsedTrade + cashUsedDiv = 그 달 총 매수 대금`(매도 제외, 초기매수 포함 — 검증 #111).
+  - ⚠️ 월말 잔액은 `runCash`처럼 월별 합계로 **재구성할 수 없다**(매수가 어느 주머니에서 나갔는지는
+    실행 순서가 정한다) → 시뮬레이션 중 `bucketLog` 스냅샷을 남기고 월말 이하 최신값을 집는다.
+- **매월 목표 증액(재투자) `BtContribution` — 유휴 예수금을 목표에 얹는다 (⚠️ 회귀 주의)**:
+  `{mode:'none'|'pctOfCash'|'amount', value, split:'ratio'|'even'}` + `contribOverrides[]`(특정 월만).
+  그 달 **첫 리밸런싱일**에 `contrib` 스텝으로 실행 — `KIND_ORDER`에서 **pay 뒤**(그날 받은 분배금까지
+  재원)·**rebal 앞**(올린 목표로 곧바로 매수). 증액 자체는 **현금을 움직이지 않고 목표만 올린다**.
+  - ⚠️ **월 귀속은 `ymOf(rebalDate)`** — 슬롯 라벨 `s.ym`을 쓰지 말 것. 오프셋·휴장 스냅으로
+    rebalDate가 다른 달로 나가면(`fixedDay` 1~3, 큰 음수 오프셋) 거래 없는 달에 증액 행이 뜨고
+    실제 집행 달은 0으로 표시된다. 거래·분배 적재가 전부 `ymOf(실제 날짜)`라 여기만 다르면 내부 모순.
+  - ⚠️ **배분 대상은 '그 달 리밸런싱 슬롯에 실제로 든 종목'** (`contribAssetsByYm`). `p.active`만
+    보면 `rebalMode:'none'`·그 달 지정 날짜 없는 종목의 목표만 오르고 **영원히 매수되지 않아**,
+    예수금 한도를 갉아먹으면서 '누적 증액'이 재투자되지 않은 돈을 보고한다(실측 배분액의 50%가 사장).
+  - ⚠️ **비중 모드에서는 아예 집행하지 않는다**(2026-08) — 분모가 '종목 평가액 합계'로 고정되면서
+    목표를 키울 수단이 사라졌다(위 '목표 기준 2종' 항목). `contrib` 스텝 조기 반환 + 경고 1회.
+  - 예수금을 넘는 증액은 미리 자른다(넘기면 곧바로 '예수금 부족'). 집행 불가 예외 규칙
+    (리밸런싱 없는 달·기간 밖·중복 ym)은 조용히 버리지 말고 경고한다.
+- **종목별 리밸런싱 일정 `BtAsset.rebalMode` (⚠️ 회귀 주의)**:
+  `'follow'`(기본, 전역 정책) / `'mid'` / `'eom'` / `'day'`(+`rebalDay`) / `'dates'`(+`rebalDates`) /
+  `'none'`. 분배가 불규칙한 종목을 전역 정책과 다르게 돌리기 위한 것.
+  - ⚠️ **월별 *일괄* 오버라이드(`assetId` 없음)는 `follow` 종목에만** 적용한다 — 개별 지정 종목까지
+    끌고 가면 "일괄과 별개로 종목을 다르게"라는 요구 자체가 무너진다. 그 종목을 특정 월만 옮기려면
+    `BtOverride.assetId`를 채운다(그 달 일정을 통째로 대체).
+  - ⚠️ **`buildSlots`의 병합 키는 '날짜' 하나** — `${date}|${group}`으로 쪼개면 같은 날 리밸런싱
+    스텝이 2회 돌아 **'전 종목 매도 → 그 다음 매수' 불변식이 깨진다**(1패스 매수가 아직 오지 않은
+    2패스 매도 대금을 못 써 예수금 부족으로 잘리고, 비중 모드 분모(평가액 합계)가 패스 사이에 달라져
+    결과가 그룹 순서에 의존한다). 그룹이 섞인 날짜는 라벨만 `'all'`로 둔다.
+  - ⚠️ 슬롯이 하나도 없는 종목은 **중간 편입 경로가 사라진다**(활성화 계기는 초기매수·슬롯·이벤트
+    셋뿐) → 기간 중간 상장 종목에 `'none'`/빈 날짜를 주면 매수가 한 번도 안 일어난다. 경고 필수.
+  - 분배 일정(`buildDividendSlots`)은 **여전히 `payCycle`만 따른다** — 리밸런싱을 끄거나 옮겨도
+    분배락·지급일은 그대로다(검증 #98).
+- **⚠️ `QTY_EPS`(1e-9) — `rounding:'exact'` 전량 매도의 부동소수 잔여 방지**: 매도 수량은
+  `(0 − qty×price) ÷ price`로 구해지는데 IEEE754에서 원 수량보다 미세하게 작게 나오는 조합이 있어
+  보유수량 한도 가드가 발동하지 않고 1e-13 규모 잔여가 남는다. 그 잔여는 러닝 누적 맵에 실려
+  **이후 모든 달**의 월말 보유에 `0주 · ₩0 (100.0%)` 유령 행으로 나타난다. → `adjustTo`에서
+  **`qty` 자체를 `-p.qty`로 스냅**한다(`p.qty`만 나중에 보정하면 `runQty`가 `t.qty`를 더하므로 갈린다).
+  보유 판정 4곳(`totalEvalAt`·월말 holdings·curve·finalHoldings)도 `QTY_EPS` 기준으로 통일(검증 #76).
+**분배금 처리 `divReinvest` / 배분 기준 `divReinvestSplit` — 재투자 (⚠️ 회귀 주의)**
+
+지급받은 분배금을 어떻게 할지 정하는 설정(④ 분배금 처리). 기본 `'hold'`(예수금 보유)는 **종전 동작과
+1원도 다르지 않다**(검증 #133). `'payDate'`(지급일 재매수) / `'mid'` / `'eom'`(월중·월말에 모아 매수).
+배분 기준은 `'target'`(목표 비중, 목표금액 모드면 목표금액 비율) / `'source'`(분배금 준 종목 = DRIP) /
+`'even'`(균등).
+
+- **⚠️ 재원은 `cashDiv` 주머니 전액** — '지급받았지만 아직 쓰지 않은 분배금'이 재투자의 유일한
+  정합적 정의다. 리밸런싱이 이미 헐어 쓴 몫은 주머니에서 빠져 있어 이중 투입이 없고, 1주 값에
+  못 미치는 잔돈은 **버리지 않고 다음 회차로 이월**된다(버리면 분배금이 조용히 증발한다).
+- **⚠️ 매수 대금은 반드시 `applyCash(delta, date, 'div')`** — `prefer` 인자를 빠뜨려 기본값
+  (매매 주머니 우선)으로 꺼내면 `cashDiv`가 줄지 않아 **다음 회차가 같은 분배금을 또 투입**한다
+  (무한 재투자로 예수금이 통째로 빨려 들어간다). 검증 #121·#122·#127b·#139.
+- **⚠️ `mid`/`eom`의 날짜는 리밸런싱과 같은 식**(기준일 + `exDivOffset` + `rebalOffset` = 분배락
+  직전 영업일, 검증 #118). 그날 사면 **그 달 분배 권리까지 확보**돼 '분배금이 다시 분배를 받는'
+  복리가 잡힌다 — 기준일 당일(15일/말일)로 바꾸면 분배락이 이미 지나 그 달 권리를 놓친다.
+  `buildReinvestSlots`는 `config.policy`를 **절대 보지 않는다**(리밸런싱과 완전 독립, 검증 #119).
+- **⚠️ `KIND_ORDER`에서 reinvest는 맨 뒤**(`exdiv 0 · pay 1 · event 2 · contrib 3 · rebal 4 ·
+  reinvest 5`). 리밸런싱은 '목표 수준 맞추기'이고 재투자는 '그러고도 남은 분배금 현금을 추가 투입'
+  이라 나중에 와야 한다. 앞에 두면 재투자가 방금 산 수량을 같은 날 리밸런싱이 되팔아(목표 초과)
+  매매만 늘고 결과는 그대로가 된다. 검증 #131.
+- **⚠️ `BtTrade.reinvest`는 `structural`과 배타이고 `tradeNet`에 섞지 않는다** — `pushTrade`가
+  reinvest → `m.reinvestNet` / structural → `structuralNet` / 나머지 → `tradeNet` 3분기다.
+  재투자를 매매차익에 넣으면 리밸런싱을 끈 시나리오에서는 매매가 재투자뿐이라 '누적 매매차익'이
+  통째로 마이너스가 되어 지표가 의미를 잃는다(구조 변경 매매와 같은 근거). 검증 #123.
+- **⚠️ 기말 예수금 분해 항등식이 한 항 늘었다**(검증 #125, #125b가 항이 필요함을 실증):
+  `finalCash = 초기잔여 + cumTradeNet + cumStructuralNet + **cumReinvestNet** + cumDivPaid`.
+  `m.cashDelta`에도 `reinvestNet`을 더해야 `runCash`가 실제 `cash`와 갈리지 않는다(검증 #127c).
+  화면 '기말 보유 현황' 표와 CSV 둘 다 이 항을 렌더한다(소스 가드 #137).
+- **⚠️ 배분 가중치가 전부 0이면 균등 폴백** — `split:'source'`인데 분배금을 준 종목이 편입 기간에서
+  빠지면 가중치 합이 0이 된다. 여기서 그냥 반환하면 분배금이 영원히 현금으로 남아 **사용자가 켠
+  재투자가 아무 경고 없이 무시된다**. 검증 #130.
+- **⚠️ `buyWithBudget`은 `rounding:'round'`여도 항상 0 방향 버림**(exact만 통과) — 예산을 넘겨 사면
+  분배금이 아니라 매매 주머니를 헐게 되어 "분배금만 재투자한다"는 전제가 깨진다.
+- **`divPocket`(assetId→금액, 합 = `cashDiv`)** 은 `'source'` 배분 전용이지만, `cashDiv`가 줄 때마다
+  `drainPocket`으로 **비례 축소**해야 한다 — 안 그러면 이미 써 버린 분배금의 출처가 남아 다음
+  재투자에서 유령 가중치가 된다.
+- **재투자 매수가 곧 편입 경로**다(`p.active = true`) — 리밸런싱을 끈 시나리오에서 중간 상장 종목이
+  들어오는 유일한 길이라, '슬롯 없음' 경고 문구도 그에 맞춰 갈라진다.
+- **⚠️ `Pos.removed`(이벤트 `removeAssets`로 뺀 종목)와 `!active`(아직 편입 전)를 절대 혼동하지 말 것**:
+  `runReinvest`의 `live` 필터와 리밸런싱 `eligible` 루프가 **둘 다** `p.removed`로 게이팅한다.
+  `p.active`로 거르면 중간 상장 대기 종목까지 빠져 위의 '재투자 = 편입 경로' 설계가 죽고, 반대로
+  게이팅이 없으면 **사용자가 뺀 종목을 재투자·리밸런싱이 옛 목표로 조용히 되사서 되살린다**
+  (기말 보유·평가액·수익률에 계속 남는다. `split:'even'`은 목표를 아예 안 보므로 '목표를 0으로
+  내려 뺀다'는 우회로마저 막힌다). 리밸런싱 쪽 되사기는 이 기능 도입 **이전부터 있던 결함**이고
+  `removeAssets`의 계약('전량 매도 후 비활성화')과 정면으로 어긋나 함께 고쳤다. 검증 #141·#142·#150.
+- **⚠️ 레벨 목표 모드에서는 재투자가 되팔린다 — 경고 필수**: `targetMode:'amount'`는 목표가 고정
+  수준이라 다음 리밸런싱이 재투자분을 그대로 되판다.
+  실효는 거의 0인데 **되판 대금은 `tradeNet`에 들어가고 재투자 매수는 `reinvestNet`으로 빠져**
+  '누적 매매차익'만 비대칭으로 부푼다(실측 PDF 픽스처 +66%, 총손익은 +₩536,000뿐) → 비교 표
+  순위가 뒤바뀐다. 조용히 두지 말고 경고한다(검증 #144·#144b). **비중 모드**는 재투자가
+  분모를 키워 정상적으로 남는다.
+- **⚠️ `drainPocket`은 비례 축소라 `'source'` 배분 결과에 **관측 가능한 영향이 없다**(비율 보존).
+  그래도 `Σ divPocket === cashDiv` 불변식을 유지해야 절대값을 읽는 미래 소비자가 깨지지 않는다 —
+  동작 테스트로는 이 함수를 검증할 수 없다는 뜻이니, 지우기 전에 이 주석을 먼저 읽을 것.
+
+**예비금 주머니 — `extraCash` = 시그널 전용 재원 (⚠️ 회귀 주의 · 유일하게 기존 결과를 바꾼 변경)**
+
+`추가 예수금(extraCash)`의 **뜻이 바뀌었다**(사용자 확정 2026-08): 첫날부터 매수에 함께 쓰는 돈 →
+**매매 시그널이 발동할 때만** 쓰는 예비금. 예수금 주머니가 **3분할**된다:
+`cashTrade + cashDiv + cashReserve === cash`.
+
+- **⚠️ 이 변경만은 `extraCash > 0`인 저장 시나리오의 결과를 바꾼다**(사용자가 요청한 의미 변경).
+  `extraCash === 0`이면 1원도 달라지지 않는다(검증 #377). ② 기본 설정 칸이 그 사실을 **앰버로 고지**한다
+  (소스 가드 #381b) — 사용자 행동 없이 결과가 달라지는 유일한 통로라 화면 단서가 필수다.
+- **⚠️ 예비금 보호는 예산이 아니라 인출 한도(`applyCash`의 `reserveCap`, 기본 0)가 담당한다**(검증 #374).
+  `adjustTo`의 `limited = !allowNegativeCash || floorCap < Infinity`라 `allowNegativeCash:true`면 예산 컷이
+  통째로 꺼지는데, `reserveCap`이 0이면 그래도 예비금은 **1원도 줄지 않는다**(초과분은 종전대로 `cashTrade`가
+  음수로 떠안는다).
+- **⚠️ 인출 순서는 매매 → 예비금 → 분배금**(검증 #379). 예비금을 분배금 뒤에 두면
+  `buyFunding:'both'`(기본, `divCap=Infinity`)에서 **분배금이 먼저 소진**돼 예비금 단계가 영원히 실행되지
+  않고, `drainPocket`이 `divPocket`을 비워 이후 `divReinvestSplit:'source'` 가중치까지 소실된다.
+  재투자 경로(`prefer==='div'`)는 분기 자체에서 `takeReserve`를 호출하지 않아 **구조적으로** 예비금에 닿지 않는다.
+- **예비금을 쓰지 못하는 경로(전부 검증 있음)**: 초기 매수 · 정기 리밸런싱(#373·#373b) ·
+  **종목 재편 이벤트**(#380 — 이벤트는 `adjustTo`에 opts를 넘기지 않으므로 **기본 예산 `cash − cashReserve`**
+  가 그 경로의 유일한 보호막이다, 소스 가드 #228) · 분배금 재투자.
+- **목표 산정에서 제외(4곳)**: 초기 매수 분모(이미 `initialCapital`) · `targetBaseAt` 현금 부트스트랩(#151) ·
+  `deployableCash`(목표 증액 상한) · `annualReview` surplus(#234).
+  ⚠️ #151의 변경을 '분모 선택지 부활'로 오독하지 말 것 — 분모는 여전히 `targetBaseAt` 하나다.
+- **파생 불변식 4종**(전부 세 번째 항 필요): 기말(#371) · 월말(#371b·#371c) · 매수 출처 3항(#376) ·
+  시그널 화면 `fromTrade + fromReserve + used = tradeAmount`.
+- **⚠️ 항등식을 렌더하는 화면·CSV 6지점을 **전부** 고쳐야 한다**(소스 가드 #381이 여섯을 각각 못 박는다) —
+  ① 최종 자산 카드 ② **기말 예수금 카드 분해** ③ **기말 보유 현황 표의 예비금 그룹** ④ **총자산 행 title**
+  ⑤ **CSV `기말예수금 내역`+`예비금 내역`** ⑥ 월 요약 '이 달 매수 대금'·`sigFundText`·월말 툴팁.
+  ⚠️ 카드 한 장만 검사하는 가드로 되돌리지 말 것 — 적대적 리뷰가 실증했듯 ②~⑤가 옛 2주머니 항등식을
+  그대로 렌더해도 초록으로 통과한다(`initialCashAfter`는 여전히 `extraCash`를 포함하므로 소계가 정확히
+  `finalCashReserve`만큼 어긋나고, 총자산 툴팁은 좌변 합 ≠ 우변인 **거짓 산식**을 찍는다).
+  ⚠️ 예비금 시드는 summary에 없지만 **`finalCashReserve + cumReserveDrawn === extraCash`** 로 정확히 복원한다.
+  ⚠️ `poolAt`이 `tradeOnly`에서도 예비금을 포함하므로 화면 `poolLabel`에도 '+ 예비금'을 붙인다 —
+  안 붙이면 '매매 예수금'이라는 이름으로 예비금이 섞인 밑변을 표시한다.
+- **⚠️ '초기 매수 후 잔여(예비금 제외)'는 모듈 스코프 `initTradeRestOf(result)` 하나를 3지점이
+  공유한다(가드 #382 — 요약 카드 · 기말 보유 현황 표 · CSV)**. 위 6지점을 고칠 때 이 값을 각 화면에서
+  손계산으로 되돌리지 말 것. ⚠️ **컴포넌트 지역 변수로 두는 형태가 실제 프로덕션 장애를 냈다** —
+  `SummaryCards`의 지역 `initTradeRest`를 `BacktestPage` 본체의 표가 참조해
+  `ReferenceError: initTradeRest is not defined`로 **백테스트 페이지 전체가 ErrorBoundary 오류 화면**이
+  됐다(2026-08, 커밋 eac4840 → 7fda652 배포분). `@ts-nocheck` + 타입체크 없는 esbuild 빌드라
+  **컴파일러도 `npm run build`도 못 잡고**, 소스 텍스트 가드는 그 지점의 존재만 확인하지 스코프를 보지
+  않으며, `undefcheck.mjs`는 파일 전체를 한 스코프로 보므로 통과시킨다 →
+  이 부류 전용 게이트는 **`memory/tools/scopecheck.mjs`**(다른 최상위 블록의 지역 선언을 참조하는지 검사)다.
+- **⚠️ 기말 분해 항등식(#125/#304)은 항이 늘지 않는다** — A는 `cash` 총액을 바꾸지 않고 분해만 한다.
+  다만 `#304b`의 폐쇄형은 **재유도됐다**: `cashTrade` 시드가 `initialCapital`로 줄었고(−extraCash),
+  예비금이 대신 낸 매수 대금만큼 `cashTrade`가 덜 나갔다(+`cumReserveDrawn`).
+  `finalCashReserve = extraCash − cumReserveDrawn`.
+  ⚠️ 예비금 전입/전출을 **별도 흐름으로 기록하는 구현은 채택 금지**(이 성질이 깨진다).
+- **경고**: `extraCash > 0 && !dip.enabled`면 그 돈은 종료일까지 한 푼도 안 쓰이므로 반드시 알린다(#378).
+- **⚠️ 검증 사각지대 이력** — 이 기능이 생기기 전 372건이 **전부 `extraCash: 0`**이라 예비금 로직이 스위트에
+  원리적으로 보이지 않았다. 픽스처를 먼저 세우고 **변이 12종으로 검출을 확인**한 뒤 구현했다.
+  그 과정에서 실제로 **죽은 단언 2건**(종목명이 경고 문구에 섞인 #378, 경로를 밟지 않는 픽스처 5건)을 잡았다 —
+  이 파트의 픽스처를 단순화하지 말 것(목표 12M > 초기 투자금 10M, 하락은 분배금 지급 **뒤**, 이벤트 포함이
+  각각 특정 변이를 잡는 장치다).
+
+**앵커 시그널 축 — 직전 체결 종가 기준 `BtDip.anchorLevels` (⚠️ 회귀 주의)**
+
+기존 축(전 구간 가격 고점/저점)에 **직전 체결 종가(앵커) 대비 ±N%** 축을 **병존**시킨다.
+사용자 요청 "리밸런싱 이후 10%, 20% 매매 시그널 / 이전 매매시그널·이전 리밸런싱 이후 비율 초과 하락시".
+기본 `[]` = 미사용 → **레거시 결과 1바이트 불변**(검증 #356).
+
+- **⚠️ 앵커는 체결 결과에 의존해 사전 탐지가 불가능하다** — `sigTrigByDate`(고점/저점 축)와 달리
+  **런타임 판정**이다. 앵커가 켜진 경우에만 `allBiz` 전 영업일에 signal 스텝을 세운다(꺼져 있으면
+  `steps` 배열이 종전과 동일, 검증 #356b).
+- **⚠️ 조기 탈출(`if (!trigs.length) continue`)은 `checkRatioSum`·`targetBaseAt`보다 반드시 앞**
+  (소스 가드 #360b). ① 빈 스텝이 `checkRatioSum`을 부르면 경고 문구의 날짜·편입 종목 수가 달라지고
+  ② **성능**: `targetBaseAt`→`totalEvalAt`이 종목마다 `priceAt`을 부르는데 그 미스 경로는
+  `for (const d in series)` 선형 스캔이라 `영업일 × 종목 × |시계열|`로 폭발한다.
+- **⚠️ 앵커를 옮기는 체결은 `anchorSource`가 정하고, 다음 셋은 **어느 값에서도 옮기지 않는다**:
+  분배금 재투자(`t.reinvest`) · 재조정 매도(`t.signal==='realloc'`) · 종목 재편(`t.structural`)**
+  (검증 #353, 소스 가드 #360). 재투자를 켜면 매달 체결이 생겨 앵커가 갈아엎어지고, 1월 대비 −17%까지
+  빠져도 새 앵커 대비 −9%라 10% 단계가 **끝내 발동하지 않는다**(설계 검증 확정 결함).
+  - `'lastFill'`(기본) — 리밸런싱 + 시그널 체결이 앵커를 옮긴다 → 트레일링 ±N% 그리드(검증 #350)
+  - `'lastRebal'` — 리밸런싱 체결만 → 한 기준에서 10% → 20% 순차 발동(검증 #351).
+    `lastFill`에서는 10%가 체결되면 앵커가 이동해 20%가 원 기준 −28%가 되어야 닿는다.
+- **갱신 지점은 `pushTrade` + 초기 매수 2곳**(초기 매수는 `pushTrade`를 타지 않는다, 검증 #350/MD9).
+  값이 그대로면 재무장하지 않는다.
+- **⚠️ `fired` Set 필수**(검증 #354) — 체결이 0인 날(이미 목표) 앵커가 안 바뀌어 다음 날 또 발동하면
+  이벤트가 매일 쌓인다. 그날 도달한 **가장 깊은 단계 1건만** 발동하고 얕은 단계는 함께 소진 처리한다.
+- **⚠️ 앵커 매수에는 비율(`buyPct`)이 없다**(항상 '목표까지') — 주면 두 축이 같은 날 겹칠 때 `pctSum`이
+  100%를 넘어 **화면 계산식(밑변 × 비율 = 금액)과 실제 체결이 어긋난다**.
+- **`extremeOn`(기본 true)** — 고점/저점 축 on/off. 없으면 `dip.enabled`를 켜는 순간
+  `normalizeDipLevels`가 기본 3단계를 복원해 고점 축이 **항상** 함께 무장돼 앵커만 쓸 방법이 없다.
+  ⚠️ 게이트는 **루프 진입부**에 둔다 — `const dipLevels =`/`const sellLevels =` 두 선언줄은 소스 가드
+  #233c·#257이 리터럴로 단언한다.
+- **⚠️ 정규화는 `normalizeSellLevels` 계열(빈 배열 보존)**(검증 #358b) — `normalizeDipLevels`(빈 배열 →
+  기본 3단계)를 재사용하면 레거시 전부에서 앵커가 저절로 켜지고 멱등(#237)이 깨진다.
+- **⚠️ `dipOf`(화면)는 `BtDip`의 **모든** 필드를 채운다**(소스 가드 #361) — dip 쓰기 6곳
+  (`patchActive({ dip: { ...dipOf(active), … } })`)의 **스프레드 베이스**라, 빠진 필드는 옆 토글 한 번으로
+  dip에서 삭제됐다가 재로드 시 기본값으로 되살아난다(끈 적 없는 축이 다시 켜진다, undo 없음).
+- **⚠️ 화면 문구는 `kind`가 아니라 `axis`로 기준을 고른다**(소스 가드 #361b) — `sigRefText`가 앵커 발동에
+  '고점 ₩X'를 찍으면 존재한 적 없는 근거를 제시하는 거짓말이 된다. 앵커일에는 기준을 만든 체결일도 함께 적는다.
+  `sigLabel`은 화면·CSV가 공유하므로 축 표기가 그 한 곳으로만 흐른다(#259b).
+- **등록 6곳**(`normalizeDip`은 **필드별 재구축기**) + `sigOn`·`strategyTags`에 앵커 반영(#361c).
+  **영속화 신규 지점 0곳**(`BtDip` 안).
+
+**③ 실행 트리거 2축 · 정기 스위치 `BtConfig.regularOn` (⚠️ 회귀 주의)**
+
+③ 리밸런싱 일정은 **체크박스 2축**(매매 시그널 발생 즉시 = `dip.enabled` / 정기 리밸런싱 = `regularOn`)
++ 정기 방식 드롭다운(4종)으로 구성한다. 두 축은 원래부터 **엔진에서 완전히 독립**이라 함께 켤 수 있는데,
+시그널이 ⑤-b에만 있어 ③에서는 보이지 않던 것을 노출한 것이다(엔진 동작 변경 0).
+
+- **⚠️ 체크를 끌 때 `policy`를 덮어쓰지 말 것** — `policy:'none'`으로 바꾸면 사용자가 고른 '월말 일괄'이
+  조용히 사라진다(백테스트는 undo가 없고 `_preserveStickyPersonalData` 대상도 아니다). `regularOn`만
+  내리고 policy는 보존한다 → 껐다 켜면 원래 방식이 그대로 돌아온다(검증 #342).
+- **⚠️ 레거시 `policy:'none'`과 결과가 **완전히** 같아야 한다** — `resolveAssetRebal`이 `regularOn===false`를
+  policy 검사 **앞**에서 `mode:'none'`으로 떨어뜨린다(검증 #340). 화면 `regularOnOf`도 `policy==='none'`을
+  '꺼짐'으로 읽는다(안 그러면 화면이 거짓 설명을 한다).
+- **⚠️ '수량 고정' 경고 게이트를 함께 고칠 것**(검증 #341, 소스 가드 #347) — `config.policy !== 'none'`만
+  보면 체크박스로 끈 경우(policy는 'allEom' 그대로) **종목 수만큼 경고가 도배**되어, 같은 뜻의 두 설정이
+  경고 개수가 달라진다(#116 계약 위반). → `config.policy !== 'none' && config.regularOn !== false`.
+- **⚠️ 종목별 지정 종목(`rebalMode !== 'follow'`)과 전역 지정일(`rebalDates`)은 이 스위치와 무관**하다
+  (검증 #343·#344). 체크 Hint에 그 사실을 명시한다 — 안 그러면 '전 종목을 멈춘다'로 읽힌다.
+- **등록 6곳** + 기본값 `true`(명시적 false만 정기를 끈다, 검증 #345c). **영속화 신규 지점 0곳**.
+- **⚠️ 라벨은 `policyLabelOf` 하나로** — 정기가 꺼져 있으면 방식과 무관하게 '리밸런싱 안 함'이다.
+  ③ 배지·시나리오 부제·비교 CSV·메모 조건 요약 4곳이 공유한다(손복제 금지).
+- **⚠️ `Hint`(=`<button>`)를 `<label>` 안에 두지 말 것** — label 활성화가 내부 체크박스를 함께 토글해
+  `?` 아이콘을 누를 때마다 그 옵션이 켜졌다 꺼진다(⑤-b 선례).
+
+**전역 지정일 리밸런싱 `BtConfig.rebalDates` (⚠️ 회귀 주의)**
+
+특정 날짜를 찍어 그날 전 종목을 목표에 맞추는 축. **전체 정책에 '추가'되는 축**이라 둘을 함께 쓸 수
+있고, 정책을 `'none'`으로 두면 지정한 날짜에만 리밸런싱한다(사용자 요구: "매월 지정일이 아니라
+특정 월일을 선택해서"). 기본 `[]` = 없음 → **레거시 결과 1바이트 불변**(검증 #335).
+
+- **⚠️ `buildSlots`에서 종목 오버라이드·`r.mode==='none'` 두 `continue`보다 **앞**에서 만든다** —
+  뒤에 두면 `policy:'none'`인 달이나 종목 오버라이드가 있는 달에서 지정일이 통째로 사라지는데,
+  **'정기는 끄고 지정일만'이 이 기능의 주 사용 시나리오다**(검증 #331·#332, 소스 가드 #339가
+  `indexOf` 위치 관계로 단언 — 미러로는 표현할 수 없다).
+- **⚠️ `rebalMode==='follow'` 종목에만 건다**(검증 #333·#339b) — 월별 **일괄** 오버라이드와 같은 규약.
+  전 종목에 걸면 '이 종목은 리밸런싱 안 함'으로 둔 종목이 지정일 하나로 그 설정을 잃는다. 특정 종목만
+  그 날짜에 넣으려면 그 종목의 `rebalMode:'dates'`를 쓴다.
+- **⚠️ 분배 일정은 건드리지 않는다**(검증 #338) — 분배락·지급일은 시장이 정하는 값이라 `payCycle`만 따른다.
+- **정규화 `normalizeRebalDates`**: 유효 날짜만 + dedupe + 정렬 + `MAX_BT_REBAL_DATES`(120) 상한.
+  ⚠️ **빈 배열을 보존한다**(`normalizeSellLevels` 계열) — 기본값으로 되돌리면 레거시 시나리오에 없던
+  리밸런싱이 생긴다(검증 #336b). 정렬·dedupe가 **멱등**을 만든다(#237·#336c).
+- **등록 6곳**(하나라도 빠지면 조용히 소멸/미저장): `makeBtConfig` · `backtestFingerprint` ·
+  `backtestSettingsFingerprint` + 미러 3곳. 지문 누락 시 '지정일만 고친 세션'이 Drive에 저장되지 않는다
+  (검증 #337 — `historyVerifyKey`·`targetAmount`와 동일 버그 클래스). **영속화 신규 지점은 0곳**
+  (`BtConfig` 안이라 App.tsx 7지점이 시나리오를 통째로 실어 나른다).
+- **⚠️ 화면은 체크박스가 아니라 '개수 배지 + 날짜 칩 개별 삭제'** — 체크박스로 두면 끄는 유일한 표현이
+  배열 비우기가 되어 입력이 통째로 소실된다(백테스트는 undo가 없고 `_preserveStickyPersonalData`
+  대상도 아니다). 중복·상한은 **입력 시점에** 막는다 — 안 막으면 초과분이 저장되고 다음 로드에서
+  정규화가 조용히 절삭해 그때 결과가 달라진다.
+- **⚠️ `rebalDatesOf` 안전 접근자로만 읽는다**(`active.rebalDates` 직접 접근 금지) — 정규화를 우회한
+  config이 한 번이라도 들어오면 렌더 중 TypeError가 루트 ErrorBoundary까지 올라가 **화면이 통째로
+  오류 페이지**가 된다(`dipOf`와 같은 근거, `@ts-nocheck`라 컴파일러가 못 막는다).
+
+**전역 '리밸런싱 안 함' `policy:'none'` (⚠️ 회귀 주의)**
+
+초기 매수 후 수량을 그대로 두는 Buy & Hold 기준선. `resolveAssetRebal`이 `follow` 종목에
+`mode:'none'`을 돌려주므로 슬롯이 하나도 생기지 않는다(검증 #114·#115).
+
+- **⚠️ `follows: true`를 유지한다** — 슬롯을 안 만들어 그룹·월별 일괄 오버라이드 경로에 어차피
+  닿지 않고, `false`로 두면 '종목이 개별 지정했다'는 뜻이 되어 `buildSlots`의 개별/일괄 구분 의미가
+  흐려진다. **종목 지정 오버라이드(`assetId` 있는 `BtOverride`)는 `r.mode` 검사보다 먼저 처리되므로
+  `policy:'none'`에서도 그 달 그 종목 슬롯을 만든다**(의도 — "전부 멈추되 이 달 이 종목만" 표현).
+- **⚠️ 종목마다 '수량 고정' 경고를 쏟지 않는다**(검증 #116) — 사용자가 명시적으로 고른 설정이라
+  종목 수만큼 경고가 도배되면 진짜 경고가 묻힌다. 종목별 `rebalMode:'none'`으로 슬롯이 없어진
+  경우에는 **종전대로 경고한다**(#116b).
+- **⚠️ 매월 목표 증액(`contribution`)은 그 달 첫 리밸런싱일에 붙으므로 리밸런싱이 없으면 집행되지
+  않는다** — 과거엔 **예외 규칙만** 경고하고 **기본 규칙은 결과·경고 어디에도 흔적 없이 사라졌다**.
+  엔진이 '리밸런싱 0회 + 증액 설정 있음'을 경고한다(검증 #143·#143b).
+  ⚠️ 설정 패널 배너 조건은 `policy === 'none'`이 **아니라 `result.slots.length === 0`** 이다 —
+  policy로 재면 양방향으로 거짓말을 한다(종목별 `rebalMode`를 하나만 지정해도 증액이 정상
+  집행되는데 '효과 없음'이라 하고, 반대로 전 종목 `rebalMode:'none'`이면 아무 안내도 없다). 소스 가드 #148.
+
+**'전체 백테스트 비교 종합' 뷰 (⚠️ 회귀 주의)**
+
+시나리오 select의 **예약 id `'__compare__'`**(`COMPARE_ID`)로 진입한다. 구성 = 비교 표(시나리오 행 ×
+지표 열) + 시나리오 라인을 겹친 차트(₩/% 토글) + 시나리오별 요약카드·개별 차트 블록.
+
+- **⚠️ 요약 카드는 단일 뷰와 비교 블록이 `SummaryCards` 한 컴포넌트를 공유한다**(소스 가드 #134).
+  복제하면 두 화면이 갈라진다. 지표도 `summary` 필드를 그대로 읽고 **여기서 다시 계산하지 않는다**.
+- **⚠️ 포함 여부 `BtConfig.compareOn`은 시나리오 안의 필드**라 영속화 신규 지점이 **0곳**이다
+  (지문·state 리터럴·`applyStateData`·sticky·브릿지 전부 무수정). 기본값은 `partial.compareOn !== false`
+  — `!!partial.compareOn`으로 두면 **필드가 없는 기존 시나리오가 전부 빠져 비교가 빈 화면**이 된다.
+- **⚠️ 토글은 `patchActive`가 아니라 id 기준 `toggleCompare`** — 비교 뷰에서는 `active`가 `null`이라
+  `patchActive`는 아무 일도 하지 않는다(흐름도 `patchNodeById`와 같은 근거). 소스 가드 #136.
+- **⚠️ `activeId === COMPARE_ID`는 '없는 시나리오' 리셋 effect에서 걸러야 한다** — 안 걸면 비교 뷰를
+  열자마자 첫 시나리오로 되돌아간다. 소스 가드 #135.
+- **⚠️ 비교 실행은 `compareOn` 필터 + `RUN_DEBOUNCE_MS` 디바운스(`runAll`)** 를 거치고 **비교 뷰일
+  때만** 계산한다(소스 가드 #138) — 최대 10개 백테스트가 체크박스를 누를 때마다 재실행되면 체감
+  반응이 눈에 띄게 나빠지고, 안 쓰는 화면의 비용을 항상 치를 이유도 없다(`btActive` 게이팅과 동일).
+- **시나리오 색상은 `local` 안의 위치**로 고정한다 — 비교 체크를 껐다 켜도 색이 바뀌지 않는다.
+- **⚠️ 색 스와치는 반드시 인라인 SVG(`Swatch`)** — 인쇄 CSS의 `.bt-shell * { background:
+  transparent !important }`는 작성자 !important라 인라인 `style={{backgroundColor}}`를 이겨서
+  span/div 스와치가 **PDF에서 통째로 사라진다**. 그러면 겹친 차트의 선(SVG `stroke`는 살아남는다)과
+  시나리오 이름을 대응시킬 방법이 없어 비교 PDF가 판독 불가가 된다. SVG `fill`은 `background`·
+  `color` 어느 규칙에도 걸리지 않는다. 소스 가드 #146.
+- **⚠️ 첫 진입은 디바운스를 건너뛴다**(`runAll === null`이면 즉시) — 태우면 220ms 동안 '0개 선택됨'
+  빈 화면이 뜨고 PDF·CSV 버튼이 비활성으로 깜빡여 사용자가 '아무것도 없다'고 오해한다. 소스 가드 #149.
+- **⚠️ 월 요약의 '매매차익이 모자라 분배금에서 충당' 안내는 `cashUsedDiv > 0`으로 띄우면 안 된다** —
+  재투자 매수는 **설계상 항상** 분배금 주머니에서 나가므로(`prefer:'div'`) 재투자를 켠 **모든 달**에
+  거짓 설명이 붙어 진짜 부족 신호가 묻힌다. 재투자 몫(`-reinvestNet`)을 뺀 나머지가 분배금을
+  헐었을 때만 띄운다. 소스 가드 #147.
+- **실행 불가(`ok:false`) 시나리오도 숨기지 않고** 사유와 함께 행을 남긴다(조용히 빠지면 사용자는
+  그 시나리오가 비교에 들어간 줄로 안다). 겹친 차트 기본 모드는 초기 투자금이 서로 다르면 `%`.
+**평가금 고정 보조 규칙 6종 (⚠️ 전부 '기본값 = 종전 동작' — 하위호환이 이 기능의 최우선 계약)**
+
+"종목별 목표 평가금을 고정하고(오르면 팔고 내리면 사서 복원) 분배금은 따로 적립했다가 급락 때만
+푼다"는 운용을 재현하기 위한 `BtConfig` 6필드. **`dip`(시그널 리밸런싱)만 독립 트리거**이고,
+`buyFunding`은 **정기 리밸런싱과 시그널이 공유**하며, 나머지 4종은 **정기 리밸런싱에만** 걸린다 —
+이벤트(구조 변경)·분배금 재투자는 종전 규약 그대로다(그쪽까지 번지면 PDF 재현 #23~#42가 깨진다).
+**초기 매수는 `초기 투자금` 한도만 쓴다**(아래 '초기 매수 예산' 항목 — 추가 예수금은 손대지 않는다).
+
+| 필드 | 기본값 | 요약 |
+|---|---|---|
+| `band` | 0 | `\|리밸런싱 전 평가액 − 목표\| ≤ 목표 × band%` 면 그 회차 매매 생략 |
+| `buyFunding` | `'both'` | **매수 재원** — `'both'`=예수금+적립 분배금 / `'tradeOnly'`=예수금만(분배금 **완전 잠금**). **정기 리밸런싱과 시그널이 공유** |
+| `dip` | `{enabled:false}` | **시그널 리밸런싱** — 매수=가격 고점 대비 −N% / 매도=가격 저점 대비 +N%, **발동일 종가로 즉시 체결**. 규모는 단계의 `buyPct`/`sellPct`가 정한다 |
+| `cashFloorPct` | 0 | 매수 후 총 예수금이 `활성 종목 목표금액 합계 × pct%` 아래로 못 내려간다 |
+| `annualReview` | `{mode:'none'}` | `everyMonths`마다 `(예수금 − 예약금) × value%`를 목표금액에 얹는다 |
+| `divTaxPct` | 0 | 지급일에 원천징수를 떼고 입금 |
+
+- **⚠️ `applyCash`의 4번째 인자 `divCap`(기본 `Infinity`)이 하위호환의 축**이다. `tradeOnly`가 0을 넘겨
+  분배금 주머니를 잠그고 급락이 그만큼만 연다. **`allowNegativeCash:true`일 때가 이 인자가 유일하게
+  일하는 경로**다 — 음수 허용이면 `adjustTo`의 예산 상한(`limited`)이 통째로 꺼져 출금 시점의 `divCap`만
+  남는다(변이 테스트로 실증, 검증 #170). 마찬가지로 `adjustTo(opts?)`의 `budget ?? cash` ·
+  `floorCap ?? Infinity`가 기본값 하위호환의 전부다(가드 #227·#228).
+- **⚠️ 시그널은 평가액이 아니라 가격 고점/저점 기준**(리밸런싱으로 수량이 계속 변해 평가액 극값은
+  왜곡된다). 발동일은 사전 탐지로 확정하고 **개방액은 런타임 `cashDiv`에 달려 있어 `signal` 스텝에서**
+  계산한다. 각 단계는 **극값 갱신 전까지 1회**, 새 고점이 서면 매수 단계가·새 저점이 서면 매도 단계가
+  재무장한다(가드 #232). ⚠️ 두 판정은 **서로 독립**이다 — 옛 코드처럼 `if (px > peak) {…; continue;}`로
+  하루를 통째로 건너뛰면 **매도 시그널이 가장 크게 오른 날(신고가일)에 발동하지 못한다**.
+- **⚠️ 시그널은 '발동일 종가로 즉시 체결'한다(2026-08 전환 — 되돌리지 말 것)**. 옛 설계는 개방만 하고
+  **다음 정기 리밸런싱**에서 매수했는데, `policy:'none'`(리밸런싱 안 함)에서는 그 회차가 영영 오지 않아
+  **"개방 ₩0 → 사용 ₩0"만 찍히고 기능이 통째로 죽었다**(사용자 실측 보고). 그래서 `dipUnlock`/
+  `dipPending`/`consumeDip`(회차를 넘겨 들고 다니던 수명 모델)과 **밴드 면제**가 전부 삭제됐다 —
+  밴드는 이제 순수하게 정기 리밸런싱 전용이다(가드 #233, 미러 #250·#300~#302).
+- **⚠️ ③ 리밸런싱 일정과 완전히 독립 — 둘을 동시에 켤 수 있다**(사용자 요구). `policy:'none'`이어도
+  시그널은 돌고, 둘 다 켜면 같은 날 `KIND_ORDER`상 **signal → rebal** 순으로 둘 다 실행된다(시그널이
+  먼저 목표를 맞추므로 이어지는 정기 회차는 자연히 no-op이 된다). 미러 #301·#302.
+- **⚠️ 매수 재원은 `buyFunding` **하나**가 정한다 — 정기 리밸런싱과 시그널이 **같은 두 줄**을 쓴다**
+  (사용자 확정 2026-08). `tradeOnly` → `budget = max(0, cashTrade)` · `divCap = 0`(적립 분배금 **완전
+  잠금**) / `both` → `budget = cash` · `divCap = Infinity`. 시그널 스텝과 `runPlan`이 **문자 그대로 같은
+  두 줄**이라야 두 경로가 갈리지 않는다(가드 #233b가 `.length === 2`로 단언).
+  ⚠️ 옛 설계는 `tradeOnly`에서도 시그널이 `적립 분배금 × 단계 비율`만큼 **개방**해 썼다 — 그 메커니즘
+  (`unlocked`/`unlockPct`/`divRoomTotal`)은 통째로 폐기됐다. 되돌리면 "매매 예수금만 = 누적 매매현금 +
+  초기 예수금"이라는 사용자 정의가 깨진다(미러 #177b).
+- **⚠️ 재조정(다른 종목의 목표 초과분 매도)은 '목표까지'(`buyPct === null`) 단계에만 돈다**
+  (`dip.reallocate`, 기본 true). 비율 매수는 "가진 현금의 일부만 투입"이 규칙이라 **재원 부족이라는
+  개념 자체가 없다** — `needTotal`에 비율 종목의 필요액을 넣으면 팔 이유가 없는 종목을 팔게 된다
+  (미러 #313b). **전 종목이 함께 하락해 팔 초과분이 없으면** 아무것도 팔지 않고 가진 재원만큼만 산다.
+  ⚠️ `config.dip.reallocate`는 반드시 **`!== false`**로 읽는다 — 화면은 정규화를 거치지 않은 로컬 사본을
+  그대로 넘길 수 있어, `undefined`를 falsy로 읽으면 **저장 전후 결과가 갈린다**(중복 낙폭 사고와 같은 부류).
+- **⚠️ 비중 모드 분모(`base`)는 signal 스텝당 단 한 번만 잡는다**(정기 리밸런싱이 plans를 실행 전에
+  확정하는 것과 같은 규약). 매도마다 `targetBaseAt`을 다시 재면 **캐스케이드**가 난다 — 같은 날
+  A·B에 매도 시그널이 뜨면 A를 판 직후 평가액 합계가 줄어 B의 목표까지 내려가고, B는 원래보다 더
+  팔게 된다(그 매도가 다시 C의 목표를 내린다). 매도·재조정·매수·현금 바닥선이 **전부 같은 base**를
+  써야 하루 안에서 목표가 흔들리지 않는다. 편입(`p.active = true`)은 수량을 바꾸지 않아 base와 무관하다.
+  미러 #318(비중 합 80% 픽스처 — 합이 100%면 총 초과분 = 총 부족분이라 두 종목이 동시에 매도하는
+  상황 자체가 안 만들어져 캐스케이드가 드러나지 않는다).
+- **⚠️ 매매 규모는 단계의 **비율 칸**이 정한다 — 비우면 '목표까지'**(사용자 확정 2026-08).
+  - `BtDipLevel.buyPct: number | null` → 매수액 = `min(재원 스냅샷 × buyPct%, 목표 미달액)`.
+    **목표에서 자른다**("축소된 비중을 일정하게 유지하는 것이 목적" — 넘겨 사면 다음 회차가 되판다,
+    미러 #175b). `null`이면 목표 미달액 전부(종전 동작) + 재조정 허용.
+  - `BtSellLevel.sellPct: number | null` → 매도액 = `(평가액 − 목표) × sellPct%`. 밑변이 평가액이
+    **아니라 초과분**이라야 목표 아래로 내려가지 않는다(미러 #312b·#314). `null`이면 목표까지 전량.
+  - ⚠️ **`null`(목표까지)과 `0`(재원/초과분의 0% = 아무것도 안 함)은 결과가 정반대**다. 지문도
+    `?? ''`로 둘을 구분해야 한다(미러 #220b). 화면 입력은 `NumInput allowEmpty`(빈칸 = null).
+  - ⚠️ 레거시 `unlockPct`는 값을 그대로 승계하되 **0은 `null`로** 옮긴다 — 옛 '단계 추가' 버튼이 0을
+    넣었고 옛 의미로 0은 '분배금을 안 연다'(= 목표까지 매수)였는데, 새 의미에서 0은 **한 주도 안 사는**
+    단계로 뒤집힌다(미러 #215b).
+  - ⚠️ **값 승계는 의도된 일회성 의미 변경이다**(사용자가 화면의 34%가 실제로 일하기를 요청했다).
+    그런데 지문 투영이 옛 `10:34`와 새 `10:34`로 **문자열이 완전히 같아**, 사용자가 아무것도 안
+    건드렸는데 결과 숫자만 달라지고 메모의 '설정이 바뀌었습니다' 배지는 뜨지 않는다 — 옛 해석으로
+    쓴 AI 분석이 조용히 거짓이 된다(적대적 리뷰 확정). → `backtestSettingsFingerprint`에
+    **`SETTINGS_FP_SCHEMA` 토큰**을 넣어 그 릴리스의 모든 메모에 배지를 띄운다(가드 #290d).
+    ⚠️ 저장 지문(`backtestFingerprint`)에는 **넣지 말 것** — 양변에 똑같이 붙어 무의미하고
+    `normalizeBacktestScenarios`의 멱등 판정만 흔든다. 토큰은 '같은 저장값의 뜻이 바뀐' 릴리스에서만 올린다.
+- **⚠️ 재원 스냅샷(`poolAt`)은 매도 시그널 처리 뒤·재조정 앞에서 1회**, **종목별로 같은 값**이다 —
+  같은 날 매도 시그널이 만든 현금은 실제로 쓸 수 있으므로 포함하고, 재조정 대금은 '목표까지' 매수를
+  위한 것이라 비율 매수의 밑변을 부풀리지 않게 제외한다. 여러 종목이 같은 날 발동해도 서로의 몫을
+  빼앗지 않아 화면 계산식(밑변 × 비율 = 금액)이 종목마다 성립한다(미러 #322).
+  ⚠️ 밑변은 **매수 계획이 살아 있는 종목만** 채운다 — 종가가 없어 계획에서 탈락한 종목까지 채우면
+  화면에 '실제로 성립한 적 없는 계산식'이 렌더된다.
+  ⚠️ 같은 종목의 여러 단계가 같은 날 겹치면(갭 하락/급등) 금액이 **합**이므로 비율도 합(**`pctSum`**)을
+  함께 남긴다 — 단계별 `pct`로 화면을 그리면 `₩1,000,000 × 34% = ₩670,000` 같은 **거짓 계산식**이
+  찍힌다(적대적 리뷰 확정, 미러 #321 / 가드 #259b). 하나라도 `null`이 섞이면 그 종목은 그날 '목표까지'.
+  ⚠️ **매도도 매수와 같은 carrier 규약으로 종목별 1회만 체결**한다 — 트리거마다 독립 실행하면 비율
+  매도가 **연쇄 적용**(10% 판 뒤 남은 초과분의 20%)돼 화면 계산식과 체결이 어긋난다(미러 #312e).
+  ⚠️ 화면의 계산식 줄은 **엔진이 실어 보낸 `BtSignalEvent.carrier`**로 그린다 — `planned > 0` 같은
+  값으로 판정하면 비율 0%·재원 0원이라 금액이 0인 대표 행(=설명이 가장 필요한 행)이 사라진다(가드 #259b).
+  ⚠️ **`밑변 × 비율 = planned`로 등호를 찍지 말 것** — `planned`는 매수면 목표 미달액, 매도면 초과분
+  전량에서 **한 번 더 잘린다**. 그대로 쓰면 `₩60,000,000 × 100% = ₩6,000,000` 같은 거짓 계산식이 된다
+  (적대적 리뷰 확정). `sigSizeText`의 `capped()`가 잘린 경우를 `곱 → …에서 자름 = 결과`로 갈라 준다.
+  ⚠️ 매도 carrier의 **`pctSum`은 '목표 이하' 가드보다 먼저** 채운다 — 뒤에 두면 조기 반환한 행이
+  `null`로 남아, 30%를 지정했는데 화면이 '목표 초과분 ₩0 전량'이라고 설명한다(미러 #312f).
+  ⚠️ 미체결 사유는 **'비율 0%'와 '재원 없음'을 갈라서** 남긴다 — 뭉뚱그리면 40%를 넣은 사용자에게
+  "매수 비율 0%"라고 단언하게 되고, KPI 팝오버는 이 note가 유일한 설명이다(미러 #175c).
+- **⚠️ 초기 매수 예산 = `초기 투자금`뿐**(사용자 확정 2026-08). 비중 분모 `base`와 `adjustTo`의
+  `budget`을 **둘 다** `config.initialCapital`로 잡고, 매수마다 `initRemain += t.cashDelta`로 줄인다.
+  추가 예수금(`extraCash`)은 "매매 시그널 때 매수할 수 있는 자금"이라 첫날 써 버리면 안 된다.
+  `extraCash === 0`이면 결과가 종전과 1원도 다르지 않다(미러 #323c).
+  ⚠️ **분모만 고치면 안 된다** — 목표 금액 모드는 `targetOf`가 base를 아예 보지 않아 예산 캡이 없으면
+  여전히 추가 예수금을 헐어 쓴다(미러 #323b). 반대로 **예산 캡만 고쳐도 안 된다** — 비중 모드에서
+  분모가 부풀면 앞 종목이 과매수하고 뒤 종목이 예산에 잘려 **배분이 기운다**(미러 #323, 2종목 픽스처).
+  ⚠️ 화면의 목표 합계 기준·'종목 수로 균등 분배'·'빈 칸 채우기'도 **초기 투자금만** 쓴다.
+- **⚠️ 재조정(②) 발동 판정은 `cashTrade`가 아니라 '실제로 쓸 수 있는 재원'(`usableFor`)으로 한다**
+  — 적대적 리뷰가 잡은 확정 결함 2건이 같은 뿌리다:
+  ① `buyFunding:'both'`(기본)에서는 분배금 주머니가 이미 매수 재원인데 `cashTrade`만 보면
+  **쓸 필요 없는 다른 종목을 팔아 치운다**(policy:'none'이면 그 현금은 영영 되돌려지지 않는다, 미러 #319).
+  ② 현금 바닥선이 있으면 판 돈이 바닥선에 막혀 매수에 못 쓰이는데도 팔아 버려 **매도만 남는
+  '나체 매도'**가 된다(미러 #320). → `usableFor(extra)`가 재원 모드·바닥선·개방 한도를 모두 반영하고,
+  **"다 팔아도 쓸 수 있는 돈이 1원도 안 늘면 한 주도 팔지 않는다"**(`usableFor(totalExcess) > usableFor(0)`)가
+  나체 매도의 유일한 방어선이다. ⚠️ 진입 게이트와 루프 정지 조건을 **둘 다** 같은 함수로 재야 한다
+  (한쪽만 옛 `cashTrade` 비교로 되돌리면 다른 쪽이 가려 변이 테스트가 통과한다 — 실측).
+- **⚠️ `BtTrade.signal`은 반드시 화면·CSV에서 렌더한다**(월별 표 날짜 셀 배지 + CSV '구분' 열).
+  안 그러면 `policy:'none'`에서 각주는 "정기 리밸런싱은 일어나지 않습니다"라고 하는데 표는 설명 없는
+  매매 행으로 가득 차고, 특히 **재조정 매도**는 시그널이 뜬 적 없는 **다른 종목**이 팔린 것이라
+  출처가 화면 어디에도 없다(적대적 리뷰 확정, 가드 #259d).
+- **⚠️ 알려진 비대칭(설계상 정상, 화면에 고지)**: 재무장 기준이 매수=고점·매도=저점이라
+  **한 방향으로만 가는 장에서는 반대편 시그널이 사실상 1회성**이 된다(계속 오르면 저점이 갱신되지 않아
+  매도가 처음 도달 때만 발동). 이는 "저점 대비 반등"의 정의상 필연이므로 산식을 바꾸지 말고
+  ⑤-b Hint의 안내 문구를 유지할 것.
+- **⚠️ 매도 시그널은 '매도 전용'이고 방어선이 둘이다**(변이 테스트로 실측): 사전 검사
+  (`평가액 − 목표 ≤ 0`이면 skip)와 방향 가드(`tr.qty >= 0`이면 skip). **하나만 지우면 다른 하나가
+  잡아 검증이 통과**하므로 둘 다 그대로 둘 것 — 둘 다 지우면 목표 미달 보유에서 반등 시그널이
+  **매수로 뒤집혀** '매도 시그널'이 자산을 늘린다(미러 #308·#308b).
+- **⚠️ 매도 대금은 매매 주머니로**(사용자 확정) — `cashDiv`를 늘리지 않는다. 시그널 매매는
+  `structural`·`reinvest` 어느 쪽도 아니라 **`tradeNet`에 그대로 들어가고**, 그래서 기말 예수금 분해
+  항등식(#125)에 **새 항이 생기지 않는다**(미러 #303·#304·#317). 표시용 라벨은 `BtTrade.signal`
+  (`'buy'|'sell'|'realloc'`) — ⚠️ `note`에 접두어로 붙이지 말 것(화면이 `t.note === '바닥선'` 정확
+  일치로 툴팁을 고른다).
+- **⚠️ `sellLevels`의 기본값은 빈 배열이고 `normalizeSellLevels`는 그것을 기본 단계로 되돌리지 않는다**
+  (매수 `normalizeDipLevels`와 **반대**). 매도는 "안 쓰는 것"이 정상 상태이고, 기본 단계를 밀어 넣으면
+  켠 적 없는 매도가 조용히 실행돼 기존 결과가 달라진다(미러 #305·#312).
+- **⚠️ 현금 바닥선은 `allowNegativeCash`보다 우선**한다(가드 #229). 매도·분배금 재투자에는 적용하지 않는다.
+- **⚠️ 원천징수는 `divPaid`를 세후로 정의**했다 — `divAccrued`(권리 확정액)는 세전 그대로 두고 현금
+  흐름만 세후로 바꾼다. 그래야 **기말 예수금 분해 항등식(#125)이 종전 그대로** 성립한다:
+  `finalCash = initialCashAfter + cumTradeNet + cumStructuralNet + cumReinvestNet + cumDivPaid`.
+  세금은 애초에 입금되지 않은 돈이라 **분해 그룹에 항을 더하면 합이 어긋난다** — 화면·CSV 모두
+  분배금 항을 '(세후)'로 라벨링만 하고 세금은 참고 줄로 뺀다(가드 #245). `curve`의 분배금 현금도
+  세후여야 `curve.cash === finalCash`가 유지된다(가드 #230).
+- **⚠️ 연간 증액은 목표 금액 모드 전용**(비중 모드는 목표가 '평가액 합계 × 비중'이라 올릴 대상이 없다 —
+  매월 증액과 같은 이유). 실제로 일하는 가드는 **스케줄링 쪽**이고 스텝 핸들러의 가드는 도달 불가한
+  방어적 중복이다(contrib과 대칭). `reserve`는 **surplus 상한**으로 보호돼 `value>100%`여도 남는다.
+  같은 날 겹치면 **contrib 먼저 → annual 나중**(`KIND_ORDER`).
+- **KPI**: `minCash`(생존 판정 핵심) · `minCashDiv`(**첫 분배금 입금 이후**만 잰다 — 0에서 시작하므로
+  전 구간으로 재면 항상 0) · `divMonthlyAvg/Stdev`(**첫 분배 달~마지막 달 연속 구간**, 이후의 진짜 0원
+  달은 포함해야 '끊겼다'가 드러난다) · `bandSkipCount/Amount` · **`signalEvents`** · `shortfallMonths`.
+  `BtMonth.shortfallCount`가 필요한 이유: **매수가 0으로 잘리면 거래 행 자체가 남지 않아** 표에서
+  부족이 사라진다.
+- **⚠️ `signalEvents`는 화면이 계산식을 재현할 수 있게 밑변까지 남긴다**(사용자 요청 2026-08:
+  "`1단계 · 매수 재원 ₩A × 34% = ₩B`처럼 상세히"). 필드: `kind`(buy/sell) · `step`(1부터) · `level` ·
+  **`pct`/`pctSum`**(`number | null`, null=목표까지) · **`carrier`**(대표 행인가) ·
+  **`poolAt`**(매수 밑변 = 재원 스냅샷) · **`excessAt`**(매도 밑변 = 목표 초과분) ·
+  **`planned`**(비율·목표 상한 적용 후 목표 매매금액) · `divPocketAt` · `cashTradeAt` ·
+  `used`(분배금에서 나간 몫) · `ref`(고점 또는 저점) · `price` · `tradeQty` · `tradeAmount` ·
+  `fromTrade` · `reallocAmount` · `note`. 옛 화면은 `개방 ₩0 → 사용 ₩0` 한 줄이라 **왜 0인지** 알 수
+  없었다 — 미체결이면 `note`(재원 없음·목표 이상·종가 없음 등)를 그대로 보여 준다(가드 #259b).
+  문장 포매터(`sigLabel`·`sigRefText`·**`sigSizeText`**·`sigFundText`·`sigOutcomeText`)는 **화면과 CSV가
+  공유**한다 — 각자 만들면 같은 사건이 화면과 파일에서 다르게 설명된다.
+  ⚠️ 같은 종목의 여러 단계가 같은 날 겹치면(갭 하락/급등) 이벤트는 단계별로 남기되 **체결·규모는 그
+  종목의 첫 이벤트(carrier)에 합산**하고 나머지는 `note`로 그 사실을 밝힌다(행마다 나눠 실으면 같은
+  체결이 두 번 표시된다). `reallocAmount`는 **날짜 단위 값**이라 그날 첫 매수 이벤트에만 싣는다.
+- **화면**: 설정은 **`⑤-b 전략 옵션 — 매매 시그널 설정`**(가드 #243이 이 문자열을 그대로 단언한다) —
+  ⑥ 종목을 ⑦로 밀지 말 것(엔진 경고가 '⑥ 종목에서…'를 가리킨다,
+  가드 #243). 결과는 `StrategyKpis`(단일 뷰·비교 블록이 `SummaryCard`를 **공유**, 가드 #242), 비교 표에
+  **기말 예수금·적립 분배금·최저 현금·월분배 표준편차**(⚠️ 실행 불가 행의 `colSpan`을 함께 고칠 것 —
+  가드 #241이 thead `<th>` 수와 대조하고, 비교 CSV는 **33열**이라 가드 #247도 함께 고쳐야 한다).
+  요약 카드는 **7장**(…·기말 예수금·적립 분배금)이라 `xl:grid-cols-4`다 — 7열로 늘리면 카드 폭이
+  100px 아래로 떨어져 `₩381,666,374`가 줄바꿈된다. 월별 표는 **12열 유지**하고 `t.note`('바닥선'·
+  '예수금 부족')는 날짜 셀 **배지**로 붙인다(비고 열이 없어 그러지 않으면 안 보인다, 가드 #246).
+- **⚠️ 화면은 `dipOf`/`annualOf` 안전 접근자로만 읽는다**(`active.dip.enabled` 직접 접근 금지, 가드 #244) —
+  `@ts-nocheck` 파일이라 컴파일러가 못 막는데, 정규화를 우회한 config가 한 번이라도 들어오면 렌더 중
+  TypeError가 루트 ErrorBoundary까지 올라가 **화면이 통째로 오류 페이지**가 된다(`runBacktest`는
+  try/catch로 감싸여 있지만 **렌더는 감싸여 있지 않다**).
+- **⚠️ `<label>` 안에 `Hint`(=`<button>`)를 두지 말 것** — label 활성화 동작이 내부 체크박스를 함께
+  토글해 `?` 아이콘을 누를 때마다 그 옵션이 켜졌다 꺼진다(가드 #249). Section 헤더의 '버튼 중첩 금지'와
+  같은 부류다.
+- **영속화 신규 지점 0곳** — 6필드가 전부 `BtConfig` **안**이라 App.tsx 7지점이 `backtestScenarios`를
+  통째로 실어 나른다. 등록은 `makeBtConfig`·`normalizeBacktestScenarios`·`backtestFingerprint` 3곳뿐.
+  ⚠️ **정규화 멱등이 핵심 불변식**(검증 #237): 레거시는 첫 로드에서 **한 번만** 새 배열을 돌려주고
+  그 뒤로는 **같은 참조**여야 한다 — 매번 새 배열이면 ① 폴링마다 재저장 ② `BacktestPage` 시드 effect가
+  로컬 사본을 갈아엎어 **2.5초 idle 승격 전의 편집이 사라진다**.
+- **적대적 리뷰 확정 결함 5건 (⚠️ 되돌리면 그대로 재발 — 검증 #250~#259)**:
+  ① **(폐기 — 2026-08 시그널 당일 실행 전환으로 원인 자체가 사라졌다)** 옛 설계에서 `delta === 0`
+  회차는 `runPlan`의 두 필터(`delta<0`/`delta>0`) 어디에도 안 들어가 급락 개방과 밴드 면제가 다음
+  회차까지 살아남았다. 지금은 개방을 회차 너머로 들고 다니지 않으므로 이 결함이 재발할 코드가 없다.
+  #250은 그 자리에서 **"시그널이 정기 리밸런싱으로 새지 않는다"**(밴드가 정기 매매를 전부 막는다)를
+  대신 지킨다. ⚠️ 옛 수명 모델로 되돌리면 이 결함도 함께 되살아난다.
+  ② **증액 상한이 총 `cash`라 `tradeOnly`·바닥선에서 무력화**됐다 — 쓸 수 없는 돈까지 목표에 얹혀 매달
+  복리로 부풀고(실측 목표 5,000만 → 3억 4천만, 평가액은 9,386만) '누적 증액'이 투입되지 않은 돈을 보고했다.
+  → **`deployableCash`**(tradeOnly면 `cashTrade`, 바닥선이 있으면 그만큼 차감)로 자른다. 매월·연간 **양쪽**.
+  ③ **같은 낙폭 단계를 두 번 적으면 런타임에 두 번 발동**해 개방액이 2배가 되고, 저장·재로드 뒤에는
+  정규화가 dedup해 **같은 시나리오가 세션마다 다른 결과**를 냈다. → `runBacktest`가 사전탐지 전에
+  `normalizeDipLevels`를 태운다. ⚠️ **이 경로는 `makeBtConfig`로 테스트하면 안 된다** — 거기서 이미
+  정규화돼 죽은 단언이 된다(실제로 그랬다). 화면은 `patchActive` 스프레드로 만든 **정규화되지 않은
+  로컬 사본**을 그대로 넘기므로, 테스트도 `cfg.dip = {...}`를 직접 주입해 그 경로를 재현한다.
+  ④ **화면의 '아직 미지급'을 `cumDivAccrued − cumDivPaid`로 구하면 세금까지 미지급으로** 표시된다
+  (`cumDivAccrued = cumDivPaid + cumDivTax + 미지급 세전분`). 반드시 `cumDivTax`를 빼고 구한다.
+  ⑤ **급락 단계에 행 추가·삭제 UI가 없어** 중복 낙폭이 정규화로 지워지면 되돌릴 수단이 없었다.
+  → 행 삭제 버튼 + '단계 추가' + **중복 낙폭 즉시 경고**.
+- **⚠️ `reserve`는 예수금의 하한이 아니다** — 연간 증액의 **재원에서 제외**될 뿐, 기존 목표를 복원하는
+  평소 매수는 그냥 예수금을 쓴다. 예수금 자체에 하한을 두려면 `cashFloorPct`를 쓸 것(그쪽이 매수를 자른다).
+- **범위 밖(의도)**: 매매차익 과세 · 거래수수료 · 슬리피지 · 시그널 단계 매수/매도 각 5개 초과 · undo/redo.
+  **알려진 한계**: ① 시그널 매수는 그 종목이 **편입 구간 안**(`effectiveStart~End`)이고 `removed`가
+  아니어야 발동한다(그 밖은 이벤트로 기록만 남고 체결 0). ② 재조정(②)은 **목표 초과분이 있는 종목**만
+  판다 — 전 종목이 목표 이하면 아무것도 팔지 않는다(설계상 의도). ③ 매도 시그널은 목표 **아래로는
+  팔지 않으므로**, 목표 미달 보유 상태에서는 반등해도 아무 일도 일어나지 않는다.
+
+**시나리오 평가 · 메모 (`review` / `notes`) — AI 분석 기록 (⚠️ 회귀 주의)**
+
+결과 화면 **표제 바로 아래(= 헤더 상단)** 의 `ScenarioReviewCard`. `BtConfig`에 저장 필드 2종을 더한다:
+`review = {rating:'good'|'watch'|'bad'|'none', verdict(한 줄 결론), updatedAt}` +
+`notes: BtNote[] = {id, kind:'ai'|'user', title, body, snapshot, createdAt, updatedAt}`.
+사용자가 AI에게 받은 분석을 그 시나리오에 붙여 두고 다음에 열 때 그대로 보기 위한 **기록 전용** 기능이다.
+
+- **⚠️ 1급 계약: 결과에 1원도 영향을 주지 않는다**(검증 #261). `runBacktest`는 두 필드를 읽지 않는다 —
+  읽는 순간 "메모를 고쳤더니 수익률이 달라졌다"가 되어 기록으로서의 신뢰가 사라진다.
+- **⚠️ 그럼에도 지문·sticky·정규화에서는 1급 저장 데이터로 다룬다**. `makeBtConfig`는 **화이트리스트
+  재구축기**라 등록을 빠뜨리면 네 경로에서 통째로 사라진다 — Drive 로드 · 백업 복원 · 별도 창 수신
+  (`normalizeBacktestScenarios`) · **시나리오 복제**(`addScenario`가 `makeBtConfig`로 사본을 만든다).
+  `backtestFingerprint`에는 **본문 전문**을 넣는다(길이·개수 해시 절충 금지 — `investmentNotesKey`가
+  '본문만 고치면 저장 안 됨'을 냈던 그 절충이다). `review.updatedAt`·`note.createdAt/updatedAt`은 **제외**
+  (커밋 시각만 바뀌어도 저장이 재트리거되는 것 방지, #55 규약). 검증 #262~#266.
+- **⚠️ `backtestScenariosHaveContent`에도 넣되 '값이 실제로 있는가'로만 잰다** — 종목을 다 지우고 분석만
+  남긴 시나리오가 백업 복원에서 조용히 사라지면 복구 불가다. 단 `!!s.review` 같은 **존재 판정은 금지**
+  (makeBtConfig가 모든 시나리오에 기본값을 물리므로 전부 true가 되어 "빈 시나리오 1개 = 내용 없음"
+  계약이 깨지고 복원 경로가 영구히 막힌다). 검증 #267·#268·#268b.
+- **⚠️ 스냅샷 지문은 `backtestSettingsFingerprint`(신설, 결과에 영향 주는 필드만)로 만든다** —
+  `backtestFingerprint`를 쓰면 그 지문 안에 `notes` 자신이 들어 있어 메모를 한 건 추가하는 순간 지문이
+  달라지고, 그 결과 **모든 메모가 영구히 '설정이 바뀜'** 으로 표시된다(배지가 상시 켜지면 진짜 변경을
+  알리는 기능이 죽는다). 이 함수는 `id·name·review·notes·compareOn·createdAt·updatedAt`을 제외한다.
+  검증 #272~#274·#284·#290c.
+- **⚠️ 편집은 로컬 draft + blur 커밋**(`NumInput`·`DivInput`과 같은 계약). 매 keystroke 커밋하면 `active`
+  참조가 바뀌어 220ms 뒤 백테스트 전 구간이 재실행되고 결과 표 전체가 리렌더된다. draft를 두는 순간
+  유실·오적용 경로가 생기므로 **FlowInspector 규약 3종을 세트로** 넣는다(빠뜨리면 조용한 데이터 사고):
+  ① 쓰기는 **id 기준 `patchScenarioById`** — `patchActive`는 렌더 시점 `active?.id`를 클로저로 잡아
+  타이핑 중 시나리오를 바꾸면 draft가 **다른 시나리오에 기록**된다. 빈 패치는 조기 return(값이 그대로면
+  아무것도 쓰지 않는다 — 안 그러면 Drive 4파일 write가 헛돈다).
+  ② flush는 **`useLayoutEffect`**(소유자 변경 + 언마운트) — passive effect는 discrete 이벤트인 blur보다
+  뒤처지고, 언마운트된 DOM에는 blur가 아예 발화하지 않는다. 호출부의 `key={active.id}`가 2차 방어선.
+  ③ `registerFlush`로 커밋 훅을 부모에 등록하고 **`promote()` 첫 줄**에서 부른다 — promote는 `localRef`만
+  회수하므로 draft를 전혀 보지 못한다. CSV는 flush 후 **로컬 사본에서 다시 읽는다**(`flushReview`는
+  setState라 그 렌더의 `active`에는 반영되지 않는다). 검증 #275~#279.
+- **⚠️ 인쇄 미러 `.bt-printonly` 2줄은 짝이다**(화면 숨김 / `@media print` 표시). textarea는 내부
+  스크롤이라 **보이는 만큼만** 인쇄되고 접어 둔 메모는 렌더조차 되지 않는다 → 정적 텍스트 사본이 인쇄를
+  담당한다. 미러가 draft를 그대로 읽으므로 blur가 나지 않는 Ctrl+P 경로에서도 방금 친 내용이 실린다.
+  ⚠️ **그 짝으로 `empty`(인쇄 제외) 판정도 draft 전체를 봐야 한다** — `hasReviewContent(cfg)`(커밋값)만
+  보면, `addNote`가 만드는 메모는 title·body가 `''`이라 붙여넣고 blur 없이 Ctrl+P를 누른 순간
+  `empty=true` → 카드 루트에 `bt-noprint` → 인쇄 CSS가 카드를 감추면서 **그 안의 미러까지 함께 사라진다**
+  (자손의 `display:block !important`는 `display:none` 조상을 되살리지 못한다). 미러가 존재하는 유일한
+  이유가 그 경로이므로 이 비대칭은 기능을 정확히 무효화한다(적대적 리뷰 확정 결함, 검증 #292).
+  ⚠️ 카드 전체에 `bt-noprint`를 붙이지 말 것(평가가 PDF에서 사라진다 — 빈 카드만 붙인다).
+  ⚠️ `bt-month`(page-break-inside: avoid)도 붙이지 말 것 — 긴 분석이 한 장에 욱여넣어져 뒤가 잘린다.
+  ⚠️ 등급 색은 **text-\* 클래스**로만(인쇄 CSS `.bt-shell * { background: transparent !important }`가
+  인라인 배경을 이겨 배지가 통째로 사라진다 — `Swatch`가 인라인 SVG인 것과 같은 근거). 검증 #280~#282.
+- **⚠️ 화면은 `reviewOf`/`notesOf` 안전 접근자로만 읽는다**(`cfg.review.rating` 직접 접근 금지) —
+  `@ts-nocheck` 파일이라 정규화를 우회한 config 하나가 렌더 중 TypeError를 내면 루트 ErrorBoundary까지
+  올라가 **화면이 통째로 오류 페이지**가 된다(`dipOf`/`annualOf`와 같은 규약). 검증 #283.
+- **⚠️ 삭제는 인라인 2단계 확인**(`delId`) — 이 화면은 z-1090이고 별도 창에는 App조차 마운트되지 않아
+  `ConfirmDialog`(z-1000)도 알림 토스트도 뜨지 않는다(`splitEven`의 `evenConfirm`과 같은 근거).
+  긴 분석을 오클릭으로 잃으면 복구 불가다. 검증 #285.
+- **⚠️ 상한은 화면 `maxLength`와 정규화가 같은 상수를 쓴다**(`MAX_BT_NOTES` 12 / `MAX_BT_NOTE_LEN` 8000 /
+  `MAX_BT_NOTE_TITLE_LEN` 80 / `MAX_BT_VERDICT_LEN` 200). 정규화에서만 자르면 붙여넣은 분석의 뒤가
+  **조용히** 사라진다. STATE는 백업 22본으로 복제되고 `backtest:live`가 시세 조회마다 시나리오 전량을
+  재직렬화하므로 상한 자체는 필수다. 검증 #270·#286.
+- **⚠️ 별도 창(`variant='page'`)은 `pagehide`에서 승격한다** — 창에는 App의 종료 커밋 체인
+  (`backtestExitCommitRef`)이 없어 최대 2.5초분 편집이 **어떤 저장 경로로도 회수되지 않는다**. 짧은
+  설정값이면 무해했지만 **AI 분석을 붙여넣고 곧바로 창을 닫는 것이 이 기능의 주 사용 시나리오**다.
+  `promote`는 dirty가 없으면 null을 반환하므로 부작용 0. 검증 #287.
+- **영속화 신규 지점 0곳** — 두 필드가 `BtConfig` **안**이라 App.tsx 7지점이 시나리오 배열을 통째로
+  실어 나르고, 별도 창 브릿지도 시나리오를 통째로 주고받는다(필드별 나열 금지 — 나열하면 새 필드가
+  창에서만 조용히 사라진다). 등록은 `makeBtConfig`·`backtestFingerprint`·`backtestScenariosHaveContent`
+  **3곳뿐**. 검증 #288·#290·#290b.
+- **⚠️ 메모 스냅샷은 조건(`conditions`·`fp`)과 숫자(`summary`)를 **같은 config**에서 가져온다** —
+  설정 칸을 고친 직후 곧바로 `[AI 분석]`을 누르면 그 클릭의 mousedown이 blur→커밋을 먼저 태워
+  `active`는 이미 새 값인데 `result`는 220ms 디바운스라 **옛 실행분**이다. 섞으면 "새 조건 + 옛 숫자"가
+  영구 박제되고 `fp`가 현재와 같아져 **stale 배지마저 뜨지 않는다**(배지의 존재 이유가 무력화된다).
+  → 결과를 낸 그 config(`runCfg`)를 박제하면 설정이 앞서 나간 경우 지문이 자연히 어긋나 배지가 즉시
+  켜진다. ⚠️ `runCfg.id === active.id` 확인 필수 — 시나리오를 막 바꾼 220ms 동안 `runCfg`는 **직전
+  시나리오**를 가리킨다. 검증 #293.
+- **⚠️ 카드는 `result.ok`가 false일 때도 렌더한다**(fatal 안내 **위**). 이 분기는 종목을 지운 경우만이
+  아니라 **저장된 시나리오를 새 세션에서 여는 흔한 경로**로도 들어온다 — `btFetched`는 메모리 전용이라
+  보유하지 않은 코드는 종목마다 ⟳를 누르기 전까지 '종가 데이터가 있는 종목이 없습니다'로 떨어진다.
+  여기서 카드를 빼면 상단 바 칩은 `메모 N`을 광고하는데 눌러도 갈 곳이 없고, 저장해 둔 AI 분석에 닿는
+  경로가 **0개**가 된다(단일 뷰 CSV·PDF 버튼도 `!result.ok`로 잠겨 있다). 검증 #291.
+  **알려진 한계(의도)**: 그 상태에서 CSV·PDF 버튼은 여전히 잠긴다(둘 다 '결과 내보내기'라서) —
+  화면에서 읽고 Ctrl+P로 인쇄하는 경로는 열려 있다.
+- **표시 지점**: 단일 뷰 표제 아래 카드(편집 가능) / 비교 표 **시나리오 셀 안**(읽기 전용 — ⚠️ 열을 늘리면
+  thead·실행불가 행 colSpan·비교 CSV를 전부 맞춰야 한다) / 비교 뷰 시나리오 블록(읽기 전용) /
+  메인 CSV 별도 행(13열 유지, 기말예수금 분해 그룹 **밖**) / 비교 CSV **`평가`·`한 줄 결론` 2열**
+  (30 → **32열**, 검증 #247의 하드코딩 열 수도 함께 바뀌었다).
+- **범위 밖(의도)**: 비교 뷰에서의 편집(active가 null이라 draft 소유자 판정이 성립하지 않는다) ·
+  메모 undo/redo · 메모 검색/정렬 · 메모의 계좌 간 공유.
+
+**시그널 사이징 분리 · 재원 배분 · 목표 비중 분모 (A~F, 2026-08) (⚠️ 회귀 주의)**
+
+시그널 매매(**전술 레이어**)와 목표 비중 유지(**정기 리밸런싱 레이어**)를 완전히 분리한 개편.
+발단은 실측 결함이다 — 시그널이 발동해도 그 종목 비중이 이미 목표를 넘고 있으면 `목표까지 = ₩0`
+이라 매수가 통째로 미체결되고, 목표 이하면 `목표 초과분 = ₩0`이라 매도가 미체결된다. 두 종목이
+**동반 하락하면 평가액은 줄어도 비중은 그대로**라 하락이 매수 여력을 만들지 못해, 전 구간 체결이
+매도뿐이고 예수금이 단조 증가하는 일방향 편향이 생겼다(사용자 실측: 체결 7건 전부 매도 · 매수
+시그널 2건 전부 미체결 · 예수금 ₩14,502 → ₩110,189,130).
+
+- **⚠️ 최우선 계약 = 레거시 결과 불변**. 모든 신규 옵션의 기본값이 종전 동작과 **1원도 다르지 않다**.
+  그 근거는 `legacyBuySizing`/`legacySellSizing` 두 줄이다 — 저장된 단계에 `sizing`이 없으면
+  `buyPct === null ? 'toTarget' : 'toTargetCapped'`(매도는 `sellPct === null ? 'toTarget' : 'pctOfExcess'`)
+  로 떨어진다. ⚠️ **레거시 `buyPct: 34`를 `pctOfPool`로 떨어뜨리지 말 것** — 그 순간 목표 캡이 풀려
+  저장된 시나리오의 결과가 통째로 달라진다.
+- **A-1 사이징 모드(단계별)** — 매수 6종 `toTarget` / `toTargetCapped`(=레거시 `buyPct:number`) /
+  `pctOfPool` / `fixedAmount` / `pctOfTotal` / `restoreBase`, 매도 6종 `toTarget`(=레거시 null) /
+  `pctOfExcess`(=레거시 number) / `pctOfEval` / `pctOfQty` / `fixedAmount` / `excessOverBase`.
+  ⚠️ **`toTargetCapped`·`pctOfExcess`를 '중복 선택지'로 보고 지우지 말 것** — 이 둘이 레거시가
+  마이그레이션되는 자리이고, 화면에 '현행'으로 노출해야 사용자가 "왜 ₩0으로 미체결인가"를 이해한다.
+- **A-2 목표 캡 해제 = `buyUsesTargetCap`/`sellUsesTargetCap` 두 함수가 유일한 게이트**.
+  레거시 계열이 아니면 목표 비중과 무관하게 체결한다("목표 이상 — 살 것 없음"·"목표 이하 — 팔 것
+  없음" 금지). ⚠️ 남는 구조적 미체결은 **보유 0(`NO_POSITION`)뿐**이다.
+- **A-3 이탈 한도(±X%p)** — 매매 **후** 비중이 목표 ±X%p를 넘지 않게 주문을 축소한다.
+  상한은 `목표 ± 분모 × X/100`(= 비중 X%p를 금액으로 환산). 축소되면 `CAP_DEVIATION`.
+  ⚠️ 목표 캡을 푼 모드에서 **유일하게 남는 안전장치**라 지우지 말 것.
+- **A-4/A-5 기준 평가액 축** — `lastFill`(직전 체결 시점 평가액) / `prevMonthEnd` / `peakEval` /
+  `manual`. 종목별로 `BtAsset.baseAxis`가 덮어쓴다.
+  ⚠️ `prevMonthEnd`는 **달이 바뀌는 첫 스텝에서 한 번** 스냅샷한다(`syncMonthEndBase`) — 그 시점
+  `p.qty`가 직전 달 말일까지의 매매를 전부 반영한 값이다(스텝이 날짜 오름차순이므로). 나중에 다시
+  계산하려면 거래를 재생해야 하므로 이 '경계에서 한 번' 방식이 유일하게 싸다.
+  ⚠️ `peakEval`은 매 영업일 관측이 필요해 `needDailyEval`이 **앵커 축과 같은 분기**로 매 영업일
+  signal 스텝을 만든다. 그 관측 블록은 **조기 탈출보다 앞**이다(트리거 없는 날에도 고점은 갱신돼야 한다).
+  ⚠️ 폭주 방지 3종(`resetOnFill` · `maxReuse` · 종목별 누적 매수 한도 `buyCapMode/Value`)을 빼지 말 것 —
+  복원 모드는 **하락이 이어지면 요구 금액이 계속 커져 재원이 고갈되는 구조**다.
+- **A-6 재원 배분** — `alloc.mode: 'sequential'`(기본 = 종전 동작, 배분 코드를 통째로 우회) /
+  `'weighted'`. 워터폴은 `utils`가 아니라 **`backtest.ts`의 순수 함수 `waterfallAllocate`**다
+  (T11~T14가 이 한 함수의 산술이라 단위 테스트가 가능해야 한다).
+  ⚠️ 실행·타이브레이크는 언제나 **⑥ 종목 등록 순서**(`regIndex`) — 그래야 순서를 뒤집어도 결과가 같다.
+  ⚠️ 1주 값·최소 주문에 미달한 배분은 `ROUNDING`으로 빼고 **그 몫을 재원으로 되돌려 다시 나눈다**
+  (`items.length`회 반복이면 반드시 수렴).
+  ⚠️ 최소 유보 현금·현금 바닥선은 **배분 전에** 재원에서 차감한다(A-6-7).
+- **B 목표 비중 분모** — `ratioBase: 'equity'`(기본) / `'equityCash'`(총자산).
+  ⚠️ 분기는 **`targetBaseAt` 한 곳뿐**이다(소스 가드 #151이 `config.ratioBase === 'equityCash'` 출현
+  횟수를 1로 못 박는다). 그 한 함수를 정기 리밸런싱·시그널 목표·밴드 판정·현금 바닥선 기준이 전부
+  지나므로 '일관 적용'이 구조로 보장된다. 옛 4종(`total`/`initial`/`totalWithDiv`)은 되살아나지 않는다
+  (`makeBtConfig`가 `'equityCash'` 외 전부를 `'equity'`로 떨어뜨린다).
+- **C 충돌 규칙** — `conflict: 'signalFirst'`(기본) / `'regularFirst'` / `'skipSignal'`.
+  ⚠️ **`KIND_ORDER` 리터럴은 건드리지 않는다**(소스 가드가 그 리터럴을 단언한다) — `stepOrderOf`가
+  정렬 시점에만 signal↔rebal 순위를 맞바꾼다. `cooldownDays`/`excludeRegularDays`는 휩소 방지.
+  ⚠️ 쿨다운으로 막힌 발동도 **`COOLDOWN` 사유로 로그에 남긴다** — 조용히 사라지면 왜 매매가 없는지 알 수 없다.
+- **D `anchorOnNoFill`** — 체결 0인 발동 뒤 앵커 기준가를 유지(기본)/그날 종가로 갱신.
+  `forceAnchor`는 `touchAnchor`와 달리 `anchorSource` 규칙을 보지 않는다(체결이 아니라 명시적 재설정).
+- **E `minCashReserve`** — 현금 바닥선(%)과 **한 자리에서 합친다**(`cashFloorAt` = 둘 중 큰 값).
+  기본 0이면 0을 반환해 `floorCap`이 Infinity로 남아 종전 코드와 동일하다.
+- **F 로그·집계** — `BtSignalEvent`에 `sizing`·`basisKind`·`basisAmount`·`ordered`·`caps`·`reason`·
+  `refDate`·`baseEval`·`restoreRate`·`shortfall`·`allocWeight`/`allocAmount` 추가. 사유 코드 11종.
+  `summary.signalStats`(매수/매도 분리 + 사유별 집계)와 `summary.allocBlocks`(A-6-8 배분 표) 신설.
+  ⚠️ 이벤트 생성은 **`makeSignalEvent` 단일 생성기**를 지난다 — 경로마다 객체 리터럴을 복제하면
+  한 곳이 `undefined`로 남아 화면에 `NaN`·빈칸이 뜬다.
+- **⚠️ `dip`의 중첩 객체(`alloc`·`baseline`)는 반드시 정규화해서 읽는다**(`dipAlloc`/`dipBaseline`).
+  화면은 `patchActive`가 스프레드로 만든 **정규화되지 않은 로컬 사본**을 그대로 넘기므로
+  `config.dip.alloc.mode`처럼 파고들면 그 순간 TypeError로 실행이 죽는다(검증 #254의 raw 주입 경로가
+  정확히 그것이다). 스칼라 필드는 `|| 0` / `=== '값'` 비교라 안전하다.
+  같은 이유로 화면의 `dipOf`에도 두 객체를 **반드시** 채운다(dip 쓰기의 스프레드 베이스).
+- **⚠️ 지문 확장은 `fpExtras` 조건부 토큰**(`x` 키). 지문 배열에 새 칸을 그냥 끼워 넣으면 값이
+  기본값이어도 저장된 모든 시나리오의 지문이 달라져 **모든 메모에 '설정이 바뀌었습니다' 배지가
+  상시 켜진다**(배지 기능이 죽는다). `SETTINGS_FP_SCHEMA`를 올리는 것도 같은 결과라 부적절하다 —
+  이번 변경은 '같은 저장값의 뜻이 바뀐' 경우가 **아니다**. 단계 토큰도 `dipLevelToken`/`sellLevelToken`이
+  **레거시 파생값과 같으면 한 글자도 덧붙이지 않는다**. `putEnum`은 **정규화가 실제로 채택하는 값만**
+  토큰으로 낸다 — 엔진이 버리는 문자열(옛 분모 값)이 지문만 흔드는 것을 막는다(검증 #109b).
+- **영속화 신규 지점 0곳** — 전부 `BtConfig`/`BtDip`/`BtDipLevel`/`BtSellLevel`/`BtAsset` **안**이라
+  App.tsx 7지점이 시나리오 배열을 통째로 실어 나른다. 등록은 `makeBtConfig`·`normalizeDip`(+
+  `normalizeBaseline`/`normalizeAlloc`)·`makeBtAsset`·`fpExtras` **4곳뿐**.
+- **범위 밖(의도)**: 매도 동시 발동의 재원 배분(재원 제약이 없어 각각 독립 처리) · undo/redo ·
+  세금·수수료·슬리피지. **알려진 한계**: `skipSignal`로 건너뛴 날의 고점/저점 축 트리거는 사전 탐지에서
+  이미 소진돼 되살아나지 않는다(사용자가 "그날 시그널 무시"를 고른 의미 그대로다).
+
+- 검증: `npm run verify:backtest` (501건 — 참조 구현 미러 #1~#58·#69~#77·#81~#112·#113~#133·#141~#145·
+  **#157~#226**·**#235~#240**·**#250~#256**(적대적 리뷰 회귀)·**#260~#274**(평가·메모)·
+  **#300~#323c**(시그널 당일 실행·매도 시그널·재원 단일 규칙·분모 캐스케이드·적대적 리뷰 확정 결함 4건·
+  **예수금/분배금 재정의**) + 소스 텍스트
+  가드 #59~#68·#78~#80·#134~#140·#146~#156·**#227~#234**(#233·#233b·#233c = 시그널 계약)·
+  **#241~#249**·**#257~#259c**(#259b~#259d = 계산식 표시·매도 UI·매매 라벨)·
+  **#275~#290c**(평가·메모 배선)·**#291~#293**(적대적 리뷰 확정 결함 3건 회귀)·
+  **#382**(초기 매수 후 잔여 공유 helper — 프로덕션 ReferenceError 회귀)·
+  **#400~#444**(A~F 사이징 분리·배분·분모·충돌·로그 — T2~T14를 사용자 실측 입력 그대로 재현)).
+  ⚠️ **#450·#450b는 `src/backtest.ts` 실모듈을 임시 폴더에 복사해 import한 뒤 미러와 결과를 대조하는
+  드리프트 가드**다(Node 타입 스트리핑). 미러 테스트만으로는 "src에만 넣은 변경"·"미러에만 넣은 변경"이
+  전부 통과하는데, 이 가드가 그 구멍을 막는다. 지원하지 않는 런타임에서는 명시적으로 건너뛴다고 출력한다.
+  ⚠️ A~F 테스트는 **기능마다 '동작 케이스 + 기본값 무영향 케이스'를 쌍으로** 둔다(#403b·#409b·#410b·
+  #413b·#414b·#424) — 무영향 케이스가 없으면 "레거시 결과 불변"이 무방비다.
+  ⚠️ **2026-08 예수금/분배금 재정의의 핵심 단언**: 재원 잠금 #177b · 목표 상한 #175b · 매도 비율
+  #312b~#312f · 재조정 게이팅 #313b · 분해 항등식 2개 #304b·#304c · 초기 매수 예산 #323~#323c ·
+  지문 null≠0 #220b · 레거시 마이그레이션 #215b · 미체결 사유 분리 #175c · 지문 스키마 토큰 #290d.
+  **전부 변이 테스트로 실제 검출을 확인**했다
+  (M1 재원 잠금 / M2 분모 / M8 carrier / M10 목표 상한 / M13 예산 차감 — 각각 처음엔 **죽은 단언**이었고
+  픽스처를 고쳐 잡히게 만들었다. 이 단언들의 픽스처를 단순화하지 말 것).
+  ⚠️ **#290·#290b·#290c는 `src/backtest.ts`를 직접 읽는 드리프트 가드**다 — #260~#274는 미러만 검사하므로
+  src에만 넣거나 미러에만 넣으면 통과하면서 실제 저장 누락을 놓친다(아래 rebalMode 실측 사고와 같은 함정).
+  보조 규칙 6종은 기능마다 **'동작 케이스 + 기본값 무영향 케이스'를 쌍으로** 둔다 — 무영향 케이스가
+  없으면 하위호환 계약이 무방비다.
+  목표 기준(비중 분모 고정) 관련: 미러 #43·#90~#91b·#106~#108d·#109~#109b·#144~#144b,
+  가드 #151~#153·#156 / 확대 시 겹침·팝오버 잘림: 가드 #154·#155.
+  ⚠️ #109b는 **정규화 전 raw 객체**로 지문을 비교한다 — `makeBtConfig` 출력을 넣으면 필드가 이미
+  사라진 뒤라 지문 투영이 되살아나도 통과하는 죽은 단언이 된다(#109의 동어반복). 실제로 그랬다.
+  ⚠️ **미러 테스트는 픽스처가 그 경로를 실제로 밟을 때만 의미가 있다** — 재투자 픽스처가
+  `targetAmount === initialCapital` + `policy:'none'`이라 `cashTrade`가 항상 0이었을 때는
+  `applyCash(..., 'div')`에서 `'div'`를 지워도 164개가 전부 통과했다(이 기능의 핵심 가드가 통째로
+  미검증). `#122c~#122e`가 **매매 주머니에 잔액이 남는 별도 픽스처**로 그 변이를 잡는다.
+  새 가드를 넣을 때는 **일부러 깨뜨려 보고(변이 테스트)** 실제로 실패하는지 확인할 것.
+  ⚠️ 미러(`scripts/verify-backtest.mjs`)의 **`backtestFingerprint` 투영**은 특히
+  드리프트가 잘 난다 — 신규 필드를 `src/backtest.ts`에만 넣고 미러를 잊으면, 지문 테스트가 통과하는데도
+  실제 저장 누락을 못 잡는다(실측 사고: `rebalMode`/`rebalDay`/`rebalDates` 3필드 누락).
+  `src/backtest.ts`의 순수 함수 본문과 **항상 1:1 동기화**할 것. #23~#42가 PDF 전체를 숫자로 재현하므로
+  산식을 바꾸면 여기서 잡힌다.
+
+### 시장지표 과거 데이터 = 조회기간 부족분 자동 보충 → Drive MARKET 저장 (2026-10, ⚠️ 회귀 주의)
+
+발단(사용자 보고 2026-10-17): 조회기간이 2004~인데 시장지표가 일부 기간만 있고(VIX 2015~ 등) 미국 기준금리
+최신값이 차트에 없어, 사용자가 파이썬으로 받은 JSON을 직접 올려야 했다. 앱이 그 일을 스스로 한다
+(브라우저는 파이썬을 못 돌리므로 같은 소스 — Yahoo·FRED·네이버 — 를 서버 함수 `/api/history`가 받는다).
+
+- **⚠️ 원인 ① FRED `limit=2000` + 오름차순** — 장기 조회에서 **최근 구간이 잘렸다**(기준금리 DFEDTARU는 주말 포함
+  일별이라 2000건 ≈ 5.5년). `limit:'100000'`(최대)로 되돌리지 말 것(`verify:indicators #G1`).
+- **FRED 키가 없거나 실패하면 `fredgraph.csv`(키 불필요)로 폴백** — 히스토리(`api/history.ts`)·실시간(`api/indicators.ts`) 둘 다.
+  파서는 `api/_indicatorSources.ts parseFredGraphCsv`(import 0건 순수 모듈).
+- **기준금리 = DFEDTAR(~2008-12-15) + DFEDTARU(2008-12-16~) 이음**(`joinFedRate`). US10Y는 FRED 뒤 최신 꼬리를
+  네이버로, KR10Y는 네이버 앞쪽을 FRED 월별로, USDKRW는 Yahoo 앞쪽을 FRED DEXKOUS로 보충한다(`fillBefore`/`fillAfter` —
+  겹치는 날은 주 소스가 이긴다). 네이버 채권 이력은 최신→과거 청크로 이어 받고 진전이 없으면 멈춘다.
+- **⚠️ 대상은 시장지표 패널의 13개 항목 전부**(사용자 확정 2026-10-17 "기준금리 이외의 모든 항목도 똑같이") — 지표 10종
+  (`INDICATOR_HISTORY_KEYS`, `indicatorHistoryMap`에 산다) + **지수 3종**(`MARKET_INDEX_KEYS` = KOSPI·S&P500·Nasdaq100,
+  `marketIndices`에 산다). 키 목록의 단일 소스는 `src/indicatorCoverage.ts`이고 훅은 `INDICATOR_COVERAGE_KEYS`를 그대로
+  쓴다(손나열 금지 — `#G17`이 패널 항목 13개가 전부 목록에 있는지 잰다). 지수는 서버 라우트 `/api/history?key=kospi|sp500|nasdaq`
+  (`YAHOO_SYMBOLS` ^KS11·^GSPC·^NDX)를 새로 타고, `fetchIndicatorHistory`의 지수 분기가 `marketIndices`에 병합 + `indexFetchStatus`
+  갱신. ⚠️ 옛 '지수 머리 확장' effect(`indexAutoExpandedRef` — 시작일부터 **전량** 재수집)는 **삭제**됐다(`#G21`) — 커버리지가
+  머리·내부 공백·최신 꼬리를 전부 맡으므로 둘을 함께 두면 조회기간 변경마다 같은 지수를 두 번 받는다. 앱 시작 시 `loadIndices`
+  (클라이언트 Yahoo 전량 수집)는 Drive 없이도 지수가 보이게 하는 종전 경로라 그대로 둔다(그 뒤 커버리지는 부족분만 받는다).
+  `INDICATOR_SOURCE_FLOOR`는 **13개 키 전부**(`#10e`) — 빠지면 1980년대 조회에서 매 세션 머리 구간을 헛조회한다.
+- **원인 ② 자동 수집이 '없음/최신일 경과'만 봤다** → `src/indicatorCoverage.ts indicatorMissingSegments`(import 0건)가
+  머리(조회 시작~보유 최초일)·내부 공백(45일 초과)·꼬리(최신일~오늘, 4일 초과) 구간을 계산하고, 훅
+  `useMarketData.ensureIndicatorCoverage`가 **그 구간만** 받아 `mergeIndicatorHistory`로 병합한다(전량 재조회 아님).
+  트리거 3개: Drive 로드 완료('saved' 최초 관측) 1회 · 조회기간 변경 · 시장지표 새로고침(최신 꼬리만 강제).
+  ⚠️ 구간 키(지표:시작:끝) 단위 **세션 가드** — 소스가 더 과거를 못 줘도 매번 헛조회하지 않는다.
+  소스 최초일(`INDICATOR_SOURCE_FLOOR` — BTC 2014-09-17 등) 이전은 요구하지 않는다.
+- **국내금**은 `/api/history?key=goldKr&page=N&pages=M&stop=YYYYMMDD` 커서 모드(요청당 최대 40페이지, `{data,next,done}`)로
+  조회 시작일까지 이어 받는다. 파라미터 없는 옛 호출은 종전대로 20페이지 날짜 맵.
+- **저장**: 받은 값은 `indicatorHistoryMap`에 병합 → App 자동 저장이 Drive `portfolio_market.json`에 남긴다.
+  ⚠️ 훅에서 MARKET 파일을 **직접 쓰지 말 것**(옛 국내금 경로가 ref 값으로 MARKET을 통째로 덮어 로드 전·실패 세션에서
+  빈 지수로 저장본을 덮을 수 있었다 — 삭제됨, `#G14`). 바뀐 게 없으면 같은 참조라 헛 저장이 없다.
+- 응답 캐시: 종료일이 최근 2일 이내면 1h, 과거 구간만이면 24h(`isRecentRangeEnd`).
+- **알려진 한계**: MARKET 파일은 저장마다 통째로 올라간다(기존 동작 — 지표가 22년치로 늘면 파일이 1~2MB가 될 수 있다).
+  소스 자체에 없는 기간(예: 국내금·BTC 초창기)은 비어 있는 것이 정상이다.
+- 검증: `npm run verify:indicators` (직접 import #1~#32(+#10c~#10f) + 배선 가드 #G1~#G21). 지수 확장분은 **변이 6종 + 음성 대조 1종**
+  (지수 키 손나열 복귀 · 서버 라우트 삭제 · 지수 분기 삭제 · floor 누락 · 옛 머리 확장 effect 부활 · 패널 항목 누락)으로 검출을 실증했다.
+
+### 종목코드 입력 → 이름·종가(·분배금)를 **그 자리에서** 확보 (⚠️ 회귀 주의)
+
+코드를 넣는 화면은 3곳(포트폴리오 테이블 · 비교종목 칩 · 백테스트 종목)인데, 과거엔 **테이블만**
+네트워크로 실제 데이터를 받아왔다. 그래서 나머지 두 곳은 "일단 포트폴리오 테이블에 그 코드를 넣고
+(분배금은 표에서 '새로고침'까지 눌러) 계좌 데이터를 만든 뒤에야" 동작했다. 세 경로 모두 코드 입력만으로
+완결되게 맞췄다. **어느 경로도 조회 결과를 계좌 데이터에 쓰지 않는다.**
+
+- **비교종목(`useStockData`)** — `handleCompStockBlur`가 **이름 + 종가 이력까지** 확보한다.
+  - **⚠️ 이력 fetch 체인은 `ensureCompHistory` 하나뿐**(blur·toggle 공유). 두 경로가 각자 체인을 가지면
+    실제종가/수정종가 우선순위가 갈려 한 종목 안에 두 가격기준이 섞인다(`mergeCodeHistory` 주석).
+    `ensureCompHistory`는 **절대 reject하지 않고**(`catch → false`) 코드별 in-flight 프로미스를 공유한다 —
+    칩의 `loading` 플래그로 중복을 막으면 어느 경로가 예외로 죽을 때 그 플래그가 true로 굳어 **버튼이
+    영구히 죽는다**.
+  - **⚠️ blur는 칩을 자동 활성화하지 않는다** — 어떤 칩을 그릴지는 사용자가 고른다. 확보만 해 두고
+    클릭 시 즉시 그려지게 한다.
+  - **⚠️ `stockFetchStatus`는 포트폴리오 테이블과 공유하는 맵**이라 **보유 종목이면 쓰지 않는다**
+    (비교 이력 조회 실패가 그 종목 행에 '갱신 실패' 빨간 점을 찍으면 안 된다). 상태점은 **종가 확보
+    여부만** 반영한다 — 이름만 못 구한 경우까지 빨간 점을 찍으면 선이 정상인 종목이 실패로 보인다.
+  - **⚠️ `compBlurEnsuredRef`(세션 재조회 억제)와 `compNameCacheRef`(코드→이름)는 한 쌍**이다. 캐시가
+    없으면 "A 입력 → B 입력 → 다시 A"에서 A가 이미 ensured라 조기 반환하고 **칩에 B의 이름이 남는다**.
+    실패한 이름은 캐시에 넣지 않는다(다음 blur가 재시도해야 한다).
+  - `await` 뒤 칩 갱신은 전부 `patchComp(index, expectedCode, patch)` — 인덱스만 믿으면 그 사이 칩을
+    추가·삭제·재입력했을 때 **엉뚱한 칩에 결과가 꽂힌다**.
+- **백테스트(`backtestFetch` + `App.handleBacktestFetch`)** — `fetchBacktestName`·`fetchBacktestDividends`
+  신설. 시장 판정은 관심종목과 같은 `detectMarket`(kr/us/fund).
+  - **⚠️ 세 갈래(종가·이름·분배금)를 각각 필요 여부로 판정**한다. 옛 코드는 '종가가 이미 있으면'
+    통째로 조기 반환해, **저장된 종가만 있고 이름·분배금이 없는 코드는 영영 안 채워졌다**.
+    무배당 종목은 성공해도 결과가 비어 '아직 없음'과 구분되지 않으므로 `btMetaTriedRef`로 **시도 자체를
+    기억**한다(⟳ 강제 조회는 무시).
+  - **⚠️ 병합 방향이 이름과 분배금이 반대다(둘 다 의도)**: 분배금은 **조회분 우선**(ym 단위 —
+    `btPrices` 규약과 동일, ⟳로 새로 받은 값이 낡은 계좌 저장값에 가리면 안 된다), 이름은 **계좌분
+    우선**(사용자가 테이블에서 손으로 고친 종목명을 API가 덮으면 안 된다).
+  - **⚠️ `buildBtCatalog`에 `stockHistoryMap`만 넘기지 말 것** — 카탈로그 코드 집합이 `종가 맵 ∪ 분배금
+    맵`이라, 백테스트에서 처음 입력한 코드가 **카탈로그에 아예 없어** 조회해 둔 이름이 화면에 닿지
+    못한다. `btCatalogPrices`(저장분 ∪ 조회분 + 이름만 확보된 코드의 빈 자리)를 넘긴다.
+  - **⚠️ 자산 이름은 `BacktestPage`의 백필 effect가 채운다** — `addAsset`은 추가 시점 카탈로그를
+    스냅샷하므로 비동기 조회가 끝나면 이름이 코드인 채 굳는다. 이름은 사용자가 직접 고치는 필드라
+    **아직 코드 그대로인 행만** 건드리고, 바뀐 게 없으면 `setLocal`이 같은 참조를 받아 dirty를 세우지
+    않는다(저장 폭주 방지).
+  - **⚠️ 별도 창 지문(`btWinDataKey`)에 `btMetaSeq` 필수** — 이름/분배금은 **코드 수가 그대로여도 내용만**
+    바뀔 수 있어 개수 기반 지문만으로는 새 창이 갱신을 놓친다.
+- **⚠️ 조회 결과를 되돌려 쓰지 말 것(두 경로 공통)**: 백테스트 종가는 `btFetched`, 이름은
+  `btFetchedNames`, 분배금은 `btFetchedDivs` — **`stockHistoryMap`·계좌 `dividendHistory` 병합 금지**.
+  전자는 보유 평가액 재계산의 권위 소스가 오염되고, 후자는 보유하지도 않은 종목이 분배금 현황 표에
+  **유령 행**으로 새어 나온다. 셋 다 파생값이라 Drive 저장 지점도 **0곳**이다(다음 세션에 재조회).
+- **`parseDividendApiResult`는 `utils.ts`로 승격**해 분배금 현황 표와 백테스트가 **같은 함수**를 쓴다 —
+  각자 파서를 두면 같은 종목이 화면마다 다른 주당분배금으로 뜬다.
+- **범위 밖(의도)**: 비교종목은 펀드(MA:/URL) 미지원(이름·이력 라우팅이 kr/us 2분기), 백테스트 분배금도
+  펀드는 API가 없어 사용자가 `divOverride`로 직접 입력한다.
+
+### 가계부(ledgerBooks) — 항목 × 월 매트릭스 + 대출 상환 계산 (⚠️ 회귀 주의)
+
+상단바 **가계부 아이콘**(`UserInfoBar` — 백테스트 **바로 오른쪽**, 인라인 SVG `LedgerIcon`)으로 여는
+별도 브라우저 창(`/?ledgerWindow=1`). 지출/수입을 **항목 × 월 매트릭스**로 기록하고(계획 열 + 1~12월
+실제 열), 대출은 상환방법에 따라 월 납입액을 계산하며, 전월·전년 대비 증감과 구분별 도넛을 낸다.
+
+- **모듈 4개**: `src/ledger.ts`(타입+순수 로직, ⚠️ `@ts-nocheck` 금지) · `LedgerPage.tsx`(overlay/page 겸용) ·
+  `LedgerWindow.tsx`(창 셸) · `scripts/verify-ledger.mjs`.
+  ⚠️ `ledger.ts`의 상대 import에는 **`.ts` 확장자 필수**(검증이 미러 없이 직접 import한다 — 떼면 파트①이
+  통째로 죽는데 빌드는 통과해 무음이다). `enum`/`namespace` 금지(Node 타입 스트리핑 미지원).
+#### 화면 재설계 2차(§13) — 첫 화면 '분석' · '수입 및 지출' 접힘 트리 · 계획 선반영(반영값) (2026-09-06, ⚠️ 회귀 주의)
+
+명세는 `가계부_재설계_2026-09.md` §13(결정 D1~D7 전부 제안대로, 커밋 `6e4166e`). 저장 스키마 무변경 · 영속화
+신규 지점 0곳. **이 절은 아래 '계획 자동 반영'·'예상(expected) 집계' 절의 몇 항목을 의도적으로
+개정한다**(§13.6) — 되돌리면 첫 화면(분석)의 ②·연간·달력이 다시 대부분 `-`가 된다(요청의 원인).
+
+1. **G-2 절 개정 — 반영값(실제 ?? 계획)은 `reflectedMonth`·`reflectedCompare` 전용 함수로만 소비한다.**
+   분석 ①②·전월/전년 대비·연간·달력·엑셀 ③이 전부 그 두 함수를 쓴다. **`monthTotals`(실제 전용)에는 여전히 섞지
+   않는다**(`#G10c` 유지) — 실제 전용 집계의 소비자는 **확인 현황**뿐이다(월 헤더 `확인 N/M`·배너·`applyPlanAsActual`·
+   엑셀 ①·③ '실제'·'미확인' 열). `compareMonths`·`momDelta`·`yoyDelta`는 **삭제**(`#G10-2`가 부재 단언).
+   `expectedGrandTotal`은 **삭제 금지** — `verify:ledger #83*·#85b`가 직접 import하며 `reflectedMonth`가 안에서 부른다.
+2. **옛 −87.2% 사고의 방어는 산식이 아니라 구조로 남는다** — 두 달이 모두 반영값이라 완비되고 '완료도 불일치'라는 상태
+   자체가 없다. 새 위험 = **'0% 거짓말'**(둘 다 계획으로만 채운 달끼리 비교 → 변동 없음). 완화 4종: ① 월 헤더
+   `확인 N/M · 진행 K` ② 비교 툴팁·라벨 `계획 반영 N건 포함`(`curUnconfirmed`) ③ 미래 달 `-`(`reason:'future'`)
+   ④ 산출 불가 집합이 다른 달 `-`(같으면 `산출 불가 J건 제외`). **넷 중 하나라도 빼면 반영값 비교가 '확정 실적 비교'로
+   읽힌다.**
+3. **롤업 셀의 `계획 N` 배지 → 월 헤더 `확인 N/M`으로 대체.** 배지를 되살리지 말 것(사용자가 소음으로 지목 — `#G11c`·
+   `#G11d` 부재 단언). ⚠️ 라벨 N에 `plannedCount`를 쓰지 말 것 — 연단위 비납부월(`planOf = 0`)까지 세어 부푼다. 단일
+   소스는 `confirmedOf(book, ym, totals?)`(`monthTotals.missingExpense`), `yearSeries` 행이
+   자기 `t`를 넘겨 monthTotals를 다시 부르지 않는다(`#G39o`). `?N`(산출 불가 하한)은 그대로다.
+4. **차이 열 = 확인분 차이**(D5): "전부 확인 시에만" → "확인 셀(실제·계획 둘 다 있는 셀) 1개 이상이면 그 셀들의
+   Σ(실제−계획), 0개면 `-`". 값은 `addExpected`가 채우는 **`confirmedVar`/`confirmedCells` 한 필드**에서만(항목·소계·
+   총계가 같은 필드 → 소계 = Σ항목이 구조로 성립, `#107`). **롤업의 `산출불가 N` 게이트는 유지하되 세는 대상은
+   `unresolvedFailures`(산출 **실패**분)뿐**이다(아래 §13.6-4b, R-3 — `loanSchedule` null 계약이 소계 경로에서
+   깨지지 않게, `#G11e-2`). `varianceOf` 셀 단위 null 계약도 그대로.
+
+4b. **⚠️ '계획 미입력'과 '산출 실패'를 절대 뭉뚱그리지 말 것 (2026-09 사용자 확정 — 되돌리지 말 것)**:
+   사용자 문장 그대로 — "변동비는 계획성 지출이 아니기 때문에 차이가 당연히 발생할 수 없습니다. 오류가 아니니
+   오류 표시 하지 않습니다." 옛 코드는 `planOf`가 null인 이유를 묻지 않고 전부 `unresolved`로 세어, 계획을 세우지
+   않는 변동비 2건이 **차이 열에 `산출불가 22` · 월 셀에 `?1`** 로 상시 점등했다(사용자가 손댈 방법이 없는 가짜 오류).
+   - **판정의 단일 지점은 `ledger.ts planMissingKind(item, ym)`** — `'unset'`(계획을 입력한 적 없음 = 정상) /
+     `'failed'`(산출하려다 실패 = 경고 대상). ⚠️ **대출은 완납·만기 경과·잔액 0으로 null이 되어도 `'failed'`다** —
+     R-3이 지키는 바로 그 경로라 정상으로 강등하면 그 가드가 통째로 죽는다. 연단위는 계획이 있는데 납부월을
+     모르면 `'failed'`(어느 달에 놓을지를 실패한 것).
+   - **`addExpected`는 `unresolved`·`unresolvedIds`를 종전 그대로 두고 `noPlan`만 추가로 센다.**
+     ⚠️ `unresolved`에서 빼지 말 것 — 그 값은 `unresolvedIds`와 짝이고, 집합이 달라지면 `reflectedCompare`의
+     전월/전년 비교 가능 판정(R-7)이 통째로 바뀐다. 값 집계('`value`가 하한인가')도 종전 그대로다.
+   - **화면이 세는 수는 `unresolvedFailures(e)`(= `unresolved − noPlan`) 하나**이고 **소비자 전부가 공유**한다
+     (매트릭스 소계 3지점 · 분석 탭 요약 줄 2지점 · 수지 균형 각주 `balUnresolved`). 한 화면만 규칙이 갈리면
+     같은 달에 두 개의 '산출 불가'가 뜬다(`#G40d`).
+   - 계획 없는 항목은 **확인 셀이 0이라 차이 열이 자연히 `-`로 떨어진다**(`#123b`). 그 사실은 경고가 아니라
+     중립 툴팁('계획 없는 항목 N건 — 변동비 등')으로만 밝힌다.
+   - **하위호환의 축**: 계획 미입력 항목이 없으면 `unresolvedFailures === unresolved`라 종전과 한 글자도 다르지
+     않다(`#124`). `applyPlanAsActual`의 `skippedUnresolved`는 **무변경**(그 프롬프트는 '확인할 수 없다'는
+     사실만 말하고 오류라 단언하지 않는다 — `#116`이 값을 고정한다).
+4c. **계획 열 숨기기 · 열 구분선 (2026-09 사용자 요청)**: `계획` 헤더 위 4px 띠 = 월 열과 **같은 UX**로 열 숨김,
+   표 위 **`계획 복원` 칩**이 유일한 되돌리기 경로다(칩 조건이 `hiddenMonths.length > 0` 단독이면 계획만 숨겼을 때
+   되돌릴 수단이 사라진다, `#G41b`). 세션 로컬 · **Drive 저장 지점 0곳**(`hiddenMonths`와 같은 등급의 뷰 선호도).
+   ⚠️ 계획 셀은 **3렌더러**(헤더·항목·롤업)에 있고 **전부** 같은 게이트를 지나야 한다 — 한 곳만 빠지면
+   그 행부터 표 정렬이 통째로 어긋난다(`#G41c`가 게이트 4개·`left: LEFT_PLAN` 4개를 함께 센다).
+   숨김은 **화면 전용**이라 계획 값·반영값·엑셀 시트는 그대로다.
+   ⚠️ 세로 구분선은 `cellBase`의 `border-r`인데, 이 표는 `border-collapse: collapse`라 **sticky 셀의 세로 테두리는
+   stuck 상태에서 제자리에 남는다** — 사용자가 가장 헷갈린다고 지목한 고정열 경계가 가로 스크롤에서 사라진다.
+   그래서 고정 3열만 `box-shadow: inset`(`EDGE_STICKY`/`EDGE_FREEZE`)으로 한 번 더 긋고(`#G42`·`#G42b`),
+   고정/스크롤 **경계 열**은 굵게 둔다(`nameEdge` — 계획을 숨기면 그 자리가 항목 열로 옮겨 간다, `#G41d`).
+5. **기본 탭 = 상수 `'chart'`**(§9 결정 4 폐기, `tabSeededRef` 삭제 — `#G39b`). 탭 순서 분석·수입 및 지출·
+   대출·연간, 키 `'matrix'`·엑셀 시트명 '월 매트릭스'는 유지(`#80b`).
+6. **트리 매트릭스** — L0 그룹 행(항상, 항목 0건이어도) → L1 결제수단 행(2종 이상이면 **항상 노출**, D3) → L2 항목 행
+   (펼쳤을 때만, `openGroups`/`openPays` 세션 로컬). 값은 전부 `renderSubtotalRow` 경유(`#G39c` — 트리 블록
+   `renderGroupTree`에 `monthTotals(`/`expectedTotal(` 호출 금지). 순서 이동 버킷 = **`group|pay`**(`moveItemInBucket`,
+   화면 `bucketKeyOf` — `#G12`·`#G12b`; `moveItemInGroup`은 위임으로 남는다). 항목 추가·결제수단 이동은 도착 버킷을
+   편다(`openBucket`, `#G39m` — 만든/옮긴 행이 안 보이면 실패로 읽힌다). 롤업 숫자는 `fmtNum`(콤마·₩ 없음 — 검산 화면이라 축약 금지), 미래 달은 흐린
+   이탤릭(`#G39d`). ⚠️ `#G39c-2`는 순서(indexOf)뿐 아니라 수단 행 push **앞 구간에 `open`/`groupOpen` 게이트 부재**까지
+   잰다 — 순서만으로는 `if (groupOpen && present.length > 1)` 래핑이 통과했다(변이 M30으로 실증).
+7. **엑셀 ③ 월별 표 8열**(D4): `월·계획·반영·실제·차이·전월 대비(반영 기준)·미확인`. 변수명 `cmp`와 게이트
+   `cmp.comparable && cmp.rate !== null`은 그대로(`#G33`), `reflectedCompare(book, k, addMonthsYm(k, -1), ctx.todayYm)`
+   (`#G33b`), 셀 인덱스 `#89b/#89c`는 `feb[5]`/`feb[4]`. **① 매트릭스는 무변경**(부제가 "빈 실제 칸 = 미입력(화면은
+   계획으로 반영) · 소계는 화면과 달리 아래" 고지 — 시트는 항상 전체 행이고 소계가 아래인 스프레드시트 관례).
+8. §5.3.3 "`compareMonths`는 닫힌 달끼리만" 문장은 폐기(그 함수 자체가 삭제됐다).
+9. **'이 달 계획대로 확인'(`applyPlanAsActual`)은 계획값을 반올림 없이 저장한다**(R-1 — `#G39i`가 본문의 `Math.round`
+   부재를 단언, `#116d` 127,000/12). 반올림하면 확인 직후 차이가 `▼ 0`·연간 `▼ 4`로 자기모순이 된다. 대상 =
+   `monthTotals.missingIds`(지출 전용 — 수입은 구조적으로 제외, R-4) ∩ `planOf ≠ null`.
+   프롬프트는 **실제로 쓰는 건수**를 말한다(`미확인 N건 중 W건 … (산출 불가 J건 제외)`). 멱등(같은 참조 → dirty 없음) · `ym > todayYm` no-op · 성공 시 `touchMonth` 1회 · 인라인 2단계 · `readOnly`/
+   미래 달 미렌더(`#G39h`). **선택**이다 — 누르지 않아도 화면·분석은 반영값으로 완전하다(D2).
+10. **`reflected*` 비교 memo의 deps에 `todayYm` 필수**(`#G39g`) — 별도 창은 `today`가 첫 `ledger:live`로 늦게 오고,
+    그때 미래 게이트가 꺼진 결과가 deps 누락으로 세션 내내 고착된다. `ledgerEventsByDate(books, year, todayYm?)`도
+    같은 이유(`#G39j`·`#118`). `todayYm`이 무효면 게이트를 **끈다**(잠깐 전부 '반영'이 전부 `-`보다 낫다, `#111b`).
+11. **비교 가능 판정은 산출 불가 '집합'을 본다** — 같으면 그 항목을 양쪽에서 빼고 비교(`unresolvedExcluded` 라벨), 다르면
+    `-`. '하나라도 있으면 `-`'로 좁히면 완납 후 잔액 0인 대출 한 줄이 전 구간을 `-`로 되돌린다(R-7, `#112`·`#G27`).
+    `no-data`는 **양쪽** `activeCount`를 본다 — cur가 빈 달이면 −100%가 확정 표기된다(R-8, `#110b`·`#G27b`).
+    사유 순서 `no-data → future → unresolved → zero-base`(`#G27c`). `zero-base`는 comparable=true·rate=null(엑셀 #89 계약).
+- **분석 ① 스택 2단**: `confirmed`(실제 입력, `LEDGER_BALANCE_COLOR.expense`) + `planned`(계획 반영 — 같은 hue의
+  알파 `LEDGER_PLANNED_ALPHA` 0.4, `ledgerPlannedFill`. **새 hue 금지**, `validate_palette.mjs` §7이 카드면 합성색 대비
+  2.08:1·ΔE 30.4를 잰다). 미래 달은 둘 다 null(막대 없음, D7 — `#G10d-3`). ①·④ 부제의 상호 참조 문장(`#G18m`/`#G18n`)은
+  **지우지 말고** "같은 기준"으로 고쳐 썼다. 분석 탭 상단 요약 줄(D6)은 `reflected`·`confirmed`·`mom` memo에서만(`#G39f`).
+- **영속화 신규 지점 0곳** — 펼침 상태·`confirmYm`은 세션 로컬, 유일한 쓰기는 기존 `actual[ym]`(지문 포함). `LedgerCalendarEvent`에
+  `reflectedExpense`·`unconfirmed`·`momReason`·`momPlanned`가 늘었지만 파생 타입이다(저장 아님).
+- **범위 밖(의도)**: 예산 진행률·다가오는 지출·월 마감·이월, 엑셀 ① 행 배치, 분석 카드 재배치,
+  헤더 KPI 6장 기준(계획 기준 유지).
+  **알려진 한계**: '0% 거짓말'은 완화되지 사라지지 않는다 · 산출 불가 집합이 달라지는 달은 `-` · 별도 창 첫 렌더는 잠깐
+  게이트가 꺼진다 · 계획을 고치면 미확인 과거 달의 반영값이 함께 바뀐다(확정하려면 '계획대로 확인') · 결제수단을 바꾸면 행이
+  다른 하위로 점프한다(도착 버킷을 편다) · 이번 달 `entry:'tx'` 항목이 남으면 헤더는 `✓`가 아니라 `진행 K`.
+- 검증: `npm run verify:ledger` §8/§8b/#70/#89 재작성 + **§17 `#105~#119e`**(반영 항등식 5종·`confirmedOf`·
+  사유 4종·`applyPlanAsActual` 8건·달력 `todayYm`·버킷 이동)
+  + **§18 `#120~#125`**(계획 미입력 ≠ 산출 불가 — `planMissingKind` 5종·`noPlan` 계수·경고 0건·하위호환·R-7 무영향)
+  + 가드 `#G10~#G10e`
+  (부재 → 사용부 존재로 뒤집음)·`#G11b~#G11e-3`·`#G12/#G12b`·`#G27~#G27d`·`#G33b~#G33d`·`#G37c`·`#G37g`·**`#G39~#G39p`**
+  ·**`#G40~#G42b`**(계획 미입력 판정·화면 공유·계획 열 숨기기·열 구분선),
+  `npm run verify:palette` §7.
+  §18/`#G40~#G42b`는 **변이 13종 + 음성 대조 1종으로 검출을 실증**했다(`unresolvedFailures`가 `noPlan` 무시 ·
+  `addExpected`가 `noPlan` 미계수 · 대출을 `'unset'`으로 강등 · 롤업 게이트/셀 배지/수지 균형 각주/분석 탭을 각각
+  `unresolved`로 되돌림 · 계획 열 게이트 한 곳 제거 · 복원 칩에서 `planHidden` 제거 · 헤더 토글 무력화 ·
+  `border-r` 제거 · `nameEdge` 고정 · sticky box-shadow 사용부 제거).
+  **변이 33종 + 음성 대조 2종(주석만 변경 → 미검출)으로 검출을 실증**했다: 기본 탭 복귀 · 라벨 복귀 · 그룹 행 손계산 ·
+  결제수단 행 삭제 / 그룹 펼침 안으로 · 미래 달 이탤릭 제거 · ① 스택 한 막대 / 미래 달 막대 그림 ·
+  ②가 monthTotals 차분 · 요약 줄 `plannedCount` / 실제 · `applyPlanAsActual`이 entry:tx를 씀 / `Math.round` 삽입 / 수입
+  write / 멱등 파괴 · moveItem이 pay 무시(화면 키·순수 함수) · 엑셀 ③ 반영 열 삭제 / todayYm 미전달 · 달력 actualExpense
+  복귀 / todayYm 미전달 · memo deps에서 todayYm 제거 · unresolved '하나라도 -' · no-data prev만 · 배너 옛 문구 · 항목 행 차이
+  게이트 되돌림 · 계획 N 배지 부활 · future 게이트 제거 · 확인분 차이가 미확인 셀까지.
+  ⚠️ 변이 M9는 처음에 **배너**를 먼저 맞혀 `#G37g`에 잡혔고 요약 줄 가드 `#G39f`는 검증되지 않았다 — 같은 문자열이 두 곳에
+  있으면 **변이 앵커도 구간을 좁혀야** 죽은 단언을 가려낼 수 있다(M9'로 재확인). 하네스는 두 스크립트가 **정상 요약 줄을
+  냈을 때만** 검출로 센다(memory 규약).
+
+#### 거래 레이어 제거 · 변동비는 그 달만 · 보기 상태 영속화 (2026-09, ⚠️ 회귀 주의)
+
+사용자 확정 4건. **거래(단계 A)는 데이터까지 완전 삭제**했고, 변동비의 의미를 바꿨으며, 표 보기
+상태를 장부에 저장한다. 검증은 `verify:ledger` **§G19(`#G43`~`#G45i`)**이고 **변이 26종 + 음성
+대조 1종으로 검출을 실증**했다.
+
+**(1) 거래 레이어 완전 삭제 — 되살리지 말 것**
+
+사용자 문장: "거래는 어떻게 사용하는지도 모르겠고 사용이 불필요하므로 삭제합니다."
+`LedgerTxTab.tsx`·`LedgerQuickEntry.tsx`·`scripts/verify-ledger-tx.mjs`가 삭제됐고,
+`ledger.ts`의 §F-2(거래 인덱스·CRUD·`actualResolved`) 687줄이 통째로 빠졌다.
+
+- **⚠️ 실제 금액의 단일 소스는 다시 `actualOf`(수동 값)다.** `actualResolved`·`txIndexOf`·
+  `isItemCounted`·`manualShadowed`·`installmentCharges`·`filterTx`·`mtdCompare`·`stripTxForSnapshot`·
+  `normalizeTx`, 항목의 `entry`, 장부의 `transactions`, `LedgerMonthTotals.uncategorized*`,
+  `LedgerConfirmed.inProgress`, 스냅샷의 `txStripped`가 **전부** 사라졌다. `#G43`~`#G43g`가
+  식별자 **부재**를 단언한다 — 일부만 되살리면 "합계는 거래를 세는데 화면에는 입력할 곳이 없는"
+  상태가 되어 조용한 과소/과대 계상이 다시 시작된다.
+- **⚠️ 집계 함수의 `ix` 인자도 사라졌다**: `expectedOf(item, ym)` · `expectedTotal(items, ym)` ·
+  `expectedIncomeTotal` · `expectedByPay` · `expectsActual(item, ym)` · `monthTotals(book, ym)` ·
+  `confirmedOf(book, ym, totals?)`. 인자 위치가 바뀐 `confirmedOf`를 특히 조심할 것(옛 3번째는
+  `todayYm`이었다).
+- **⚠️ 저장된 거래는 정규화가 버린다**(`normalizeLedgerBooks`가 화이트리스트 재구축기다).
+  스냅샷에는 애초에 거래가 없었으므로(옛 `stripTxForSnapshot`) **복구 경로가 없다** — 사용자가
+  "데이터까지 완전 삭제"를 명시적으로 고른 결과다.
+- 엑셀은 **시트 3장**(④ 거래내역 삭제), 달력 가계부 칩은 `touch`·`annual` 2종만 남는다.
+
+**(2) 변동비 = 추가한 그 달에만 적용 (사용자 확정 2026-09)**
+
+사용자 문장: "3월에 변동비 '고지서'를 입력하고 3월을 숨기면 4월에는 그 항목이 보이지 않아야 한다.
+지금은 엑셀처럼 행을 추가하면 1~12월 전부에 적용되는 것이 구조적인 문제다."
+
+- **`addItem`이 `group === 'variable'`일 때만 `activeFrom = activeTo = ym`**(`#G44`).
+  ⚠️ **다른 그룹으로 넓히지 말 것** — 고정비·대출·연단위·수입은 계획이 1월부터 반영돼야 하고,
+  그게 아래 '계획 자동 반영' 절이 고친 바로 그 버그다(`addItem`의 기본값은 여전히 `activeFrom: ''`).
+- **`rowInView(it)`** — 보이는 달(`visibleMonths`) 중 **활성인 달도 값도 하나 없으면** 그 변동비
+  행을 렌더하지 않는다(`#G44c`·`#G44d`). ⚠️ **값이 있으면 활성 여부와 무관하게 보여 준다** —
+  적용기간 밖에 남은 값을 행째로 숨기면 사용자가 그 돈을 영영 찾을 수 없다(소계·연 합계에는
+  들어 있다). ⚠️ 변동비 **외 그룹은 항상 true**(값이 없어도 입력할 수 있어야 한다).
+- **⚠️ 숨긴 행 수를 그룹 행이 알린다**(`hiddenRows`, `#G44e`) — 소계·연 합계에는 들어 있는데 행이
+  없으면 사용자가 "합계가 안 맞는다"로 읽는다.
+- **적용범위 칩**(항목명 아래 `적용 3월만`/`전체`) = `activeFrom`/`activeTo`를 고치는 **명시적 UI**.
+  ⚠️ `toggleScope`가 좁힐 때 **값이 있는 달을 반드시 포함**한다(`actual`·`planOverride` 키 ∪ 보고
+  있는 달의 최소~최대, `#G44f`) — 그러지 않으면 `isItemActive` 밖으로 밀려난 값이 화면에서 `-`로
+  잠기고 합계에서도 빠져 **돈이 조용히 사라진다**(이 저장소가 가장 싫어하는 실패 모드).
+  잠긴 칸(`-`) 클릭으로 넓히는 기존 경로는 그대로다.
+- **⚠️ 숨긴 달에 변동비를 추가하면 그 달을 함께 되살린다**(`#G44b`) — 그 항목은 그 달에만 활성이라
+  `rowInView`가 곧바로 숨겨서 "추가했는데 아무 일도 안 일어난다"가 된다.
+- 그룹 행 note가 `추가하면 {month}월에만 적용됩니다`를 상시 안내한다(보고 있는 달이 기준이라는 사실이
+  화면에 없으면 사용자가 다른 달을 입력하려다 잠긴 칸만 보고 고장으로 읽는다).
+- **기존 항목은 마이그레이션하지 않는다**(저장값을 조용히 덮지 않는다 — '계획 자동 반영' 절의 규약
+  계승). 이미 만든 변동비는 '전체'로 남고, 칩으로 사용자가 직접 좁힌다.
+- **⚠️ 적용범위가 '전체'인 변동비는 활성을 근거로 쓰지 않는다 (2026-09-10 사용자 보고 — 되돌리지 말 것)**:
+  바로 위 '마이그레이션하지 않는다' 규약 때문에 **이 기능 배포 이전에 만든 변동비는 전부 '전체'**
+  (`activeFrom`/`activeTo` 빈 문자열)로 남는데, 그러면 `isItemActive`가 12개월 모두 참이라 `rowInView`의
+  규칙이 **구조적으로 무력화**된다 — 9월에만 값이 있는 행이 9월을 숨겨도 그대로 남는다(실측: '삼성 카드
+  계획대비 초과금액'). 기능을 요청한 사용자의 기존 데이터에서 정확히 그 기능이 동작하지 않는 상태였다.
+  → `rowInView`가 **적용범위 유무로 갈린다**(`scoped = isValidYm(activeFrom) || isValidYm(activeTo)`).
+  - **⚠️ `scoped` 경로는 한 글자도 바뀌지 않았다**(하위호환의 축, `#G44h2`) — `addItem`이 만드는 새
+    변동비는 전부 이 경로라 "새로 추가한 행의 동작은 종전과 동일"이 논증이 아니라 **구조**로 보장된다.
+  - **⚠️ '전체' 경로에 `isItemActive`를 다시 들이지 말 것**(`#G44i`가 사용부 **부재**로 단언) —
+    한 번이라도 들어오면 그 순간 이 결함이 재발한다. 그 경로는 **값이 있는 달로만** 판정한다.
+  - **⚠️ 그 경로에서는 `planOverride`도 '값'이다**(`#G44j`) — '전체'는 모든 달이 활성이라 그 계획이
+    **살아 있고**(`planOf`는 비활성 달의 오버라이드를 애초에 읽지 않는다) 소계·연 합계에 들어간다.
+    값 기준으로 접으면서 그 달을 빠뜨리면 사용자가 넣은 계획이 화면에서만 사라진다.
+  - **⚠️ 그 해에 값이 하나도 없는 행은 항상 보여 준다**(`#G44k`) — 숨기면 입력도 삭제도 못 하는
+    **유령 행**이 된다(칩으로 '전체'로 되돌린 빈 행이 그 경로다). 판정 기준은 `visibleMonths`가 아니라
+    **`MONTHS`(그 해 12개월)** 여야 한다 — 보이는 달로 재면 값이 숨긴 달에만 있는 행이 이 구제에 걸려
+    되살아나 고치려던 증상이 그대로 남는다.
+  - **저장값은 건드리지 않는다**(표시 규칙만) — 그래서 위 '마이그레이션하지 않는다'와 충돌하지 않고
+    영속화 신규 지점도 **0곳**이다.
+  - **알려진 한계(의도)**: 칩으로 **의도적으로** '전체'로 넓힌 변동비도 값이 없는 달에서는 행이 접힌다
+    (그 달에 입력하려면 새 행을 추가한다). 변동비에서 '전체'는 '매달 반복' = 고정비 성격이라 의미가
+    거의 없고, 접힌 건수는 `hiddenRows` 안내가 밝힌다.
+  - 검증: `#G44h`~`#G44k`. **변이 6종 + 음성 대조 1종으로 검출을 실증**했다(scoped 상시 참 · 전체 경로에
+    `isItemActive` 부활 · 유령 행 구제 삭제 · 그 구제를 `visibleMonths` 기준으로 · `planOverride` 제외 ·
+    `scoped` 분기 무력화). ⚠️ `sliceBlock`은 시작 needle을 못 찾으면 `''`를 돌려주므로 부재 가드(`#G44i`)는
+    **슬라이스 길이를 함께 단언**한다 — 빼면 죽은 단언이 된다.
+
+**(3) 보기 상태 영속화 — 닫았다 열어도 마지막 조작 상태 (사용자 요청 2026-09)**
+
+사용자 문장: "가계부를 실행하면 분석 차트가 보이고, 수입 및 지출 탭을 하면 사용자의 마지막
+조작 상태를 유지합니다."(기본 탭은 종전대로 `'chart'` 상수 — §13.6-5 그대로)
+
+- **저장 위치 = `LedgerBook.view`**(`{hiddenMonths, planHidden, openGroups, openPays}`).
+  ⚠️ 장부 **안**이라 App.tsx의 영속화 7지점을 자동 상속한다 — **영속화 신규 지점 0곳**.
+  등록은 `makeLedgerBook`(기본값 없음) 대신 `normalizeLedgerBooks`(`normView`/`sameView`) ·
+  `ledgerFingerprint` **2곳**.
+- **⚠️ 기본 상태(아무것도 숨기지 않고 아무것도 펼치지 않음)는 저장하지 않는다**(`normView`가
+  `undefined`를 돌려준다, `#G45b`) — 그래야 레거시 장부가 로드마다 '변경됨'이 되지 않는다(멱등 계약).
+- **⚠️ 지문에 빠지면 '열만 숨긴 세션'이 `portfolioUpdatedAt`을 못 올려 Drive 저장이 통째로 스킵된다**
+  (이 저장소에서 여러 번 재발한 버그 클래스). `#G45c`는 토큰이 아니라 **지문 값이 실제로 달라지는가**를
+  단언한다 — 토큰으로 재면 키 이름을 한 글자만 바꿔도 통과한다(변이 테스트로 실측한 죽은 단언).
+- **⚠️ `ledgerBooksHaveContent`에는 넣지 말 것**(`#G45d`) — 보기 선호도지 '내용'이 아니라서,
+  포함시키면 열만 숨긴 빈 장부가 '내용 있음'이 되어 **백업 복원 경로가 영구히 막힌다**.
+- **⚠️ 쓰기는 `applyView` 한 경로**(`#G45f`~`#G45h`). 펼침 토글 3종(`openBucket`·`toggleGroup`·
+  `togglePay`)과 숨기기·복원 4지점이 전부 이 함수를 지난다 — 한 곳만 직접 `setState`로 우회하면
+  그 조작만 저장되지 않아 다음에 열 때 되돌아간다(사용자가 고쳐 달라고 한 바로 그 증상).
+  ⚠️ 다음 Set을 **업데이터 밖에서** 만들어 넘긴다(StrictMode 이중 호출 — 이 파일의 `addItem` 규약).
+  ⚠️ `readOnly`(impersonation·연결 끊김·Drive 로드 전)면 **화면만 바꾸고 저장하지 않는다**.
+- **⚠️ 복원 동기화는 `book.id`가 바뀔 때 한 번만**(`viewSyncedRef`, `#G45e`) — `book` 객체마다
+  돌리면 `applyView` 저장 → local 갱신 → 재동기화 루프가 돌아 방금 누른 값이 되돌아간다.
+  스냅샷 복원은 `viewSyncedRef.current = ''`로 **재무장**한다(id가 그대로면 effect가 돌지 않는다).
+- **복원 칩 라벨** = `1월`·`계획`(옛 `1월 복원`), 앞에 `숨긴 열` 안내가 붙는다(사용자 요청).
+
+#### 계산 규약 — 첨부 스프레드시트에서 역산해 실측 확정 (verify:ledger §2·§6이 고정)
+| 항목 | 값 | 판정 |
+|---|---|---|
+| 신용대출 95,000,000 @4.47% | 월 353,875 | `P×r/12` **정확 일치** → 만기일시(이자만) |
+| APT1/2, 만기 2063-04 | 544,059 / 333,220 | 원리금균등(n≈440) |
+| 전세 159,550,000 @2.73% | 423,289 | **어떤 방식으로도 불일치** → 사용자 입력이 권위 |
+| 예상 年 지출 | **62,743,196** | 월합×12 + 년단위 |
+| DSR (사진 H9) | 27.6% | 연 상환액 / 연 수입 |
+
+- **⚠️ 중간 반올림 금지.** MS365(연 127,000)를 항목별로 반올림(10,583)하면 예상 年 지출이
+  62,743,**192**가 되어 사진의 …**196**과 4원 어긋난다. 무반올림 10,583.333…으로 누산해야 일치한다.
+  **계산은 무반올림, 표시만 반올림**(`roundWon`).
+- **⚠️ `loanSchedule`의 유한성 게이트가 이 기능의 절반이다.** 순진한 PMT는 `annualRate=0`에서 **NaN**,
+  `n=0`에서 **Infinity**, `n<0`에서 **음수**(실측 P=1억·4%·n=−3 → −33,222,469)를 낸다. 셋 다
+  `typeof === 'number'`라 타입으로 안 걸리고 Σ를 지나 월 지출 합계·예상 年 지출·DSR·저축여력을 전부
+  오염시킨다. **`payment > 0`은 Infinity를 통과시킨다 — `Number.isFinite`만이 막는다.**
+  집계(`monthTotals`·`ledgerKpi`)도 `Number.isFinite`로 걸러 한 값이 합계를 삼키지 않게 한다.
+- **⚠️ `LedgerLoan.principalAsOfYm`(잔액의 기준월)이 없으면 계산을 포기한다.** '만기 − 오늘'로 잔여
+  개월을 재면 잔액은 그대로인데 n만 줄어 **사용자 조작 없이 월 납입액이 매달 상승**한다(실측 APT1
+  1년에 +8,757원, +1.3%). 원리금균등은 정의상 고정인데도 그렇게 된다. 잔액과 기간의 기준 시점을 묶어
+  두면 납입액이 **1회 계산되고 만기까지 고정**된다(검증 #12·#12b).
+- **⚠️ 원금균등은 회차마다 납입액이 다르다.** '첫 회차를 대표값'으로 쓰지 말 것 — 연 상환액을 구조적으로
+  과대 계상한다. 연 합계는 `loanAnnualTotal`이 12회차를 각각 더한다(#25).
+- **⚠️ `paymentOverride`(사용자 직접 입력)가 계산을 덮어쓴다.** 전세 케이스가 그 근거다 — 실제 대출에는
+  중도상환·금리변동·부분거치 등 모델에 없는 조건이 흔하다. **계산은 제안, 입력이 권위.**
+
+#### 잔액은 매달 줄어든다 · 중도상환 · 금리변동 (2026-09, ⚠️ 회귀 주의)
+
+사용자 보고: "한번 대출은 계속 지속되는 것으로 지출에 반영되어 있습니다 … 대출잔액을 수정, 또는
+상환금액 입력을 하면 대출원금이 계산되어 줄어 들어야 … 금리도 고정이 아니라 변동이 있으므로 …
+그것에 맞게 다음달에 원리금균등상환, 이자 상환금액이 계산되어 가계부 지출에 반영되어야."
+→ `loanSchedule`이 폐쇄형 1회 계산에서 **순차 전개 스케줄 조회**로 바뀌었다(`buildLoanRuns`).
+
+- **⚠️ 하위호환의 축 = `events`가 비면 `payment`가 종전과 *비트 단위로* 같다**(`#200b`가 `===`로 단언).
+  근거 둘: ① 원리금균등·원금균등의 납입액을 **거치가 끝나는 그 회차에 1회만** 계산하고 이후로
+  캐리한다(매달 재계산하면 부동소수 잔차로 `p0 === p6`이 깨진다 — `#12`) ② 그 1회 계산의 입력이
+  종전 식의 `(P, nEff)`와 정확히 같다(거치 중 원금 상환 0 → 잔액이 P 그대로, `n - k|k=grace` = `n - grace`).
+  달라진 것은 **원리금균등의 `interestPart`/`principalPart` 분해**뿐이다(종전은 이자를 매달 `P×i`로
+  고정했는데 원리금균등에서 그럴 수 없다 — 화면 소비자가 없던 값이라 버그 수정으로 정정).
+- **⚠️ 잔액으로 스케줄을 끊는 두 장치는 `hasPrepay`(중도상환이 기록된 대출)에서만 켠다.**
+  ① 완납 게이트(잔액 0 → `paidOffYm`) ② 마지막 회차 정산 클램프(`principalPart > balance`).
+  `evByYm.size > 0`(금리변동 포함)으로 넓히면 **금리변동 한 줄만 적어도** 납입액이 잔액보다 큰
+  `paymentOverride` 대출이 조기에 '완납 0원'으로 꺼진다(`#204e4`). 이벤트가 없으면 '완납'이라는 개념이
+  종전 모델에 아예 없었고, 금리변동만 있는 대출은 남은 회차로 재계산되어 조기 소진 자체가 없다.
+- **⚠️ 정산 클램프는 `!useOverride`도 함께 본다 — 두 게이트가 서로를 가린다.** 한쪽만 남기면
+  `principal:1 + override:544,059`(실측 픽스처의 '사진 값 그대로' 구성)에서 납입액이 **1원으로 잘려**
+  월 지출 합계·예상 年 지출·DSR이 통째로 무너진다(`#39`·`#41`·`#43`). 이 사각지대는 **변이 M5로
+  실측**했다 — `#204e3`(적용된 중도상환 + override)이 없으면 `hasPrepay`가 가려 죽은 단언이 된다.
+- **⚠️ 완납 이후는 `payment: 0` + `source:'paidOff'`이지 null이 아니다.** null로 되돌리면
+  `planMissingKind`가 대출의 null을 `'failed'`로 세어 **다 갚은 대출이 손댈 방법 없는 '산출 불가'
+  경고를 상시 점등**시킨다(2026-09에 변동비에서 고친 것과 같은 부류의 가짜 오류). 단 **만기 범위
+  밖은 종전대로 null**(만기 경과)이라 `#9d`·`#20`이 그대로 성립한다.
+- **⚠️ 이벤트 적용은 그 달 납입액 계산 *전*이고, 같은 달이면 금리 → 상환 순서다.** 그래야 그 달
+  이자가 새 금리로 계산되고 재계산이 상환 후 잔액으로 이뤄진다(`#203f`). **기준월 이전 이벤트는
+  무시**한다(이미 `principal`에 반영된 것으로 본다 — 이중 차감 금지, `ignoredEvents`로 세어 화면이 알린다).
+- **⚠️ 일부 상환의 기본 재약정은 `after:'payment'`(기간 유지 · 월 납입액 감소)** — 사용자 확정(2026-09).
+  기본값을 뒤집으면 **저장된 이벤트의 뜻이 조용히 달라진다**(그 값을 저장하지 않는 레거시 행 포함).
+  `'term'`(납입액 유지 · 만기 단축)은 행에서 고른다. 화면의 기본 적용월은 **다음 달**(`#G46e`).
+- **⚠️ `loanPrincipal`과 `loanBalance`는 다른 질문이다 — 합치지 말 것.** 앞은 사용자가 적은 출발점
+  (시간 불변), 뒤는 스케줄이 굴린 '지금 남은 빚'. **'월 납입 이율'의 분모는 종전대로 `loanPrincipal`**
+  이어야 사진 실측값(0.359%·0.431%)이 재현된다(`#206`·`#206d`).
+- **⚠️ 중도상환한 목돈 자체는 그 달 지출에 더하지 않는다**(잔액과 이후 납입액만 바뀐다). 더하면 그 달
+  지출이 수천만원 튀어 전월 대비·연간 합계·저축여력이 통째로 왜곡되고, 중도상환 재원은 보통 저축·
+  퇴직금이라 '월 지출'과 성격이 다르다. **화면이 그 사실을 고지해야** "2천만원을 갚았는데 가계부에
+  안 잡힌다"로 읽히지 않는다(`#G46g`).
+- **⚠️ 성능은 `WeakMap` 참조 캐시가 전제다.** APT 대출이 441회차인데 `monthTotals`·`loanNext12Total`이
+  한 렌더에 수십 번 부른다. 대출 객체는 편집할 때만 새로 만들어지므로(불변 갱신) 참조가 곧 정확한
+  무효화 신호다 — **제자리 변형(mutation)을 하면 캐시가 낡는다**.
+- **영속화 신규 지점 0곳** — `events`는 `LedgerLoan` **안**이라 App.tsx의 가계부 7지점을 자동 상속한다.
+  등록은 `makeLedgerLoan`(`events: []`) · `normalizeLedgerBooks`(`normLoanEvents` + **`sameLoanEvents`로
+  `changed` 판정** — 배열이라 정규화가 항목을 버릴 수 있고, 그 결과가 저장되려면 `changed`가 서야 한다) ·
+  `ledgerFingerprint`(⚠️ 빠뜨리면 '조건 변경만 기록한 세션'이 Drive 저장에서 통째로 스킵된다 — 이
+  저장소에서 6회 재발한 버그 클래스) · `ledgerBooksHaveContent` **4곳뿐**. 펼침 상태(`expandedLoan`)는
+  **세션 로컬**이다(장부 지문에 얹으면 펼치기만 해도 STATE 저장이 나간다).
+- **범위 밖(의도)**: 분석 탭 잔액 추이 차트 · 연간 탭 잔액/이자 열 · 회차별 상환표 전체 보기 ·
+  엑셀 대출 시트의 잔액 열과 조건 변경 이력(값 출처에 '완납'만 추가) · 중도상환 목돈의 자동 지출 계상 ·
+  대출 항목의 자동 종료(전액 상환 후에도 행은 남고 납입액만 0이다 — 지우거나 적용기간으로 닫는다).
+- 검증: `verify:ledger` **§19 `#200~#207b`** + 배선 가드 **`#G46~#G46i`**. **변이 22종 + 음성 대조
+  1종으로 검출을 실증**했다(after 기본값 뒤집기 · 이벤트 무시 · 완납을 null로 · 정산 클램프의 두 게이트
+  각각 제거 · 이자를 기준월 잔액으로 고정 · 지문에서 events 제거 · 정규화 정렬 제거 · 상한을 신참부터
+  버림 · 기준월 이전 이벤트 허용 · rate/prepay 순서 뒤바꿈 · 완납 게이트 확대 · KPI 잔액을 principal로 ·
+  재약정 미재계산 · 화면 잔액 열/추가 버튼/고지/합계/기본 적용월 · 엑셀 완납 라벨).
+  ⚠️ 그 과정에서 **죽은 단언 3건**(#204e·#202k·#G46)을 잡았다 — 두 게이트가 서로를 가리는 사각지대와
+  '선언만 보는' 가드였다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+
+#### 축·합계 규약
+- **`group` 단일 축**(`loan|fixed|variable|annual|income`). ⚠️ `kind:'expense'|'income'` 이중 축을
+  되살리지 말 것 — 수입이 지출 합계에 섞이는 경로가 열린다(#44).
+- **`planUnit`은 `group`과 직교한다**(같은 것을 두 번 말하는 게 아니다): `planUnit:'year'` = "연 단위로
+  청구되지만 **매달** 부담"(연 구독 → /12) / `group:'annual'` = "1년에 **한 번** 나가는 목돈"(납부월에만 계상).
+- **⚠️ 월 지출 합계 = 대출 + 고정비 + 변동비(annual 제외).** 예상 年 지출이 `×12 + 년단위`라, annual을
+  월 합계에 더하면 **12배 이중 계상**된다(#42).
+- **⚠️ 미입력(키 없음)과 0원(명시적 0)은 다른 뜻이다.** 실제 합계는 **입력된 것만** 더하고 `missingCount`를
+  함께 낸다 — 0으로 취급하면 "지출이 줄었다"고, 계획으로 대체하면 "차이 0"이라고 거짓말한다.
+  ⚠️ 커밋은 반드시 `commitActual`(빈칸=키 삭제) — **`cleanNum`은 빈칸을 0으로 만들어 이 구분을 즉시 파괴**한다.
+- **⚠️ 전월·전년 비교는 입력 완료도가 다르면 숫자를 내지 않는다**(`delta`/`rate` = null). 진행 중인 달은
+  항상 미입력이 많다 — 그게 기본 상태다. 지난달 12건 입력 / 이번 달 1건이면 순진한 차분이 **−87.2%**를
+  내고 사용자는 '지출이 87% 줄었다'로 읽는다(일간 지표 절의 `'-'` 규약과 같은 근거, #50).
+- **⚠️ `LedgerBook`에 `year` 필드를 두지 말 것** — 장부를 한 해에 묶으면 **전년 대비가 구조적으로 불가능**해진다
+  (다른 장부를 봐야 하므로). 장부는 연도 무관이고 화면이 연도를 고른다(#52).
+- **⚠️ 항목 유효기간(`activeFrom`/`activeTo`) 필수** — 없으면 연중에 추가한 항목이 **존재하지도 않던 달에
+  영구히 '미입력'으로 계상**되고 경고가 절대 꺼지지 않는다(#33).
+- **⚠️ `byPay`(현금/카드 소계)는 지출 전용** — 수입을 섞으면 '현금합계'에 급여가 들어간다(#48c).
+
+#### 색 규약 (⚠️ 손익 색을 쓰지 말 것)
+이 앱의 손익 색(**이익=빨강** / 손실=파랑, 한국 증시 관행)을 가계부에 쓰면 **정반대로 읽힌다** — 지출은
+증가가 나쁜 것이다. 상태색(초과 `#fbbf24` ▲ / 절약 `#2dd4bf` ▼ / 중립 `#94a3b8`)을 쓰고 **아이콘과 라벨을
+항상 동반**한다. 도넛 4슬롯(`대출 #60a5fa` / `고정비 #f472b6` / `변동비 #4ade80` / `연단위 #fb923c`)은
+CVD ΔE 7.1 대역이라 **직접 라벨 + 2px 간격이 필수**(색만으로 구분이 보장되지 않는다).
+⚠️ 값은 `scripts/validate_palette.js`로 실측 검증했다 — 색을 바꾸려면 **반드시 그 스크립트를 다시 돌릴 것**
+(눈으로 판단 금지). 팔레트는 `ledger.ts` 모듈 상수로 공유한다(손복제 금지).
+
+#### 메모 달력 가계부 칩
+소스 2종을 **라이브 파생**한다(⚠️ `calendarMemos`에 복사 금지 — note·qty·transfer와 같은 계약):
+(a) `book.months[ym].touchedDate` = 그 날 가계부를 정리한 기록 → 칸에 **총지출 + 전월대비** 요약
+(b) `annual` 항목의 `dueMonth/dueDay` = 연단위 지출 예정일 → **항목명 + 금액**.
+패드는 읽기 전용이고 하단 **[가계부 열기]** 버튼이 '확장'이다.
+- ⚠️ `ledgerByDate`에 **`open` 게이트 필수** — CalendarModal은 App 최상위 형제라 달력을 닫아도 계속
+  마운트돼 있어, 게이트가 없으면 닫은 뒤에도 전 장부 시계열을 영구히 재계산한다.
+- ⚠️ **PICK 체인에 자기 분기 필수** — 마지막 `else`가 qty라, 없으면 오류 없이 '종목 수량 변경' 패드가 열린다.
+- ⚠️ **연단위 지출은 매년 반복되고 정리 기록은 그 해에만 뜬다**(수명이 다르다 — #56·#56b).
+- ⚠️ **별도 달력 창의 [가계부 열기]는 App에 위임**한다(`calendar:openLedger`). 그 창에서 `window.open`을
+  직접 부르면 새 창의 opener가 **달력 창**이 되어 가계부 창이 앱 탭과 영원히 연결되지 못하고 읽기 전용으로
+  굳는다. 장부는 `calendar:accounts`(지문 게이팅)가 아니라 **`calendar:live`에 싣는다** — accounts는
+  `portfolios` 지문으로만 게이팅돼 장부만 바뀐 편집이 새 창에 반영되지 않는다.
+- **(2026-09 §13) 'touch' 칩·패드의 총지출·전월 대비는 반영값**(`reflectedExpense`·`reflectedMomDelta`)이고
+  `ledgerEventsByDate(books, year, todayYm)`의 3번째 인자로 **미래 달 게이트**를 건다(CalendarModal이
+  `todayStr.slice(0, 7)`을 넘긴다 — 별도 달력 창도 같은 헬퍼). `actualExpense`·`missing`은 레거시 필드로
+  남고 문구는 `미확인 N건 — 계획으로 반영됨`·`진행 중 K건`이다(`#G39j`·`#118~#118c`).
+
+#### 적대적 리뷰가 잡은 회귀 13건 (2026-08 — ⚠️ 되돌리면 그대로 재발)
+
+3렌즈 리뷰가 독립적으로 지목한 것을 전부 node로 재현해 고쳤다. 각 항목의 가드가 괄호 안에 있고,
+**변이 13종으로 검출을 실증**했다(존재만 단언하는 죽은 가드가 아님을 확인).
+
+- **⚠️ 만기월도 납입 회차다**(`#G26`·`#9`·`#9c~#9e`). `loanTermMonths`의 endDate 경로가
+  `monthsBetweenYm`만 쓰면 **만기월이 `kRaw >= n`에 걸려 '계산 불가'**가 되고, 같은 대출을
+  `termMonths`로 넣었을 때와 회차 수가 1 달라진다(실측: 6개월 대출에서 월 납입액 **19.7% 차이**).
+  `span + 1`이 두 경로의 회차 정의를 통일한다.
+  ⚠️ **사진을 정확히 재현할 수 없는 것이 정상이다** — 두 대출이 요구하는 회차가 442.6과 437.1로
+  달라 같은 만기일로는 어느 쪽도 맞출 수 없다(납입액은 최초 약정액, 대출금은 현재 잔액이라서).
+  허용오차를 '정확 일치'로 조이지 말 것. 정확한 값은 `paymentOverride`가 낸다.
+- **⚠️ 연 납입액 = `loanNext12Total`(향후 12개월 스케줄 합)**(`#G25`·`#G25b`·`#67`).
+  `월 × 12`는 원금균등에서 과대이고, 같은 화면의 각주('첫 달 × 12가 아닙니다')를 **반증**한다.
+  ⚠️ **달력 연도(1~12월)로 재지 말 것** — 기준월이 연중이면 앞쪽 달들이 '아직 시작 전'이라
+  null이 되어 합계가 통째로 모자란다(사진의 신용대출은 기준월이 8월이라 5개월치만 잡힌다).
+  행별 표시와 KPI가 **같은 함수**를 써야 한 화면에서 두 값이 나오지 않는다.
+- **⚠️ `expectsActual`이 '실적 입력 대상'의 단일 소스**(`#G24`·`#G24b`·`#64`~`#65c`).
+  `group:'annual'`은 **납부월에만** 대상이다. `isItemActive`로 재면 연단위 항목 하나가 비납부월
+  11개월 내내 '미입력'으로 세어져 ① KPI 배너가 손댈 방법 없이 상시 점등 ② 그 항목의 **연간 차이
+  열이 영구히 `'-'`** ③ 납부월과 그 다음 달의 전월 대비가 **매년 2개월씩 비교 불가**가 된다
+  (정확히 `activeFrom`이 막으려던 실패 모드). 화면 3곳이 같은 함수를 공유해야 값이 갈리지 않는다.
+- **(2026-09 §13에서 구조로 대체됨)** 옛 `compareMonths`는 개수가 아니라 미입력 항목 `missingIds` 집합을
+  비교했다('1월은 월세만, 2월은 커피만 입력'이 둘 다 `missing=1`로 통과해 **−93.6%** 거짓 신호를 내던 것을
+  막았다). 지금은 비교가 **반영값**(`reflectedCompare`)이라 빠진 항목이 계획으로 채워져 두 달이 구조적으로
+  완비된다 — 그 함수와 `#G27`(집합 비교)은 삭제됐고, `#G27`은 이제 `reflectedCompare`의 **산출 불가 집합**
+  비교와 `no-data` 양쪽 판정을 단언한다. `monthTotals.missingIds`는 확인 현황용으로 남는다(`#66`·`#66e`).
+- **⚠️ `ledgerKpi`의 annual 분기는 '보고 있는 달' 활성 게이트보다 **앞**에 둔다**(`#68`).
+  `addItem`이 `activeFrom`을 추가 시점 달로 박으므로, 그보다 앞선 달을 보고 있으면 연 목돈이
+  예상 年 지출에서 **통째로 사라진다**. 연 단위 값은 **납부월 기준**으로 활성을 판정한다.
+- **⚠️ 인앱 폴백(overlay)에는 `z-[1090]`이 필수**(`#G20`). App 루트는 스태킹 컨텍스트를 만들지
+  않아, z 없이 두면 상단바(`sticky top-0 z-30`)와 플로팅 창(계산기·관심종목·메모 달력 z-1050)이
+  위에 그려져 **최상단 줄(닫기 버튼 포함)이 가려지고 닫을 수조차 없다**. `variant==='page'`에는
+  주지 않는다(BacktestPage와 같은 층: ConfirmDialog 1000 위, LoadingOverlay 1100 아래).
+- **⚠️ `today`는 브릿지로 늦게 도착한다 → 동기화 effect + ref 게이트**(`#G21`·`#G21b`).
+  `useState` 초기화는 첫 렌더에서 한 번만 평가되고 이 컴포넌트는 리마운트되지 않아, 상수 초기값을
+  두면 **별도 창(주 진입점)이 항상 그 상수 달로 열린다**. 그 상태에서 '+ 추가'는 엉뚱한 달을
+  `activeFrom`에 박고 셀 입력은 그 달을 '정리했다'고 기록한다. 하드코딩 연도 금지.
+- **⚠️ 장부 자동 생성은 `setLocal`(dirty)을 쓰지 않는다**(`#G22`) + **채택 effect는 빈 배열을
+  채택하지 않는다**(`#G22b`). 둘 중 하나만 빠져도 앱 탭 새로고침 중에 뒤늦게 도착한 **저장된
+  장부가 영영 채택되지 않고** 2.5초 뒤 승격이 그것을 **빈 장부 1권으로 덮어쓴다**(FlowBoard가
+  명시적으로 막아 둔 경로 — 백업 복원으로도 되돌릴 수 없는 sticky 데이터다).
+- **⚠️ `touchMonth`는 값이 실제로 바뀐 경우에만**(`#G23`). `NumCell`의 `onBlur`는 값이 그대로여도
+  항상 커밋을 부르므로, 무조건 호출하면 칸을 **Tab으로 지나가기만 해도** 그 달을 '정리했다'고
+  기록하고 메모 달력에 **사용자가 만든 적 없는 가계부 칩**이 뜨며 Drive 4파일 write가 나간다.
+- **⚠️ impersonation 읽기 전용의 정본은 App의 `ledger:books` 핸들러**(`#G28`·`#G28b`·`#G28c`).
+  인앱 폴백의 `readOnly` prop만으로는 **기본 경로인 별도 창의 쓰기를 못 막는다** — 창은 조작
+  가능한 URL로 열리므로 App 측 재확인이 정본이고(fail-closed), `ledger:live`의 `readOnly`는
+  창 UI를 함께 잠그는 보조 신호다.
+- **⚠️ `ledgerAccess` 선언은 한 곳뿐이고 브릿지 effect보다 **위**에 있어야 한다**(`#G29`·`#G29b`).
+  아래쪽 `isAdminUser`는 `authUser` null 가드(early return) 뒤라 브릿지에서 참조할 수 없어,
+  관리자 판정을 옵셔널 체이닝으로 직접 한다. 인앱 prop과 `calendar:live` payload가 **같은 표현**을
+  써야 게이팅이 갈리지 않는다(안 그러면 권한이 꺼진 사용자의 **별도 달력 창에만** 가계부 칩이 남는다).
+- **⚠️ `isValidLedgerDate`는 패턴이 아니라 실제 달력을 본다**(`#69`~`#70b`). 패턴만 보면
+  `2026-04-31`이 통과하는데 CalendarModal이 `utils.isValidIsoDate`로 다시 걸러 **칩이 아무 안내
+  없이 사라진다**. 말일 의도(`dueDay: 31`)는 버리지 말고 그 달 말일로 **클램프**한다.
+#### 별도 창 브릿지 (`?ledgerWindow=1`)
+흐름도·백테스트와 **같은 규약**(App 미마운트 · `noopener` **금지** · `ping.need`가 초기 전송의 유일한 트리거 ·
+재입양 · 끊기면 `readOnly` · 자체 `ErrorBoundary label` · `pagehide` 승격 · 팝업 차단 시 인앱 폴백).
+- **⚠️ 채널이 하나뿐이다**(`ledger:live`). 가계부는 포트폴리오 데이터가 전혀 필요 없는 자체 완결 기능이라
+  무거운 원자재 채널이 없다 — 두 채널로 쪼개면 각각 `gotData`를 세우게 되어 장부가 도착하기 전에 쓰기가
+  열리고 **저장된 장부 전체가 빈 배열로 덮이는** 경로가 생긴다(CalendarWindow가 실제로 겪은 함정).
+- **⚠️ `today`는 앱이 만들어 보낸다** — 창에서 `new Date()`로 만들면 KST 규약이 갈린다.
+- **⚠️ 늦게 도착한 상위 값 채택 effect 필수**(dirty면 채택 안 함). 없으면 `LoadingOverlay`가 20초에
+  자동 해제되는 느린 회선에서 빈 배열로 시드된 뒤 항목 하나만 고쳐도 2.5초 후 승격이 **저장된 장부를
+  통째로 대체**한다(FlowBoard가 명시적으로 막아 둔 경로).
+
+#### 이전 기록(스냅샷) — 사용자 저장 + 복원 (2026-08-29, ⚠️ 회귀 주의)
+
+가계부 헤더의 **💾 저장** / **이전 기록** 버튼. 앱 레벨 `ledgerSnapshots: LedgerSnapshot[]`
+(`{id, savedAt, label, auto, books}`).
+
+- **⚠️ 스냅샷은 `ledgerBooks` 안이 아니라 그 옆에 산다.** 장부 안에 두면 장부가 통째로 덮이는
+  사고에서 **안전망까지 같이 죽는다** — 그 사고가 정확히 이 기능이 막으려는 것이다.
+  `#102`가 `makeLedgerBook()`에 `snapshots` 키가 없음을 단언한다.
+- **⚠️ 자동 백업(`portfolio_backup_*.json`)과 별개다.** 그쪽은 `saveAllToDrive(state, versioned)`의
+  `versioned`가 있을 때만(수동 저장·앱 닫기) 만들어지고, **800ms 디바운스 자동 저장은 백업 없이
+  STATE를 덮어쓴다** — 그래서 하루 종일 편집해도 복구 지점이 하나도 안 생길 수 있다
+  (2026-08-29 실측: 가계부 배포 16:26 → 유실 19:22, 그날 백업 0본).
+- **⚠️ 저장은 먼저 `promote()`로 로컬 편집을 회수한다** — 안 하면 방금 친 값이 2.5초 idle 승격
+  전이라 `books` prop에 없고, 사용자가 "저장"을 눌렀는데 **직전 상태가 저장**된다.
+- **⚠️ 복원 직전에 현재 상태를 자동 스냅샷(`auto:true`)으로 남긴다** — 복원은 파괴적이고 undo가
+  없다. 이게 없으면 잘못 고른 복원 한 번으로 지금 작업분이 사라진다.
+- **⚠️ 상한 초과 시 `auto`를 먼저 버린다** — 사용자가 직접 누른 저장이 자동 스냅샷 때문에
+  밀려나면 안 된다. **방금 넣은 것은 어떤 경우에도 버리지 않는다**(저장이 조용히 실패하면 안 된다).
+- **⚠️ 개수(10)와 바이트(512KB) 상한을 둘 다 건다** — STATE는 백업 22본으로 복제되고 저장마다
+  파일 전체가 업로드되므로 개수만으로는 큰 장부에서 STATE가 배로 불어난다.
+- **⚠️ 직전과 내용이 같으면 추가하지 않고 원본 참조를 반환한다**(저장 연타로 같은 내용이 상한을
+  채우면 정작 필요한 과거 시점이 밀려난다 + 헛된 Drive 저장 트리거 방지).
+- **영속화 7지점**(`ledgerBooks`와 동일 패턴) + **sticky**(`ledgerSnapshotsHaveContent`) —
+  백업 복원이 '이전 기록'을 되돌리면 그 백업 시점 이후의 복구 지점이 통째로 사라진다
+  (복구 수단이 복구로 지워지는 역설). 계좌 0개 예외에도 포함.
+- **별도 창 브릿지**: 앱→창 `ledger:live`에 `snapshots` 동봉 / 창→앱 **`ledger:snapshots`**.
+  ⚠️ 앱 핸들러의 impersonation 게이트를 `ledger:books`와 **똑같이** 둘 것(한쪽만 막으면
+  impersonation 창이 스냅샷 이력을 고칠 수 있다). 창의 수신 화이트리스트는 **열거형**이라
+  새 타입을 추가하면 양쪽에 등록해야 한다(CalendarWindow 선례).
+- 확인창은 **인라인 2단계**(z-1090 + 별도 창엔 App조차 없어 `ConfirmDialog`·토스트가 안 뜬다).
+
+#### ⚠️ 별도 창도 Drive 로드 완료 전까지 읽기 전용 (2026-08-30 — 아래 잠금의 누락된 절반)
+
+바로 아래 인앱 잠금(2026-08-29)이 **버튼이 실제로 여는 별도 창에는 적용되지 않아** 유실 경로가
+그대로 열려 있었다. 사용자 보고: "가계부를 열면 빈 가계부가 뜨고, 이전 기록을 불러와야 내용이 보인다."
+
+- **메커니즘**: 창의 `writable = linked && gotData && !appReadOnly`에서 `gotData`는 **첫
+  `ledger:live`가 오면** 선다 — 그 메시지가 Drive 로드 전이라 `books: []`를 실어 와도 마찬가지다.
+  그러면 창은 **'아직 안 불러왔다'와 '저장된 게 없다'를 구분하지 못한 채 편집 가능한 빈 장부**를
+  띄우고, 거기서 한 글자만 쳐도 dirty → 2.5초 승격 → App `setLedgerBooks` → Drive 저장으로
+  **저장된 장부를 덮는다**(그때부터 채택 effect도 dirty라 막혀 자가치유가 안 된다).
+- **⚠️ 스냅샷이 살아남는 것이 이 버그의 지문이다** — `ledgerSnapshots`는 💾 버튼으로만 쓰이므로
+  빈 장부 승격이 건드리지 않는다. "장부는 비었는데 이전 기록은 있다"가 보이면 이 경로를 의심할 것.
+- **수정**: `ledger:live`에 **`dataState: ledgerDataState`**를 함께 싣고
+  (⚠️ effect deps에 `ledgerDataState` **필수** — 없으면 로드가 끝나도 창이 잠긴 채 남아
+  고치려던 것보다 나쁘다), 창은 `writable`에 `appDataState === 'ready'`를 추가한다.
+- **⚠️ fail-closed** — 창의 `appDataState` 초기값은 `'loading'`이고, 수신값은
+  `'ready'|'error'` 화이트리스트 밖이면 전부 `'loading'`으로 떨어뜨린다. 열어 두면 이 필드의
+  존재 이유가 사라진다. 최악이 '창이 읽기 전용으로 남음'(새로고침으로 복구)이고 반대편은
+  **되돌릴 수 없는 장부 유실**이라, 비대칭이 이 방향을 강제한다.
+- **⚠️ 안내 문구를 상태별로 갈라 쓸 것**(`error`를 `loading`보다 **먼저** 판정 — 실패를
+  '불러오는 중'으로 감추지 않는다). 빈 화면만 보여 주면 사용자가 유실로 오해하고 새로 입력하는데,
+  그 입력이 정확히 기존 장부를 덮는 경로다. 그래서 "아직 저장된 내용이 안 보여도 지우지 마세요"를 명시한다.
+- **`ledgerDataState`가 `'ready'`가 되는 지점은 STATE 확정 직후 한 곳**(`App.tsx`, `loadFromDrive`
+  뒤) — 인앱·창이 **같은 값**을 쓰므로 두 경로의 보호가 갈리지 않는다(가드 #G38d).
+- **영속화 지점 0곳** — `dataState`는 브릿지 payload의 파생 신호다.
+- 검증: `#G28c`(계약을 의도적으로 좁혀 정규식 갱신) + `#G38~#G38e`. **변이 7종으로 검출 확인**
+  (옛 잠금 복귀 · `dataState` 미전송 · deps 누락 · fail-open 복귀 · 초기값 `ready` ·
+  인앱 잠금 제거 · error를 loading으로 감춤).
+
+#### ⚠️ 시드 effect가 방금 채택한 장부를 덮던 표시 버그 (2026-08-30 — 위 두 잠금이 못 잡던 절반)
+
+사용자 보고: "앱을 실행하고 가계부를 클릭하면 이전 내용이 바로 보이지 않고 **이전 기록(스냅샷)을
+불러와야** 한다." 매 실행마다 재현됐다.
+
+- **원인 = 시드 effect가 렌더 스코프 `local`(그 렌더의 클로저)로 장부 유무를 판정한 것.**
+  별도 창(**기본 진입점**)의 첫 `ledger:live`는 `books`(실장부)와 `dataState:'ready'`를
+  **한 핸들러에서** 세팅하므로 React 18이 **한 커밋으로 배치**한다 → 그 렌더에서 `books`는
+  실장부인데 `local`은 아직 `[]`다. effect는 **선언 순서**로 도니까 채택 effect(`:308`)가
+  `localRef.current`에 실장부를 넣은 **직후** 시드 effect(`:672`)가 stale한 `local.length === 0`을
+  보고 **빈 장부 1권으로 덮어썼다**. 그 다음 커밋부터는 `books` identity가 그대로라 채택 effect의
+  deps `[books]`가 안 바뀌어 **실장부가 영영 화면에 닿지 못한다**.
+- **⚠️ 인앱 폴백은 무사했다** — App은 `setLedgerBooks`(applyStateData 안)와
+  `setLedgerDataState('ready')`(그 `await` **뒤**)가 다른 tick이라 **다른 커밋**이 된다. books가
+  먼저 커밋되며 `readOnly`는 아직 true라 시드가 건너뛰어지고, ready 커밋 때는 `local`이 이미
+  채워져 있다. 그래서 2026-08-29/08-30 잠금 두 건이 증상을 못 잡았다.
+- **⚠️ Drive 데이터는 오염되지 않았다** — 시드는 `setLocal`이 아니라 `localRef.current` 직접
+  대입이라 **dirty를 세우지 않는다** → 승격도 저장도 없다. **표시만** 깨졌었고, 그래서 스냅샷
+  복원이 매번 통했다(그리고 매번 다시 필요했다).
+- **수정**: 판정을 `localRef.current`로 바꾼다(`#G22c`). 덤으로 **자가 치유** — 로컬이 비었는데
+  상위 `books`에 내용이 있고 dirty가 아니면 **빈 시드 대신 그것을 채택**한다(`#G22d`), deps에
+  `books` 추가(`#G22e`). ⚠️ `dirtyRef` 가드를 빼지 말 것 — 사용자가 장부를 전부 지운 편집 중이면
+  되살리면 안 된다.
+- ⚠️ **`#G22` 가드는 `LP_RAW`를 자른 뒤 `stripComments`를 거친다** — 구간 경계가 주석이라
+  `LP`(주석 제거본)로는 못 자르고, 원문 그대로 두면 부재 단언이 **설계 근거 주석**(금지 토큰
+  `setLocal`·`local.length === 0`을 그대로 인용한다)에 걸린다.
+- 검증: 변이 6종(음성 대조 1 포함)으로 검출 확인 — 판정을 `local`로 되돌림 · 자가 치유 삭제 ·
+  dirty 가드 제거 · deps에서 `books` 제거 · 시드가 `setLocal` 사용 · 주석 인용 오탐.
+
+#### ⚠️ 인앱 가계부는 Drive 로드 완료 전까지 읽기 전용 (2026-08-29 실측 유실)
+
+`App.tsx` `ledgerDataState: 'loading' | 'ready' | 'error'` → `readOnly={!!adminViewingAs ||
+ledgerDataState !== 'ready'}`.
+
+- `086b582`가 '빈 장부 시드가 dirty를 세우던' 경로를 막았지만 **구멍이 남았다**: 로드 전에
+  화면을 열고 **사용자가 한 글자라도 치면** dirty가 정당하게 서고, 뒤늦게 도착한 진짜 장부가
+  `if (dirtyRef.current) return;`에 막혀 채택되지 않은 채 2.5초 뒤 그 한 줄짜리 장부가 Drive를
+  덮는다. **실측: 항목 40여 건이 빈 항목 3건으로 대체**됐고 그날 백업이 없어 복구 불가였다.
+- 별도 창은 `readOnly={!writable}`로 이미 막혀 있었고 **인앱 경로에만 이 가드가 없었다.**
+- **⚠️ 로드 실패를 `'ready'`로 취급하지 말 것** — Drive엔 기록이 있는데 못 읽은 상태라, 거기서
+  편집을 허용하면 다음 저장이 그 기록을 덮는다. 실패는 읽기 전용으로 잠그고 사유를 표시한다.
+- **⚠️ 초기값은 `'loading'`**(기본이 잠김). `'ready'`로 두면 게이트가 무의미해진다.
+- 잠금 해제 지점은 **STATE가 확정되는 바로 그 줄**(뒤의 부수 로드를 기다리지 않는다).
+
+#### 영속화 7지점 + 게이팅
+① `useState` ② `portfolioStructureKey`에 `ledgerFingerprint(ledgerBooks)` ③ 저장 payload 리터럴
+④ 저장 effect deps ⑤ `applyStateData`(sticky 아님) ⑥ `applyBackupData`(sticky, **공유 함수**)
+⑦ `useDriveSync._preserveStickyPersonalData` + `ledgerFlushRef`/`ledgerExitCommitRef`/`exitCommitRef` **4원 합성**/
+수동 저장 4핸들러 동기 주입.
+- **⚠️ 저장 effect의 `portfolios.length === 0` 조기 반환에 예외를 둔다** — 가계부는 포트폴리오와 개념적
+  의존이 **0**이라 '계좌를 아직 만들지 않은 사용자'가 정상 경로다. 예외가 없으면 그 사용자의 장부는 어떤
+  경로로도 저장되지 않아 새로고침마다 사라진다(`portfolios.length === 0 && !ledgerBooksHaveContent(...)`).
+- **⚠️ sticky 판정은 `length` 금지, `ledgerBooksHaveContent` 공유 함수** — 화면을 **열기만 해도** 빈 장부가
+  1권 생기므로 length 기준이면 백업으로 되살릴 길이 영구히 막힌다.
+- **⚠️ `ledgerFingerprint`는 절대 throw하지 않는다**(화이트리스트 투영 + try/catch). 이 계산은 저장 effect의
+  첫 블록이라 던지면 그 세션의 Drive 저장이 통째로 멈춘다. 길이·개수 해시 절충 금지, `updatedAt` 제외.
+- **게이팅 = approved_users M열(index 12) `ledgerEnabled`** — Apps Script 6곳
+  (`handleCheckApproval`·`handleListUsers`·`handleGetFeatureLabels` **3군데**(fallbacks·`E1:M1`·catch fallbacks)·
+  `colMap`·`handleAddUser` 13셀·`setupSheet` **3군데**) + 프론트 8곳(`LoginGate` 3 · `App` 초기 리터럴·
+  `ledgerAccess`·prop·마운트 · `AdminPage` 타입·`featureLabels[8]`·`featureDefs` · `UserInfoBar` 아이콘·prop·렌더).
+  **배포 순서: 프론트 먼저 → Apps Script 나중**(`>= 6` 인덱스 머지가 구버전 응답을 우아하게 처리).
+  ⚠️ `effectiveUserFeatures`에 얹지 말 것 — 관리자 본인이 영구 접근 불가가 된다.
+- impersonation은 **읽기 전용**(`readOnly={!!adminViewingAs}`) — 흐름도·백테스트와 같은 근거(undo 없음 + sticky).
+
+#### 계획 자동 반영 — "계획은 손대지 않아도 1월부터 보인다" (2026-08, ⚠️ 회귀 주의)
+
+사용자 요구: "계획은 일일이 숫자를 안 넣어도 1월부터 반영되고, 실제가 다른 달만 직접 고친다
+(지출은 한번 정해지면 거의 일정하기 때문)". 사용자 확정 규약 = **예상치로 반영 + 흐린 이탤릭 구분**
+(계획으로 채운 달을 '확인했다'로 승격하지 **않는다**).
+
+- **⚠️ 원인은 계산이 아니라 `addItem`의 생성 기본값이었다.** 옛 코드는 `activeFrom: ym`(보고 있는 달)을
+  박았고 **그 필드를 고칠 UI가 0곳**이었다 → 8월에 가계부를 만들면 전 항목이 `2026-08`로 고정돼
+  1~7월이 `-`가 되고 `planOf`가 null을 돌려준다. 사용자가 되돌릴 방법이 아예 없었다.
+  → 기본값 **`activeFrom: ''`(제한 없음)**. ⚠️ `isItemActive`/`expectsActual`의 **의미는 무변**이다
+  (연중 시작·종료 항목은 종전대로 잠긴다 — 검증 #104e).
+- **⚠️ 잠긴 칸(`-`)은 클릭으로 적용기간을 넓히는 버튼이다** — 시작월이면 `activeFrom`을, 종료월이면
+  `activeTo`를 그 달로 옮긴다. 이게 없으면 `activeFrom` 편집 수단이 다시 0곳이 된다(가드 #G37f).
+- **⚠️ 월 칸의 계획은 `placeholder` + `placeholder:text-gray-500 placeholder:italic`** — 기본
+  placeholder 색이면 '아직 없는 값'으로 읽혀 사용자가 "계획이 반영 안 됐다"고 느낀다(그게 원 보고다).
+  실제 입력은 밝은 글씨, 계획은 흐린 이탤릭. `NumCell`이 `className` prop을 받는 이유(가드 #G37e).
+- **⚠️ 항목 행의 연간 합계는 `Σ expectedOf`(실제 ?? 계획)** — 소계 행과 **같은 규약**이라야
+  `소계 = Σ항목`이 성립한다. 계획으로 채운 달이 섞이면 같은 시각 언어(흐린 이탤릭). (`계획 N개월` 문구는
+  2026-09 §13에서 **툴팁으로** 내려갔다 — 셀 배지 규약은 아래 '화면 재설계 2차' 절 3항.)
+  ⚠️ **가드는 반드시 `renderItemRow` 구간으로 좁혀 단언할 것** — 소계 행도 같은
+  `{fmtWon(yearExpected, hideAmounts)}` 문자열을 갖고 있어, 파일 전역으로 재면 **항목 행을
+  `yearActual`로 되돌려도 소계 행이 대신 통과시켜 죽은 단언**이 된다(변이 N2로 실증). 그리고 그게
+  정확히 '소계 = Σ항목'이 깨지는 형태다. 같은 구간의 title 템플릿 때문에 `(?<!\$)` 룩비하인드도 필수.
+- **⚠️ 연간 '차이' 열 = 확인분 차이(2026-09 §13.6-4 개정, 결정 D5)** — 실제·계획이 둘 다 있는 달만 더한
+  `confirmedVar`, 확인 셀 0개면 `-`. `yearExpected − yearPlan`으로 바꾸면 언제나 0이 되어 "차이 없음"이라는
+  거짓 확정이 된다(`varianceOf` null 계약과 같은 근거). 옛 게이트(`yearMissing === 0`이면 전액)는 첫 화면의
+  차이 열을 전부 `-`로 만들어 폐기했다(가드 #G37c — 새 식을 사용부로 단언).
+- **⚠️ `yearExpected`는 `<td>` 안에서만 쓰이는 표시 전용 값** — 비교·차트·달력으로 흘려보내지 말 것
+  (`yearSeries`/`annualCompare`/`ledgerEventsByDate` — 비교는 `reflectedMonth`가 **자기 손으로** 계산한다).
+  가드 #G37d가 양방향 정규식으로 단언한다.
+- **⚠️ 미입력 배너 문구(2026-09 §13 개정)** — `{월} 확인 N/M — 미확인 K건은 계획으로 반영됩니다(실제가 다르면
+  수입 및 지출 탭에서 고치세요)`. 옛 괄호 문장 `전월·전년 대비와 달력은 제외`는 반영 규약에서 **거짓**이라
+  삭제했고 가드 #G37g가 그 **부재**를 단언한다(옛 문구 `합계·증감에서 제외됩니다`도 부재).
+- **범위 밖(의도)**: **엑셀 3시트는 무변경** — `#G32c`의 "빈 셀 = 미입력" 계약과 각주가 걸려 있고,
+  엑셀 색 규약에는 '흐린 이탤릭'에 대응하는 표현이 없어 화면과 같은 구분을 만들 수 없다.
+  기존 항목 `계획` 열로 계획은 이미 파일에 들어간다. 기존 항목의 `activeFrom` 일괄 정리(마이그레이션)도
+  하지 않는다 — 저장값을 조용히 덮는 대신 잠긴 칸 클릭으로 사용자가 명시적으로 푼다.
+- 검증: 값 `#104~#104e`(기간 미지정이면 1월도 활성·계획이 잡힘·예상=계획·차이는 여전히 null·
+  activeFrom이 있으면 종전대로 잠김) + 배선 `#G37~#G37g`. **변이 12종으로 실제 검출을 확인**했다
+  (addItem 되돌림 · 연간 합계를 actual로 · expectedOf 누적 제거 · 차이 게이트를 expected로 ·
+  달력 소비자 누출 · 흐린 표시 제거 · `NumCell` className 무시 · 잠긴 칸 클릭 제거 · 배너 문구 되돌림 ·
+  `isItemActive` 무력화 · `expectedOf` 폴백 제거 · `varianceOf`가 미입력을 0으로 확정).
+
+#### 예상(expected) 집계 — "계획만 입력해도 소계가 나온다" (2026-08, ⚠️ 회귀 주의)
+
+소계 행의 월 셀은 **`expectedOf = actualOf ?? planOf`**(ledger.ts G-2절)다. 사용자가 계획만
+넣어도 소계가 나와야 한다는 요청이 이 개념의 존재 이유다.
+
+- **⚠️ `??`이지 `||`가 아니다.** `||`면 "그 달엔 안 썼다"는 **명시적 0이 계획으로 되살아나**
+  미입력/0원 구분이 이 한 줄에서 붕괴한다.
+- **⚠️ `monthTotals`(실제 전용)에 필드로 얹지 말 것 — 별도 함수 + 별도 타입이 구조적 방어선이다.**
+  **2026-09 §13.6-1 개정**: 반영값(실제 ?? 계획)은 **`reflectedMonth`·`reflectedCompare` 전용 함수로만
+  소비**한다 — 분석 ①②·전월/전년 대비·연간·달력·엑셀 ③이 전부 그 두 함수를 쓴다(옛 "5소비자로 흘려보내지
+  말 것"은 폐기, `#G10`·`#G10b`·`#G10e`는 **사용부 존재** 단언으로 뒤집었다). 그래도 `monthTotals`에는
+  섞지 않는다(`#G10c` 유지) — 실제 전용 집계의 소비자는 **확인 현황**(월 헤더 `확인 N/M`·배너·
+  `applyPlanAsActual`·엑셀 ①·③ '실제'·'미확인' 열)뿐이고, 거기에 계획이 섞이면 "무엇을 아직 확인하지
+  않았는가"를 화면이 답할 수 없게 된다. 옛 −87.2% 사고의 방어와 새 위험('0% 거짓말')의 완화 4종은 아래
+  '화면 재설계 2차' 절 2항.
+- **⚠️ 소계의 '계획' 열은 `planSum`이지 `fromPlan`이 아니다.** 후자는 '실적이 없는 항목의
+  계획'이라 **사용자가 실적을 채워 넣을수록 0으로 수렴**한다(실측 547,000 → 17,000).
+  그 칸은 예상값을 검산할 유일한 기준선이라, 요청을 만족시키려던 변경이 정확히 그 검산을 파괴한다.
+- **⚠️ 월 상태는 네 가지**(`monthState`: `none`/`empty`/`partial`/`full`). `missing < active`
+  2분법으로 되돌리지 말 것 — 연중에 가계부를 시작하면 시작 전 달은 활성 항목이 0건이라
+  `0 < 0 === false`가 되어 화면이 **"미입력 N개월"**이라 단언하는데, 그 칸은 매트릭스에서 `-`로
+  잠겨 있어 채울 방법이 없다(경고가 영원히 안 꺼진다). **연중 시작이 기본 사용 경로다.**
+- **⚠️ `expectedTotal`/`expectedByPay`는 수입 제외를 함수 **안**에서 한다** — 호출부에
+  위임하면 `byPay`가 급여를 '현금합계'에 넣던 회귀(#48c)가 `monthTotals` 밖으로 자리만 옮겨
+  되살아난다(#48c는 `monthTotals`만 보므로 초록으로 통과한다).
+  **⚠️ 그 대가로 수입 소계는 반드시 `expectedIncomeTotal`을 써야 한다**(`renderSubtotalRow`의
+  `income` 플래그). 지출 전용 집계를 그대로 태우면 `activeCount === 0` → `monthState 'none'`
+  → **수입 소계가 12개월 전부 `-`, 계획·합계·차이 ₩0으로 죽는다**(적대적 리뷰 3렌즈가 독립
+  적으로 잡은 회귀). `#G11-2`·`#G11-3`·`#82`가 그 배선을 단언한다.
+- **⚠️ `unresolved`(실제도 계획도 못 구함)를 0으로 계상하지 말 것.** 산출된 항목이 0건이면
+  셀은 `0`이 아니라 **`-`**이고(`resolved = actualCount + plannedCount`), 섞여 있으면 그 값은
+  총액이 아니라 **하한**이라 `?N` 표시를 단다. 차이 열의 확정 불가 게이트에도 `unresolved`를
+  포함할 것. 안 그러면 `principalAsOfYm`이 빈 대출이 **'납입 ₩0 · 차이 ₩0'으로 확정 단언**
+  되어 `loanSchedule`의 null 계약("계산 실패는 0이 아니다")이 소계 경로에서 깨진다.
+- **⚠️ 메인 도넛의 **모든** 그룹이 항목 단위 폴백(`expectedTotal`)을 쓴다.**
+  `totals.byGroup`의 그룹 단위 `actual > 0 ? actual : plan`(전부-아니면-전무)으로 되돌리면
+  **미입력 항목이 통째로 탈락**하는데 고정비 조각과 상세 도넛은 항목 단위라, 같은 캡션을 단 두
+  카드가 다른 총액을 보여 준다(실측 880,000 vs 1,080,000 — **월 중 부분 입력은 기본 상태**다).
+  통일하면 `Σ메인 === Σ상세 === expectedGrandTotal`이 성립하고 `#83`이 그 항등식을,
+  `#83c`가 '옛 규칙이면 실제로 갈라진다'를 고정한다.
+  ⚠️ `#G13f`(donutRows 공유)는 **음수 클램프만** 보므로 이 회귀를 잡지 못한다 — `#G13d-2` 필요.
+- **⚠️ 결제수단 축은 한 화면에서 한 규칙만.** 옛 `payRows`(= `totals.byPay`의
+  `actual > 0 ? actual : plan`)는 **삭제됐다. 되살리지 말 것** — 100% 스트립(항목 단위)과 같은
+  카드 안에서 같은 수단에 다른 금액을 찍는다(실측 카드 580,000 vs 300,000).
+- **결제수단 소계 행**은 그 그룹에 결제수단이 **2종 이상**일 때만 만든다(대출은 전부 '이체'라
+  자동으로 사라진다). ⚠️ 현금/카드만 하드코딩하면 `pay:'auto'`인 항목이 **어느 행에도 없이
+  사라진다** — `LEDGER_PAY_ORDER` 전체를 훑을 것. 불변식 `Σ(결제수단 행) === 그룹 소계`.
+- **⚠️ tfoot '월 지출 합계 (연단위 납부월 포함)' 라벨의 괄호를 지우지 말 것** — 헤더 KPI의
+  '월 지출 합계'는 **연단위 제외**라 이름이 겹치는데, 그 둘을 맞추려는 후속 수정이
+  `recurringMonthly`에 annual을 더하면 `projectedAnnual`에서 **12배 이중 계상**된다.
+  ⚠️ 이 행의 연 합계를 `projectedAnnual`과 같다고 **단언하지 말 것** — 정의가 다르다(이쪽은 각
+  달의 자기 값 합, 저쪽은 기준월 recurring × 12). 대출의 `principalAsOfYm` 이전 달은 납입액이
+  null이라 실측 픽스처에서 **11,581,101 어긋난다**(그 항등식을 테스트로 세우면 반드시 빨간불이
+  뜨고, 가장 그럴듯한 '수정'이 `loanSchedule`의 `kRaw<0` 게이트 완화 → #18·#12 붕괴다).
+
+#### 순서 이동 / 구분(category) / 헤더 세분화 (2026-08)
+
+- **순서 이동**: `moveItemInBucket(items, id, ±1, keyOf)` — `items`는 버킷이 **섞인 평면 배열**이라
+  인접 인덱스와 그냥 교환하면 다른 버킷 항목과 자리를 바꿔 **화면에서는 아무 일도 일어나지
+  않는다**. 같은 키의 가장 가까운 앞/뒤와 교환할 것. 이동 불가면 **원본 참조 반환**(헛된
+  저장 트리거 방지). **2026-09 §13부터 화면 버킷은 `group|pay`**(`bucketKeyOf`, `#G12`·`#G12b`) —
+  항목이 결제수단 아래로 묶이면서 그룹만 보면 같은 실패 모드가 한 단계 아래에서 재현되기 때문이다.
+  `moveItemInGroup(items, id, ±1)`은 그룹 버킷 위임으로 남는다(`#72~#73c` 불변). ⚠️ **`order` 필드를 만들지 말 것** — 배열 재정렬이면 `ledgerFingerprint`가
+  순서를 그대로 투영하므로 **영속화 신규 지점이 0곳**이다(필드를 만들면 정규화·`same` 비교·
+  지문·`makeLedgerItem` 4곳 등록이 필요하고 하나만 빠져도 조용히 유실).
+  ⚠️ ▲▼ 버튼에 `data-col`을 달지 말 것(`onGridKeyDown`의 ↑/↓ 열 이동에 끼어든다).
+- **구분 프리셋 = `LedgerBook.categories: string[]`** (신규 저장 필드). 선택 목록은
+  `ledgerCategories(book)` = **레지스트리 ∪ 실제 쓰이는 값**.
+  ⚠️ 합집합에 넣는 항목 값은 **가공하지 않고 그대로**다 — trim해서 넣으면 Drive/백업/브릿지로
+  들어온 `' 구독 '`이 옵션 `'구독'`과 일치하지 않아 `<select>`가 선택 없는 상태가 되고,
+  브라우저가 첫 옵션을 표시해 그 행이 **미분류로 보인다**. 거기서 한 번만 건드리면 원래 값이
+  영구히 덮인다(undo 없음, sticky 보호도 없다).
+  ⚠️ 레지스트리에서 지워도 **항목의 `category`는 건드리지 않는다**(그 값은 합집합에 계속 남는다).
+  ⚠️ 정규화의 `changed` 판정에 `sameStrList(categories, src.categories)`를 **반드시 넣을 것** —
+  빠지면 `raw`가 반환돼 정규화가 통째로 무효가 된다. 그리고 `sameStrList`는 **`undefined`와
+  `[]`를 같게 본다**(다르게 보면 레거시 장부가 로드마다 '변경됨'이 되어 Drive 폴링마다 재저장 +
+  로컬 사본이 갈아엎어져 2.5초 idle 승격 전 편집이 사라진다).
+  ⚠️ 등록 3곳: `normalizeLedgerBooks`(+`changed`) · `ledgerFingerprint`(`c:` 키) ·
+  `makeLedgerBook`(**`[]`** — 비지 않으면 `#60`이 깨져 백업 복원이 영구히 막힌다). `ledgerBooksHaveContent`도 포함.
+- **헤더 '예상 月 지출' 결제수단 세분화 = `projectedByPay`** — ⚠️ **`totals.byPay`를 쓰지 말 것.**
+  `byPay`는 연단위를 **납부월에 전액** 넣는데 카드 값 `projectedMonthly`는 연단위를 **÷12** 해
+  매달 넣으므로 부분합 ≠ 총액이 상시 발생한다(실측: 비납부월 473,334 부족 / 납부월 5,680,000
+  초과). `projectedByPay`는 **Σ가 `projectedMonthly`와 정확히 같도록**(무반올림) 정의돼 있고
+  `#79`가 납부월·비납부월 양쪽에서 그 항등식을 고정한다.
+  ⚠️ 라벨에 **'계획 기준'**을 남길 것 — 분석 탭 칩은 실적 우선 + 연단위 납부월 포함이라 같은
+  '카드'라는 이름으로 다른 숫자가 나온다(양쪽 다 고지한다).
+
+#### 도넛 / 결제수단 막대 (2026-08)
+
+- **⚠️ 툴팁 글자색은 `contentStyle`이 아니라 `itemStyle`로 고친다.** 근본 원인은 recharts
+  2.15.3 `Pie.defaultProps.fill = '#808080'` → `DefaultTooltipContent`의
+  `color: entry.color || '#000'`이 그 회색을 채택하는 것이다(`<Pie>`에 fill을 주지 않고 색이
+  `<Cell>`에 있으면 **툴팁 글자가 항상 #808080**, 4.59:1). 배경이 카드면과 **같은 색**(1.00:1)
+  이라 상자가 떠오르지 않는 것이 나머지 절반 — 다크 테마에서 배경 명도로 벌릴 폭이 좁으므로
+  (최선 1.23:1) **테두리 대비**(#374151 1.76:1 → #64748b 3.81:1)가 실질적 분리 수단이다.
+  6곳 손복제를 `TOOLTIP_STYLE` 상수 하나로 합쳤다 — 되돌리지 말 것.
+- **⚠️ 도넛은 바깥 라벨이 아니라 '옆 목록 + 안쪽 %'**(`DonutWithList`, 메인·상세 공유).
+  220px에 4슬롯이 겨우 버티던 구성인데 고정비 분리·상세 구분으로 슬롯이 8~20개가 된다 —
+  라벨선 끝점이 충돌해 **CVD 대역의 유일한 보조 부호인 직접 라벨이 무력화**된다.
+- **⚠️ 두 도넛은 같은 후처리(`donutRows` = `Math.max(0,·)` 후 `>0` 필터)를 지나야 한다.**
+  한쪽만 클램프하면 음수 plan(정정·환급 입력으로 도달 가능)에서 두 도넛의 합이 갈리고,
+  `byGroup`과 비교하는 검증은 그 경우에도 통과하는 **죽은 단언**이 된다.
+- **⚠️ 합계는 '도넛 가운데 + 목록 맨 아래' 두 곳 (2026-09 사용자 요청)**: 값은 `donutRows`가
+  낸 **`sum` 하나**이고 `DonutWithList` 안에서 **다시 더하지 않는다**(손으로 더하면 클램프·필터를
+  지난 조각 합과 갈려 "조각 합 ≠ 합계"가 된다). 두 도넛이 같은 컴포넌트를 쓰므로 **'구분'과
+  '상세구분'에 같은 규칙이 적용되는 것이 구조로 보장**되고, `Σ메인 === Σ상세 === expectedGrandTotal`
+  항등식(#83)이 그 두 숫자로 **화면에 노출**된다(달라지면 즉시 눈에 띈다).
+  - **⚠️ 가운데는 축약 없는 정확 금액**(`fmtWon`) — 합계를 검산하는 자리다(`fmtNum` 주석과 같은
+    규약). 구멍 지름이 108px뿐이라 길이에 따라 폰트만 13→12→11px로 줄인다. **목록 합계 행만**
+    다른 행과 같은 축약(`fmtWonShort`)을 써서 금액 열 정렬을 지킨다(둘은 반올림 차이일 뿐이고
+    정확 금액은 `title`로 보완).
+  - **⚠️ 가운데 오버레이는 `pointer-events-none` 필수** — 아니면 도넛 툴팁·조각 hover를 가로챈다.
+  - **⚠️ 목록 합계 행은 스크롤 영역 밖**(`flex-col` + 스크롤 `flex-1 min-h-0`). 안에 두면 조각이
+    12개가 넘는 상세 도넛에서 **합계가 스크롤에 가려** 표시한 의미가 사라진다.
+  - **⚠️ 합계 % 는 `sum > 0`일 때만 `100%`** — 0원인 달에 100%를 단언하지 않는다(null 계약).
+  - **영속화 지점 0곳** — 전부 매 렌더 파생값이다.
+- **⚠️ 고정비 결제수단 분리는 `totals.byPay`가 아니라 고정비 항목만 순회해 구한다** —
+  `byPay`는 그룹 구분 없이 전 지출을 나눈 값이라 대출·연단위가 섞인다(`addItem`이 연단위를
+  `pay:'cash'`로 만들므로 오염이 **기본 경로**다).
+- **결제수단 색 = `ledgerPayColor` (고정비 hue 램프)** — ⚠️ **독립 팔레트로 되돌리지 말 것.**
+  이 앱의 색 공간은 포화라(GROUP 4 + DIVERGING 3 + 빨강 금지) 결제수단 5슬롯에 줄 독립 hue가
+  **존재하지 않는다**(`validate_palette.mjs` §4가 그 불가능성을 매번 재확인한다 — 그 단언이
+  실패로 뒤집히면 색 공간이 넓어진 것이므로 그때 승격할 것). 그래서 **스택 순서 + 범례 +
+  세그먼트 안 직접 라벨**이 1차 식별자이고 색은 보조다. 고정비 도넛 분리와 막대가 **같은 색을
+  공유**해야 한다(한 화면에서 '현금'이 두 색이면 안 된다).
+- **⚠️ 스택 막대에서 `null`은 '데이터 없음'을 표현할 수 없다** — recharts가
+  `getValueByDataKey(d, key, 0)`로 **0으로 강제**한다. 항목이 없던 달은 **행 자체를 제외**하고
+  (`payChartData`) 제외한 달 수를 화면에 밝힌다(0 막대는 '그 달 지출 0원'이라는 거짓 단언).
+- **⚠️ 대출 기본 결제수단이 `transfer`라 "현금+카드=전체"가 성립하지 않는다** — 반드시 고지.
+- **상세 도넛**은 그룹당 **최대 5조각**. 램프가 6슬롯부터 인접 ΔE 4 아래로 떨어진다.
+  ⚠️ `LEDGER_DETAIL_OTHER`는 **독립 상수**다 — `LEDGER_DIVERGING.flat`을 재사용하면 같은 회색이
+  '계획선'·'변동 없음'·'기타 지출' 셋을 뜻한다.
+- **⚠️ '기타 1건'으로 접지 말 것 — fold 임계는 `LEDGER_DETAIL_TOP_N + 1`이다(2026-08)**:
+  `head 4 + 기타 1 = 5`는 **전부 표시(5)와 조각 수가 똑같은데 이름만 잃는 순손실**이다. 실제로
+  대출 5건 중 APT 2가 그렇게 사라져 사용자가 "누락됐다"고 보고했다. `TOP_N`으로 되돌리면 그 버그가
+  그대로 부활하고, `TOP_N + 2`로 넓히면 6건에서 n=6이 되어 팔레트 §2가 실패를 단언한 대역에 들어간다
+  (⚠️ `validate_palette.mjs`는 화면이 몇 슬롯을 렌더하는지 **모른다** — 두 게이트 사이의 빈틈이라
+  `#G13g-5`가 산술로 상한을 따로 고정한다). 각주 문구도 실제 규칙과 함께 갱신할 것(`#G13g-7`).
+- **⚠️ 수지 균형 카드 = 수입·지출·차액 3막대, 두 축이 **같은 규칙**(2026-08 사용자 요청)**:
+  과거엔 수입만 `t.actualIncome || t.planIncome`(그룹 단위 폴백)이고 지출은 `t.actualExpense`
+  (폴백 없음)라, 실적 미입력이면 **범례에는 '지출'이 있는데 막대가 하나도 안 보였다**. 그 비대칭이
+  원인이므로 둘 다 항목 단위(`expectedIncomeTotal` / `expectedTotal`)로 뽑는다 — 전용 필드
+  `balIncome`/`balExpense`/`balance`를 쓰고 **`plan`/`actual`/`expected`는 손대지 않는다**
+  (`#G10d`가 `plan: t.planExpense, actual: t.actualExpense,`를 리터럴로 단언한다).
+  ⚠️ **`#G10` 계열 '계획 폴백 누출 금지'와 충돌하지 않는다** — 금지 대상 5소비자는
+  `compareMonths`/`momDelta`·`yoyDelta`/`yearSeries.actual`/`annualCompare`/`ledgerEventsByDate`이고
+  이 카드는 그 목록에 없다. row가 두 계열을 별도 필드로 들고 어느 쪽을 그릴지 고르는 것은
+  **표시 선택이지 누출이 아니다**.
+  - ⚠️ **null 게이트는 `&&`가 아니라 `||`다.** `makeLedgerBook`이 `items: []`로 시작하므로
+    '수입 항목을 아직 등록하지 않은 장부'가 기본 경로인데, `&&`면 `balance = 0 − 지출`이 되어
+    지출 전액이 12개월 내내 amber '부족분'으로 그려진다(부호까지 틀린 확정 표기).
+  - 잉여금 = `LEDGER_DIVERGING.under`(teal) / 부족분 = `.over`(amber) + `<ReferenceLine y={0}>`으로
+    **부호를 기하로도 이중 인코딩**한다. ⚠️ 범례 한 칸으로는 두 색을 설명할 수 없어
+    `legendType="none"`이고, 색-의미 매핑은 **부제의 직접 라벨**(▲ 잉여금 / ▼ 부족분)이 진다
+    (차트 ② `momDelta` 선례와 같은 규약 — 색만으로 뜻을 전달하지 않는다).
+  - ⚠️ 막대 이름은 **`BALANCE_BAR_NAME` 상수로 공유**한다 — 툴팁이 `n === BALANCE_BAR_NAME`으로
+    이 계열을 골라 부호별로 '잉여금'/'부족분' 라벨을 갈라 쓰므로, 한쪽만 고치면 분기가 조용히 죽는다.
+    null 값은 recharts `Tooltip.filterNull`(기본 true)이 payload에서 **먼저** 걸러 formatter에
+    도달하지 않는다 → `null >= 0 === true` 함정은 발생하지 않는다(2.15.3 소스 확인).
+  - ⚠️ **차트 ①과 같은 그리드·같은 분홍색인데 규칙이 다르다**(①=입력된 실적만, ④=실제 ?? 계획).
+    두 카드 부제가 **서로를 가리켜야** 사용자가 어느 쪽을 먼저 봐도 모순으로 읽지 않는다(`#G18m`·`#G18n`).
+    헤더 KPI `savingCapacity`는 '계획 기준 · 연단위 ÷12'라 또 다른 축이므로 각주로 고지한다(`#G18p`).
+  - ⚠️ `expectedTotal`의 `value`는 산출 불가(unresolved) 몫을 빼고 더하므로 총액이 아니라 **하한**이다
+    → 각주가 그 달 수를 밝힌다(`#G18o`). **그 값으로 막대 색을 회색 중립화하지 말 것** —
+    `loanSchedule`은 **만기 경과·잔액 0**(코드 주석이 "흔한 상태"라 부르는, 상환 끝난 대출을 지우지
+    않고 둔 경우)에도 null을 내므로 가장 흔한 정상 상태에서 차트가 통째로 회색이 된다(과잉 억제).
+  - **영속화 지점 0곳** — 전부 매 렌더 파생값이다. `ledgerFingerprint`·`portfolioStructureKey`·
+    `applyStateData`·`applyBackupData`·`ledger:live` 브릿지 **전 지점 무수정**.
+- **⚠️ sticky 오프셋은 파생 상수**(`LEFT_PLAN = COL_PAY + COL_NAME`). `left-[212px]`
+  하드코딩으로 되돌리지 말 것 — 212는 `62+150` 전제라 항목 셀이 넓어지면 계획열이 제자리에 남아
+  **가로 스크롤 시 × 삭제 버튼을 덮는다**.
+- **⚠️ `../ledger` import를 한 덩어리로 합치지 말 것** — `memory/tools/undefcheck.mjs`의 import
+  정규식이 `{...}` 안을 **300자까지만** 본다(합치면 1010자). 합치면 거기서 들여온 이름이 전부
+  '미해결 후보'로 잡혀 **그 게이트가 이 파일에서 영구히 무의미**해진다.
+
+#### 엑셀(.xlsx) 내보내기 — 시트 3장 (⚠️ 회귀 주의)
+
+헤더의 **⭳ 엑셀** 버튼(⧉ 새 창 왼쪽)으로 **보고 있는 연도**를 시트 3장짜리 통합문서로 내려받는다.
+`src/ledgerExcel.ts`(빌더) + `src/xlsxWriter.ts`의 **`buildXlsxMulti`**(다중 시트 확장).
+
+| 시트 | 열 | 내용 |
+|---|---|---|
+| 월 매트릭스 | 29 | 결제·항목·계획 + [실제·차이] × 12개월 + 연간[실제·차이] · 그룹 섹션/소계/총계 |
+| 대출 | 12 | 사진의 표 + 잔여 회차 + **값 출처** · 연 납입액(향후 12개월) · DSR |
+| 연간요약 | 7 | KPI 9종 + 월별(계획·실제·차이·전월대비·미입력) + 구분별 + 결제수단별 |
+
+- **월은 항상 12개월 전부**(화면에서 숨긴 월도 포함) — 사용자 확정. 파일이 늘 같은 모양이라
+  다른 파일과 비교하거나 남에게 보낼 때 예측 가능하다.
+- **⚠️ `hideAmounts` 미적용** — portfolioExcel·evalCompareExcel과 같은 규약. 화면 토글은
+  '어깨너머 보기'를 막는 것이고, 내려받은 파일을 마스킹하면 쓸모가 없다.
+- **⚠️ 색은 화면과 의도적으로 다르다.** 엑셀 숫자서식은 8색(Black·Blue·Cyan·Green·Magenta·Red·
+  White·Yellow)만 지원해 화면의 amber/teal을 표현할 수 없고, **내려받은 파일은 앱 밖의 독립
+  문서**라 스프레드시트 관례(초과=빨강 / 절약=녹색)가 오히려 정확하다(사용자 원본 시트도 그렇다).
+  ⚠️ 대신 **▲/▼ 부호를 서식에 박아** 색만으로 뜻을 전달하지 않는다(색각 이상·흑백 인쇄 안전).
+
+##### ⚠️ 다중 시트가 처음 만든 함정 4종 (설계 검토가 잡았다 — 되돌리면 그대로 재발)
+- **`tabSelected`는 통합문서에 하나뿐**(`verify:excel #47`). `buildSheetXml`이 이 값을 하드코딩하면
+  3시트가 전부 선택돼 Excel이 **'그룹'으로 묶어 연다** — 제목 표시줄의 [그룹] 표기 외에 시각 단서가
+  거의 없는데, 그 상태에서 한 셀을 고치거나 행을 지우면 **묶인 모든 시트의 같은 위치에 그대로
+  적용**된다(29열 매트릭스가 조용히 파괴된다). Ctrl+P도 전 시트를 인쇄한다.
+  → `buildSheetXml(sheet, tabSelected = true)`의 **기본값 true**가 단일 시트 하위호환의 축이다.
+- **`styles.xml`은 통합문서에 하나뿐**(`#49`·`#51`·`#81`). 셀의 `s`는 그 파일의 cellXfs 인덱스라,
+  시트마다 다른 `styles` 배열을 쓰면 인덱스가 충돌해 **오류 없이 조용히** 색·숫자서식이 뒤섞인다
+  (그 상태로도 Excel은 정상적으로 열려서 더 위험하다). → **StyleBag 하나**를 세 시트가 공유하고,
+  어기면 `buildXlsxMulti`가 **던진다**.
+  ⚠️ 그 가드를 `(sh.styles || []) !== styles`로 쓰지 말 것 — `||`가 매번 새 빈 배열을 만들어
+  **styles 미지정 시트 1장이 자기 자신과의 비교에 실패**하고, 메시지가 원인을 정반대로 지목한다(`#51b`).
+- **`[Content_Types].xml` Override와 `workbook.xml.rels`의 rId를 시트 수만큼** 늘려야 한다
+  (`#44`·`#45`·`#46`). styles의 rId는 시트 **뒤**(N+1)로 밀리고 `<sheet r:id>`와 1:1이어야 한다 —
+  어긋나면 Excel이 '복구할 수 없는 내용'으로 파일을 거부한다.
+- **시트명 중복은 Excel이 거부한다**(`#53`·**`#53d`**). `sanitizeSheetName`이 31자 절단·금지문자
+  치환을 하므로 서로 다른 이름이 같아질 수 있다 → `uniqueSheetNames`.
+  ⚠️ `#53`~`#53c`는 함수를 **직접** 부르므로 `buildXlsxMulti`가 그걸 쓰는지는 보지 못한다
+  (변이 테스트로 실증: 호출을 되돌려도 셋 다 통과했다) — **`#53d`가 사용부를 단언**한다.
+
+##### ⚠️ 값 규약 (기존 엑셀 2종 계승 + 가계부 고유)
+- **null 3종을 뭉개지 말 것**: '미입력'(빈 셀) / '0원'(숫자 0) / '해당 없음'(annual 비납부월 = 회색 `-`).
+  0으로 떨어뜨리면 시트가 "지출이 없었다"고 확정 단언해 화면과 다른 말을 한다(`#83b`·`#83c`).
+- **⚠️ 화면의 단일 소스를 재구현하지 말 것** — 계획은 `planOf`, 차이는 `varianceOf`, 미입력 판정은
+  `expectsActual`을 **그대로 쓴다**(`#85`·`#85b`·`#G32`). `loanSchedule`을 직접 부르면 `planOf`의
+  `isItemActive` 게이트를 잃어, 조기 상환으로 `activeTo`가 지난 대출이 **화면엔 '-'인데 시트엔 금액**이
+  찍히고 그룹 소계·지출 합계·저축여력·KPI가 전부 그만큼 부푼다. `loanSchedule`은 대출 시트 전용.
+- **⚠️ 전월 대비는 `comparable`만 보면 안 된다**(`#89`~`#89c`·`#G33`). zero-base는
+  `comparable: true`인데 `rate: null`이라, 그 상태로 쓰면 **0.00%('변동 없음')가 확정 표기**되고
+  같은 행의 차이 열(+₩500,000)과 정면으로 모순된다. 게이트는 상태 플래그가 아니라 **값**(`rate !== null`).
+- **⚠️ 퍼센트는 분수 + `%` 서식**(`#88`). 이율 3.70을 그대로 넣으면 **370%**가 된다.
+- **⚠️ 대출 '값 출처'는 6분기**(`#86c`·`#87`). `loanSchedule`의 null은 원인이 **네 가지**인데
+  (기준월 없음·시작 전·만기 경과·잔액 0) 전부 '계산 불가'로 뭉개면 **상환이 끝난 대출**이 데이터
+  오류처럼 보여 사용자가 멀쩡한 잔액·만기·이율을 고치거나 행을 지운다 — 대출은 DSR·저축여력의
+  분모라 그 편집이 요약 시트 전체를 오염시킨다.
+  ⚠️ 만기 판정은 **두 갈래**다: 만기일이 잔액 기준월보다 **앞서면** `loanTermMonths`가 null이라
+  `k >= n` 분기에 닿지 못한다(그게 바로 '완납 후 방치'라는 가장 흔한 상태다).
+  ⚠️ `loanSchedule`의 null 계약은 **손대지 말 것** — 사유 판정은 호출부에서 따로 낸다.
+- **⚠️ 파일명 날짜는 인자로 받은 KST**(`#90`·`#G31`). `new Date()`는 KST 00:00~09:00에 하루 밀린다.
+- **⚠️ 타입은 `import type`으로 분리**(`#G30`). Node 타입 스트리핑은 `interface`를 지운 뒤 런타임
+  import를 시도하므로, 값 import에 섞으면 `does not provide an export named`로 **검증 파트①이
+  통째로 죽는다**(vite 빌드는 통과하므로 무음이다).
+
+##### ⚠️ 버튼
+- **`readOnly`로 게이팅하지 않는다**(`#G35b`·`#G36b`) — 내보내기는 **읽기 동작**이고, 앱 탭
+  새로고침으로 링크가 끊긴 13초(`LINK_TIMEOUT`)가 오히려 파일로 빼내고 싶은 순간이다.
+- 데이터가 아직 안 온 상태(`gotData` 전)는 장부가 비어 있다 → **버튼 비활성 + 사유 표시**(`#G35d`).
+- **try/catch 필수**(`#G35c`) — 이 화면은 z-1090이고 별도 창에는 App조차 없어 토스트·ConfirmDialog가
+  뜨지 않는다. 인라인 플래시가 유일한 피드백이고, 던지면 창 전체가 오류 박스로 래치돼 복구 경로가
+  창 닫기뿐이 된다.
+
+##### 검증 — ⚠️ 스크립트를 새로 만들지 말 것
+`buildXlsxMulti`·`freezeCols`·`uniqueSheetNames`의 OOXML 계약은 **`verify:excel`**(소유 모듈이
+`xlsxWriter.ts`다 — 그래야 가계부를 개편·삭제해도 그 테스트가 살아남는다), 시트 빌더·셀 값·
+null 계약·버튼 배선은 **`verify:ledger`**에 둔다. 이 저장소는 **기능 하나 = 스크립트 하나**이고
+(자산검증 비교도 모델+엑셀을 `verify-compare` 한 곳에서 검증한다), **게이트 목록에 없는 스크립트는
+작업 흐름에서 아무도 돌리지 않는다**.
+⚠️ 이 블록이 없던 동안 `tabSelected` blocker가 `verify:excel` 91/0을 그대로 뚫었다 —
+신규 writer 코드가 어떤 게이트에도 노출되지 않았기 때문이다. **변이 15종으로 검출을 실증**했다.
+
+- **범위 밖(의도)**: 차트 삽입 · 수식(SUM) 삽입 · 여러 연도 한 파일 · 피벗테이블 · 인쇄 설정 · CSV.
+- **범위 밖(의도)**: 포트폴리오 계좌 자동 연동 · 개별 거래(트랜잭션) 입력 · 영수증 첨부 · 다중 통화 ·
+  카드 명세서 임포트 · undo/redo · 예산 초과 푸시 알림 · 항목 드래그 재정렬(▲▼만) ·
+  구분의 계좌 간 공유 · 상세 도넛의 드릴다운.
+- 검증: `npm run verify:ledger` (직접 import #0~#102 + 소스 텍스트 가드 #G1~#G17c·**#G18\***·
+  **#G13o\***(도넛 합계)·**§19 대출 조건 변경 `#200~#207b`·`#G46~#G46i`**, **689건**)
+  + **`npm run verify:palette`**(`scripts/validate_palette.mjs`).
+  ⚠️ **`#G13o-5`(합계 행이 스크롤 밖인가)를 '등장 순서'로 되돌리지 말 것 — 죽은 단언이었다**
+  (2026-09 실측): 합계 행을 스크롤 div **안**으로 옮겨도 `overflow-y-auto` 뒤에 오므로 순서 비교는
+  그 변이를 통과시킨다. 지금은 두 지점 사이의 **`<div>` 균형**으로 "스크롤 div가 먼저 닫혔는가"를
+  잰다(닫혔으면 `</div>`가 정확히 하나 더 많다). 도넛 합계 가드는 **변이 6종 + 음성 대조 1종**
+  (가운데 삭제 · `pointer-events-none` 제거 · 가운데를 축약 금액으로 · 목록 합계 행 삭제 ·
+  합계 행을 스크롤 안으로 · `sum` 대신 재합산)으로 **실제 검출을 확인**했다.
+  ⚠️ **`#G13g`도 죽은 단언이었다**(2026-08 실증) — `/LEDGER_DETAIL_TOP_N/.test(LP) &&
+  /LEDGER_DETAIL_OTHER/.test(LP)`가 파일 전역이라 **import 문 한 줄과 각주**만으로 충족돼,
+  fold 로직을 통째로 지워도 초록이었다(변이 3종 확인). 지금은 `sliceBlock`으로 `detailDonut`
+  구간을 잘라 **사용부**를 단언한다(`#G13g-1`~`#G13g-7`). 파일 전역 정규식으로 되돌리지 말 것.
+  ⚠️ **존재 가드도 주석에 걸린다** — `#G18i`가 처음에 `/legendType="none"/`이었는데 바로 위
+  설명 주석이 그 토큰을 인용하고 있어 실제 prop을 지워도 통과했다(변이 M10). 부재 가드는
+  `stripComments`를 거치고(`#G18c`), 존재 가드는 **사용부 형태**(`name={BALANCE_BAR_NAME}
+  legendType="none"`)로 좁힌다.
+  ⚠️ **`#G10d`는 한때 죽은 단언이었다** — `yearSeries` 구간을 `const e = expectedTotal` 앞까지
+  잘라 `expected` 부재를 재는 형태였는데, 보호 대상인 row 객체 리터럴이 그 **뒤**에 있어
+  `actual: t.actualExpense` → `actual: e.value` 변이(= 이 diff의 최대 위험)가 278건 전부
+  초록으로 통과했다. 지금은 **사용부 존재**(`plan: t.planExpense, actual: t.actualExpense,`)로
+  단언한다 — 부재 슬라이스로 되돌리지 말 것.
+  ⚠️ 파트①의 중심은 **사용자 실측 스프레드시트 픽스처**다 — 기대치(544,059 / 1,654,443 / 4,755,266 /
+  62,743,196 / 27.6%)를 고치지 말 것. 가드는 **선언이 아니라 사용부**를 단언한다.
+  ⚠️ **팔레트 검증기는 `validate_palette.mjs`다** — CLAUDE.md가 오래 참조하던 `validate_palette.js`는
+  **저장소에 존재한 적이 없어** 그 규약이 실행 불가였다(2026-08 복원). 그 스크립트는 `ledger.ts`를
+  직접 import해 `ledgerRamp` 출력을 **1:1 대조**하고(§0), 결제수단 축의 독립 hue가 불가능함을
+  매번 재측정한다(§4). CVD 모델은 **Viénot/Brettel**이고 옛 주석의 "CVD ΔE 7.1"은 다른 모델의
+  값이라 재현되지 않는다(이 모델 기준 deutan 12.4 / protan 11.3 / **tritan 4.2**).
+  ⚠️ 새 가드는 **변이 30종으로 실제 검출을 확인**했다(`??`→`||` · 수입 게이트 제거 · planSum→fromPlan ·
+  monthState 2분법 · 인접 인덱스 교환 · 참조 보존 제거 · category trim · 연단위 ÷12 제거 ·
+  지문 투영 삭제 · `changed` 판정 삭제 · 레거시 churn · 램프 클램프 제거 · 5구간 누출 주입 ·
+  결제수단 하드코딩 · 총합계 행 삭제 · itemStyle 삭제 · 바깥 라벨 복귀 · 후처리 우회 ·
+  0 막대 복귀 · byPay 복귀 · sticky 하드코딩 · ▲▼/구분 삭제 · 구분 삭제가 항목까지 지움).
+  ⚠️ 도넛 fold·수지 균형 가드는 **변이 17종(음성 대조 1 포함)으로 검출을 확인**했다
+  (fold 임계 `+1`→`+2` · fold 삭제 후 무조건 slice 복귀 · `n`을 head.length로 축소 · 각주 되돌림 ·
+  기타 색 바인딩 제거 · 지출 막대를 옛 `actual`로 · null 게이트 `||`→`&&` · 막대 이름 상수 공유 파괴 ·
+  툴팁 부호 분기 제거 · `legendType="none"` 제거 · `ReferenceLine` 제거 · 부제 색 매핑 삭제 ·
+  ① 상호 참조 삭제 · 산출 불가 각주 삭제 · `transparent` 분기 제거 · `plan/actual` 줄 변조 ·
+  **주석에 금지 토큰을 인용해도 오탐하지 않는지**(음성 대조)).
+  ⚠️ 그중 **`changed` 판정 삭제(M11)는 처음에 죽은 단언이었다** — `#76` 픽스처에 `id`가 없어
+  다른 이유로도 `changed`가 섰다. `#76c`가 **categories 외 전부 정규형인 픽스처**로 그 구멍을
+  막는다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+### 계좌 카드 '별도 브라우저 창' (`/?cardWindow=1&card=…&pid=…`) (⚠️ 회귀 주의)
+
+계좌 화면의 카드를 각각 별도 브라우저 창에서 열고 **편집까지** 한다. 카드 헤더의 **⧉ 확장 버튼**
+(`CardExpandButton`)이 진입점이고, 창 제목은 `"COVERD 4 - 분배금 현황"` 형식이다(`cardWindowTitle`).
+지원 카드 5종 — `summary`(포트폴리오 요약) · `stats`(통계·히스토리) · `dividend`(분배금 현황) ·
+`rebalancing`(리밸런싱 표) · `donut`(자산비중비교). **`chart`(수익률 차트)는 범위 밖**(아래 참조).
+
+- **⚠️ 창은 App을 마운트하지 않는다**(`main.tsx` `CARD_WINDOW_BOOT`). 메모 달력·흐름도·백테스트 창과
+  **같은 규약** — Drive STATE는 통째 덮어쓰기라 writer가 둘이면 서로의 편집을 지운다. writer는 끝까지
+  앱 탭 하나. `window.open`에 **`noopener` 금지**(opener 브릿지가 기능의 전부), 클릭 직후 **동기** open.
+- **⚠️ 기존 3창과 결정적으로 다른 점: 단일 ref가 아니라 Map 레지스트리**(`cardWinsRef`). 카드 창은
+  (계좌 × 카드)마다 열리므로 단일 ref로 두면 **뒤에 핑을 보낸 창만** 데이터를 받고 앞 창은 영구히
+  낡는다. 창 하나당 `<CardWinFeed>`를 하나씩 마운트해(가변 훅 호출 회피) **계좌 객체 identity**로
+  전송을 게이팅한다. ⚠️ 피더 JSX는 **early return보다 위에서** 만들어 관리자 페이지·포털·배당세
+  페이지 분기에도 함께 렌더한다 — 메인 대시보드 return 안에만 두면 앱 탭이 그쪽으로 이동하는
+  순간 피더가 언마운트돼 창은 갱신이 멈추는데도 ping/pong은 계속 오가 '연결됨·편집 가능'으로 남는다 — `setPortfolios`의 map이 바뀌지 않은 계좌의 참조를 보존하므로 JSON 지문보다
+  정확하고 공짜다. 같은 (계좌,카드) 재클릭은 `window.open`의 name 재사용으로 **기존 창을 포커스**한다.
+
+**불변식(INV) — `src/cardWindow.ts` 상단에도 같은 목록이 있다**
+- **INV-1** writer는 앱 탭 하나. 창은 App을 import조차 하지 않는다.
+- **INV-2** 창은 **원자재**(계좌 객체 + 시장지표 + 종가 이력 부분집합)만 받고 파생은 **앱과 같은 코드**
+  (`usePortfolioData`·`buildBookCostSeries`)로 **창에서** 계산한다. 파생값을 push하면 창 로컬 상태
+  (정렬·'추가' 수량)를 반영할 수 없어 화면과 계산이 갈린다.
+- **INV-3** 창의 모든 쓰기는 **by-id 커맨드**(`card:cmd`). `patchActive` 계열을 프록시하면 앱 탭의
+  **활성 계좌**에 착지해 엉뚱한 계좌를 파괴한다.
+- **INV-4** 통째 교체는 **기대값**을 함께 보내고 앱이 다르면 배치 전체를 거부한다 — 계좌 필드
+  배치는 `expect.principal`(원금을 안 건드리는 배치에도 **항상** 싣는다: 앱 탭의
+  `transferStockToPortfolio`가 이관 행을 prepend하며 원금도 바꾸므로, 이 값이 '메모만 고치는
+  편집이 이관 행을 지우는 것'까지 막는 유일한 방어선이다), 투자기록은 `baseKeyOf(notes)`
+  (앱 탭 **메모 달력 NOTE 패드**가 같은 배열을 동시에 편집한다).
+  ⚠️ **과표 이벤트(`updateTaxBaseEvents`)는 미적용** — `dividendCall`이 20종을 fn 이름으로
+  라우팅하는 범용 통로라 개별 base를 얹으려면 라우터를 깨야 하고, 그 배열을 자동으로 쓰는
+  앱 경로가 없어 위험이 '앱 탭과 창에서 같은 종목을 동시에 편집'으로 한정된다(문서된 절충).
+- **INV-5** 창은 자기 `ConfirmDialog`·인라인 토스트·`ErrorBoundary(label)`를 갖는다. App의 `confirm`은
+  App이 렌더하는 다이얼로그가 resolve하므로 프록시가 **원리적으로 불가능**하고, `notify`는 애초에
+  토스트를 그리지 않아(벨 로그만) 프록시해도 창 사용자에겐 피드백이 **0**이다.
+- **INV-6** 메시지 화이트리스트는 **양쪽 모두 접두사 검사**(`card:`). 열거형 금지 — `CalendarWindow`가
+  열거형 비대칭으로 응답을 조용히 폐기한 사고가 있다.
+- **INV-7** 창의 조작은 앱 탭 비활동 타이머를 리셋한다. ⚠️ `resetActivity`만으로는 부족 — 경고가
+  **이미 뜬 뒤**에는 체크 루프가 `lastActivityAt`을 보지 않아 60초 뒤 무조건 로그아웃한다(그 모달은
+  창 뒤 앱 탭에 있어 보이지도 않는다) → `showInactivityWarning`이면 `handleInactivityContinue()`.
+- **INV-8** 끊김(opener 소멸·13초 무응답)·삭제 계좌 = **읽기 전용**. 저장 버튼만 숨기면 한참 고친 뒤 사라진다.
+- **INV-9** 창은 계좌 id를 **열 때 박제**한다 — 앱 탭이 다른 계좌로 가도 자기 계좌를 계속 편집한다.
+
+**by-id 라이터 계층(`usePortfolioState`) — 이 기능의 바닥**
+`patchById(pid, patch)` 신설 + `patchActive = patch => patchById(activePortfolioId, patch)` 위임
+(렌더 스코프 클로저 동일 → 앱 탭 동작·타이밍 무변). 신설: `applyItemPatchesFor` ·
+**`applyCardWriteFor(pid, {itemPatches, settingsFields, accountFields, expect})`**(단일 `setPortfolios`로
+원자적) · `handleUpdateFor` · `updateSettingsForTypeOf`(accountType을 **pid**에서 해석) ·
+`patchSettingsForTypeOf`(필드 병합) · `setPrincipalFor`/`addPrincipalFor`/`setAvgExchangeRateFor` ·
+열 숨김·행 마킹 by-id 변형. 4색 사이클·열 토글은 순수 헬퍼(`cycleMarkedRow`·`toggleInList`)를 공유한다.
+`useStockData`에는 **`handleSingleStockRefreshFor(pid, id, code)`** — 옛 구현은 항목 조회·시장 라우팅·
+쓰기·`stampDateFor` **넷 다** 활성 계좌에 묶여 있어, 다른 계좌를 보는 창에서 누르면 **잘못된 확정일로
+전역 `stockHistoryMap`을 스탬프**했다(그 맵은 `buildCloseEvalSeries`의 `allExact` 판정과 자동확정
+데이터완비 가드의 권위 소스이고 Drive에 영속 → 한 번 오염되면 과거 평가액이 영구히 어긋난다).
+
+**커맨드 프로토콜** — 창→앱 `card:ping{winId,card,pid,need}`(5초·`need`가 초기 전송의 유일한 트리거·
+재입양) · `card:cmd{winId,reqId,op,args}` · `card:activity` / 앱→창 `card:pong` · `card:data`(원자재) ·
+`card:ack{reqId,ok,result,reason}` · `card:teardown`.
+- **⚠️ 쓰기는 입양된 창만**(`entry.win === e.source`), ping만 그 앞의 의도된 예외.
+- **⚠️ `switch` 진입 **전에** `pidOk(a.pid)`를 한 번 검사**한다 — 개별 case가 빠뜨려도 타 계좌로 새지
+  않는다(fail-closed). 분배금 라우팅도 `args[0] === entry.pid`를 재확인한다. 창은 URL 파라미터로
+  열리므로 조작 가능하다는 전제.
+- **⚠️ `CARD_OPS`는 문서가 아니라 계약** — App 핸들러와 **1:1**이어야 한다(가드 #G3g가 양방향 단언).
+  목록에만 있고 구현이 없는 op은 default-deny에 걸려 '버튼이 고장난 것'으로 보인다.
+- **⚠️ 응답이 필요한 op은 `reqId` 상관 + 타임아웃**(`saveTargetSnapshot`·`verifyPin`). postMessage는
+  fire-and-forget이라 동기 반환값 계약을 그대로 쓰면 성공해도 실패로 표시된다.
+
+**카드별 규약**
+- **분배금**: 라이터 20종이 **이미 전부 by-id + 원시 인자**라 `dividendCall`로 그대로 프록시한다.
+  ⚠️ `onToggleHiddenMonth`의 **시그니처는 `(tab, monthIndex)` 그대로** 두고 pid는 호출부가 바인딩한다 —
+  넓히면 통합 대시보드 compact 경로(앱 레벨 저장, pid 없음)의 인자가 밀려 버킷이 뒤바뀐다.
+- **리밸런싱**: 항목 쓰기가 `writeTargets(itemPatches, settingsFields)` 하나로 모였다. `cardWrite`가
+  주어지면 그쪽으로만 보낸다(인앱은 종전 `setPortfolio`+`updateSettingsForType`).
+  **⚠️ 미러 3전이((%)·(₩))와 '잔액→예수금'은 항목 patch와 settings를 반드시 한 번에 쓴다** — 쪼개면
+  반쪽 적용이 남고 재클릭이 같은 전이를 또 타서 목표금액이 현재 평가금으로 **두 번** 덮인다(undo 없음).
+  **⚠️ 과거 목표비중 복원은 창에서 구조적 no-op** — `setPortfolio`를 넘기지 않고 `rebalTargetSnapshots=[]`
+  라 버튼도 잠긴다(CLAUDE.md '복원' INV-5: id 불일치 시 no-op이 곧 타 계좌 오적용 방어).
+  PIN 검증은 앱 탭에 위임한다(창의 `sessionStorage`는 **열린 시점 사본**이라 낡는다).
+- **달력 목표비중 스냅샷**: `buildRebalTargetEntryFrom`·`sameRebalTargetEntry`·`upsertRebalTargetMemo`를
+  `utils.ts`로 추출해 App과 창이 공유한다. **⚠️ 창이 자기 화면 값으로 만든 엔트리를 보내고 앱은 upsert만
+  한다** — 앱이 활성 계좌 스코프로 재빌드하면 그 순간 '기록 = 화면 표 1:1'이 깨지고, 앱 탭이 다른 계좌를
+  보고 있으면 **그 계좌의 기존 기록을 거짓 내용으로 교체**한다(`calendarMemos`는 백업 복원 sticky라
+  복구 불가). 부수 효과로 창 로컬 정렬·'추가' 수량이 기록에 그대로 반영돼 오히려 정확해진다.
+- **통계·히스토리**: **⚠️ 계좌 필드 쓰기는 마이크로태스크로 모아 하나의 `cardWrite`로** 보낸다 —
+  `DepositPanel`은 한 클릭에서 `setDepositHistory`와 `setPrincipal`을 따로 부르므로, 쪼개지면 원장은
+  지워졌는데 원금은 그대로인 중간 상태가 Drive에 저장된다(컴포넌트 수정 0줄).
+  **⚠️ 배치에는 언제나 `expect.principal`을 싣는다**(원금을 안 건드리는 배치라도) — 앱 탭의
+  `transferStockToPortfolio`가 이관 행을 prepend하며 원금도 바꾸므로, 이 기대값이 **메모만 고치는 편집이
+  이관 행을 지우는 것**까지 막는 유일한 방어선이다.
+  **⚠️ history 편집(자산검증 확정·수량/종가)·전체 시세 새로고침·CSV는 창에서 명시적 미지원** — history는
+  앱 탭이 백필·자동확정·today-effect로 **동시에** 쓰는 배열이라 창의 스냅샷을 통째로 되보내면 그 사이
+  생긴 기록이 소실된다. 조용히 무시하지 않고 창 안 인라인 안내로 사유를 밝히고, 종가 재조회는
+  `Promise<false>`를 돌려준다(undefined면 모달 스피너가 영구 회전).
+  `activeBookByDate`는 앱과 **같은 정책**(해외·현금성 `null`)으로 창이 직접 계산한다.
+  기록 확정일(KR 21:00 / 글로벌 07:30)은 **앱이 계좌 타입별로 해석해 보낸다**(창 재계산 금지).
+
+**세션·보안**
+- **⚠️ 로그아웃·세션 충돌 시 `card:teardown` 브로드캐스트 + 창은 화면 내용을 비운다**(단순 읽기 전용으로는
+  이전 사용자의 금융 데이터가 남는다 — 다중 계정 오염 방지 정책). `onForceLogout`·수동 로그아웃 **둘 다**
+  `ADMIN_VIEW_EMAIL` 가드보다 **앞**에서 정리해야 한다(impersonation 탭에서 연 창에는 피조사 사용자의
+  데이터가 떠 있다). `authEpoch`(로그인 이메일) 불일치도 같은 처리.
+
+**영속화 신규 지점 0곳** — 창은 저장 필드를 만들지 않는다. 모든 쓰기가 앱 탭의 기존 by-id 라이터를 타고
+`portfolioStructureKey` → `portfolioUpdatedAt` → `useDriveSync` 경로로 흐른다. 예외는 **선행 결함 1건**:
+`actualDividendQty`·`dividendTaxAmounts`가 지문에 없고 라이터도 `dividendHistoryUpdatedAt`을 올리지 않아
+그 필드만 고친 세션이 조용히 유실됐다(분배금 전용 창의 주 사용 시나리오) → 지문에 추가했다.
+'숨긴 카드 1회 펼침'도 `sectionCollapsedMap` **안의 예약 키**(`__cardWindowUnhide_v1__`)로 표현해
+chartPrefs 5지점을 새로 만들지 않는다 — ⚠️ 로드마다 비우는 방식은 '숨기기 유지'를 사실상 제거하므로 금지.
+
+**범위 밖(의도)**
+- **수익률 차트**: `finalChartData`(App.tsx 219줄 memo) + 선행 memo 4개(`activeCloseEvalByDate`·
+  `activeBookByDate`·`accountTwrByDate`·`filteredDates`)가 전부 활성 계좌 전용이고, 그 체인이 누적 TWR
+  **곱셈 체인**이라 리팩터링 중 하루라도 값이 갈리면 이후 전 구간이 영구히 어긋난다. 조회기간
+  (`chartPeriod`/`appliedRange`)도 앱 레벨 단일값이라 창별 기간을 표현할 수 없다.
+- 앱 탭을 닫으면 창은 읽기 전용(구조적 — writer가 하나뿐이므로 우회 불가).
+- 같은 계좌를 앱 탭과 창에서 동시에 편집하면 **필드 단위** last-write-wins(달력·흐름도 창과 같은 절충).
+- `settings`는 같은 accountType 전 계좌 공유라 창의 설정 변경도 형제 계좌에 전파된다(기존 앱 동작 그대로).
+- 창의 정렬·'추가' 수량·'추가 가능' 연동은 **창 로컬**(세션 스크래치 — 창에서 고쳐도 저장되지 않는다).
+  앱 탭에서는 셋 다 영속된다(`rebalanceSortConfigMap` · `rebalExtraQtyMap` · `rebalMaxAddLinkMap`).
+
+검증: `npm run verify:card-window` — 순수 함수는 `src/cardWindow.ts`를 **직접 import**해 테스트하고
+(미러 금지 — src/미러 한쪽만 고친 변경이 둘 다 통과하는 구멍을 만든다), 배선은 소스 텍스트 가드다.
+⚠️ 가드는 **선언이 아니라 사용부**를 단언한다. **변이 49종으로 검출을 실증**했다
+(그중 14종은 적대적 검증이 실제로 잡은 결함의 회귀 가드다 — `rebalCommitRef` 등록 소실로
+**인앱 메모 달력 목표비중 자동 기록이 전면 중단**된 blocker, 창의 입출금 정렬 dead 배선,
+끊긴 창에서 쓰기가 새던 것, impersonation 무통지 편집 경로, 피더 언마운트, 투자기록 무가드
+전량 교체, `settings` 폴백 자기모순, 계약 파일의 **NUL 바이트**(git이 바이너리로 취급해
+diff·`-S` 검색이 통째로 막혔다) 등) — 그중 미러 원자성
+가드는 처음에 **죽은 단언**이었다(갭 정규식이 문장 경계를 넘어 다음 호출의 인자를 집었다). 사이클 함수
+본문을 잘라 '호출 횟수 = 전이 수(3)'로 세도록 고쳐 검출을 확인했다. 가드를 손볼 때 같은 변이가 여전히
+잡히는지 반드시 다시 확인할 것.
+
+---
+
+### 투자 기록 = 목록·메모장 '상호 배타' + 별도 브라우저 창 (`card=notes`) (2026-09, ⚠️ 회귀 주의)
+
+리밸런싱 패널의 **투자 기록** 스트립을 누르면 목록이 뜨고, `+`(새 메모)·⤢(기존 메모)를 누르면
+**목록이 사라지고 메모장만** 남는다. 저장(✓)·취소(✕)하면 **다시 목록으로 돌아온다**.
+목록·메모장 헤더의 **⧉**는 같은 화면을 **별도 브라우저 창**(`/?cardWindow=1&card=notes&pid=…`)에서 연다.
+
+- **⚠️ 발단(사용자 보고 2026-09)**: 옛 구조는 목록 위에 메모장이 **겹쳐** 떠서 목록·메모장·뒤의
+  자산관리 대시보드가 3중으로 겹쳐 어느 것도 읽을 수 없었다. **두 화면을 동시에 띄우는 형태로
+  되돌리지 말 것** — 상호 배타의 단일 판정 지점은 `InvestmentNotesPanel`의 `edit` 하나이고,
+  메모장 분기가 **먼저 반환**해 목록이 구조적으로 함께 렌더될 수 없다.
+- **⚠️ 인앱 팝업(`variant='popup'`)과 별도 창(`variant='page'`)이 `InvestmentNotesPanel` **한
+  컴포넌트를 공유**한다** — 창용으로 복제하면 두 화면이 갈린다(다른 카드와 같은 규약).
+  `RebalancingPanel`은 `noteLogOpen`/`noteOpenSeq`/`noteInitialId` 3개만 들고 있는다
+  (⚠️ `openSeq`를 함께 올려야 이미 열려 있을 때 다시 눌러도 초기 화면이 다시 정해진다).
+- **⚠️ `saveEdit`는 id를 못 찾으면 **새로 넣는다**(upsert)** — 별도 창에서는 `+`가 만든 새 메모가
+  앱 탭 왕복 전이라 `notes`에 아직 없을 수 있고, `map`만 돌리면 작성한 본문이 통째로 버려진다
+  (화면에는 저장된 것처럼 보인다).
+- **⚠️ 확장(⧉)은 `onExpand()`가 **true를 반환할 때만** 인앱 화면을 닫는다** — 팝업이 차단됐는데
+  닫으면 작성 중이던 화면을 통째로 잃는다(계산기 ⧉와 같은 규약). 닫기 직전 **작성 중이던 초안을
+  커밋**한다(안 하면 새 창으로 넘어가지 않고 사라진다).
+- **⚠️ 새 메모 날짜는 `getTodayKST()`** — `toISOString()`(UTC)은 한국 00:00~09:00에 쓴 기록을
+  '어제' 칸에 꽂는다(메모 달력 `dayKey`와 매칭되는 값이라 하루가 어긋나면 칩이 딴 날에 뜬다).
+- **`notes`는 `CARD_WINDOW_SUPPORTED`에 넣지 않는다**(ladder와 같은 근거 — 카드 헤더의 확장 버튼
+  목록이라, 넣으면 리밸런싱 카드 헤더에 엉뚱한 버튼이 뜬다). 진입점은 투자 기록 헤더의 ⧉ 하나뿐이고
+  App의 `openNotesWindow(pid)`가 연다. **winId는 카드 기본형 `notes:<pid>`**라 `CardWindow`의
+  `WIN_ID`와 자동으로 같다 — 문자열이 갈리면 '창이 열려 있는데 버튼은 닫힘'으로 보인다.
+- **⚠️ CardWindow의 `notes` 분기는 `isCardWindowSupported` 가드보다 **앞**에 둔다**(그 목록에 없는
+  화면이라 뒤에 두면 '아직 지원하지 않습니다'로 떨어진다).
+- **쓰기는 기존 `updateInvestmentNotes` 커맨드 그대로** — 배열 통째 교체라 `baseKeyOf` 지문을 함께
+  보내고 앱이 불일치를 거부한다(INV-4. 앱 탭의 **메모 달력 NOTE 패드**가 같은 배열을 동시에 편집한다).
+  창에서 `window.open`을 직접 부르면 새 창의 opener가 그 창이 되어 앱 탭과 영영 연결되지 않으므로
+  `openNotesWindow` op으로 앱 탭에 위임한다.
+- **영속화 신규 지점 0곳** — 저장 필드는 기존 `investmentNotes`(계좌 내부 필드)이고 `CARD_NEEDS.notes`는
+  `{}`(계좌 객체만 있으면 된다 — 시세·분배금을 한 줄도 읽지 않아 `CardWinFeed` 무수정).
+  `portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps **전 지점 무수정**.
+- **범위 밖(의도)**: 인앱 팝업과 별도 창을 동시에 열면 마지막 쓰기가 이긴다(⧉가 인앱을 닫으므로
+  실사용에서 겹치는 구간은 짧다 — 달력·흐름도 창과 같은 절충). `+`로 만든 뒤 취소하면 빈 메모가
+  목록에 남는다(그 자리에서 삭제할 수 있다 — 옛 동작은 목록이 닫혀 있어 보이지도 않았다).
+- 검증: `verify:card-window` `#G34~#G34m`. **변이 13종 + 음성 대조 1종으로 검출을 실증**했다
+  (early-return 제거로 동시 렌더 · 저장이 목록 미복귀 · upsert 폴백 제거 · 차단 무시하고 인앱 닫기 ·
+  초안 미커밋 · `+`가 전환 안 함 · 날짜 UTC · notes 분기를 가드 뒤로 · base 지문 제거 ·
+  `openNotesWindow` 실패 미통지 · winId 불일치 · `CARD_WINDOW_SUPPORTED`에 추가 · 패널이 UI 재복제).
+
+---
+
