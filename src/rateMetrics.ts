@@ -178,3 +178,23 @@ export function roseWithinDays(series: Series | null | undefined, days: number):
   }
   return false;
 }
+
+// 여러 기록이 '모두 N일 전보다 낮은' 날짜 구간(MBS 차트 매수 기회 칠하기 — 2026-10 사용자 규칙).
+//   날짜는 첫 기록(base)의 관측일만 본다(차트 행과 같은 날짜라야 칠할 수 있다). 각 기록은 그날(또는 직전) 값 − N일 전(그날 또는 직전) 값 < 0.
+//   gapDays 이하로 떨어진 구간은 하나로 잇고, 관측 minObs개 미만 구간은 버린다(하루짜리 깜빡임 제외).
+export function fallingTogetherZones(seriesList: Array<Series | null | undefined>, days = 30, fromDate = '', minObs = 3, gapDays = 5): Array<[string, string]> {
+  const lists = (seriesList || []).map(seriesPoints);
+  if (!lists.length || lists.some(p => !p.length)) return [];
+  const falling = (pts: Array<[string, number]>, d: string) => {
+    const now = valueOnOrBefore(pts, d), ago = valueOnOrBefore(pts, shiftIsoDays(d, -days));
+    return now != null && ago != null && now - ago < -EPS;
+  };
+  const zones: Array<[string, string, number]> = [];
+  for (const [d] of lists[0]) {
+    if (fromDate && d < fromDate) continue;
+    if (!lists.every(p => falling(p, d))) continue;
+    const z = zones[zones.length - 1];
+    if (z && dayNum(d) - dayNum(z[1]) <= gapDays) { z[1] = d; z[2]++; } else zones.push([d, d, 1]);
+  }
+  return zones.filter(z => z[2] >= minObs).map(([a, b]) => [a, b]);
+}

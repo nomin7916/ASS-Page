@@ -9,7 +9,7 @@ import { BG, BORDER } from '../design';
 import {
   computeRateMetrics, parseHistoryText, mergeSeries, withLive, buildRateChartRows, shiftIsoDays,
 } from '../rateMetrics';
-import { changeOverDays, roseWithinDays } from '../rateMetrics';
+import { changeOverDays, roseWithinDays, fallingTogetherZones } from '../rateMetrics';
 import { readBrazilNotes } from '../brazilNotes';
 import { applySettingsFile, appendStateChanges, manualToSave } from '../rateSettings';
 import {
@@ -204,7 +204,7 @@ function RateCard({ k, m, t, emptyText = null }) {
   );
 }
 
-function ChartBox({ title, rows, t, children, height = 220 }) {
+function ChartBox({ title, rows, t, children, height = 220, footer = null }) {
   return (
     <div className={`rounded-lg border ${t.border} p-2`} style={{ background: t.card }}>
       <div className="text-[12px] font-bold mb-1">{title}</div>
@@ -217,6 +217,7 @@ function ChartBox({ title, rows, t, children, height = 220 }) {
             </ResponsiveContainer>
           </div>
         )}
+      {footer}
     </div>
   );
 }
@@ -676,6 +677,18 @@ export default function RateWindow() {
     ));
   });
   const [glossaryOpen, setGlossaryOpen] = useState(false);
+  // MBS 차트 매수 기회 칠하기 — 미국 2년 금리 · MBS 스프레드 · AGNC 주가가 모두 30일 전보다 낮은 구간(사용자 규칙, 2026-10).
+  //   AGNC 주가는 ⑤ 표(약 1년)보다 길게 최근 3년을 따로 받는다(창 메모리 전용)
+  const [mbsHelpOpen, setMbsHelpOpen] = useState(false);
+  const [agncLong, setAgncLong] = useState(null);
+  useEffect(() => {
+    if (access !== 'allowed' || !today) return;
+    let alive = true;
+    fetchWatchDaily('us', 'AGNC', shiftIsoDays(today, -3 * 365 - 45))
+      .then(pts => { if (alive && Array.isArray(pts) && pts.length) setAgncLong(Object.fromEntries(pts)); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [access, today]);
   const brBondPrice = brlBondPriceAt(metrics.br10y?.current);
   const brBondKrw = brBondPrice != null && Number.isFinite(metrics.brlkrw?.current) ? brBondPrice * metrics.brlkrw.current : null;
   const [openSignal, setOpenSignal] = useState(null);
@@ -695,6 +708,17 @@ export default function RateWindow() {
   const rowsSpread = useMemo(() => buildRateChartRows(seriesByKey, ['t10y2y', 't10y3m'], fromChart), [seriesByKey, fromChart]);
   const rowsHy = useMemo(() => buildRateChartRows(seriesByKey, ['hyYield', 'hySpread'], fromChart), [seriesByKey, fromChart]);
   const rowsMbs = useMemo(() => buildRateChartRows(seriesByKey, ['mbsSpread', 'move'], fromChart), [seriesByKey, fromChart]);
+  const MBS_ZONE_DAYS = 30;
+  const mbsZones = useMemo(() => (agncLong ? fallingTogetherZones([seriesByKey.mbsSpread, seriesByKey.us2y, agncLong], MBS_ZONE_DAYS, fromChart) : []), [seriesByKey, agncLong, fromChart]);
+  const mbsNow = useMemo(() => {
+    const agC = changeOverDays(agncLong, MBS_ZONE_DAYS);
+    const agLast = agncLong ? Object.keys(agncLong).sort().pop() : null, agCur = agLast ? agncLong[agLast] : null;
+    return {
+      us2y: changeOverDays(seriesByKey.us2y, MBS_ZONE_DAYS),
+      mbs: changeOverDays(seriesByKey.mbsSpread, MBS_ZONE_DAYS),
+      agncPct: agC != null && Number.isFinite(agCur) && agCur - agC !== 0 ? (agC / (agCur - agC)) * 100 : null,
+    };
+  }, [seriesByKey, agncLong]);
   const rowsBr = useMemo(() => buildRateChartRows(seriesByKey, ['br10y', 'brSelic', 'brIpca', 'brExp12', 'brlkrw'], fromChart), [seriesByKey, fromChart]);
   const rowsKr = useMemo(() => buildRateChartRows(seriesByKey, ['krBase', 'kr3y', 'kr10y', 'us10y'], fromChart), [seriesByKey, fromChart]);
   // 한국 기준금리 — 서버에 ECOS 인증키가 없으면 값 대신 needKey가 온다(값을 지어내지 않는다)
@@ -1017,7 +1041,29 @@ export default function RateWindow() {
                 </ComposedChart>
               </ChartBox>
 
-              <ChartBox title="MBS — 스프레드(왼쪽 %p)·MOVE(오른쪽)" rows={rowsMbs} t={t}>
+              <ChartBox title="MBS — 스프레드(왼쪽 %p)·MOVE(오른쪽)" rows={rowsMbs} t={t} footer={(
+                <>
+                <div className={`text-[10px] mt-1 ${t.sub}`}>
+                  <span className="inline-block w-2.5 h-2.5 align-middle mr-1" style={{ background: '#22c55e55' }} />
+                  매수 기회 = 미국 2년 금리 · MBS 스프레드 · AGNC 주가가 모두 {MBS_ZONE_DAYS}일 전보다 낮은 구간{agncLong ? ` (${mbsZones.length}구간)` : ' (AGNC 주가 받는 중)'}
+                  <span className="ml-2">지금 {MBS_ZONE_DAYS}일 변화: 2년 {fmtChg(mbsNow.us2y, '%p')} · 스프레드 {fmtChg(mbsNow.mbs, '%p')} · AGNC {mbsNow.agncPct == null ? '-' : `${mbsNow.agncPct > 0 ? '▲' : mbsNow.agncPct < 0 ? '▼' : ''}${Math.abs(mbsNow.agncPct).toFixed(1)}%`}</span>
+                </div>
+                <button onClick={() => setMbsHelpOpen(o => !o)} className={`text-[11px] mt-1 ${t.sub} hover:text-sky-400`}>{mbsHelpOpen ? '▾' : '▸'} 지표 활용법 · 모기지 채권(AGNC) 영향</button>
+                {mbsHelpOpen && (
+                  <div className={`text-[11px] leading-relaxed mt-1 space-y-1.5 ${t.sub}`}>
+                    <p><b className="text-orange-400">MBS 스프레드</b>(주황, 왼쪽) = 30년 모기지 금리 − 미국 10년 금리. 모기지 채권이 국채보다 얼마나 더 이자를 주는지입니다.</p>
+                    <p>· <b>벌어질 때</b>: AGNC가 가진 모기지 채권 값이 국채보다 더 떨어져 장부가(순자산)가 줄고, 주가도 대개 약해집니다. 대신 새로 사는 채권의 이자 차익은 커집니다.</p>
+                    <p>· <b>좁혀질 때</b>: 보유 채권 값이 올라 장부가가 늘어 주가에 유리합니다.</p>
+                    <p><b className="text-violet-400">MOVE</b>(보라, 오른쪽) = 미국 국채 금리가 얼마나 출렁일지 예상하는 지수. 높으면 조기상환 예측이 어려워 헤지 비용이 늘고 스프레드가 벌어지기 쉽습니다. 고점에서 꺾여 내려오면 스프레드가 좁혀지는(장부가 회복) 경우가 많습니다.</p>
+                    <p><b>미국 단기 금리</b>(2년) = AGNC가 돈을 빌리는 비용(레포)의 방향. 내리면 조달 비용이 줄어 이자 차익·배당 여력이 커집니다.</p>
+                    <p><b className="text-green-400">초록 칸(매수 기회)</b> = 단기 금리와 스프레드가 AGNC에 유리하게 내려가는데 주가는 내려간 구간 — 환경을 주가가 아직 따라오지 못한 때로 봅니다.</p>
+                    <p>· 관망(사지 않음): 단기 금리 하락 + 스프레드 상승 — 앞으로 이자 차익은 커지지만 장부가는 아직 눌리는 중입니다.</p>
+                    <p>· 함께 볼 것: ⑤ 표의 AGNC 주가 ÷ 장부가(1.0 이하면 장부가보다 싸다) · MOVE 꺾임 · ③ 모기지 리츠 판정(세로 점선).</p>
+                    <p>· 주의: 참고 신호입니다. 과거 흐름이 반복된다는 보장은 없고, AGNC 주가는 최근 약 3년만 받아 그 앞은 칠하지 않습니다.</p>
+                  </div>
+                )}
+                </>
+              )}>
                 <ComposedChart data={rowsMbs} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid stroke={t.grid} vertical={false} />
                   <XAxis dataKey="date" tick={axisTick} tickFormatter={shortDate} minTickGap={40} stroke={t.axis} />
@@ -1025,6 +1071,9 @@ export default function RateWindow() {
                   <YAxis yAxisId="right" orientation="right" tick={axisTick} stroke={COLORS.move} width={36} domain={['auto', 'auto']} />
                   <Tooltip contentStyle={tooltipStyle} formatter={(v, name) => [fmtVal(Number(v), name === RATE_DEFS.move.label ? '' : '%p'), name]} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
+                  {mbsZones.map(([a, b]) => (
+                    <ReferenceArea key={`mz-${a}`} yAxisId="left" x1={a} x2={b} fill="#22c55e" fillOpacity={0.18} stroke="none" ifOverflow="hidden" />
+                  ))}
                   <Line yAxisId="left" isAnimationActive={false} type="monotone" dataKey="mbsSpread" name={RATE_DEFS.mbsSpread.label} stroke={COLORS.mbsSpread} dot={false} strokeWidth={1.5} connectNulls />
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="move" name={RATE_DEFS.move.label} stroke={COLORS.move} dot={false} strokeWidth={1.5} connectNulls />
                   {signalLines(['mortgageReit'], 'left', fromChart)}

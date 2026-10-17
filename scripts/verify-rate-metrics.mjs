@@ -22,7 +22,7 @@ catch (e) {
 }
 
 if (M) {
-  const { computeRateMetrics: calc, parseHistoryText, mergeSeries, withLive, buildRateChartRows, percentileOf, bandOf, seriesPoints, changeOverDays, roseWithinDays } = M;
+  const { computeRateMetrics: calc, parseHistoryText, mergeSeries, withLive, buildRateChartRows, percentileOf, bandOf, seriesPoints, changeOverDays, roseWithinDays, fallingTogetherZones } = M;
   console.log('\n── 파트① 계산 ──');
 
   // 기본: 2026-01-01 ~ 2026-10-16 사이 몇 개 관측
@@ -76,6 +76,17 @@ if (M) {
   eq('#28b 그보다 오래된 자료가 없으면 null', changeOverDays({ '2026-10-16': 1 }, 90), null);
   eq('#29 최근 60일 안의 인상 여부 — 9/1 인상 있음 / 30일로 좁히면 없음', [roseWithinDays(sx, 60), roseWithinDays(sx, 30)], [true, false]);
   eq('#29b 관측 2개 미만이면 null(모름)', roseWithinDays({ '2026-10-16': 15 }, 60), null);
+  // 매수 기회 구간 — 세 기록이 모두 30일 전보다 낮은 날짜(첫 기록의 관측일만)
+  const lin = (from, n, f) => { const o = {}; for (let i = 0; i < n; i++) o[new Date(Date.parse(`${from}T00:00:00Z`) + i * 86400000).toISOString().slice(0, 10)] = f(i); return o; };
+  const down = lin('2026-01-01', 120, i => 100 - i), rise = lin('2026-01-01', 120, i => 100 + i);
+  const vee = lin('2026-01-01', 120, i => (i < 60 ? 100 - i : 40 + (i - 60) * 2));
+  eq('#30 셋 다 계속 하락 → 30일 뒤부터 끝까지 한 구간', fallingTogetherZones([down, down, down], 30), [['2026-01-31', '2026-04-30']]);
+  eq('#30b 하나라도 오르면 구간 없음', fallingTogetherZones([down, rise, down], 30), []);
+  eq('#30c V자(60일째 바닥) — 바닥 뒤 반등 폭이 30일 전 값을 넘기 전까지만', fallingTogetherZones([down, vee, down], 30), [['2026-01-31', '2026-03-11']]);
+  eq('#30d 시작일 이후만 · 관측 3개 미만 구간 버림', [fallingTogetherZones([down, down, down], 30, '2026-04-29'), fallingTogetherZones([down, down, down], 30, '2026-04-20')], [[], [['2026-04-20', '2026-04-30']]]);
+  eq('#30e 빈 기록이 있으면 없음', fallingTogetherZones([down, {}, down], 30), []);
+  const gap = lin('2026-01-01', 120, i => (i >= 70 && i <= 72 ? 200 : 100 - i));
+  eq('#30f 5일 이하 끊김은 잇는다 · 그보다 길면 나눈다', [fallingTogetherZones([down, gap, down], 30).length], [1]);
   eq('#27 차트 행 — 날짜 합집합 · 빈 값 null · 시작일 이후만',
     buildRateChartRows({ a: { '2026-10-01': 1, '2026-10-03': 3 }, b: { '2026-10-02': -2 } }, ['a', 'b'], '2026-10-02'),
     [{ date: '2026-10-02', a: null, b: -2 }, { date: '2026-10-03', a: 3, b: null }]);
@@ -92,6 +103,10 @@ console.log('\n── 파트③ 배선 가드 ──');
   ok('#G4 받은 자료를 브라우저 저장소에 두지 않는다', !/localStorage|sessionStorage/.test(RW));
   ok('#G5 키 13개 전부 정의', ['fedRate', 'us3m', 'us2y', 'us10y', 'us30y', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr10y']
     .every(k => new RegExp(`\\b${k}:\\s*\\{ label:`).test(RW)));
+  ok('#G7 MBS 차트 매수 기회 — 2년 금리·MBS 스프레드·AGNC 주가(3년)가 모두 30일 전보다 낮은 구간을 초록 칸으로 · 접히는 활용법',
+    /fallingTogetherZones\(\[seriesByKey\.mbsSpread, seriesByKey\.us2y, agncLong\], MBS_ZONE_DAYS, fromChart\)/.test(RW) && /import \{ changeOverDays, roseWithinDays, fallingTogetherZones \} from '\.\.\/rateMetrics';/.test(RW)
+    && /fetchWatchDaily\('us', 'AGNC', shiftIsoDays\(today, -3 \* 365 - 45\)\)/.test(RW) && /<ReferenceArea key=\{`mz-\$\{a\}`\} yAxisId="left" x1=\{a\} x2=\{b\}/.test(RW)
+    && /지표 활용법 · 모기지 채권\(AGNC\) 영향/.test(RW) && /\{footer\}/.test(RW) && !/localStorage|sessionStorage/.test(RW));
   ok('#G6 기간을 늘리면 모자란 앞쪽만 더 받는다', /if \(have && have <= from\) return \[k, null, true\];/.test(RW) && /const to = have \? shiftIsoDays\(have, -1\) : today;/.test(RW));
   ok('#G7 권한 확인 전엔 내용을 그리지 않는다(fail-closed)', /useState\('pending'\)/.test(RW) && /이 페이지를 사용할 권한이 없습니다/.test(RW));
 }
