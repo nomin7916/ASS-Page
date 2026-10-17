@@ -157,7 +157,7 @@ async function fetchHistory(key, fromIso, toIso) {
 }
 async function fetchHistoryServer(key, fromIso, toIso) {
   try {
-    const res = await fetch(`/api/history?key=${key}&start=${isoYmd(fromIso)}&end=${isoYmd(toIso)}`, { signal: AbortSignal.timeout(25000) });
+    const res = await fetch(`/api/history?key=${key}&start=${isoYmd(fromIso)}&end=${isoYmd(toIso)}`, { signal: AbortSignal.timeout(45000) });   // 한국 10년(네이버)은 10년 구간에 18초 — 동시 요청 중 25초를 넘는다
     if (!res.ok) return null;
     const rec = parseHistoryText(await res.text());
     return Object.keys(rec).length ? rec : null;

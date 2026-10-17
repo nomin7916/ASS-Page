@@ -127,6 +127,7 @@ console.log('\n── 파트⑤ 배선 가드 ──');
   ok('#G12 기간 버튼 전체 추가 · 잘라 쓰기(Drive 모드는 서버 호출 없음) · 잠정 표시 · 상단 바', /\{ key: 'all', label: '전체', years: null \}/.test(RW) && /const fromChart = today && periodYears \?/.test(RW)
     && (RW.match(/\{provLine\(\[/g) || []).length === 6 && /value: '잠정'/.test(RW) && /provisionalDate,/.test(RW) && /기록 \$\{storedLast\}까지 저장/.test(RW) && /분 전`\} 갱신/.test(RW) && /latestStoredDate,/.test(RW));
   ok('#G8 앱 탭이 관리자 여부를 알려 준다', /isAdmin: !!rateIsAdminRef\.current/.test(APP));
+  ok('#G13 BCB 브라우저 받기는 2년 단위(10년치는 시간 초과) · 과거치 요청 시한 45초', /const e0 = `\$\{\+s\.slice\(0, 4\) \+ 2\}\$\{s\.slice\(4\)\}`;/.test(src('src/bcbClient.ts')) && /AbortSignal\.timeout\(45000\)/.test(RW));
   ok('#G9 검증 스크립트가 게이트 목록에 있다', pkg.scripts['verify:rate-hist'] === 'node scripts/verify-rate-hist.mjs');
 }
 

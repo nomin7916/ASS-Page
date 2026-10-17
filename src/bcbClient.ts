@@ -10,13 +10,13 @@ const toBr = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slic
 const OLINDA = 'https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativasMercadoInflacao12Meses';
 export const BCB_BROWSER_KEYS = ['brSelic', 'brIpca', 'brExp12', 'brReal'];
 
-// SGS — 일별 시리즈는 한 번에 최대 10년이라 9년 단위로 나눠 받는다
+// SGS — 일별 시리즈는 한 번에 최대 10년이지만 10년치는 30초 넘게 걸려 시간 초과된다(실측 2026-10-18: 2년 3.7초) → 2년 단위로 나눠 받는다
 export async function fetchBcbSgsBrowser(series: number, fromIso: string, toIso: string): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
   const today = todayIso();
   let s = fromIso;
   while (s <= toIso) {
-    const e0 = `${+s.slice(0, 4) + 9}${s.slice(4)}`;
+    const e0 = `${+s.slice(0, 4) + 2}${s.slice(4)}`;
     const e = e0 < toIso ? e0 : toIso;
     try {
       const res = await fetch(`https://api.bcb.gov.br/dados/serie/bcdata.sgs.${series}/dados?formato=json&dataInicial=${toBr(s)}&dataFinal=${toBr(e)}`, { signal: AbortSignal.timeout(15000) });
