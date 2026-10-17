@@ -159,7 +159,7 @@ async function fetchYahooHistory(symbol: string, d1: string, d2: string): Promis
 // ⚠️ 키가 없거나 API가 실패해도 fredgraph.csv는 키 없이 같은 시계열을 준다(파이썬 pandas_datareader와 같은 경로).
 const toIsoDate = (d: string) => `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
 
-async function fetchFredApiHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000): Promise<Record<string, number>> {
+async function fetchFredApiHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000, signed = false): Promise<Record<string, number>> {
   if (!FRED_KEY) return {};
   const params: Record<string, string> = {
     series_id:  seriesId,
@@ -179,7 +179,7 @@ async function fetchFredApiHistory(seriesId: string, d1: string, d2: string, tim
     for (const obs of (data.observations ?? [])) {
       if (obs.value === '.') continue;
       const v = parseFloat(obs.value);
-      if (!isNaN(v) && v > 0) record[obs.date] = v;
+      if (!isNaN(v) && (signed || v > 0)) record[obs.date] = v;
     }
     return record;
   } catch {
@@ -187,7 +187,7 @@ async function fetchFredApiHistory(seriesId: string, d1: string, d2: string, tim
   }
 }
 
-async function fetchFredGraphHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000): Promise<Record<string, number>> {
+async function fetchFredGraphHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000, signed = false): Promise<Record<string, number>> {
   let url = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(seriesId)}`;
   if (d1) url += `&cosd=${toIsoDate(d1)}`;
   if (d2) url += `&coed=${toIsoDate(d2)}`;
@@ -197,16 +197,17 @@ async function fetchFredGraphHistory(seriesId: string, d1: string, d2: string, t
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return {};
-    return parseFredGraphCsv(await res.text());
+    return parseFredGraphCsv(await res.text(), signed);
   } catch {
     return {};
   }
 }
 
-async function fetchFredHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000): Promise<Record<string, number>> {
-  const api = await fetchFredApiHistory(seriesId, d1, d2, timeoutMs);
+// signed=true: 0·음수가 정상값인 시리즈(장단기 금리차) — 부호로 버리지 않는다.
+async function fetchFredHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000, signed = false): Promise<Record<string, number>> {
+  const api = await fetchFredApiHistory(seriesId, d1, d2, timeoutMs, signed);
   if (Object.keys(api).length > 0) return api;
-  return fetchFredGraphHistory(seriesId, d1, d2, timeoutMs);
+  return fetchFredGraphHistory(seriesId, d1, d2, timeoutMs, signed);
 }
 
 // 조각 병합용 — 한 소스의 최초일·최신일
@@ -275,7 +276,7 @@ function toCSV(data: Record<string, number>): string {
   return lines.join('\n');
 }
 
-// 순수 과거 지표 히스토리(us10y/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth + 지수 kospi/sp500/nasdaq) → 24h 캐시
+// 순수 과거 지표 히스토리(us10y/us2y/us30y/us3m/t10y2y/t10y3m/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth + 지수 kospi/sp500/nasdaq) → 24h 캐시
 // ⚠️ 종료일이 최근(어제·오늘)인 요청은 1h만 캐시한다 — 24h로 두면 '새로고침' 꼬리 수집이 하루 내내 같은
 //    (오늘 값이 빠진) 응답을 돌려받는다. 과거 구간만 담은 요청은 값이 바뀌지 않으므로 24h 그대로.
 function csvResponse(data: Record<string, number>, recent = false): Response {
@@ -740,6 +741,33 @@ export default async function handler(request: Request): Promise<Response> {
     }
     if (Object.keys(data).length === 0) return new Response('us10y 수집 실패', { status: 502 });
     return csvResponse(data, recent);
+  }
+
+  // 미국 금리 5종(2026-10): FRED 일별 시리즈 그대로(us10y의 FRED 경로와 같은 fetchFredHistory).
+  //   us2y=DGS2 · us30y=DGS30 · us3m=DGS3MO · t10y2y=T10Y2Y · t10y3m=T10Y3M (금리차 2종은 %p)
+  // ⚠️ 금리차 2종은 0·음수(곡선 역전)가 정상값이다 → signed 수집 + **JSON 응답**. CSV로 내리면 클라이언트
+  //    parseIndexCSV가 0 이하 행을 버려 역전 구간이 통째로 사라진다(JSON 경로는 mergeIndicatorHistory(signed)가 받는다).
+  const US_RATE_SERIES: Record<string, { id: string; signed: boolean }> = {
+    us2y:   { id: 'DGS2',   signed: false },
+    us30y:  { id: 'DGS30',  signed: false },
+    us3m:   { id: 'DGS3MO', signed: false },
+    t10y2y: { id: 'T10Y2Y', signed: true },
+    t10y3m: { id: 'T10Y3M', signed: true },
+  };
+  if (US_RATE_SERIES[key]) {
+    const { id, signed } = US_RATE_SERIES[key];
+    const data = await fetchFredHistory(id, d1, d2, 10000, signed);
+    if (Object.keys(data).length === 0) return new Response(`${key} 수집 실패`, { status: 502 });
+    if (!signed) return csvResponse(data, recent);
+    return new Response(JSON.stringify(data), {
+      headers: {
+        'Content-Type':                'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control':               recent
+          ? 's-maxage=3600, stale-while-revalidate=600'
+          : 's-maxage=86400, stale-while-revalidate=43200',
+      },
+    });
   }
 
   // fedRate: FRED DFEDTARU(상단, 2008-12-16~) + DFEDTAR(단일 목표, ~2008-12-15)

@@ -45,4 +45,5 @@ export const CHART_NAME_TO_POINT_KEY = {
   'KOSPI':   'kospiPoint',  'S&P500': 'sp500Point', 'NASDAQ': 'nasdaqPoint',
   'US 10Y':  'us10yPoint',  'Gold': 'goldIntlPoint', '국내금': 'goldKrPoint', 'USDKRW': 'usdkrwPoint',
   'DXY':     'dxyPoint',    '기준금리': 'fedRatePoint', 'KR 10Y': 'kr10yPoint', 'VIX': 'vixPoint',
+  '미국 2년': 'us2yPoint', '미국 30년': 'us30yPoint', '미국 3개월': 'us3mPoint', '10년−2년': 't10y2yPoint', '10년−3개월': 't10y3mPoint',
 };

@@ -8,12 +8,15 @@ const INDICATOR_COLORS = {
   fedRate: '#ff375f', us10y: '#8e8e93', kr10y: '#636366',
   goldIntl: '#ffd60a', goldKr: '#d97706', usdkrw: '#0a84ff', dxy: '#5ac8fa',
   vix: '#ff453a', btc: '#f7931a', eth: '#627eea',
+  us2y: '#a1a1aa', us30y: '#71717a', us3m: '#d4d4d8', t10y2y: '#2dd4bf', t10y3m: '#14b8a6',
 };
 
 // Yahoo Finance / FRED 자동수집 가능한 키
-const STOOQ_SUPPORTED = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth'];
+const STOOQ_SUPPORTED = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'];
 // 차트에 표시 가능한 키
-const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth'];
+const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'];
+// 장단기 금리차 — 단위 %p, 전일 대비도 %p 차이(api/indicators fetchFred diff)
+const SPREAD_KEYS = ['t10y2y', 't10y3m'];
 
 // 수집 source 이름 → 실제 출처 URL 매핑
 const SOURCE_URLS: Record<string, Record<string, string>> = {
@@ -25,6 +28,11 @@ const SOURCE_URLS: Record<string, Record<string, string>> = {
   us10y:   { FRED: 'https://fred.stlouisfed.org/series/DGS10', Yahoo: 'https://finance.yahoo.com/quote/%5ETNX/', 'Naver채권US': 'https://m.stock.naver.com/marketindex/bond' },
   kr10y:   { 'Naver채권': 'https://m.stock.naver.com/marketindex/bond', Yahoo: 'https://finance.yahoo.com/quote/%5EKR10YT%3DRR/' },
   fedRate: { FRED: 'https://fred.stlouisfed.org/series/DFEDTARU' },
+  us2y:    { FRED: 'https://fred.stlouisfed.org/series/DGS2' },
+  us30y:   { FRED: 'https://fred.stlouisfed.org/series/DGS30' },
+  us3m:    { FRED: 'https://fred.stlouisfed.org/series/DGS3MO' },
+  t10y2y:  { FRED: 'https://fred.stlouisfed.org/series/T10Y2Y' },
+  t10y3m:  { FRED: 'https://fred.stlouisfed.org/series/T10Y3M' },
   usdkrw:  { Yahoo: 'https://finance.yahoo.com/quote/KRW=X/', 'Naver환율': 'https://m.stock.naver.com/marketindex/exchange/FX_USDKRW' },
   dxy:     { Yahoo: 'https://finance.yahoo.com/quote/DX-Y.NYB/' },
   vix:     { Yahoo: 'https://finance.yahoo.com/quote/%5EVIX/' },
@@ -42,6 +50,11 @@ const DEFAULT_URLS: Record<string, string> = {
   us10y:   'https://fred.stlouisfed.org/series/DGS10',
   kr10y:   'https://m.stock.naver.com/marketindex/bond',
   fedRate: 'https://fred.stlouisfed.org/series/DFEDTARU',
+  us2y:    'https://fred.stlouisfed.org/series/DGS2',
+  us30y:   'https://fred.stlouisfed.org/series/DGS30',
+  us3m:    'https://fred.stlouisfed.org/series/DGS3MO',
+  t10y2y:  'https://fred.stlouisfed.org/series/T10Y2Y',
+  t10y3m:  'https://fred.stlouisfed.org/series/T10Y3M',
   usdkrw:  'https://finance.yahoo.com/quote/KRW=X/',
   dxy:     'https://finance.yahoo.com/quote/DX-Y.NYB/',
   vix:     'https://finance.yahoo.com/quote/%5EVIX/',
@@ -138,6 +151,32 @@ export default function MarketIndicators({
       val: marketIndicators.us10y, chg: marketIndicators.us10yChg,
       fmt: (v) => v?.toFixed(3) + '%', color: 'text-gray-300',
       sep: true,
+    },
+    // 미국 금리 5종(2026-10, FRED 일별) — us10y와 같은 모양. 금리차 2종은 %p(0·음수 정상)
+    {
+      label: '미국 2년', key: 'us2y',
+      val: marketIndicators.us2y, chg: marketIndicators.us2yChg,
+      fmt: (v) => v?.toFixed(3) + '%', color: 'text-gray-300',
+    },
+    {
+      label: '미국 30년', key: 'us30y',
+      val: marketIndicators.us30y, chg: marketIndicators.us30yChg,
+      fmt: (v) => v?.toFixed(3) + '%', color: 'text-gray-300',
+    },
+    {
+      label: '미국 3개월', key: 'us3m',
+      val: marketIndicators.us3m, chg: marketIndicators.us3mChg,
+      fmt: (v) => v?.toFixed(3) + '%', color: 'text-gray-300',
+    },
+    {
+      label: '10년−2년', key: 't10y2y',
+      val: marketIndicators.t10y2y, chg: marketIndicators.t10y2yChg,
+      fmt: (v) => (v > 0 ? '+' : '') + v?.toFixed(2) + '%p', color: 'text-teal-300',
+    },
+    {
+      label: '10년−3개월', key: 't10y3m',
+      val: marketIndicators.t10y3m, chg: marketIndicators.t10y3mChg,
+      fmt: (v) => (v > 0 ? '+' : '') + v?.toFixed(2) + '%p', color: 'text-teal-300',
     },
     {
       label: 'KR 10Y', key: 'kr10y',
@@ -305,7 +344,7 @@ export default function MarketIndicators({
             <span className={`font-bold font-mono text-[9px]
               ${item.chg > 0 ? 'text-red-400' : item.chg < 0 ? 'text-blue-400' : 'text-gray-500'}`}>
               {item.chg > 0 ? '▲' : item.chg < 0 ? '▼' : ''}
-              {Math.abs(item.chg).toFixed(2)}%
+              {Math.abs(item.chg).toFixed(2)}{SPREAD_KEYS.includes(item.key) ? '%p' : '%'}
             </span>
           )}
         </div>
@@ -398,6 +437,11 @@ export default function MarketIndicators({
                 { label: 'Gold',     key: 'goldIntl', val: marketIndicators.goldIntl,   histKey: 'goldIntl', marketIndexKey: null },
                 { label: '국내 금',  key: 'goldKr',  val: marketIndicators.goldKr,      histKey: 'goldKr', marketIndexKey: null },
                 { label: 'US 10Y',   key: 'us10y',   val: marketIndicators.us10y,       histKey: 'us10y', marketIndexKey: null },
+                { label: '미국 2년',   key: 'us2y',   val: marketIndicators.us2y,   histKey: 'us2y', marketIndexKey: null },
+                { label: '미국 30년',  key: 'us30y',  val: marketIndicators.us30y,  histKey: 'us30y', marketIndexKey: null },
+                { label: '미국 3개월', key: 'us3m',   val: marketIndicators.us3m,   histKey: 'us3m', marketIndexKey: null },
+                { label: '10년−2년',   key: 't10y2y', val: marketIndicators.t10y2y, histKey: 't10y2y', marketIndexKey: null },
+                { label: '10년−3개월', key: 't10y3m', val: marketIndicators.t10y3m, histKey: 't10y3m', marketIndexKey: null },
                 { label: 'KR 10Y',   key: 'kr10y',   val: marketIndicators.kr10y,       histKey: 'kr10y', marketIndexKey: null },
                 { label: '기준금리',  key: 'fedRate', val: marketIndicators.fedRate,     histKey: 'fedRate', marketIndexKey: null },
                 { label: 'USDKRW',   key: 'usdkrw',  val: marketIndicators.usdkrw,     histKey: 'usdkrw', marketIndexKey: null },

@@ -20,13 +20,17 @@ async function safeJson(url: string, init?: RequestInit) {
 // FRED (미연준 공식): DGS10(US10Y), DFEDTARU(기준금리 상단)
 // ① API(키 있을 때) → ② fredgraph.csv(키 불필요) 폴백. 키가 없는 배포에서 기준금리가 통째로 '-'가 되거나
 //    재시도 경로(tradingeconomics 스크래핑 — 차단되기 쉽다)에만 의존하던 것을 막는다.
-async function fetchFred(seriesId: string) {
+// diff=true(장단기 금리차 T10Y2Y·T10Y3M): change를 비율(%)이 아니라 전일 대비 차이(%p)로 낸다 — 0 근처를 오가는
+//    값이라 비율은 무의미하게 폭발한다. 0·음수도 정상값이다.
+async function fetchFred(seriesId: string, diff = false) {
   const fromLatest = (vals: number[]) => {
     const price = vals[0];
     const prev  = vals.length > 1 ? vals[1] : null;
     return {
       price:  Number.isFinite(price) ? price : null,
-      change: prev && Number.isFinite(prev) ? ((price - prev) / Math.abs(prev)) * 100 : null,
+      change: diff
+        ? (prev != null && Number.isFinite(prev) && Number.isFinite(price) ? price - prev : null)
+        : (prev && Number.isFinite(prev) ? ((price - prev) / Math.abs(prev)) * 100 : null),
       source: 'FRED',
     };
   };
@@ -43,7 +47,7 @@ async function fetchFred(seriesId: string) {
       signal: AbortSignal.timeout(6000),
     });
     if (res.ok) {
-      const rec = parseFredGraphCsv(await res.text());
+      const rec = parseFredGraphCsv(await res.text(), diff);
       const vals = Object.keys(rec).sort().reverse().map(d => rec[d]);
       if (vals.length) return fromLatest(vals);
     }
@@ -215,6 +219,7 @@ export default async function handler(req: Request): Promise<Response> {
     vix,
     btcYahoo, ethYahoo,
     btcCg, ethCg,
+    us2y, us30y, us3m, t10y2y, t10y3m,
   ] = await Promise.allSettled([
     fetchFred('DGS10'),                                                // US 10Y (FRED — 영업일 종가 기준)
     fetchYahoo('^TNX'),                                                // US 10Y (Yahoo — 장중 실시간 fallback)
@@ -240,6 +245,11 @@ export default async function handler(req: Request): Promise<Response> {
     fetchYahoo('ETH-USD'),                                             // ETH (Yahoo)
     fetchCoinGecko('bitcoin'),                                         // BTC (fallback)
     fetchCoinGecko('ethereum'),                                        // ETH (fallback)
+    fetchFred('DGS2'),                                                 // 미국 2년 (FRED)
+    fetchFred('DGS30'),                                                // 미국 30년 (FRED)
+    fetchFred('DGS3MO'),                                               // 미국 3개월 (FRED)
+    fetchFred('T10Y2Y', true),                                         // 10년−2년 금리차 (%p)
+    fetchFred('T10Y3M', true),                                         // 10년−3개월 금리차 (%p)
   ]);
 
   const ok = <T>(r: PromiseSettledResult<T>) =>
@@ -266,6 +276,11 @@ export default async function handler(req: Request): Promise<Response> {
   const body = {
     us10y,
     fedRate: ok(fedRate),
+    us2y:    ok(us2y),
+    us30y:   ok(us30y),
+    us3m:    ok(us3m),
+    t10y2y:  ok(t10y2y),
+    t10y3m:  ok(t10y3m),
     kr10y,
     usdkrw,
     goldKr,

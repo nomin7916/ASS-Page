@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { isSignedIndicator } from '../indicatorCoverage';
 
 // 차트 구간 선택의 **진행 상태 정본은 이 ref**다 (⚠️ 회귀 주의 — React state로 되돌리지 말 것).
 //   anchor  : 더블클릭으로 고정한 시작점(''이면 앵커 없음)
@@ -139,7 +140,10 @@ export function useChartInteraction({
     const indPeriodRates: Record<string, number | null> = {};
     INDICATOR_CHART_KEYS.forEach(k => {
       const sp = sData[`${k}Point`]; const ep = eData[`${k}Point`];
-      indPeriodRates[`${k}PeriodRate`] = (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
+      // 장단기 금리차(0·음수 정상)는 비율이 아니라 차이(%p) — App indRateOf와 같은 규칙
+      indPeriodRates[`${k}PeriodRate`] = isSignedIndicator(k)
+        ? (sp != null && ep != null ? ep - sp : null)
+        : (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
     });
     const backtestPeriodRate = (sData.backtestRate != null && eData.backtestRate != null)
       ? ((100 + eData.backtestRate) / (100 + sData.backtestRate) - 1) * 100

@@ -111,10 +111,25 @@ if (C) {
   eq('#10 소스 최초일 이전은 요구하지 않는다(BTC)', seg(daily('2014-09-17', '2026-10-16'), '2004-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.btc), []);
   eq('#10b floor 표 — btc/eth/fedRate', [INDICATOR_SOURCE_FLOOR.btc, INDICATOR_SOURCE_FLOOR.eth, INDICATOR_SOURCE_FLOOR.fedRate], ['2014-09-17', '2017-11-09', '1982-09-27']);
   // 패널 13개 항목 전부 — 키 목록은 순수 모듈이 단일 소스, floor는 13개 전부 ISO 날짜
-  eq('#10c 커버리지 키 = 지표 10 + 지수 3 (13개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 13);
+  // 2026-10 미국 금리 5종 추가 → 지표 15 + 지수 3 = 18
+  eq('#10c 커버리지 키 = 지표 15 + 지수 3 (18개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 18);
   eq('#10d 지수 키 3종', C.MARKET_INDEX_KEYS, ['kospi', 'sp500', 'nasdaq']);
-  ok('#10e 13개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
+  ok('#10e 18개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
   eq('#10f 지수 floor 이전은 요구하지 않는다(KOSPI 1997-07-01)', seg(daily('1997-07-01', '2026-10-16', 100), '1980-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.kospi), []);
+  // ── 미국 금리 5종(2026-10) · 장단기 금리차는 0·음수가 정상값 ──
+  ok('#10g 미국 금리 5종이 커버리지 키에 있다', ['us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)));
+  eq('#10h 부호 있는 지표 = 금리차 2종만', C.SIGNED_INDICATOR_KEYS, ['t10y2y', 't10y3m']);
+  ok('#10i isSignedIndicator — 금리차만 true', C.isSignedIndicator('t10y2y') && C.isSignedIndicator('t10y3m') && !C.isSignedIndicator('us10y') && !C.isSignedIndicator(''));
+  {
+    const sp = { '2023-01-03': -0.71, '2023-01-04': 0, '2023-01-05': 0.12 };
+    eq('#10j signed 병합은 0·음수를 보존한다', merge({}, sp, true), sp);
+    eq('#10k unsigned 병합은 종전대로 0 이하를 버린다', merge({}, sp), { '2023-01-05': 0.12 });
+    eq('#10l signed 병합도 null·빈 문자열·NaN은 버린다', merge({}, { '2023-01-03': null, '2023-01-04': '', '2023-01-05': 'x', '2023-01-06': -1 }, true), { '2023-01-06': -1 });
+    // 역전 구간이 내부 공백으로 오인되면 매 세션 헛조회가 난다
+    const inv = daily('2022-01-03', '2026-10-16', -0.4);
+    eq('#10m signed 커버리지는 음수 구간을 보유로 본다', seg(inv, '2022-01-03', '', TODAY, INDICATOR_SOURCE_FLOOR.t10y2y, true), []);
+    ok('#10n [대조] unsigned로 재면 같은 데이터가 전부 빈 구간이 된다', seg(inv, '2022-01-03', '', TODAY).length > 0);
+  }
 
   // 손상값은 날짜로 치지 않는다
   eq('#11 손상 키·0·NaN 값 무시', seg({ bad: 1, '2025-01-01': 0, '2025-01-02': NaN, ...daily('2004-01-05', '2026-10-16') }, '2004-01-01', '', TODAY), []);
@@ -154,6 +169,9 @@ if (I) {
   eq('#21 fredgraph.csv 파싱(헤더·결측 . ·빈 칸·CRLF)', parseFredGraphCsv(csv), { '2008-12-16': 0.25, '2026-10-16': 3.75 });
   eq('#22 옛 헤더(DATE)도', parseFredGraphCsv('DATE,DGS10\n2004-01-02,4.38\n'), { '2004-01-02': 4.38 });
   eq('#23 빈·손상 입력', [parseFredGraphCsv(''), parseFredGraphCsv(null)], [{}, {}]);
+  const spCsv = 'observation_date,T10Y2Y\n2023-01-03,-0.71\n2023-01-04,0.00\n2023-01-05,.\n2023-01-06,\n2023-01-09,0.12\n';
+  eq('#23b signed: 금리차는 0·음수 보존(결측·빈 칸은 제외)', parseFredGraphCsv(spCsv, true), { '2023-01-03': -0.71, '2023-01-04': 0, '2023-01-09': 0.12 });
+  eq('#23c unsigned: 종전대로 0 이하 제외', parseFredGraphCsv(spCsv), { '2023-01-09': 0.12 });
 
   const yahoo = { '2003-12-01': 1190, '2003-12-02': 1191 };
   const fred = { '2003-11-28': 1180, '2003-12-01': 9999, '2003-11-27': 1179 };
@@ -178,9 +196,9 @@ const COV = src('src/indicatorCoverage.ts');
 const SRCS = src('api/_indicatorSources.ts');
 
 ok('#G1 FRED limit은 최대(100000) — 2000+오름차순은 최근 구간을 자른다', /limit:\s*'100000'/.test(H) && !/limit:\s*'2000'/.test(H));
-ok('#G2 FRED 키 없음/실패 → fredgraph.csv 폴백(히스토리)', /fetchFredApiHistory\(seriesId, d1, d2, timeoutMs\)[\s\S]{0,200}fetchFredGraphHistory\(seriesId, d1, d2, timeoutMs\)/.test(H)
-  && /fred\.stlouisfed\.org\/graph\/fredgraph\.csv/.test(H) && /parseFredGraphCsv\(await res\.text\(\)\)/.test(H));
-ok('#G3 실시간 기준금리도 fredgraph.csv 폴백', /fred\.stlouisfed\.org\/graph\/fredgraph\.csv/.test(IND) && /parseFredGraphCsv\(await res\.text\(\)\)/.test(IND));
+ok('#G2 FRED 키 없음/실패 → fredgraph.csv 폴백(히스토리)', /fetchFredApiHistory\(seriesId, d1, d2, timeoutMs(, signed)?\)[\s\S]{0,200}fetchFredGraphHistory\(seriesId, d1, d2, timeoutMs(, signed)?\)/.test(H)
+  && /fred\.stlouisfed\.org\/graph\/fredgraph\.csv/.test(H) && /parseFredGraphCsv\(await res\.text\(\)(, signed)?\)/.test(H));
+ok('#G3 실시간 기준금리도 fredgraph.csv 폴백', /fred\.stlouisfed\.org\/graph\/fredgraph\.csv/.test(IND) && /parseFredGraphCsv\(await res\.text\(\)(, diff)?\)/.test(IND));
 ok('#G4 기준금리 = DFEDTAR(~2008-12-15) + DFEDTARU 이음', /fetchFredHistory\('DFEDTARU'/.test(H) && /fetchFredHistory\('DFEDTAR', d1/.test(H) && /joinFedRate\(legacy, upper\)/.test(H));
 ok('#G5 US10Y 최신 꼬리를 Naver로 보충', /fillAfter\(data, tail\)/.test(H) && /fetchNaverBondHistory\('US10YT=RR', shiftYmd\(ymd\(last\), 1\)/.test(H));
 ok('#G6 KR10Y 앞쪽을 FRED 월별로 보충', /fetchFredHistory\('IRLTLT01KRM156N', d1, shiftYmd\(ymd\(first\), -1\)/.test(H) && /fillBefore\(data, head\)/.test(H));
@@ -196,6 +214,13 @@ ok('#G13 훅: Drive 로드 뒤 1회 · 조회기간 변경 · 새로고침 3개 
   && /if \(fresh && coverageReadyRef\.current\) ensureIndicatorCoverage\(\{ forceTail: true \}\);/.test(M));
 ok('#G14 훅: MARKET 파일을 직접 쓰지 않는다(App 자동 저장 게이트 경유)', !/saveDriveFile\(/.test(M));
 ok('#G15 훅: 국내금은 조회 시작일까지 페이지를 이어 받는다', /&stop=\$\{stop\}/.test(M) && /if \(!\(json\.next > page\)\) break;/.test(M));
+ok('#G16b 서버: 미국 금리 5종 FRED 시리즈 · 금리차는 signed + JSON 응답', /us2y:\s*\{ id: 'DGS2',\s*signed: false \}/.test(H) && /us30y:\s*\{ id: 'DGS30',\s*signed: false \}/.test(H)
+  && /us3m:\s*\{ id: 'DGS3MO',\s*signed: false \}/.test(H) && /t10y2y:\s*\{ id: 'T10Y2Y',\s*signed: true \}/.test(H) && /t10y3m:\s*\{ id: 'T10Y3M',\s*signed: true \}/.test(H)
+  && /fetchFredHistory\(id, d1, d2, 10000, signed\)/.test(H) && /if \(!signed\) return csvResponse\(data, recent\);/.test(H));
+ok('#G16c 실시간: 5종 최신값 + 금리차 전일대비는 %p 차이', /fetchFred\('DGS2'\)/.test(IND) && /fetchFred\('DGS30'\)/.test(IND) && /fetchFred\('DGS3MO'\)/.test(IND)
+  && /fetchFred\('T10Y2Y', true\)/.test(IND) && /fetchFred\('T10Y3M', true\)/.test(IND) && /t10y3m:\s*ok\(t10y3m\)/.test(IND));
+ok('#G16d 훅: 금리차는 signed 병합·커버리지', /mergeIndicatorHistory\(prev\[key\], parsedData, isSignedIndicator\(key\)\)/.test(M)
+  && /INDICATOR_SOURCE_FLOOR\[key\], isSignedIndicator\(key\)\)/.test(M) && /t10y3m:\s*'fred:T10Y3M'/.test(M));
 ok('#G16 순수 모듈은 import 0건', !/^\s*import\s/m.test(COV) && !/^\s*import\s/m.test(SRCS));
 
 // ── 2026-10: 지수 3종도 같은 보충 경로 ──
@@ -205,7 +230,7 @@ const panelKeys = [...new Set([...MI.matchAll(/label:\s*'[^']+',\s*key:\s*'(\w+)
 const covKeys = (COV.match(/INDICATOR_HISTORY_KEYS = \[([^\]]+)\]/) || [])[1];
 const idxKeys = (COV.match(/MARKET_INDEX_KEYS = \[([^\]]+)\]/) || [])[1];
 const covSet = new Set([...(covKeys || '').matchAll(/'(\w+)'/g), ...(idxKeys || '').matchAll(/'(\w+)'/g)].map(m => m[1]));
-ok('#G17 패널의 모든 항목(13)이 커버리지 키 목록에 있다', panelKeys.length === 13 && panelKeys.every(k => covSet.has(k)));
+ok('#G17 패널의 모든 항목(18)이 커버리지 키 목록에 있다', panelKeys.length === 18 && panelKeys.every(k => covSet.has(k)));
 ok('#G18 서버: 지수 3종 Yahoo 라우트(kospi/sp500/nasdaq) — 임의 구간 조회 가능', /kospi:\s*'\^KS11'/.test(H) && /sp500:\s*'\^GSPC'/.test(H) && /nasdaq:\s*'\^NDX'/.test(H));
 ok('#G19 훅: 커버리지 키는 순수 모듈 목록 그대로(13개) — 손나열 금지', /const AUTO_INDICATOR_KEYS = INDICATOR_COVERAGE_KEYS;/.test(M)
   && !/AUTO_INDICATOR_KEYS = \['us10y'/.test(M));

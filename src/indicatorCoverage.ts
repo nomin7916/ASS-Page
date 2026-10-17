@@ -15,7 +15,14 @@ export const MAX_GAP_SEGMENTS = 4;            // 한 번에 채우는 내부 공
 // 커버리지 보충 대상 = 시장지표 패널의 13개 항목 전부(사용자 확정 2026-10 "기준금리 이외의 모든 항목도 똑같이").
 // ⚠️ 두 목록이 단일 소스다 — 훅(useMarketData)과 검증(verify:indicators)이 이 배열을 직접 읽는다.
 //   indicatorHistoryMap에 사는 지표 10종 / marketIndices에 사는 지수 3종(저장 위치가 달라 병합 대상만 갈린다).
-export const INDICATOR_HISTORY_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'goldKr'];
+export const INDICATOR_HISTORY_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'goldKr',
+  // 미국 금리 5종(2026-10) — FRED 일별. us10y와 같은 경로(서버 /api/history · 커버리지 보충)를 탄다.
+  'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'];
+// 장단기 금리차(%p)는 **0·음수가 정상값**이다(수익률 곡선 역전). 다른 지표는 0 이하를 손상값으로 버리지만,
+// 이 키들까지 버리면 역전 구간이 통째로 빠지고 커버리지가 그 구간을 매 세션 '구멍'으로 보고 헛조회한다.
+// ⚠️ 판정은 isSignedIndicator 하나로만 — 병합(mergeIndicatorHistory)·커버리지(indicatorDates)·서버 응답 파서가 공유한다.
+export const SIGNED_INDICATOR_KEYS = ['t10y2y', 't10y3m'];
+export const isSignedIndicator = (key: string | null | undefined): boolean => !!key && SIGNED_INDICATOR_KEYS.includes(key);
 export const MARKET_INDEX_KEYS = ['kospi', 'sp500', 'nasdaq'];
 export const INDICATOR_COVERAGE_KEYS = [...INDICATOR_HISTORY_KEYS, ...MARKET_INDEX_KEYS];
 
@@ -23,6 +30,11 @@ export const INDICATOR_COVERAGE_KEYS = [...INDICATOR_HISTORY_KEYS, ...MARKET_IND
 // ⚠️ 13개 키 전부 있어야 한다(#10c) — 빠진 지표는 2004년 이전 조회에서 매 세션 머리 구간을 헛조회한다.
 export const INDICATOR_SOURCE_FLOOR: Record<string, string> = {
   us10y: '1962-01-02',    // FRED DGS10 최초일
+  us2y: '1976-06-01',     // FRED DGS2 최초일
+  us30y: '1977-02-15',    // FRED DGS30 최초일(2002-02~2006-02 발행 중단 구간은 내부 공백)
+  us3m: '1981-09-01',     // FRED DGS3MO 최초일
+  t10y2y: '1976-06-01',   // FRED T10Y2Y 최초일
+  t10y3m: '1982-01-04',   // FRED T10Y3M 최초일
   fedRate: '1982-09-27',  // FRED DFEDTAR 최초일
   kr10y: '2000-10-02',    // FRED IRLTLT01KRM156N(월별) 최초월 — 네이버 일별은 그보다 늦다
   goldIntl: '2000-08-30', // Yahoo GC=F 최초일
@@ -53,10 +65,11 @@ export function daysBetweenIso(a: string, b: string): number {
 export interface IndicatorSegment { from: string; to: string; kind: 'all' | 'head' | 'gap' | 'tail' }
 
 // 유효한(날짜 키 + 유한 양수 값) 날짜만 오름차순으로
-export function indicatorDates(hist: Record<string, unknown> | null | undefined): string[] {
+// signed=true(장단기 금리차)면 0·음수도 유효값이다(SIGNED_INDICATOR_KEYS 주석).
+export function indicatorDates(hist: Record<string, unknown> | null | undefined, signed = false): string[] {
   if (!hist || typeof hist !== 'object') return [];
   return Object.keys(hist)
-    .filter(d => isIsoDate(d) && Number.isFinite(Number(hist[d])) && Number(hist[d]) > 0)
+    .filter(d => isIsoDate(d) && hist[d] !== null && hist[d] !== '' && Number.isFinite(Number(hist[d])) && (signed || Number(hist[d]) > 0))
     .sort();
 }
 
@@ -68,6 +81,7 @@ export function indicatorMissingSegments(
   end: string | null | undefined,
   today: string,
   floor?: string | null,
+  signed = false,
 ): IndicatorSegment[] {
   if (!isIsoDate(today)) return [];
   let s = isIsoDate(start) ? start : '';
@@ -75,7 +89,7 @@ export function indicatorMissingSegments(
   const e = isIsoDate(end) && end < today ? end : today;
   if (s && s > e) return [];
 
-  const dates = indicatorDates(hist);
+  const dates = indicatorDates(hist, signed);
   if (dates.length === 0) {
     return s ? [{ from: s, to: e, kind: 'all' }] : [];
   }
@@ -118,13 +132,14 @@ export function indicatorMissingSegments(
 export function mergeIndicatorHistory(
   prev: Record<string, number> | null | undefined,
   incoming: Record<string, unknown> | null | undefined,
+  signed = false,
 ): Record<string, number> {
   const base = prev && typeof prev === 'object' ? prev : {};
   if (!incoming || typeof incoming !== 'object') return base as Record<string, number>;
   let next: Record<string, number> | null = null;
   for (const [d, raw] of Object.entries(incoming)) {
     const v = Number(raw);
-    if (!isIsoDate(d) || !Number.isFinite(v) || v <= 0) continue;
+    if (!isIsoDate(d) || raw === null || raw === '' || !Number.isFinite(v) || (!signed && v <= 0)) continue;
     if (base[d] === v) continue;
     if (!next) next = { ...base };
     next[d] = v;

@@ -75,6 +75,7 @@ import { useAutoConfirmHistory } from './hooks/useAutoConfirmHistory';
 import { useIndexImport } from './hooks/useIndexImport';
 import { usePortfolioData } from './hooks/usePortfolioData';
 import { useIntegratedData } from './hooks/useIntegratedData';
+import { isSignedIndicator } from './indicatorCoverage';
 import { useMarketCalendar, getTodayKST, getEffectiveDate, getEffectiveDateKR, getEffectiveDateForAccount, getBackfillBoundaryKR, getBackfillBoundaryForAccount, isKrCutoffAccount, getMsUntilNextBoundary } from './hooks/useMarketCalendar';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
@@ -1481,7 +1482,12 @@ export default function App() {
     );
   }, [unifiedDates, appliedRange]);
 
-  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth'];
+  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'];
+  // 장단기 금리차(t10y2y·t10y3m)는 0·음수가 정상값이라 비율(현재÷기준−1)이 무의미하다 → 기준 대비 **차이(%p)**로 그린다.
+  //    판정은 indicatorCoverage.isSignedIndicator 하나(수집·병합과 같은 소스).
+  const indRateOf = (k, cur, base) => (isSignedIndicator(k)
+    ? (Number.isFinite(base) && cur != null ? cur - base : null)
+    : (base > 0 && cur != null ? ((cur / base) - 1) * 100 : null));
 
   const indexDataMap = useMemo(() => {
     const map = {};
@@ -1509,7 +1515,7 @@ export default function App() {
         if (v !== null) {
           indPoints[`${k}Point`] = v;
           if (i === 0 || baseIndicators[k] == null) baseIndicators[k] = v;
-          indPoints[`${k}Rate`] = baseIndicators[k] > 0 ? ((v / baseIndicators[k]) - 1) * 100 : 0;
+          indPoints[`${k}Rate`] = indRateOf(k, v, baseIndicators[k]) ?? 0;
         }
       });
 
@@ -1937,16 +1943,16 @@ export default function App() {
       const sp500Base = firstBase('sp500Point');
       const nasdaqBase = firstBase('nasdaqPoint');
       const indBases = {};
-      INDICATOR_CHART_KEYS.forEach(k => { indBases[k] = firstBase(`${k}Point`); });
+      // 금리차는 0·음수도 유효한 기준점이다(firstBase는 양수만 찾는다)
+      INDICATOR_CHART_KEYS.forEach(k => { indBases[k] = isSignedIndicator(k) ? (rawData.find(d => d[`${k}Point`] != null)?.[`${k}Point`] ?? null) : firstBase(`${k}Point`); });
       const compBases = compStocks.map((_, ci) => firstBase(`comp${ci + 1}Point`));
       return rawData.map(item => {
         const indRates = {};
         INDICATOR_CHART_KEYS.forEach(k => {
           const basePoint = indBases[k];
           const curPoint = item[`${k}Point`];
-          if (basePoint > 0 && curPoint != null) {
-            indRates[`${k}Rate`] = ((curPoint / basePoint) - 1) * 100;
-          }
+          const r = indRateOf(k, curPoint, basePoint);
+          if (r != null) indRates[`${k}Rate`] = r;
         });
         return {
           ...item,
@@ -4420,7 +4426,7 @@ export default function App() {
     const indRates = {};
     INDICATOR_CHART_KEYS.forEach(k => {
       const sp = s[`${k}Point`]; const ep = e[`${k}Point`];
-      indRates[`${k}PeriodRate`] = (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
+      indRates[`${k}PeriodRate`] = sp == null ? null : indRateOf(k, ep, sp);
     });
     const backtestPeriodRate = (s.backtestRate != null && e.backtestRate != null)
       ? ((100 + e.backtestRate) / (100 + s.backtestRate) - 1) * 100 : null;

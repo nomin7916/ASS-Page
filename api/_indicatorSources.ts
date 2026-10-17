@@ -2,13 +2,14 @@
 // ⚠️ import 0건 · process.env 미사용 · enum/namespace 금지 — scripts/verify-indicators.mjs가 직접 import한다.
 
 // fredgraph.csv(키 불필요) — "observation_date,SERIES\nYYYY-MM-DD,값" (결측은 '.' 또는 빈 칸)
-export function parseFredGraphCsv(csv: string): Record<string, number> {
+// signed=true: 장단기 금리차(T10Y2Y·T10Y3M)처럼 0·음수가 정상값인 시리즈 — 값 부호로 버리지 않는다.
+export function parseFredGraphCsv(csv: string, signed = false): Record<string, number> {
   const record: Record<string, number> = {};
   for (const line of String(csv || '').split(/\r?\n/)) {
     const m = /^(\d{4}-\d{2}-\d{2}),\s*([^,\s]*)/.exec(line.trim());
     if (!m) continue;
     const v = parseFloat(m[2]);
-    if (Number.isFinite(v) && v > 0) record[m[1]] = v;
+    if (m[2] !== '' && Number.isFinite(v) && (signed || v > 0)) record[m[1]] = v;
   }
   return record;
 }

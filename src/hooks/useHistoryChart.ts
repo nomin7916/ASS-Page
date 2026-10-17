@@ -33,10 +33,11 @@ export function useHistoryChart() {
   const [showNasdaq, setShowNasdaq] = useState(false);
   const [showIndicatorsInChart, setShowIndicatorsInChart] = useState({
     us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false,
+    us2y: false, us30y: false, us3m: false, t10y2y: false, t10y3m: false,
   });
   const [goldIndicators, setGoldIndicators] = useState({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
   const [goldIndicatorColors, setGoldIndicatorColors] = useState({ goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' });
-  const [indicatorScales, setIndicatorScales] = useState({ us10y: 1, goldIntl: 1, goldKr: 1, usdkrw: 1, dxy: 1, fedRate: 1, kr10y: 1, vix: 1, btc: 1, eth: 1 });
+  const [indicatorScales, setIndicatorScales] = useState({ us10y: 1, goldIntl: 1, goldKr: 1, usdkrw: 1, dxy: 1, fedRate: 1, kr10y: 1, vix: 1, btc: 1, eth: 1, us2y: 1, us30y: 1, us3m: 1, t10y2y: 1, t10y3m: 1 });
   const [isScaleSettingOpen, setIsScaleSettingOpen] = useState(false);
 
   // ── 패널·금액 표시 ──

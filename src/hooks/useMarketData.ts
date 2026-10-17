@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { fetchIndexData } from '../api';
 import { buildIndexStatus, parseIndexCSV } from '../utils';
 import { getTodayKST } from './useMarketCalendar';
-import { indicatorMissingSegments, mergeIndicatorHistory, INDICATOR_SOURCE_FLOOR, INDICATOR_COVERAGE_KEYS, MARKET_INDEX_KEYS } from '../indicatorCoverage';
+import { indicatorMissingSegments, mergeIndicatorHistory, INDICATOR_SOURCE_FLOOR, INDICATOR_COVERAGE_KEYS, MARKET_INDEX_KEYS, isSignedIndicator } from '../indicatorCoverage';
 
 export const defaultCompStocks = [
   { id: 1, code: '', name: '비교종목1', active: false, loading: false, color: '#10b981' },
@@ -43,6 +43,8 @@ export function useMarketData({
     us10yChg: null, kr10yChg: null, usdkrwChg: null, dxyChg: null, goldIntlChg: null, goldKrChg: null,
     kospiChg: null, sp500Chg: null, nasdaqChg: null,
     fedRate: null, fedRateChg: null,
+    us2y: null, us2yChg: null, us30y: null, us30yChg: null, us3m: null, us3mChg: null,
+    t10y2y: null, t10y2yChg: null, t10y3m: null, t10y3mChg: null,
     vix: null, vixChg: null,
     btc: null, btcChg: null,
     eth: null, ethChg: null,
@@ -413,6 +415,12 @@ export function useMarketData({
     dxy:      'yahoo:DX-Y.NYB',
     kr10y:    'yahoo:^KR10YT=RR',
     fedRate:  'fred:DFEDTARU',
+    // 미국 금리 5종(2026-10) — FRED 일별. t10y2y·t10y3m 단위는 %p(0·음수 정상 — isSignedIndicator)
+    us2y:     'fred:DGS2',
+    us30y:    'fred:DGS30',
+    us3m:     'fred:DGS3MO',
+    t10y2y:   'fred:T10Y2Y',
+    t10y3m:   'fred:T10Y3M',
     goldKr:   null,
     vix:      'yahoo:^VIX',
     btc:      'yahoo:BTC-USD',
@@ -426,6 +434,7 @@ export function useMarketData({
   const INDICATOR_LABELS = {
     us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold', goldKr: '국내금',
     usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리', vix: 'VIX',
+    us2y: '미국 2년', us30y: '미국 30년', us3m: '미국 3개월', t10y2y: '10년−2년', t10y3m: '10년−3개월',
     btc: 'Bitcoin', eth: 'Ethereum',
     kospi: 'KOSPI', sp500: 'S&P500', nasdaq: 'Nasdaq100',
   };
@@ -521,7 +530,8 @@ export function useMarketData({
     }
 
     setIndicatorHistoryMap(prev => {
-      const merged = mergeIndicatorHistory(prev[key], parsedData);
+      // 장단기 금리차(%p)는 0·음수가 정상값 — signed 병합(그 외 키는 종전대로 0 이하 버림)
+      const merged = mergeIndicatorHistory(prev[key], parsedData, isSignedIndicator(key));
       return merged === prev[key] ? prev : { ...prev, [key]: merged };
     });
     return parsedData;
@@ -600,7 +610,8 @@ export function useMarketData({
       const data = await res.json();
 
       const keys = ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
-                    'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth'];
+                    'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',
+                    'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'];
 
       setMarketIndicators(prev => {
         const merged = { ...prev };
@@ -636,7 +647,8 @@ export function useMarketData({
     } catch (e) {
       console.error('시장 지표 수집 오류:', e);
       ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
-       'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth']
+       'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',
+       'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m']
         .forEach(k => { statusMap[k] = { status: 'fail', source: 'API 오류', updatedAt: now }; });
       const clientKeys = Object.keys(fetchersMap);
       retryFailedIndicators(clientKeys, { ...statusMap });
@@ -703,7 +715,7 @@ export function useMarketData({
       const end = appliedRangeRef.current?.end || '';
       await Promise.all(AUTO_INDICATOR_KEYS.map(async (key) => {
         const hist = MARKET_INDEX_KEYS.includes(key) ? marketIndicesRef.current?.[key] : indicatorHistoryMapRef.current?.[key];
-        const segs = indicatorMissingSegments(hist, start, end, today, INDICATOR_SOURCE_FLOOR[key]);
+        const segs = indicatorMissingSegments(hist, start, end, today, INDICATOR_SOURCE_FLOOR[key], isSignedIndicator(key));
         // 조회 시작일이 없고 데이터도 없으면 종전처럼 기본 기간(최근 3년)을 한 번 받는다
         if (segs.length === 0 && !start && (!hist || Object.keys(hist).length === 0)) {
           const g = `${key}:init`;
