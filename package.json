@@ -37,6 +37,7 @@
     "verify:palette": "node scripts/validate_palette.mjs",
     "verify:imports": "node scripts/importcheck.mjs",
     "verify:indicators": "node scripts/verify-indicators.mjs",
+    "verify:rate-metrics": "node scripts/verify-rate-metrics.mjs",
     "gate": "node scripts/gate.mjs",
     "ship": "node scripts/ship.mjs"
   },
