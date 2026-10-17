@@ -19,11 +19,13 @@ export const INDICATOR_HISTORY_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 
   // 미국 금리 5종(2026-10) — FRED 일별. us10y와 같은 경로(서버 /api/history · 커버리지 보충)를 탄다.
   'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m',
   // 하이일드·모기지·MOVE(2026-10). mort30은 주간, mbsSpread는 서버 계산값(mort30 − us10y).
-  'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'];
+  'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move',
+  // 한국 금리 3종(2026-10 7단계). krBase는 ECOS(인증키 필요), krUs10y는 서버 계산값(kr10y − us10y).
+  'kr3y', 'krBase', 'krUs10y'];
 // 장단기 금리차(%p)는 **0·음수가 정상값**이다(수익률 곡선 역전). 다른 지표는 0 이하를 손상값으로 버리지만,
 // 이 키들까지 버리면 역전 구간이 통째로 빠지고 커버리지가 그 구간을 매 세션 '구멍'으로 보고 헛조회한다.
 // ⚠️ 판정은 isSignedIndicator 하나로만 — 병합(mergeIndicatorHistory)·커버리지(indicatorDates)·서버 응답 파서가 공유한다.
-export const SIGNED_INDICATOR_KEYS = ['t10y2y', 't10y3m', 'mbsSpread'];
+export const SIGNED_INDICATOR_KEYS = ['t10y2y', 't10y3m', 'mbsSpread', 'krUs10y'];
 export const isSignedIndicator = (key: string | null | undefined): boolean => !!key && SIGNED_INDICATOR_KEYS.includes(key);
 export const MARKET_INDEX_KEYS = ['kospi', 'sp500', 'nasdaq'];
 export const INDICATOR_COVERAGE_KEYS = [...INDICATOR_HISTORY_KEYS, ...MARKET_INDEX_KEYS];
@@ -43,6 +45,9 @@ export const INDICATOR_SOURCE_FLOOR: Record<string, string> = {
   mbsSpread: '1971-04-02', // mort30 − us10y — mort30 첫 날짜부터
   move: '2002-11-12',     // Yahoo ^MOVE 실측 첫 날짜
   fedRate: '1982-09-27',  // FRED DFEDTAR 최초일
+  kr3y: '2023-10-18',     // 네이버 KR3YT=RR 일별 실측 첫 날짜(최근 약 3년만 제공 — 날짜가 해마다 밀린다)
+  krBase: '1999-05-06',   // ECOS 722Y001/0101000 일별 첫 날짜(StatisticItemList START_TIME)
+  krUs10y: '2023-10-18',  // kr10y 네이버 일별 − DGS10 — 네이버 일별 첫 날짜부터
   kr10y: '2000-10-02',    // FRED IRLTLT01KRM156N(월별) 최초월 — 네이버 일별은 그보다 늦다
   goldIntl: '2000-08-30', // Yahoo GC=F 최초일
   usdkrw: '1981-04-13',   // FRED DEXKOUS 최초일(Yahoo KRW=X는 2003-12~)

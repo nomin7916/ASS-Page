@@ -25,7 +25,7 @@ const m = (o = {}) => ({ current: 1, change1m: 0, high52: 9, position52: 10, pct
 const a = (o = {}) => ({ price: 20, yield12: null, yieldPost: null, drawdown52: null, pb: null, pnav: null, manualSet: false, ...o });
 
 if (S) {
-  const { evalLongBond, evalHighYield, evalMortgageReit, evalEquityReit, evalBdc, evaluateRateSignals, RATE_RULES } = S;
+  const { evalLongBond, evalHighYield, evalMortgageReit, evalEquityReit, evalBdc, evalKrBond, evaluateRateSignals, RATE_RULES } = S;
   const st = (r) => [r.state, `${r.met}/${r.total}`];
   console.log('\n── 파트① 자산군별 판정 ──');
 
@@ -90,12 +90,19 @@ if (S) {
   ], [[['AGNC 배당률', 14, 11.9]], [['O 배당률', 5.4, 4.59]], [['MAIN 배당률', 7, 5.95]]]);
   eq('#27b 대표 종목 자료가 없으면 수익률 칸은 비운다', evalEquityReit({}).yields, []);
 
+  // 한국 채권(비교용) — ① 국고채 10년 3년 백분위 70 이상 → 관심, ①② 꺾임까지 → 적기
+  eq('#28 한국 채권 대기', st(evalKrBond({ kr10y: m({ pct3y: 60, turnedDown: true }) })), ['wait', '1/2']);
+  eq('#29 한국 채권 관심 — ①', st(evalKrBond({ kr10y: m({ pct3y: 75 }) })), ['watch', '1/2']);
+  eq('#30 한국 채권 적기 — ①②', st(evalKrBond({ kr10y: m({ pct3y: 70, turnedDown: true }) })), ['buy', '2/2']);
+  eq('#31 한국 채권 수익률 — 3년·10년, 세후 = × (1 − 15.4%)', evalKrBond({ kr3y: m({ current: 3 }), kr10y: m({ current: 3.5 }) }).yields.map(y => [y.label, y.pre, +y.post.toFixed(4)]), [['3년', 3, 2.538], ['10년', 3.5, 2.961]]);
+  ok('#32 한국 채권 설명 한 줄', evalKrBond({}).note === '미국 자산과 비교하기 위한 참고 줄입니다' && RATE_RULES.krInterestTaxPct === 15.4);
+
   console.log('\n── 파트② 공통 규칙 ──');
   const none = evaluateRateSignals({});
-  eq('#19 자료가 없으면 전부 대기(충족으로 치지 않는다)', none.map(r => r.state), ['wait', 'wait', 'wait', 'wait', 'wait']);
+  eq('#19 자료가 없으면 전부 대기(충족으로 치지 않는다)', none.map(r => r.state), ['wait', 'wait', 'wait', 'wait', 'wait', 'wait']);
   ok('#19b 자료 없음은 근거에 그대로 드러낸다', none.some(r => /자료 없음/.test(r.rationale)));
   const sorted = evaluateRateSignals({ us10y: m({ pct3y: 72, turnedDown: true }), fedRate: m({ pct3y: 60 }), hySpread: m({ change1m: 0, pct3y: 50 }) });
-  eq('#20 충족 비율 내림차순(같으면 정의 순서)', sorted.map(r => r.key), ['longBond', 'equityReit', 'bdc', 'highYield', 'mortgageReit']);
+  eq('#20 충족 비율 내림차순(같으면 정의 순서)', sorted.map(r => r.key), ['longBond', 'equityReit', 'bdc', 'highYield', 'mortgageReit', 'krBond']);
   ok('#20b 대표 종목 행을 넘기면 판정에 반영된다', evaluateRateSignals({ us10y: m({ pct3y: 72, turnedDown: true }) }, { O: a({ yield12: 6.5 }) }).find(r => r.key === 'equityReit').state === 'buy');
   ok('#21 원천징수율 15%', RATE_RULES.withholdingPct === 15);
 }
@@ -107,10 +114,11 @@ console.log('\n── 파트③ 배선 가드 ──');
   const RW = src('src/components/RateWindow.tsx');
   const code = RS.replace(/\/\/.*$/gm, '');
   ok('#G1 순수 모듈은 import 0건', !/^\s*import\s/m.test(RS));
-  ok('#G2 문턱값은 RATE_RULES 한 곳 — 판정 함수가 RATE_RULES를 읽는다', /export const RATE_RULES = \{/.test(RS) && (code.match(/= RATE_RULES\.\w+;/g) || []).length === 5);
+  ok('#G2 문턱값은 RATE_RULES 한 곳 — 판정 함수가 RATE_RULES를 읽는다', /export const RATE_RULES = \{/.test(RS) && (code.match(/= RATE_RULES\.\w+;/g) || []).length === 6);
   ok('#G3 창은 판정을 rateSignals에서만 가져온다', /from '\.\.\/rateSignals'/.test(RW) && /evaluateRateSignals\(metrics, assetRows\)/.test(RW));
   ok('#G4 지시형 문구 없음(주석 제외)', !/사세요|매수하세요|파세요/.test(code + RW.replace(/\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')));
   ok('#G6 새 기준치도 RATE_RULES에 있다', /pbMax: 0\.9, pbWarn: 1\.1/.test(RS) && /oYieldMin: 6\.0/.test(RS) && /mainDrawdownMax: -15, mainPnavMax: 1\.5/.test(RS));
+  ok('#G8 한국 채권 기준치 · 6번째 자산군', /krBond: \{ pctMin: 70 \}/.test(RS) && /evalBdc\(m, assets\), evalKrBond\(m\)\]/.test(RS));
   ok('#G7 6단계 자리표시 문구가 남지 않았다', !/6단계에서 추가/.test(RS));
   ok('#G5 행을 누르면 조건 목록을 펼친다', /setOpenSignal\(/.test(RW) && /c\.pending \? '…' : c\.met \? '○' : '×'/.test(RW));
 }

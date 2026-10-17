@@ -4,10 +4,14 @@
 export const config = { runtime: 'edge' };
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
+const ECOS_KEY = process.env.ECOS_API_KEY ?? '';   // 한국은행 ECOS — 한국 기준금리(krBase). 없으면 '인증키 필요' 502
 
 import { getKisToken } from './_kisToken.js';
 import { fetchKisDailyRange } from './_kisDaily.js';
-import { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread } from './_indicatorSources.js';
+import {
+  parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread,
+  computeKrUsSpread, parseEcosRows, parseNaverBondPrices,
+} from './_indicatorSources.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
@@ -268,6 +272,38 @@ async function fetchNaverBondHistory(reutersCode: string, d1: string, d2: string
   return record;
 }
 
+// 네이버 채권 일별 — 옛 기간 조회(bond/prices)가 비면(2026-10 실측 404) front-api 페이지 조회(최근 약 3년, 쪽당 60건)로 받는다.
+//   kr10y·kr3y·krUs10y가 공유한다. 조회 구간 밖 날짜는 버린다.
+async function fetchNaverBondDaily(reutersCode: string, d1: string, d2: string, deadlineAt = Date.now() + 12000): Promise<Record<string, number>> {
+  const old = await fetchNaverBondHistory(reutersCode, d1, d2, deadlineAt);
+  if (Object.keys(old).length >= 10) return old;
+  const lo = d1 ? `${d1.slice(0, 4)}-${d1.slice(4, 6)}-${d1.slice(6, 8)}` : '';
+  const hi = d2 ? `${d2.slice(0, 4)}-${d2.slice(4, 6)}-${d2.slice(6, 8)}` : '9999-12-31';
+  const out: Record<string, number> = { ...old };
+  for (let page = 1; page <= 15; page++) {
+    const remaining = deadlineAt - Date.now();
+    if (remaining < 1500) break;
+    let rec: Record<string, number> | null = null;
+    try {
+      const res = await fetch(`https://m.stock.naver.com/front-api/marketIndex/prices?category=bond&reutersCode=${encodeURIComponent(reutersCode)}&page=${page}&pageSize=60`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+          'Referer':    'https://m.stock.naver.com/',
+          'Accept':     'application/json',
+        },
+        signal: AbortSignal.timeout(Math.min(8000, remaining)),
+      });
+      if (!res.ok) break;
+      rec = parseNaverBondPrices(await res.json());
+    } catch { break; }
+    const days = Object.keys(rec || {});
+    if (!days.length) break;
+    for (const d of days) if ((!lo || d >= lo) && d <= hi) out[d] = (rec as Record<string, number>)[d];
+    if (lo && days.sort()[0] < lo) break; // 시작일보다 앞까지 받았다
+  }
+  return out;
+}
+
 // { date: price } → "Date,Close\n..." CSV 변환 (기존 parseIndexCSV 호환)
 function toCSV(data: Record<string, number>): string {
   const lines = ['Date,Close'];
@@ -277,7 +313,7 @@ function toCSV(data: Record<string, number>): string {
   return lines.join('\n');
 }
 
-// 순수 과거 지표 히스토리(us10y/us2y/us30y/us3m/t10y2y/t10y3m/hyYield/hySpread/mort30/mbsSpread/move/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth + 지수 kospi/sp500/nasdaq) → 24h 캐시
+// 순수 과거 지표 히스토리(us10y/us2y/us30y/us3m/t10y2y/t10y3m/hyYield/hySpread/mort30/mbsSpread/move/fedRate/kr10y/kr3y/krBase/krUs10y/goldIntl/usdkrw/dxy/vix/btc/eth + 지수 kospi/sp500/nasdaq) → 24h 캐시
 // ⚠️ 종료일이 최근(어제·오늘)인 요청은 1h만 캐시한다 — 24h로 두면 '새로고침' 꼬리 수집이 하루 내내 같은
 //    (오늘 값이 빠진) 응답을 돌려받는다. 과거 구간만 담은 요청은 값이 바뀌지 않으므로 24h 그대로.
 function csvResponse(data: Record<string, number>, recent = false): Response {
@@ -810,7 +846,7 @@ export default async function handler(request: Request): Promise<Response> {
 
   // kr10y: Naver 일별 primary → 앞쪽(네이버가 못 준 과거)은 FRED 월별(IRLTLT01KRM156N)로 보충
   if (key === 'kr10y') {
-    let data = await fetchNaverBondHistory('KR10YT=RR', d1, d2, Date.now() + 12000);
+    let data = await fetchNaverBondDaily('KR10YT=RR', d1, d2, Date.now() + 12000);
     const first = firstKey(data);
     if (Object.keys(data).length < 10) {
       data = await fetchFredHistory('IRLTLT01KRM156N', d1, d2);
@@ -820,6 +856,45 @@ export default async function handler(request: Request): Promise<Response> {
     }
     if (Object.keys(data).length === 0) return new Response('kr10y 수집 실패', { status: 502 });
     return csvResponse(data, recent);
+  }
+
+  // kr3y(국고채 3년): kr10y와 같은 네이버 일별 경로. FRED에 같은 만기 월별 시계열이 없어 앞쪽 보충은 없다(최근 약 3년).
+  if (key === 'kr3y') {
+    const data = await fetchNaverBondDaily('KR3YT=RR', d1, d2, Date.now() + 12000);
+    if (Object.keys(data).length === 0) return new Response('kr3y 수집 실패', { status: 502 });
+    return csvResponse(data, recent);
+  }
+
+  // krBase(한국은행 기준금리): ECOS 722Y001 / 0101000 / 일별(_indicatorSources.parseEcosRows 주석). 인증키가 없으면 502.
+  if (key === 'krBase') {
+    if (!ECOS_KEY) return new Response('krBase 인증키 필요(ECOS_API_KEY)', { status: 502 });
+    let data: Record<string, number> | null = null;
+    try {
+      const res = await fetch(`https://ecos.bok.or.kr/api/StatisticSearch/${encodeURIComponent(ECOS_KEY)}/json/kr/1/100000/722Y001/D/${d1 || '19990506'}/${d2 || ymd(new Date().toISOString().slice(0, 10))}/0101000`,
+        { signal: AbortSignal.timeout(Math.min(15000, budgetLeft())) });
+      if (res.ok) data = parseEcosRows(await res.json());
+    } catch { data = null; }
+    if (!data || Object.keys(data).length === 0) return new Response('krBase 수집 실패', { status: 502 });
+    return csvResponse(data, recent);
+  }
+
+  // krUs10y(%p) = kr10y − us10y(DGS10) — 서버 계산, 음수 정상 → JSON 응답(mbsSpread와 같은 규약).
+  if (key === 'krUs10y') {
+    const [kr, ust] = await Promise.all([
+      fetchNaverBondDaily('KR10YT=RR', d1, d2, Date.now() + 12000),
+      fetchFredHistory('DGS10', shiftYmd(d1, -14), d2),
+    ]);
+    const data = computeKrUsSpread(kr, ust);
+    if (Object.keys(data).length === 0) return new Response('krUs10y 수집 실패', { status: 502 });
+    return new Response(JSON.stringify(data), {
+      headers: {
+        'Content-Type':                'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control':               recent
+          ? 's-maxage=3600, stale-while-revalidate=600'
+          : 's-maxage=86400, stale-while-revalidate=43200',
+      },
+    });
   }
 
   // Yahoo Finance 지원 지표

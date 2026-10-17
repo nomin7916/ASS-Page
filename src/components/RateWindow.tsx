@@ -44,7 +44,7 @@ const BG_OPTIONS = [
   { key: 'white', label: '백색' },
 ];
 
-// 사용 키 13개 — unit: '%'(금리) · '%p'(금리차·스프레드) · ''(MOVE)
+// 사용 키 16개 — unit: '%'(금리) · '%p'(금리차·스프레드) · ''(MOVE)
 const RATE_DEFS = {
   fedRate:   { label: '기준금리',        unit: '%',  hint: '연준이 정한 정책금리(상단)' },
   us3m:      { label: '미국 3개월',      unit: '%',  hint: '기준금리를 바로 따라가는 단기 금리' },
@@ -58,7 +58,10 @@ const RATE_DEFS = {
   mort30:    { label: '30년 모기지',     unit: '%',  hint: '미국 주택담보대출 금리(주간 발표)', weekly: true },
   mbsSpread: { label: 'MBS 스프레드',    unit: '%p', hint: '모기지 − 10년 금리, 커지면 주택 자금이 빡빡하다' },
   move:      { label: 'MOVE',            unit: '',   hint: '금리가 얼마나 요동치는지' },
+  krBase:    { label: '한국 기준금리',   unit: '%',  hint: '한국은행이 정한 정책금리(ECOS)' },
+  kr3y:      { label: '국고채 3년',      unit: '%',  hint: '국내 단기 국채 금리 — 기준금리 기대를 따라간다' },
   kr10y:     { label: '한국 10년',       unit: '%',  hint: '국내 장기 금리의 기준' },
+  krUs10y:   { label: '한미 10년 금리차', unit: '%p', hint: '음수면 미국 금리가 더 높음 — 원화 약세 압력' },
 };
 const RATE_KEYS = Object.keys(RATE_DEFS);
 // 자료가 짧은 지표 — FRED ICE BofA 2종은 2023-10-17부터만 제공된다(3년 백분위 옆에 '자료 3년' 표시)
@@ -68,7 +71,7 @@ const BOARD_ROWS = [
   { title: '미국 금리', keys: ['fedRate', 'us3m', 'us2y', 'us10y', 'us30y'] },
   { title: '금리차', keys: ['t10y2y', 't10y3m'] },
   { title: '신용·모기지', keys: ['hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'] },
-  { title: '한국', keys: ['kr10y'] },
+  { title: '한국', keys: ['krBase', 'kr3y', 'kr10y', 'krUs10y'] },
 ];
 
 const PERIODS = [
@@ -83,6 +86,7 @@ const COLORS = {
   t10y2y: '#2dd4bf', t10y3m: '#fb923c',
   hyYield: '#f472b6', hySpread: '#38bdf8',
   mbsSpread: '#fb923c', move: '#a78bfa',
+  krBase: '#f472b6', kr3y: '#38bdf8', kr10y: '#fbbf24',
 };
 // ③ 상태 색 — 대기 회색 · 관심 하늘 · 적기 녹색 · 경고 빨강
 const SIGNAL_COLOR = { wait: '#9ca3af', watch: '#38bdf8', buy: '#4ade80', warn: '#f87171' };
@@ -114,7 +118,7 @@ async function fetchHistory(key, fromIso, toIso) {
   } catch { return null; }
 }
 
-function RateCard({ k, m, t }) {
+function RateCard({ k, m, t, emptyText = null }) {
   const def = RATE_DEFS[k];
   const band = m.band ? BAND[m.band] : null;
   const pos = m.position52 == null ? null : Math.max(0, Math.min(100, m.position52));
@@ -130,7 +134,7 @@ function RateCard({ k, m, t }) {
         )}
       </div>
       <div className="flex items-baseline gap-2 mt-1">
-        <span className="text-[18px] font-extrabold tabular-nums">{fmtVal(m.current, def.unit)}</span>
+        <span className="text-[18px] font-extrabold tabular-nums">{m.current == null && emptyText ? <span className="text-[13px] text-amber-400">{emptyText}</span> : fmtVal(m.current, def.unit)}</span>
         <span className={`text-[11px] font-bold tabular-nums ${m.change1m > 0 ? 'text-red-400' : m.change1m < 0 ? 'text-blue-400' : t.sub}`}
           title="1개월 변화">1M {fmtChg(m.change1m, def.unit)}</span>
       </div>
@@ -359,6 +363,9 @@ export default function RateWindow() {
   const rowsSpread = useMemo(() => buildRateChartRows(seriesByKey, ['t10y2y', 't10y3m'], fromChart), [seriesByKey, fromChart]);
   const rowsHy = useMemo(() => buildRateChartRows(seriesByKey, ['hyYield', 'hySpread'], fromChart), [seriesByKey, fromChart]);
   const rowsMbs = useMemo(() => buildRateChartRows(seriesByKey, ['mbsSpread', 'move'], fromChart), [seriesByKey, fromChart]);
+  const rowsKr = useMemo(() => buildRateChartRows(seriesByKey, ['krBase', 'kr3y', 'kr10y', 'us10y'], fromChart), [seriesByKey, fromChart]);
+  // 한국 기준금리 — 서버에 ECOS 인증키가 없으면 값 대신 needKey가 온다(값을 지어내지 않는다)
+  const krBaseNeedKey = live?.krBase?.needKey === true;
 
   const themeKey = bgMode === 'system' ? (systemDark ? 'black' : 'white') : bgMode;
   const t = THEMES[themeKey];
@@ -418,7 +425,7 @@ export default function RateWindow() {
             </div>
             {failedKeys.length > 0 && (
               <div className="text-[11px] text-amber-400 mb-2">
-                받지 못한 자료: {failedKeys.map(k => RATE_DEFS[k].label).join(', ')}
+                받지 못한 자료: {failedKeys.map(k => (k === 'krBase' && krBaseNeedKey ? `${RATE_DEFS[k].label}(인증키 필요)` : RATE_DEFS[k].label)).join(', ')}
               </div>
             )}
             <div className="flex flex-col gap-3">
@@ -426,7 +433,7 @@ export default function RateWindow() {
                 <div key={row.title}>
                   <div className={`text-[11px] font-bold mb-1 ${t.sub}`}>{row.title}</div>
                   <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-                    {row.keys.map(k => <RateCard key={k} k={k} m={metrics[k]} t={t} />)}
+                    {row.keys.map(k => <RateCard key={k} k={k} m={metrics[k]} t={t} emptyText={k === 'krBase' && krBaseNeedKey ? '인증키 필요' : null} />)}
                   </div>
                 </div>
               ))}
@@ -437,7 +444,7 @@ export default function RateWindow() {
           <section className={`rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
             <div className="flex flex-wrap items-baseline gap-2 mb-2">
               <h2 className="text-[13px] font-bold">지금 적정 자산</h2>
-              <span className={`text-[10px] ${t.sub}`}>금리 지표 조건 충족 순 · 행을 누르면 조건별 ○× · 세후 = 미국 원천징수 {RATE_RULES.withholdingPct}% 차감</span>
+              <span className={`text-[10px] ${t.sub}`}>금리 지표 조건 충족 순 · 행을 누르면 조건별 ○× · 세후 = 미국 원천징수 {RATE_RULES.withholdingPct}% 차감(한국 채권은 이자소득세 {RATE_RULES.krInterestTaxPct}%)</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-[12px] border-collapse">
@@ -571,6 +578,20 @@ export default function RateWindow() {
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <Line yAxisId="left" isAnimationActive={false} type="monotone" dataKey="mbsSpread" name={RATE_DEFS.mbsSpread.label} stroke={COLORS.mbsSpread} dot={false} strokeWidth={1.5} connectNulls />
                   <Line yAxisId="right" isAnimationActive={false} type="monotone" dataKey="move" name={RATE_DEFS.move.label} stroke={COLORS.move} dot={false} strokeWidth={1.5} connectNulls />
+                </ComposedChart>
+              </ChartBox>
+
+              <ChartBox title="한국 금리 — 기준금리·국고채 3년·10년 + 미국 10년(점선)" rows={rowsKr} t={t}>
+                <ComposedChart data={rowsKr} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke={t.grid} vertical={false} />
+                  <XAxis dataKey="date" tick={axisTick} tickFormatter={shortDate} minTickGap={40} stroke={t.axis} />
+                  <YAxis tick={axisTick} stroke={t.axis} width={36} domain={['auto', 'auto']} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={tip('%')} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  {['krBase', 'kr3y', 'kr10y'].map(k => (
+                    <Line key={k} isAnimationActive={false} type="monotone" dataKey={k} name={RATE_DEFS[k].label} stroke={COLORS[k]} dot={false} strokeWidth={1.5} connectNulls />
+                  ))}
+                  <Line isAnimationActive={false} type="monotone" dataKey="us10y" name={RATE_DEFS.us10y.label} stroke={t.axis} strokeDasharray="4 3" dot={false} strokeWidth={1.2} connectNulls />
                 </ComposedChart>
               </ChartBox>
             </div>

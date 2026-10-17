@@ -10,17 +10,19 @@ const INDICATOR_COLORS = {
   vix: '#ff453a', btc: '#f7931a', eth: '#627eea',
   us2y: '#a1a1aa', us30y: '#71717a', us3m: '#d4d4d8', t10y2y: '#2dd4bf', t10y3m: '#14b8a6',
   hyYield: '#f472b6', hySpread: '#e879f9', mort30: '#fbbf24', mbsSpread: '#fb923c', move: '#a78bfa',
+  kr3y: '#a3a3a3', krBase: '#f43f5e', krUs10y: '#22d3ee',
 };
 
 // Yahoo Finance / FRED 자동수집 가능한 키
-const STOOQ_SUPPORTED = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'];
+const STOOQ_SUPPORTED = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y'];
 // 차트에 표시 가능한 키
-const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'];
+const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth', 'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m', 'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y'];
 // 주간 지표 관측일 표기 — '10월 9일 값' (ISO 날짜를 문자열로 잘라 시간대 영향 없음)
 const asOfLabel = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? `${+iso.slice(5, 7)}월 ${+iso.slice(8, 10)}일 값` : '');
 const lastHistDate = (h) => (h && typeof h === 'object' ? Object.keys(h).sort().pop() || null : null);
 // 장단기 금리차 — 단위 %p, 전일 대비도 %p 차이(api/indicators fetchFred diff)
-const SPREAD_KEYS = ['t10y2y', 't10y3m', 'hySpread', 'mbsSpread'];
+// 한미 10년 금리차도 %p, 한국 기준금리의 전일 대비는 '직전 변경폭(%p)'이다(api/indicators fetchEcosBaseRate)
+const SPREAD_KEYS = ['t10y2y', 't10y3m', 'hySpread', 'mbsSpread', 'krUs10y', 'krBase'];
 
 // 수집 source 이름 → 실제 출처 URL 매핑
 const SOURCE_URLS: Record<string, Record<string, string>> = {
@@ -42,6 +44,9 @@ const SOURCE_URLS: Record<string, Record<string, string>> = {
   mort30:  { FRED: 'https://fred.stlouisfed.org/series/MORTGAGE30US' },
   mbsSpread:{ FRED: 'https://fred.stlouisfed.org/series/MORTGAGE30US' },
   move:    { Yahoo: 'https://finance.yahoo.com/quote/%5EMOVE/' },
+  kr3y:    { 'Naver채권': 'https://m.stock.naver.com/marketindex/bond', Yahoo: 'https://finance.yahoo.com/quote/%5EKR3YT%3DRR/' },
+  krBase:  { ECOS: 'https://ecos.bok.or.kr/' },
+  krUs10y: { calc: 'https://m.stock.naver.com/marketindex/bond' },
   usdkrw:  { Yahoo: 'https://finance.yahoo.com/quote/KRW=X/', 'Naver환율': 'https://m.stock.naver.com/marketindex/exchange/FX_USDKRW' },
   dxy:     { Yahoo: 'https://finance.yahoo.com/quote/DX-Y.NYB/' },
   vix:     { Yahoo: 'https://finance.yahoo.com/quote/%5EVIX/' },
@@ -69,6 +74,9 @@ const DEFAULT_URLS: Record<string, string> = {
   mort30:  'https://fred.stlouisfed.org/series/MORTGAGE30US',
   mbsSpread:'https://fred.stlouisfed.org/series/MORTGAGE30US',
   move:    'https://finance.yahoo.com/quote/%5EMOVE/',
+  kr3y:    'https://m.stock.naver.com/marketindex/bond',
+  krBase:  'https://ecos.bok.or.kr/',
+  krUs10y: 'https://m.stock.naver.com/marketindex/bond',
   usdkrw:  'https://finance.yahoo.com/quote/KRW=X/',
   dxy:     'https://finance.yahoo.com/quote/DX-Y.NYB/',
   vix:     'https://finance.yahoo.com/quote/%5EVIX/',
@@ -225,6 +233,23 @@ export default function MarketIndicators({
       val: marketIndicators.kr10y, chg: marketIndicators.kr10yChg,
       fmt: (v) => v?.toFixed(3) + '%', color: 'text-gray-300',
     },
+    // 한국 금리 3종(2026-10 7단계). 기준금리는 ECOS 인증키가 없으면 '인증키 필요'(값을 지어내지 않는다)
+    {
+      label: '국고채 3년', key: 'kr3y',
+      val: marketIndicators.kr3y, chg: marketIndicators.kr3yChg,
+      fmt: (v) => v?.toFixed(3) + '%', color: 'text-gray-300',
+    },
+    {
+      label: '한국 기준금리', key: 'krBase',
+      val: marketIndicators.krBase, chg: marketIndicators.krBaseChg,
+      fmt: (v) => v?.toFixed(2) + '%', color: 'text-rose-300',
+      emptyText: marketIndicators.krBaseNeedKey ? '인증키 필요' : null,
+    },
+    {
+      label: '한미 10년 금리차', key: 'krUs10y',
+      val: marketIndicators.krUs10y, chg: marketIndicators.krUs10yChg,
+      fmt: (v) => (v > 0 ? '+' : '') + v?.toFixed(2) + '%p', color: 'text-cyan-300',
+    },
     {
       label: '미국 기준금리', key: 'fedRate',
       val: marketIndicators.fedRate, chg: marketIndicators.fedRateChg,
@@ -380,7 +405,7 @@ export default function MarketIndicators({
           title={effectiveUrl ? `클릭하여 출처 이동 (${indicatorFetchStatus[item.key]?.source ?? ''})` : undefined}
         >
           <span className="text-white font-bold font-mono text-[11px] truncate">
-            {item.val !== null && item.val !== undefined ? item.fmt(item.val) : '-'}
+            {item.val !== null && item.val !== undefined ? item.fmt(item.val) : (item.emptyText || '-')}
             {/* 주간 지표 관측일 — '○월 ○일 값' */}
             {item.asOf && <span className="block text-[9px] text-gray-500 font-normal leading-none">{asOfLabel(item.asOf)}</span>}
           </span>
@@ -492,6 +517,9 @@ export default function MarketIndicators({
                 { label: 'MBS 스프레드', key: 'mbsSpread', val: marketIndicators.mbsSpread, histKey: 'mbsSpread', marketIndexKey: null },
                 { label: 'MOVE',     key: 'move',     val: marketIndicators.move,       histKey: 'move', marketIndexKey: null },
                 { label: 'KR 10Y',   key: 'kr10y',   val: marketIndicators.kr10y,       histKey: 'kr10y', marketIndexKey: null },
+                { label: '국고채 3년', key: 'kr3y',   val: marketIndicators.kr3y,   histKey: 'kr3y', marketIndexKey: null },
+                { label: '한국 기준금리', key: 'krBase', val: marketIndicators.krBase, histKey: 'krBase', marketIndexKey: null },
+                { label: '한미 10년 금리차', key: 'krUs10y', val: marketIndicators.krUs10y, histKey: 'krUs10y', marketIndexKey: null },
                 { label: '기준금리',  key: 'fedRate', val: marketIndicators.fedRate,     histKey: 'fedRate', marketIndexKey: null },
                 { label: 'USDKRW',   key: 'usdkrw',  val: marketIndicators.usdkrw,     histKey: 'usdkrw', marketIndexKey: null },
                 { label: 'DXY',      key: 'dxy',      val: marketIndicators.dxy,        histKey: 'dxy', marketIndexKey: null },

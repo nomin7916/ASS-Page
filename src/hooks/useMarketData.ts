@@ -47,6 +47,7 @@ export function useMarketData({
     t10y2y: null, t10y2yChg: null, t10y3m: null, t10y3mChg: null,
     hyYield: null, hyYieldChg: null, hySpread: null, hySpreadChg: null, mort30: null, mort30Chg: null, mort30Date: null,
     mbsSpread: null, mbsSpreadChg: null, move: null, moveChg: null,
+    kr3y: null, kr3yChg: null, krBase: null, krBaseChg: null, krBaseNeedKey: false, krUs10y: null, krUs10yChg: null,
     vix: null, vixChg: null,
     btc: null, btcChg: null,
     eth: null, ethChg: null,
@@ -429,6 +430,10 @@ export function useMarketData({
     mort30:    'fred:MORTGAGE30US',
     mbsSpread: 'calc:MORTGAGE30US-DGS10',
     move:      'yahoo:^MOVE',
+    // 한국 금리 3종(2026-10 7단계) — kr3y 네이버 일별 · krBase ECOS(인증키) · krUs10y 서버 계산(kr10y − DGS10, %p)
+    kr3y:      'naver:KR3YT=RR',
+    krBase:    'ecos:722Y001/0101000',
+    krUs10y:   'calc:KR10Y-DGS10',
     goldKr:   null,
     vix:      'yahoo:^VIX',
     btc:      'yahoo:BTC-USD',
@@ -444,6 +449,7 @@ export function useMarketData({
     usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리', vix: 'VIX',
     us2y: '미국 2년', us30y: '미국 30년', us3m: '미국 3개월', t10y2y: '10년−2년', t10y3m: '10년−3개월',
     hyYield: '하이일드 금리', hySpread: '하이일드 스프레드', mort30: '30년 모기지', mbsSpread: 'MBS 스프레드', move: 'MOVE',
+    kr3y: '국고채 3년', krBase: '한국 기준금리', krUs10y: '한미 10년 금리차',
     btc: 'Bitcoin', eth: 'Ethereum',
     kospi: 'KOSPI', sp500: 'S&P500', nasdaq: 'Nasdaq100',
   };
@@ -621,7 +627,7 @@ export function useMarketData({
       const keys = ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
                     'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',
                     'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m',
-                    'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'];
+                    'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y'];
 
       setMarketIndicators(prev => {
         const merged = { ...prev };
@@ -641,6 +647,8 @@ export function useMarketData({
           } else {
             statusMap[k] = { status: 'fail', source: 'API', updatedAt: now };
           }
+          // 한국 기준금리 — ECOS 인증키가 없으면 서버가 값 대신 needKey를 보낸다(카드에 '인증키 필요')
+          if (k === 'krBase') merged.krBaseNeedKey = d?.needKey === true;
         });
         return merged;
       });
@@ -661,7 +669,7 @@ export function useMarketData({
       ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
        'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth',
        'us2y', 'us30y', 'us3m', 't10y2y', 't10y3m',
-       'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move']
+       'hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move', 'kr3y', 'krBase', 'krUs10y']
         .forEach(k => { statusMap[k] = { status: 'fail', source: 'API 오류', updatedAt: now }; });
       const clientKeys = Object.keys(fetchersMap);
       retryFailedIndicators(clientKeys, { ...statusMap });

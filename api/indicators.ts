@@ -6,6 +6,8 @@ export const config = { runtime: 'edge' };
 import { parseFredGraphCsv } from './_indicatorSources.js';
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
+// 한국은행 ECOS Open API 인증키 — 없으면 한국 기준금리는 빈 값 + needKey(화면에 '인증키 필요'). 값을 지어내지 않는다.
+const ECOS_KEY = process.env.ECOS_API_KEY ?? '';
 
 async function safeJson(url: string, init?: RequestInit) {
   try {
@@ -145,6 +147,23 @@ async function fetchNaverBond(reutersCode: string, source: string) {
   return price > 0 ? { price, change, source } : { price: null, change: null, source };
 }
 
+// 한국은행 기준금리(ECOS 722Y001 · 0101000 · 일별) — 최근 60일에서 마지막 값과 그 직전의 다른 값(%p 차이)
+async function fetchEcosBaseRate() {
+  if (!ECOS_KEY) return { price: null, change: null, source: 'ECOS', needKey: true };
+  const ymdOf = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '');
+  const end = new Date(), start = new Date(Date.now() - 60 * 86400000);
+  const data = await safeJson(`https://ecos.bok.or.kr/api/StatisticSearch/${encodeURIComponent(ECOS_KEY)}/json/kr/1/100/722Y001/D/${ymdOf(start)}/${ymdOf(end)}/0101000`);
+  const rows = Array.isArray(data?.StatisticSearch?.row) ? data.StatisticSearch.row : null;
+  if (!rows || !rows.length) return { price: null, change: null, source: 'ECOS', needKey: data?.RESULT?.CODE === 'INFO-100' };
+  const vals = rows.map((r: any) => ({ t: String(r.TIME), v: parseFloat(String(r.DATA_VALUE)) })).filter((x: any) => /^\d{8}$/.test(x.t) && Number.isFinite(x.v));
+  if (!vals.length) return { price: null, change: null, source: 'ECOS' };
+  vals.sort((a: any, b: any) => (a.t < b.t ? -1 : 1));
+  const last = vals[vals.length - 1];
+  const prevDiff = [...vals].reverse().find((x: any) => x.v !== last.v);
+  const date = `${last.t.slice(0, 4)}-${last.t.slice(4, 6)}-${last.t.slice(6, 8)}`;
+  return { price: last.v, change: prevDiff ? Math.round((last.v - prevDiff.v) * 10000) / 10000 : 0, source: 'ECOS', date };
+}
+
 // Yahoo Finance v8 chart API (서버사이드 직접 호출)
 async function fetchYahoo(symbol: string) {
   const data = await safeJson(
@@ -215,6 +234,7 @@ export default async function handler(req: Request): Promise<Response> {
   const [
     us10yFred, us10yYahoo, us10yNaver, fedRate,
     kr10yNaver, kr10yYahoo,
+    kr3yNaver, kr3yYahoo, krBase,
     kospi,
     sp500Yahoo, sp500Naver,
     nasdaqYahoo, nasdaqNaver,
@@ -233,6 +253,9 @@ export default async function handler(req: Request): Promise<Response> {
     fetchFred('DFEDTARU'),                                             // 미국 기준금리 상단 (FRED)
     fetchNaverBond('KR10YT=RR', 'Naver채권'),                         // KR 10Y (Naver primary)
     fetchYahoo('^KR10YT=RR'),                                          // KR 10Y (Yahoo fallback)
+    fetchNaverBond('KR3YT=RR', 'Naver채권'),                          // 국고채 3년 (Naver primary)
+    fetchYahoo('^KR3YT=RR'),                                           // 국고채 3년 (Yahoo fallback)
+    fetchEcosBaseRate(),                                               // 한국은행 기준금리 (ECOS)
     fetchNaver('/api/index/KOSPI/basic',                'Naver'),      // KOSPI
     fetchYahoo('^GSPC'),                                               // S&P500 (Yahoo primary)
     fetchNaver('/api/index/SPI@SPX/basic',              'Naver'),      // S&P500 (Naver fallback)
@@ -280,6 +303,11 @@ export default async function handler(req: Request): Promise<Response> {
   const us10y = ok(us10yNaver)?.price ? ok(us10yNaver) : ok(us10yYahoo)?.price ? ok(us10yYahoo) : ok(us10yFred);
   // KR 10Y: Naver primary → Yahoo fallback
   const kr10y = ok(kr10yNaver)?.price ? ok(kr10yNaver) : ok(kr10yYahoo);
+  const kr3y = ok(kr3yNaver)?.price ? ok(kr3yNaver) : ok(kr3yYahoo);
+  // 한미 10년 금리차(%p) = 한국 10년 − 미국 10년(둘 다 위에서 고른 최신값). 음수 정상. 전일 대비는 비운다(두 소스 기준이 다르다).
+  const krUs10y = kr10y?.price != null && us10y?.price != null
+    ? { price: Math.round((kr10y.price - us10y.price) * 10000) / 10000, change: null, source: 'calc' }
+    : { price: null, change: null, source: 'calc' };
   // 국내금: Naver front-api(M04020000) → HTML 기준가 순으로 fallback
   const goldKr = ok(goldKrMetal)?.price ? ok(goldKrMetal) : ok(goldKrHtml)?.price ? ok(goldKrHtml) : null;
 
@@ -311,6 +339,9 @@ export default async function handler(req: Request): Promise<Response> {
     mbsSpread,
     move:    ok(move),
     kr10y,
+    kr3y,
+    krBase:  ok(krBase),
+    krUs10y,
     usdkrw,
     goldKr,
     kospi:   ok(kospi),

@@ -47,4 +47,5 @@ export const CHART_NAME_TO_POINT_KEY = {
   'DXY':     'dxyPoint',    '기준금리': 'fedRatePoint', 'KR 10Y': 'kr10yPoint', 'VIX': 'vixPoint',
   '미국 2년': 'us2yPoint', '미국 30년': 'us30yPoint', '미국 3개월': 'us3mPoint', '10년−2년': 't10y2yPoint', '10년−3개월': 't10y3mPoint',
   '하이일드 금리': 'hyYieldPoint', '하이일드 스프레드': 'hySpreadPoint', '30년 모기지': 'mort30Point', 'MBS 스프레드': 'mbsSpreadPoint', 'MOVE': 'movePoint',
+  '국고채 3년': 'kr3yPoint', '한국 기준금리': 'krBasePoint', '한미 10년 금리차': 'krUs10yPoint',
 };

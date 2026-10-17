@@ -111,14 +111,16 @@ if (C) {
   eq('#10 소스 최초일 이전은 요구하지 않는다(BTC)', seg(daily('2014-09-17', '2026-10-16'), '2004-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.btc), []);
   eq('#10b floor 표 — btc/eth/fedRate', [INDICATOR_SOURCE_FLOOR.btc, INDICATOR_SOURCE_FLOOR.eth, INDICATOR_SOURCE_FLOOR.fedRate], ['2014-09-17', '2017-11-09', '1982-09-27']);
   // 패널 13개 항목 전부 — 키 목록은 순수 모듈이 단일 소스, floor는 13개 전부 ISO 날짜
-  // 2026-10 미국 금리 5종 → 18, 하이일드·모기지·MOVE 5종 → 지표 20 + 지수 3 = 23
-  eq('#10c 커버리지 키 = 지표 20 + 지수 3 (23개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 23);
+  // 2026-10 미국 금리 5종 → 18, 하이일드·모기지·MOVE 5종 → 23, 한국 금리 3종 → 지표 23 + 지수 3 = 26
+  eq('#10c 커버리지 키 = 지표 23 + 지수 3 (26개, 중복 없음)', [...new Set(C.INDICATOR_COVERAGE_KEYS)].length, 26);
   eq('#10d 지수 키 3종', C.MARKET_INDEX_KEYS, ['kospi', 'sp500', 'nasdaq']);
-  ok('#10e 23개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
+  ok('#10e 26개 키 전부 floor가 있고 ISO 날짜', C.INDICATOR_COVERAGE_KEYS.every(k => C.isIsoDate(INDICATOR_SOURCE_FLOOR[k])));
   eq('#10f 지수 floor 이전은 요구하지 않는다(KOSPI 1997-07-01)', seg(daily('1997-07-01', '2026-10-16', 100), '1980-01-02', '', TODAY, INDICATOR_SOURCE_FLOOR.kospi), []);
   // ── 미국 금리 5종(2026-10) · 장단기 금리차는 0·음수가 정상값 ──
   ok('#10g 미국 금리 5종이 커버리지 키에 있다', ['us2y', 'us30y', 'us3m', 't10y2y', 't10y3m'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)));
-  eq('#10h 부호 있는 지표 = 장단기 금리차 2종 + MBS 스프레드', C.SIGNED_INDICATOR_KEYS, ['t10y2y', 't10y3m', 'mbsSpread']);
+  eq('#10h 부호 있는 지표 = 장단기 금리차 2종 + MBS 스프레드 + 한미 10년 금리차', C.SIGNED_INDICATOR_KEYS, ['t10y2y', 't10y3m', 'mbsSpread', 'krUs10y']);
+  ok('#10g4 한국 금리 3종이 커버리지 키에 있다', ['kr3y', 'krBase', 'krUs10y'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)) && C.isSignedIndicator('krUs10y') && !C.isSignedIndicator('kr3y'));
+  eq('#10g5 실측 첫 날짜 — 국고채 3년·한미 금리차 2023-10-18(네이버 약 3년) · 기준금리 1999-05-06(ECOS)', ['kr3y', 'krBase', 'krUs10y'].map(k => INDICATOR_SOURCE_FLOOR[k]), ['2023-10-18', '1999-05-06', '2023-10-18']);
   ok('#10g2 하이일드·모기지·MOVE 5종이 커버리지 키에 있다', ['hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'].every(k => C.INDICATOR_HISTORY_KEYS.includes(k)));
   eq('#10g3 실측 첫 날짜 — 하이일드 2종 2023-10-17 · 모기지 1971-04-02 · MOVE 2002-11-12', ['hyYield', 'hySpread', 'mort30', 'mbsSpread', 'move'].map(k => INDICATOR_SOURCE_FLOOR[k]), ['2023-10-17', '2023-10-17', '1971-04-02', '1971-04-02', '2002-11-12']);
   ok('#10i isSignedIndicator — 금리차만 true', C.isSignedIndicator('t10y2y') && C.isSignedIndicator('t10y3m') && !C.isSignedIndicator('us10y') && !C.isSignedIndicator(''));
@@ -166,7 +168,16 @@ if (C) {
 console.log('\n── 파트② 소스 병합 (api/_indicatorSources.ts 직접 import) ──');
 const I = await load('api/_indicatorSources.ts');
 if (I) {
-  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread } = I;
+  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices } = I;
+  eq('#34 한미 10년 금리차 = 한국 − 미국(그날 또는 직전 미국 값) · 음수 보존 · 소수 4자리',
+    computeKrUsSpread({ '2026-10-13': 3.0, '2026-10-14': 3.1, '2026-10-15': 4.2 }, { '2026-10-13': 4.1, '2026-10-15': 4.2 }),
+    { '2026-10-13': -1.1, '2026-10-14': -1, '2026-10-15': 0 });
+  eq('#34b 미국 값이 생기기 전 한국 날짜는 만들지 않는다', computeKrUsSpread({ '2026-10-01': 3 }, { '2026-10-02': 4 }), {});
+  eq('#35 ECOS 응답 → 날짜·값', parseEcosRows({ StatisticSearch: { row: [{ TIME: '19990506', DATA_VALUE: '4.75' }, { TIME: 'x', DATA_VALUE: '1' }, { TIME: '20261008', DATA_VALUE: '2.50' }] } }),
+    { '1999-05-06': 4.75, '2026-10-08': 2.5 });
+  eq('#35b ECOS 오류 응답(인증키 오류 등)은 null — 값을 지어내지 않는다', parseEcosRows({ RESULT: { CODE: 'INFO-100', MESSAGE: '인증키가 유효하지 않습니다.' } }), null);
+  eq('#36 네이버 채권 일별 시세 해석', parseNaverBondPrices({ isSuccess: true, result: [{ localTradedAt: '2026-10-16T15:59:06+09:00', closePrice: '3.8820' }, { localTradedAt: '', closePrice: '1' }] }), { '2026-10-16': 3.882 });
+  eq('#36b 실패 응답은 null', parseNaverBondPrices({ isSuccess: false }), null);
   const csv = 'observation_date,DFEDTARU\r\n2008-12-16,0.25\r\n2008-12-17,.\r\n2008-12-18,\r\n2026-10-16,3.75\r\n';
   eq('#21 fredgraph.csv 파싱(헤더·결측 . ·빈 칸·CRLF)', parseFredGraphCsv(csv), { '2008-12-16': 0.25, '2026-10-16': 3.75 });
   eq('#22 옛 헤더(DATE)도', parseFredGraphCsv('DATE,DGS10\n2004-01-02,4.38\n'), { '2004-01-02': 4.38 });
@@ -213,7 +224,7 @@ ok('#G7 USDKRW 앞쪽을 FRED DEXKOUS로 보충', /key === 'usdkrw'/.test(H) && 
 ok('#G8 최근 종료 요청은 짧게 캐시', /csvResponse\(data, recent\)/.test(H) && /s-maxage=3600/.test(H) && /isRecentRangeEnd\(d2,/.test(H));
 ok('#G9 Naver 채권 이력 청크 역순 수집(진전 없으면 종료)', /earliest >= chunkEnd\) break;/.test(H) && /chunkEnd = shiftYmd\(earliest, -1\);/.test(H));
 ok('#G10 국내금 페이지 커서 모드(page·pages·stop → data·next·done)', /searchParams\.get\('page'\)/.test(H) && /JSON\.stringify\(\{ data, next, done \}\)/.test(H));
-ok('#G11 훅: 커버리지 계산·병합은 공용 순수 함수', /indicatorMissingSegments\(hist, start, end, today, INDICATOR_SOURCE_FLOOR\[key\]\)/.test(M)
+ok('#G11 훅: 커버리지 계산·병합은 공용 순수 함수', /indicatorMissingSegments\(hist, start, end, today, INDICATOR_SOURCE_FLOOR\[key\](, isSignedIndicator\(key\))?\)/.test(M)
   && (M.match(/mergeIndicatorHistory\(prev/g) || []).length >= 2);
 ok('#G12 훅: 구간 키 단위 세션 가드 + 새로고침만 꼬리 강제', /const forced = opts\.forceTail && seg\.kind === 'tail';/.test(M) && /if \(!forced && coverageGuardRef\.current\.has\(g\)\) continue;/.test(M));
 ok('#G13 훅: Drive 로드 뒤 1회 · 조회기간 변경 · 새로고침 3개 트리거', /coverageReadyRef\.current = true;[\s\S]{0,200}ensureIndicatorCoverage\(\);/.test(M)
@@ -237,7 +248,14 @@ const panelKeys = [...new Set([...MI.matchAll(/label:\s*'[^']+',\s*key:\s*'(\w+)
 const covKeys = (COV.match(/INDICATOR_HISTORY_KEYS = \[([^\]]+)\]/) || [])[1];
 const idxKeys = (COV.match(/MARKET_INDEX_KEYS = \[([^\]]+)\]/) || [])[1];
 const covSet = new Set([...(covKeys || '').matchAll(/'(\w+)'/g), ...(idxKeys || '').matchAll(/'(\w+)'/g)].map(m => m[1]));
-ok('#G17 패널의 모든 항목(23)이 커버리지 키 목록에 있다', panelKeys.length === 23 && panelKeys.every(k => covSet.has(k)));
+ok('#G17 패널의 모든 항목(26)이 커버리지 키 목록에 있다', panelKeys.length === 26 && panelKeys.every(k => covSet.has(k)));
+ok('#G17c 서버: 한국 금리 3종 — 국고채 3년 네이버→Yahoo · 기준금리 ECOS(722Y001/0101000, 키 없으면 needKey) · 한미 금리차 계산', /fetchNaverBond\('KR3YT=RR', 'Naver채권'\)/.test(IND)
+  && /fetchYahoo\('\^KR3YT=RR'\)/.test(IND) && /if \(!ECOS_KEY\) return \{ price: null, change: null, source: 'ECOS', needKey: true \};/.test(IND)
+  && /722Y001\/D\/\$\{ymdOf\(start\)\}\/\$\{ymdOf\(end\)\}\/0101000/.test(IND) && /krBase:\s*ok\(krBase\)/.test(IND) && /kr10y\.price - us10y\.price/.test(IND)
+  && /if \(key === 'kr3y'\)/.test(H) && /fetchNaverBondDaily\('KR3YT=RR'/.test(H) && /if \(!ECOS_KEY\) return new Response\('krBase 인증키 필요/.test(H)
+  && /const data = computeKrUsSpread\(kr, ust\);/.test(H) && /fetchNaverBondDaily\('KR10YT=RR', d1, d2/.test(H));
+ok('#G17d 화면: 기준금리 인증키가 없으면 \'인증키 필요\'(패널·금리 창)', /emptyText: marketIndicators\.krBaseNeedKey \? '인증키 필요' : null/.test(MI)
+  && /merged\.krBaseNeedKey = d\?\.needKey === true/.test(M));
 ok('#G17b 서버: 하이일드·모기지 FRED · MBS 스프레드는 서버 계산(JSON) · MOVE는 Yahoo', /hyYield:\s*\{ id: 'BAMLH0A0HYM2EY',\s*signed: false \}/.test(H)
   && /hySpread:\s*\{ id: 'BAMLH0A0HYM2',\s*signed: false \}/.test(H) && /mort30:\s*\{ id: 'MORTGAGE30US',\s*signed: false \}/.test(H)
   && /const data = computeMbsSpread\(mort, ust\);/.test(H) && /move:\s*'\^MOVE'/.test(H)

@@ -9,11 +9,13 @@
 
 export const RATE_RULES = {
   withholdingPct: 15,             // 미국 배당·이자 원천징수(세후 수익률 = 세전 × (1 − 15%))
+  krInterestTaxPct: 15.4,         // 한국 채권 이자소득세(지방세 포함) — 한국 채권(비교용) 세후
   tlt: { pctMin: 70, nearHighPp: 0.3 },
   hy: { positionMin: 70, crisisChange1mPp: 1.0 },
   mreit: { curvePctMax: 30, mbsPctMin: 60, pbMax: 0.9, pbWarn: 1.1 },
   reit: { pctMin: 70, oYieldMin: 6.0 },
   bdc: { fedPctMin: 50, hyChangeMaxPp: 1.0, hyPctMax: 70, mainDrawdownMax: -15, mainPnavMax: 1.5 },
+  krBond: { pctMin: 70 },
 };
 
 export type SignalState = 'wait' | 'watch' | 'buy';
@@ -177,10 +179,30 @@ export function evalBdc(all: Record<string, MetricsLike>, assets?: Assets): Asse
   });
 }
 
-// 5개 자산군 — 충족 비율 내림차순(같으면 정의 순서)
+// ⑥ 한국 채권(비교용) — 미국 자산과 비교하기 위한 참고 줄. 세후는 이자소득세 15.4%.
+export function evalKrBond(all: Record<string, MetricsLike>): AssetSignal {
+  const r = RATE_RULES.krBond;
+  const a = M(all, 'kr10y'), b = M(all, 'kr3y');
+  const c1 = num(a.pct3y) && a.pct3y >= r.pctMin;
+  const c2 = num(a.current) && a.turnedDown;
+  const conditions: SignalCondition[] = [
+    { label: `국고채 10년이 최근 3년 중 ${r.pctMin} 이상`, met: !!c1, detail: `3년 ${rank(a.pct3y)}` },
+    { label: '국고채 10년이 최근 20일 최고에서 꺾여 내려옴', met: !!c2, detail: a.turnedDown ? '꺾임' : '꺾임 없음' },
+  ];
+  const tax = 1 - RATE_RULES.krInterestTaxPct / 100;
+  const ky = (label: string, v: number | null): SignalYield[] => (num(v) ? [{ label, pre: v, post: v * tax }] : []);
+  return finish({
+    key: 'krBond', label: '한국 채권(비교용)', sample: '국고채', state: c1 && c2 ? 'buy' : c1 ? 'watch' : 'wait',
+    warning: null, note: '미국 자산과 비교하기 위한 참고 줄입니다', conditions,
+    rationale: `국고채 3년 ${pct(b.current)} · 10년 ${pct(a.current)}(3년 ${rank(a.pct3y)}) · ${a.turnedDown ? '꺾임' : '꺾임 없음'}`,
+    yields: [...ky('3년', b.current), ...ky('10년', a.current)],
+  });
+}
+
+// 6개 자산군 — 충족 비율 내림차순(같으면 정의 순서)
 export function evaluateRateSignals(all: Record<string, MetricsLike> | null | undefined, assets?: Assets): AssetSignal[] {
   const m = all || {};
-  const list = [evalLongBond(m), evalHighYield(m, assets), evalMortgageReit(m, assets), evalEquityReit(m, assets), evalBdc(m, assets)];
+  const list = [evalLongBond(m), evalHighYield(m, assets), evalMortgageReit(m, assets), evalEquityReit(m, assets), evalBdc(m, assets), evalKrBond(m)];
   return list.map((s, i) => [s, i] as const)
     .sort((x, y) => y[0].ratio - x[0].ratio || x[1] - y[1])
     .map(([s]) => s);

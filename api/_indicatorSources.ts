@@ -62,6 +62,48 @@ export function computeMbsSpread(mort30: Record<string, number>, us10y: Record<s
   return out;
 }
 
+// 한미 10년 금리차(%p) = 한국 10년 − 미국 10년(DGS10) — 2026-10 7단계.
+// 한국 날짜마다 계산하고, 그날 미국 값이 없으면 **직전** 미국 값을 쓴다. 음수가 정상(SIGNED_INDICATOR_KEYS의 krUs10y).
+export function computeKrUsSpread(kr10y: Record<string, number>, us10y: Record<string, number>): Record<string, number> {
+  const uk = keysOf(us10y);
+  const out: Record<string, number> = {};
+  let i = 0, cur: number | null = null;
+  for (const d of keysOf(kr10y)) {
+    while (i < uk.length && uk[i] <= d) { cur = us10y[uk[i]]; i++; }
+    const k = kr10y[d];
+    if (cur == null || !Number.isFinite(cur) || !Number.isFinite(k)) continue;
+    out[d] = Math.round((k - cur) * 10000) / 10000;
+  }
+  return out;
+}
+
+// 한국은행 ECOS StatisticSearch 응답 → { 'YYYY-MM-DD': 값 }. 오류 응답(RESULT)·모양이 틀리면 null(= 조회 실패).
+//   기준금리 = 통계표 722Y001(1.3.1. 한국은행 기준금리 및 여수신금리) · 항목 0101000(한국은행 기준금리) · 주기 D(일),
+//   단위 연% · 일별 자료 첫날 1999-05-06(ECOS StatisticItemList로 확인, 2026-10).
+export function parseEcosRows(json: any): Record<string, number> | null {
+  const rows = json?.StatisticSearch?.row;
+  if (!Array.isArray(rows)) return null;
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    const t = String(r?.TIME ?? '');
+    const v = parseFloat(String(r?.DATA_VALUE ?? ''));
+    if (/^\d{8}$/.test(t) && Number.isFinite(v) && v > 0) out[`${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}`] = v;
+  }
+  return out;
+}
+
+// 네이버 채권 일별 시세(front-api/marketIndex/prices) → { 'YYYY-MM-DD': 종가 }. 최근 약 3년만 제공한다(2026-10 실측).
+export function parseNaverBondPrices(json: any): Record<string, number> | null {
+  if (!json?.isSuccess || !Array.isArray(json?.result)) return null;
+  const out: Record<string, number> = {};
+  for (const it of json.result) {
+    const d = String(it?.localTradedAt ?? '').slice(0, 10);
+    const v = parseFloat(String(it?.closePrice ?? ''));
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(v) && v > 0) out[d] = v;
+  }
+  return out;
+}
+
 // 응답 캐시 — 종료일이 최근 2일 이내면 '최신 꼬리를 포함한 요청'이라 짧게 캐시한다.
 export function isRecentRangeEnd(d2Ymd: string, todayYmd: string): boolean {
   if (!/^\d{8}$/.test(d2Ymd || '') || !/^\d{8}$/.test(todayYmd || '')) return true;
