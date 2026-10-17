@@ -9,10 +9,11 @@ import { BG, BORDER } from '../design';
 import {
   computeRateMetrics, parseHistoryText, mergeSeries, withLive, buildRateChartRows, shiftIsoDays,
 } from '../rateMetrics';
+import { evaluateRateSignals, SIGNAL_STATE_LABEL, RATE_RULES } from '../rateSignals';
 
 /**
  * 금리 모니터링 **별도 브라우저 창** (`/?rateWindow=1`).
- * 3단계: 뼈대 / 4단계(2026-10): ② 현재 금리 보드 + ④ 금리 차트. ③⑤(적정 자산·종목)는 아직 빈 상자다.
+ * 3단계: 뼈대 / 4단계(2026-10): ② 현재 금리 보드 + ④ 금리 차트 / 5단계: ③ 지금 적정 자산(판정은 src/rateSignals.ts).
  *
  * ⚠️ 이 창은 App을 마운트하지 않는다(LedgerWindow와 같은 규약). 로그인·권한은 opener(앱 탭)에 묻는다:
  *    창 → `rate:ping` / 앱 → `rate:pong { allowed, today }`. 권한 판정의 정본은 앱 탭(rateAccess)이다 —
@@ -78,6 +79,8 @@ const COLORS = {
   hyYield: '#f472b6', hySpread: '#38bdf8',
   mbsSpread: '#fb923c', move: '#a78bfa',
 };
+// ③ 상태 색 — 대기 회색 · 관심 하늘 · 적기 녹색 · 경고 빨강
+const SIGNAL_COLOR = { wait: '#9ca3af', watch: '#38bdf8', buy: '#4ade80', warn: '#f87171' };
 const BAND = {
   low:  { label: '낮음', color: '#60a5fa' },
   mid:  { label: '보통', color: '#9ca3af' },
@@ -286,6 +289,10 @@ export default function RateWindow() {
     return out;
   }, [seriesByKey]);
 
+  // ③ 판정 — 충족 비율 내림차순으로 이미 정렬돼 온다
+  const signals = useMemo(() => evaluateRateSignals(metrics), [metrics]);
+  const [openSignal, setOpenSignal] = useState(null);
+
   const fromChart = today ? shiftIsoDays(today, -(PERIODS.find(p => p.key === period)?.years || 1) * 365) : '';
   const rowsUs = useMemo(() => buildRateChartRows(seriesByKey, ['fedRate', 'us2y', 'us10y', 'us30y'], fromChart), [seriesByKey, fromChart]);
   const rowsSpread = useMemo(() => buildRateChartRows(seriesByKey, ['t10y2y', 't10y3m'], fromChart), [seriesByKey, fromChart]);
@@ -365,9 +372,70 @@ export default function RateWindow() {
             </div>
           </section>
 
-          {/* ③ 지금 적정 자산 — 5단계 */}
-          <section className={`rounded-lg border ${t.border} p-3 min-h-[120px]`} style={{ background: t.card }}>
-            <h2 className="text-[13px] font-bold">지금 적정 자산</h2>
+          {/* ③ 지금 적정 자산 — 금리 지표만으로 판정(주가 조건은 6단계) */}
+          <section className={`rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
+            <div className="flex flex-wrap items-baseline gap-2 mb-2">
+              <h2 className="text-[13px] font-bold">지금 적정 자산</h2>
+              <span className={`text-[10px] ${t.sub}`}>금리 지표 조건 충족 순 · 행을 누르면 조건별 ○× · 세후 = 미국 원천징수 {RATE_RULES.withholdingPct}% 차감</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px] border-collapse">
+                <thead>
+                  <tr className={`text-[11px] ${t.sub} border-b ${t.border}`}>
+                    <th className="text-left font-normal py-1 pr-2">자산군</th>
+                    <th className="text-left font-normal py-1 pr-2">상태</th>
+                    <th className="text-right font-normal py-1 pr-2">조건</th>
+                    <th className="text-right font-normal py-1 pr-2 whitespace-nowrap">지금 투자 시 수익률 (세전 / 세후)</th>
+                    <th className="text-left font-normal py-1">근거</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {signals.map(sg => {
+                    const color = sg.warning ? SIGNAL_COLOR.warn : SIGNAL_COLOR[sg.state];
+                    const open = openSignal === sg.key;
+                    return (
+                      <React.Fragment key={sg.key}>
+                        <tr className={`border-b ${t.border} cursor-pointer hover:bg-sky-500/5`} onClick={() => setOpenSignal(open ? null : sg.key)}>
+                          <td className="py-1.5 pr-2 whitespace-nowrap">
+                            <span className="font-bold">{sg.label}</span> <span className={`text-[10px] ${t.sub}`}>{sg.sample}</span>
+                          </td>
+                          <td className="py-1.5 pr-2 whitespace-nowrap">
+                            <span className="text-[11px] font-bold px-1.5 rounded" style={{ color, border: `1px solid ${color}66` }}>
+                              {sg.warning ? `경고 · ${SIGNAL_STATE_LABEL[sg.state]}` : SIGNAL_STATE_LABEL[sg.state]}
+                            </span>
+                          </td>
+                          <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">{sg.met}/{sg.total}</td>
+                          <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">
+                            {sg.yields.length
+                              ? sg.yields.map(y => <div key={y.label}><span className={`text-[10px] ${t.sub}`}>{y.label}</span> {y.pre.toFixed(2)}% / {y.post.toFixed(2)}%</div>)
+                              : <span className={t.sub} title="종목 배당률은 6단계에서 추가">-</span>}
+                          </td>
+                          <td className="py-1.5">
+                            {sg.warning && <span className="text-red-400 font-bold mr-1">{sg.warning} ·</span>}
+                            <span className={t.sub}>{sg.rationale}</span>
+                            {sg.note && <div className="text-[11px] text-amber-400">{sg.note}</div>}
+                          </td>
+                        </tr>
+                        {open && (
+                          <tr className={`border-b ${t.border}`}>
+                            <td colSpan={5} className="py-1.5 pl-3">
+                              <ul className="flex flex-col gap-0.5 text-[11px]">
+                                {sg.conditions.map(c => (
+                                  <li key={c.label} className={c.pending ? t.sub : ''}>
+                                    <span className={`inline-block w-4 font-bold ${c.pending ? '' : c.met ? 'text-green-400' : 'text-gray-500'}`}>{c.pending ? '…' : c.met ? '○' : '×'}</span>
+                                    {c.label} <span className={t.sub}>— {c.detail}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           {/* ④ 금리 차트 */}
