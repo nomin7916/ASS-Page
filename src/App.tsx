@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
 import { applySettingsFile, buildSettingsFile } from './rateSettings';
+import { HIST_FILE_NAMES } from './rateHistStore';
 import { RATE_RULES } from './rateSignals';
 import { MANUAL_INPUTS } from './rateAssets';
 import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, uploadHtmlStudyMaterial, deleteDriveFileById, driveFileExists, updateDriveFileIfExists, getOrCreateAdminFolder } from './driveStorage';
@@ -632,6 +633,7 @@ export default function App() {
   const ledgerAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.ledgerEnabled;
   // 금리 모니터링 접근 권한(N열 rateEnabled, 2026-10) — ledgerAccess와 같은 근거·같은 자리(브릿지 effect에서 참조).
   const rateAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.rateEnabled;
+  const rateIsAdmin = (authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
   // ⚠️ 백테스트용으로 조회한 종가는 **여기에만** 담는다. stockHistoryMap에 병합하면
   //    buildCloseEvalSeries(보유 평가액 재계산)·useAutoConfirmHistory 데이터완비 가드의 권위
   //    소스가 오염돼 보유+백테스트 중복 코드의 과거 평가액이 영구히 틀어진다(WatchlistPopup 불변식).
@@ -3403,6 +3405,8 @@ export default function App() {
   const rateWinRef = useRef(null);
   const rateAccessRef = useRef(rateAccess);
   rateAccessRef.current = rateAccess;
+  const rateIsAdminRef = useRef(rateIsAdmin);
+  rateIsAdminRef.current = rateIsAdmin;
   // 메시지 핸들러(deps [])가 첫 렌더의 ensureDriveFolder(로그인 전 authUser)를 붙잡지 않게 최신 함수를 ref로 둔다
   const ensureDriveFolderRef = useRef(ensureDriveFolder);
   ensureDriveFolderRef.current = ensureDriveFolder;
@@ -3425,7 +3429,7 @@ export default function App() {
       const canWrite = !!rateAccessRef.current && !!driveTokenRef.current && !adminViewingAsRef.current;
       if (d.type === 'rate:ping') {
         if (rateWinRef.current !== e.source) rateWinRef.current = e.source;   // 이 탭이 새로고침된 뒤의 재입양
-        reply({ type: 'rate:pong', allowed: !!rateAccessRef.current, today: getTodayKST(), canWrite });
+        reply({ type: 'rate:pong', allowed: !!rateAccessRef.current, today: getTodayKST(), canWrite, isAdmin: !!rateIsAdminRef.current });
         return;
       }
       // ⑥ 설정(9-A) — 앱 탭이 사용자 Index_Data 폴더의 rate_monitor_settings.json을 읽고 쓴다.
@@ -3443,6 +3447,36 @@ export default function App() {
             reply({ type: 'rate:settings', reqId: d.reqId, ok: true, data: data || null, canWrite });
           } catch (err) {
             reply({ type: 'rate:settings', reqId: d.reqId, ok: false, error: `설정을 불러오지 못했습니다 (${err?.message || err})` });
+          }
+        })();
+        return;
+      }
+      // 지표 과거 기록(10-A) — 묶음 파일(rateHistStore.HIST_FILE_NAMES)만 읽고 쓴다. saveDriveFile만(버전 백업 없음)
+      if (d.type === 'rate:histLoad') {
+        (async () => {
+          const token = driveTokenRef.current;
+          if (!rateAccessRef.current || !token) return reply({ type: 'rate:hist', reqId: d.reqId, ok: false, error: '권한 또는 Drive 연결이 없습니다' });
+          try {
+            const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+            const bodies = await Promise.all(HIST_FILE_NAMES.map(n => loadDriveFile(token, folderId, n)));
+            reply({ type: 'rate:hist', reqId: d.reqId, ok: true, files: Object.fromEntries(HIST_FILE_NAMES.map((n, i) => [n, bodies[i] || null])) });
+          } catch (err) {
+            reply({ type: 'rate:hist', reqId: d.reqId, ok: false, error: `과거 기록을 불러오지 못했습니다 (${err?.message || err})` });
+          }
+        })();
+        return;
+      }
+      if (d.type === 'rate:histSave') {
+        (async () => {
+          if (!canWrite) return reply({ type: 'rate:histSaved', reqId: d.reqId, ok: false, error: '저장할 수 없습니다(권한·Drive 연결·관리자 접속 확인)' });
+          if (!HIST_FILE_NAMES.includes(d.name) || !d.body || typeof d.body !== 'object') return reply({ type: 'rate:histSaved', reqId: d.reqId, ok: false, error: '허용되지 않은 파일입니다' });
+          try {
+            const token = driveTokenRef.current;
+            const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+            await saveDriveFile(token, folderId, d.name, d.body);
+            reply({ type: 'rate:histSaved', reqId: d.reqId, ok: true });
+          } catch (err) {
+            reply({ type: 'rate:histSaved', reqId: d.reqId, ok: false, error: `기록을 저장하지 못했습니다 (${err?.message || err})` });
           }
         })();
         return;

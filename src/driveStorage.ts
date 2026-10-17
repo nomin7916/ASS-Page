@@ -29,6 +29,12 @@ export const DRIVE_FILES = {
   SETTINGS:          'app_settings.json',       // 전역 앱 설정 캐시 (youtubeUrl, notebookLinks)
   MANUAL_LATEST:     'portfolio_manual_latest.json', // 마지막 수동 저장본 (항상 최신 유지)
   RATE_SETTINGS:     'rate_monitor_settings.json',   // 금리 모니터링 ⑥ 설정(기준치·수동값·브라질 메모) — 버전 백업 없음
+  // 금리 모니터링 지표 과거 기록(10-A) — 묶음별 파일, 형식은 rateHistStore.ts. 4MB 초과 시 '_2' 파일로 나뉜다. 버전 백업 없음
+  RATE_HIST_US:      'rate_hist_us.json',
+  RATE_HIST_CREDIT:  'rate_hist_credit.json',
+  RATE_HIST_KR:      'rate_hist_kr.json',
+  RATE_HIST_BR:      'rate_hist_br.json',
+  RATE_HIST_MISC:    'rate_hist_misc.json',
 };
 
 // 동시 호출 중복 방지 — 이메일 기준 캐시 (토큰 교체 시에도 폴더 중복 생성 방지)

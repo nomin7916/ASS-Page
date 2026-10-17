@@ -12,6 +12,11 @@ import {
 import { changeOverDays, roseWithinDays } from '../rateMetrics';
 import { readBrazilNotes } from '../brazilNotes';
 import { applySettingsFile, appendStateChanges, manualToSave } from '../rateSettings';
+import {
+  HIST_GROUPS, HIST_KEYS, HIST_BATCH_KEYS, groupOfKey, splitFileName, encodeSeries, decodeSeries, mergeHist,
+  resumeFrom, coversFloor, chunkRanges, planGroupFiles, readHistFiles,
+} from '../rateHistStore';
+import { INDICATOR_SOURCE_FLOOR, isSignedIndicator } from '../indicatorCoverage';
 import RateSettingsPanel from './RateSettingsPanel';
 import { computeBrlBond, BRL_BOND_FACE, BRL_BOND_COUPON, BRL_BOND_YEARS } from '../brlBond';
 import { evaluateRateSignals, evaluateOne, SIGNAL_STATE_LABEL, RATE_RULES } from '../rateSignals';
@@ -215,6 +220,15 @@ export default function RateWindow() {
   const [linked, setLinked] = useState(true);
   // ⑥ 설정(9-A) — 앱 탭이 Drive에서 읽어 준 파일. 창 메모리에만 두고 저장은 앱 탭에 맡긴다
   const [canWrite, setCanWrite] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  // 지표 과거 기록(10-A) — 'pending'(앱 탭 응답 대기) → 'drive'(Drive 기록 + 이어받기·저장) | 'memory'(서버에서 받아 메모리만)
+  const [storeMode, setStoreMode] = useState('pending');
+  const [collect, setCollect] = useState({ active: false, done: 0, total: 0 });
+  const [histSaveError, setHistSaveError] = useState('');
+  const [redoConfirm, setRedoConfirm] = useState(false);
+  const storedRef = useRef({});              // 키 → 저장 형식 항목(rateHistStore.HistEntry)
+  const storedFilesRef = useRef(new Set());   // Drive에 실제로 있던 파일 이름(분할 '_2' 파일 정리용)
+  const collectingRef = useRef(false);
   const [settingsFile, setSettingsFile] = useState(null);
   const [settingsState, setSettingsState] = useState('loading');   // loading | ready | error
   const [settingsError, setSettingsError] = useState('');
@@ -258,7 +272,7 @@ export default function RateWindow() {
       if (window.opener && e.source !== window.opener) return;
       const d = e.data;
       if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
-      if (d.type === 'rate:settings' || d.type === 'rate:settingsSaved') {
+      if (d.type === 'rate:settings' || d.type === 'rate:settingsSaved' || d.type === 'rate:hist' || d.type === 'rate:histSaved') {
         const cb = pendingRef.current.get(d.reqId);
         if (cb) { pendingRef.current.delete(d.reqId); cb(d); }
         return;
@@ -268,6 +282,7 @@ export default function RateWindow() {
       setLinked(true);
       setAccess(d.allowed === true ? 'allowed' : 'denied');
       setCanWrite(d.canWrite === true);
+      setIsAdmin(d.isAdmin === true);
       if (typeof d.today === 'string') setToday(d.today);
     };
     window.addEventListener('message', onMsg);
@@ -360,11 +375,87 @@ export default function RateWindow() {
     return () => { alive = false; };
   }, [access]);
 
+  // 메모리 모드(앱 탭 없음·Drive 불가)일 때만 — 지금처럼 기간만큼 서버에서 받아 메모리로만 쓴다
   useEffect(() => {
-    if (access !== 'allowed' || !today) return;
+    if (access !== 'allowed' || !today || storeMode !== 'memory') return;
     const y = PERIODS.find(p => p.key === period)?.years || 1;
     ensureHistory(y);
-  }, [access, today, period, ensureHistory]);
+  }, [access, today, period, ensureHistory, storeMode]);
+
+  // ── 지표 과거 기록 Drive 저장(10-A) ──
+  // 묶음(파일) 하나 저장 — 4MB를 넘으면 둘로 나눈다. 나눔이 풀리면 예전 '_2' 파일은 빈 본문으로 덮어 오래된 값이 남지 않게 한다
+  const saveGroup = useCallback(async (group) => {
+    for (const f of planGroupFiles(group, storedRef.current)) {
+      const body = f.body || (storedFilesRef.current.has(f.file) ? { v: 1, keys: {} } : null);
+      if (!body) continue;
+      const r = await request({ type: 'rate:histSave', name: f.file, body });
+      if (r?.ok) { storedFilesRef.current.add(f.file); setHistSaveError(''); }
+      else setHistSaveError(r?.error || '기록을 저장하지 못했습니다');
+    }
+  }, [request]);
+  // 수집 — 키마다 저장된 마지막 날짜 이후(없으면 출처 첫 날짜부터)를 10년 단위로, 한 번에 4개 키씩. 묶음이 끝날 때마다 해당 파일 저장
+  const runCollection = useCallback(async (force) => {
+    if (collectingRef.current || !today) return;
+    collectingRef.current = true;
+    const jobs = HIST_KEYS.map(k => {
+      const signed = isSignedIndicator(k), floor = INDICATOR_SOURCE_FLOOR[k] || '';
+      const entry = force ? null : storedRef.current[k];
+      const from = entry && coversFloor(entry, floor) ? resumeFrom(entry, floor, today) : resumeFrom(null, floor, today);
+      return { k, signed, from, base: entry ? decodeSeries(entry, signed) : {} };
+    });
+    const total = jobs.length;
+    let done = jobs.filter(j => !j.from).length;
+    setCollect({ active: true, done, total });
+    const failed = [];
+    const todo = jobs.filter(j => j.from);
+    for (let i = 0; i < todo.length; i += HIST_BATCH_KEYS) {
+      const batch = todo.slice(i, i + HIST_BATCH_KEYS);
+      const results = await Promise.all(batch.map(async (j) => {
+        let series = j.base, ok = true;
+        for (const [s, e] of chunkRanges(j.from, today)) {
+          const rec = await fetchHistory(j.k, s, e);
+          if (!rec) { ok = false; break; }   // 실패하면 거기서 멈춘다 — 다음에 저장된 마지막 날짜부터 이어 받는다
+          series = mergeHist(series, rec, j.signed);
+        }
+        const entry = encodeSeries(series, j.signed, 'api/history', new Date().toISOString());
+        if (entry) storedRef.current = { ...storedRef.current, [j.k]: entry };
+        if (!ok) failed.push(j.k);
+        return [j.k, series];
+      }));
+      setHist(prev => {
+        let next = prev;
+        for (const [k, series] of results) { if (series !== prev[k] && Object.keys(series).length) { if (next === prev) next = { ...prev }; next[k] = series; } }
+        return next;
+      });
+      const groups = [...new Set(batch.map(j => groupOfKey(j.k)).filter(Boolean))];
+      for (const g of groups) await saveGroup(g);
+      done += batch.length;
+      setCollect({ active: true, done, total });
+    }
+    setFailedKeys(failed.filter(k => RATE_KEYS.includes(k)));
+    setCollect({ active: false, done: total, total });
+    collectingRef.current = false;
+  }, [today, saveGroup]);
+  // 모드 결정 — 앱 탭이 쓰기 가능하다고 답하면 Drive 기록을 읽고 이어받기, 4초 안에 그렇지 않으면 메모리 모드
+  useEffect(() => {
+    if (storeMode !== 'pending' || access !== 'allowed' || !today) return;
+    if (linked && canWrite) {
+      setStoreMode('loading');
+      request({ type: 'rate:histLoad' }).then(d => {
+        if (!d?.ok) { setStoreMode('memory'); return; }
+        for (const [name, body] of Object.entries(d.files || {})) if (body) storedFilesRef.current.add(name);
+        storedRef.current = readHistFiles(d.files || {});
+        const fromStore = {};
+        for (const [k, e] of Object.entries(storedRef.current)) fromStore[k] = decodeSeries(e, isSignedIndicator(k));
+        setHist(prev => ({ ...prev, ...fromStore }));
+        setStoreMode('drive');
+        runCollection(false);
+      });
+      return;
+    }
+    const id = setTimeout(() => setStoreMode(m => (m === 'pending' ? 'memory' : m)), 4000);
+    return () => clearTimeout(id);
+  }, [storeMode, access, today, linked, canWrite, request, runCollection]);
 
   // 과거치 + 현재값(현재값의 날짜가 기록 최신일 이후일 때만 끝에 붙인다 — 날짜가 없으면 기준일)
   const seriesByKey = useMemo(() => {
@@ -452,7 +543,8 @@ export default function RateWindow() {
   // ── 상태 변경 기록(9-B) — 벨 알림 대신. 창을 열고 자료가 다 모이면 한 번, 바뀐 자산군만 기록해 설정 파일에 저장 ──
   const historyDoneRef = useRef(false);
   const anchorsReady = RATE_ANCHOR_TICKERS.every(tk => assetData[tk]?.status === 'ok' || assetData[tk]?.status === 'fail');
-  const histReady = !loading && Object.keys(hist).length > 0;
+  // 과거치가 다 모인 뒤에만(메모리 모드 받기 끝 / Drive 모드 이어받기 끝) — 중간값으로 상태를 기록하지 않는다
+  const histReady = !loading && !collect.active && (storeMode === 'memory' || storeMode === 'drive') && Object.keys(hist).length > 0;
   useEffect(() => {
     if (historyDoneRef.current || settingsState !== 'ready' || !canWrite || !linked || !anchorsReady || !histReady || !today) return;
     historyDoneRef.current = true;
@@ -583,6 +675,16 @@ export default function RateWindow() {
           <h1 className="text-[16px] font-bold">금리 모니터링</h1>
           <span className={`text-[12px] ${t.sub}`}>기준일 {today || '-'}</span>
           {loading && <span className={`text-[11px] ${t.sub}`}>자료 받는 중…</span>}
+          {collect.active && (
+            <span className="flex items-center gap-1.5 text-[11px] text-sky-400" title="지표 과거 기록을 처음부터 받아 Drive에 저장하는 중">
+              과거 기록 수집 중 {collect.done}/{collect.total}
+              <span className="inline-block w-24 h-1.5 rounded-full overflow-hidden" style={{ background: t.track }}>
+                <span className="block h-full bg-sky-500" style={{ width: `${collect.total ? (collect.done / collect.total) * 100 : 0}%` }} />
+              </span>
+            </span>
+          )}
+          {storeMode === 'memory' && <span className="text-[11px] text-amber-400">기록 저장 안 됨(앱 탭 필요)</span>}
+          {histSaveError && <span className="text-[11px] text-red-400">{histSaveError}</span>}
           {!linked && <span className="text-[11px] text-amber-400">앱 창과 연결이 끊겼습니다</span>}
           <div className="ml-auto flex items-center gap-1" role="group" aria-label="배경">
             <span className={`text-[11px] mr-1 ${t.sub}`}>배경</span>
@@ -986,6 +1088,17 @@ export default function RateWindow() {
           <div className="flex flex-wrap items-baseline gap-2 mb-1">
             <h2 className="text-[13px] font-bold">설정</h2>
             <span className={`text-[10px] ${t.sub}`}>저장하면 ③ 판정과 ⑤ 표가 바로 다시 계산됩니다</span>
+            {isAdmin && storeMode === 'drive' && (
+              <span className="ml-auto flex items-center gap-1 text-[11px]">
+                {!redoConfirm
+                  ? <button disabled={collect.active} onClick={() => setRedoConfirm(true)} className={`px-2 py-0.5 rounded border ${t.border} hover:text-sky-400 disabled:opacity-40`}>과거 기록 전체 다시 받기</button>
+                  : (<>
+                    <span className="text-amber-400">저장된 과거 기록을 처음부터 다시 받습니다. 진행할까요?</span>
+                    <button onClick={() => { setRedoConfirm(false); runCollection(true); }} className="px-2 py-0.5 rounded border border-sky-500 text-sky-400">예</button>
+                    <button onClick={() => setRedoConfirm(false)} className={`px-2 py-0.5 rounded border ${t.border}`}>아니오</button>
+                  </>)}
+              </span>
+            )}
           </div>
           {settingsState === 'error' && <div className="text-[11px] text-red-400 mb-1">{settingsError}</div>}
           {settingsState === 'loading'
