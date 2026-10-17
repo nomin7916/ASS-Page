@@ -45,7 +45,8 @@ export function seriesPairs(series: any, signed = false): Array<[string, number]
   return out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 }
 
-export interface HistEntry { first: string; last: string; d: number[]; x: number[]; source: string; savedAt: string }
+// capped — 최초 수집에서 최근 구간은 받았는데 그 앞이 비었다(대체 출처가 짧다: 네이버 약 3년). 그 뒤로는 최신분만 받는다(관리자 '전체 다시 받기'만 처음부터)
+export interface HistEntry { first: string; last: string; d: number[]; x: number[]; source: string; savedAt: string; capped?: boolean }
 // 압축 — 첫 날짜 + 일수 차이 배열 + 값 배열. 관측이 없으면 null
 export function encodeSeries(series: any, signed = false, source = '', savedAt = ''): HistEntry | null {
   const pts = seriesPairs(series, signed);
@@ -93,7 +94,7 @@ export const coversFloor = (entry: any, floor: string) => !!entry && ISO.test(St
 // 키 하나의 받을 구간 — full이면 저장 기록에 없거나 앞쪽이 비어 처음부터(최초 수집), 아니면 최신분만
 export function planFetch(key: string, entry: any, floor: string, today: string): { from: string; to: string; full: boolean } | null {
   if (!ISO.test(today)) return null;
-  const full = !entry || !coversFloor(entry, floor);
+  const full = !entry || (!entry.capped && !coversFloor(entry, floor));
   const from = resumeFrom(full ? null : entry, floor, today, tailOverlapDays(key));
   return from ? { from, to: today, full } : null;
 }
@@ -155,7 +156,7 @@ export function planGroupFiles(group: HistGroup, entries: Record<string, HistEnt
   return [{ file: group.file, body: a, bytes: fileBytes(a) }, { file: splitFileName(group.file), body: b, bytes: fileBytes(b) }];
 }
 // 바뀐 묶음 — 저장해 둔 항목과 지금 항목이 다른 키가 하나라도 있는 묶음만(savedAt은 비교하지 않는다)
-const entrySig = (e: any) => (e ? `${e.first}|${e.last}|${e.source}|${(e.d || []).join(',')}|${(e.x || []).join(',')}` : '');
+const entrySig = (e: any) => (e ? `${e.capped ? 1 : 0}|${e.first}|${e.last}|${e.source}|${(e.d || []).join(',')}|${(e.x || []).join(',')}` : '');
 export function changedGroups(saved: Record<string, any> | null | undefined, now: Record<string, any> | null | undefined): HistGroup[] {
   return HIST_GROUPS.filter(g => g.keys.some(k => entrySig(saved?.[k]) !== entrySig(now?.[k])));
 }

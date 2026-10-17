@@ -64,6 +64,8 @@ if (H && C) {
   eq('#34 저장 기록에 없는 키(새로 추가) → 출처 첫 날짜부터 최초 수집', planFetch('brlkrw', null, C.INDICATOR_SOURCE_FLOOR.brlkrw, T), { from: C.INDICATOR_SOURCE_FLOOR.brlkrw, to: T, full: true });
   eq('#35 앞쪽이 빈 기록 → 처음부터 다시(최초 수집)', planFetch('us10y', st('2020-01-02', '2026-10-16'), C.INDICATOR_SOURCE_FLOOR.us10y, T)?.full, true);
   eq('#36 날짜 없음 → 받지 않음', planFetch('us10y', null, '1962-01-02', ''), null);
+  eq('#51 capped(대체 출처가 짧아 앞이 빈 기록) → 처음부터 다시 받지 않고 최신분만', planFetch('us2y', { first: '2023-06-01', last: '2026-10-16', capped: true }, C.INDICATOR_SOURCE_FLOOR.us2y, T), { from: '2026-10-11', to: T, full: false });
+  eq('#51b capped 표시도 바뀐 묶음 판정에 들어간다(저장된다)', changedGroups({ us2y: { first: '2023-06-01', last: '2026-10-16', d: [0], x: [4] } }, { us2y: { first: '2023-06-01', last: '2026-10-16', d: [0], x: [4], capped: true } }).map(g => g.id), ['us']);
   ok('#37 다시 받기 간격 30분', HIST_REFRESH_MS === 30 * 60 * 1000);
   const J = (k, full) => ({ k, plan: full == null ? null : { from: '2020-01-01', to: T, full } });
   eq('#48 받는 순서 — 최신분 키 먼저 · 최초 수집 키는 뒤로 · 받을 것 없는 키 제외', orderFetchJobs([J('fedRate', true), J('us10y', false), J('us2y', null), J('kr3y', true), J('vix', false)]).map(j => j.k), ['us10y', 'vix', 'fedRate', 'kr3y']);
@@ -127,6 +129,7 @@ console.log('\n── 파트⑤ 배선 가드 ──');
   ok('#G12 기간 버튼 전체 추가 · 잘라 쓰기(Drive 모드는 서버 호출 없음) · 잠정 표시 · 상단 바', /\{ key: 'all', label: '전체', years: null \}/.test(RW) && /const fromChart = today && periodYears \?/.test(RW)
     && (RW.match(/\{provLine\(\[/g) || []).length === 6 && /value: '잠정'/.test(RW) && /provisionalDate,/.test(RW) && /기록 \$\{storedLast\}까지 저장/.test(RW) && /분 전`\} 갱신/.test(RW) && /latestStoredDate,/.test(RW));
   ok('#G8 앱 탭이 관리자 여부를 알려 준다', /isAdmin: !!rateIsAdminRef\.current/.test(APP));
+  ok('#G14 최초 수집이 최근 구간만 받고 멈추면 capped · 최신분 받기는 capped를 이어 간다', /const capped = j\.plan\.full \? got && !ok : !!storedRef\.current\[j\.k\]\?\.capped;/.test(RW) && /got = true;/.test(RW) && /if \(entry && capped\) entry\.capped = true;/.test(RW));
   ok('#G13 BCB 브라우저 받기는 2년 단위(10년치는 시간 초과) · 과거치 요청 시한 45초', /const e0 = `\$\{\+s\.slice\(0, 4\) \+ 2\}\$\{s\.slice\(4\)\}`;/.test(src('src/bcbClient.ts')) && /AbortSignal\.timeout\(45000\)/.test(RW));
   ok('#G9 검증 스크립트가 게이트 목록에 있다', pkg.scripts['verify:rate-hist'] === 'node scripts/verify-rate-hist.mjs');
 }

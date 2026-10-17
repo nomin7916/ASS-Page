@@ -12,8 +12,10 @@ import {
   parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread,
   computeKrUsSpread, parseEcosRows, parseNaverBondPrices,
   computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily,
+  extendStepChanges, parseNyFedTarget, parsePmmsCsv,
 } from './_indicatorSources.js';
 import { KR_BASE_RATE_CHANGES, KR_BASE_RATE_SNAPSHOT_AT } from './_krBaseRateData.js';
+import { US_FED_RATE_CHANGES } from './_usFedRateData.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
@@ -216,6 +218,41 @@ async function fetchFredHistory(seriesId: string, d1: string, d2: string, timeou
   const api = await fetchFredApiHistory(seriesId, d1, d2, timeoutMs, signed);
   if (Object.keys(api).length > 0) return api;
   return fetchFredGraphHistory(seriesId, d1, d2, timeoutMs, signed);
+}
+
+// ── FRED 키가 없는 배포의 대체 출처(2026-10-18) — 배포 서버에서 fredgraph.csv가 응답하지 않는다(실측 20초 시간 초과) ──
+//   키가 없으면 FRED는 4초만 기다리고 대체 출처로 넘어간다. 값을 지어내지 않는다 — 대체 출처가 없는 하이일드 2종은 비운다.
+//   미국 국채 3개월·2년·10년·30년 = 네이버 채권(최근 약 3년) · 기준금리 = FRED 변경 이력 스냅샷 + 뉴욕 연준 EFFR 목표 상단
+//   · 30년 모기지 = 프레디맥 PMMS CSV(1971~, 주간)
+const FRED_TIMEOUT = FRED_KEY ? 10000 : 4000;
+const NAVER_US_BOND: Record<string, string> = { us3m: 'US3MT=RR', us2y: 'US2YT=RR', us10y: 'US10YT=RR', us30y: 'US30YT=RR' };
+async function fetchPmmsHistory(d1: string, d2: string, timeoutMs = 8000): Promise<Record<string, number>> {
+  try {
+    const res = await fetch('https://www.freddiemac.com/pmms/docs/PMMS_history.csv', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return {};
+    const all = parsePmmsCsv(await res.text()) || {};
+    const lo = toIsoDate(d1), hi = toIsoDate(d2);
+    return Object.fromEntries(Object.entries(all).filter(([d]) => d >= lo && d <= hi));
+  } catch { return {}; }
+}
+async function fetchUsFedRateNoKey(d1: string, d2: string, timeoutMs = 6000): Promise<Record<string, number>> {
+  let obs: Record<string, number> | null = null;
+  try {
+    const res = await fetch(`https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json?startDate=${US_FED_RATE_CHANGES[US_FED_RATE_CHANGES.length - 1][0]}&endDate=${new Date().toISOString().slice(0, 10)}`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.ok) obs = parseNyFedTarget(await res.json());
+  } catch { obs = null; }
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const to = toIsoDate(d2) < todayIso ? toIsoDate(d2) : todayIso;
+  return stepToDaily(extendStepChanges(US_FED_RATE_CHANGES, obs), toIsoDate(d1), to);
+}
+const fetchNaverUsBond = (key: string, d1: string, d2: string) => fetchNaverBondDaily(NAVER_US_BOND[key], d1, d2, Date.now() + 12000);
+// 미국 10년 — FRED DGS10, 없으면 네이버(mbsSpread·krUs10y 계산용)
+async function fetchUs10yAny(d1: string, d2: string): Promise<Record<string, number>> {
+  const f = await fetchFredHistory('DGS10', d1, d2, FRED_TIMEOUT);
+  return Object.keys(f).length ? f : fetchNaverUsBond('us10y', d1, d2);
 }
 
 // 조각 병합용 — 한 소스의 최초일·최신일
@@ -816,7 +853,7 @@ export default async function handler(request: Request): Promise<Response> {
 
   // us10y: FRED DGS10(1962~, 하루 늦게 발표) → 최신 꼬리는 Naver 일별로 보충 · 실패 시 Naver → Yahoo ^TNX
   if (key === 'us10y') {
-    let data = await fetchFredHistory('DGS10', d1, d2);
+    let data = await fetchFredHistory('DGS10', d1, d2, FRED_TIMEOUT);
     if (Object.keys(data).length >= 10) {
       const last = lastKey(data);
       if (last && ymd(last) < d2 && budgetLeft() > 3000) {
@@ -848,7 +885,15 @@ export default async function handler(request: Request): Promise<Response> {
   };
   if (US_RATE_SERIES[key]) {
     const { id, signed } = US_RATE_SERIES[key];
-    const data = await fetchFredHistory(id, d1, d2, 10000, signed);
+    let data = await fetchFredHistory(id, d1, d2, FRED_TIMEOUT, signed);
+    // FRED 실패 — 네이버 국채(3개월·2년·30년) · 금리차는 네이버 10년 − 2년/3개월 · 모기지는 프레디맥. 하이일드는 대체 출처 없음
+    if (Object.keys(data).length === 0) {
+      if (NAVER_US_BOND[key]) data = await fetchNaverUsBond(key, d1, d2);
+      else if (key === 't10y2y' || key === 't10y3m') {
+        const [ten, short] = await Promise.all([fetchNaverUsBond('us10y', d1, d2), fetchNaverUsBond(key === 't10y2y' ? 'us2y' : 'us3m', shiftYmd(d1, -14), d2)]);
+        data = computeKrUsSpread(ten, short);
+      } else if (key === 'mort30') data = await fetchPmmsHistory(d1, d2);
+    }
     if (Object.keys(data).length === 0) return new Response(`${key} 수집 실패`, { status: 502 });
     if (!signed) return csvResponse(data, recent);
     return new Response(JSON.stringify(data), {
@@ -865,10 +910,11 @@ export default async function handler(request: Request): Promise<Response> {
   // mbsSpread(%p) = mort30 − us10y — 서버에서 계산해 날짜→값으로 내보낸다(_indicatorSources.computeMbsSpread).
   //   모기지는 주간이라 시작일보다 2주 앞부터 받아 첫 날짜에도 '직전 모기지 값'이 있게 한다. 음수 가능 → JSON 응답.
   if (key === 'mbsSpread') {
-    const [mort, ust] = await Promise.all([
-      fetchFredHistory('MORTGAGE30US', shiftYmd(d1, -14), d2),
-      fetchFredHistory('DGS10', d1, d2),
+    const [mortF, ust] = await Promise.all([
+      fetchFredHistory('MORTGAGE30US', shiftYmd(d1, -14), d2, FRED_TIMEOUT),
+      fetchUs10yAny(d1, d2),
     ]);
+    const mort = Object.keys(mortF).length ? mortF : await fetchPmmsHistory(shiftYmd(d1, -14), d2);
     const data = computeMbsSpread(mort, ust);
     if (Object.keys(data).length === 0) return new Response('mbsSpread 수집 실패', { status: 502 });
     return new Response(JSON.stringify(data), {
@@ -887,10 +933,12 @@ export default async function handler(request: Request): Promise<Response> {
   if (key === 'fedRate') {
     const legacyEnd = '20081215';
     const [upper, legacy] = await Promise.all([
-      d2 >= '20081216' ? fetchFredHistory('DFEDTARU', d1 > '20081216' ? d1 : '20081216', d2) : Promise.resolve({}),
-      d1 <= legacyEnd ? fetchFredHistory('DFEDTAR', d1, d2 < legacyEnd ? d2 : legacyEnd) : Promise.resolve({}),
+      d2 >= '20081216' ? fetchFredHistory('DFEDTARU', d1 > '20081216' ? d1 : '20081216', d2, FRED_TIMEOUT) : Promise.resolve({}),
+      d1 <= legacyEnd ? fetchFredHistory('DFEDTAR', d1, d2 < legacyEnd ? d2 : legacyEnd, FRED_TIMEOUT) : Promise.resolve({}),
     ]);
-    const data = joinFedRate(legacy, upper);
+    let data = joinFedRate(legacy, upper);
+    // FRED 실패 — 변경 이력 스냅샷 + 뉴욕 연준 목표 상단(달력 날짜마다 그날 적용 금리 — DFEDTARU와 같은 모양)
+    if (Object.keys(data).length === 0) data = await fetchUsFedRateNoKey(d1, d2, Math.min(6000, budgetLeft()));
     if (Object.keys(data).length === 0) return new Response('fedRate 수집 실패', { status: 502 });
     return csvResponse(data, recent);
   }
@@ -981,7 +1029,7 @@ export default async function handler(request: Request): Promise<Response> {
   if (key === 'krUs10y') {
     const [kr, ust] = await Promise.all([
       fetchNaverBondDaily('KR10YT=RR', d1, d2, Date.now() + 12000),
-      fetchFredHistory('DGS10', shiftYmd(d1, -14), d2),
+      fetchUs10yAny(shiftYmd(d1, -14), d2),
     ]);
     const data = computeKrUsSpread(kr, ust);
     if (Object.keys(data).length === 0) return new Response('krUs10y 수집 실패', { status: 502 });

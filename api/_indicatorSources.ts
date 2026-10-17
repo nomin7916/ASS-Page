@@ -164,6 +164,46 @@ export function stepLatest(changes: Array<[string, number]>, todayIso: string): 
   return { price: last[1], change: prev ? Math.round((last[1] - prev[1]) * 10000) / 10000 : 0, date: last[0] };
 }
 
+// 변경 이력 스냅샷 뒤에 관측(날짜→값)을 이어 붙인다 — 스냅샷 마지막 날짜 이후에 값이 바뀐 날만 새 변경으로 추가
+export function extendStepChanges(changes: Array<[string, number]>, obs: Record<string, number> | null | undefined): Array<[string, number]> {
+  const out = (changes || []).slice();
+  const lastDate = out.length ? out[out.length - 1][0] : '';
+  let cur = out.length ? out[out.length - 1][1] : null;
+  for (const d of keysOf(obs || {})) {
+    const v = (obs as Record<string, number>)[d];
+    if (d <= lastDate || !Number.isFinite(v) || v <= 0 || v === cur) continue;
+    out.push([d, v]);
+    cur = v;
+  }
+  return out;
+}
+// 뉴욕 연준 EFFR API(/api/rates/unsecured/effr/...json) → { 날짜: 목표 범위 상단 }. 모양이 틀리면 null
+export function parseNyFedTarget(json: any): Record<string, number> | null {
+  const rows = json?.refRates;
+  if (!Array.isArray(rows)) return null;
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    const d = String(r?.effectiveDate ?? ''), v = Number(r?.targetRateTo);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(v) && v > 0) out[d] = v;
+  }
+  return out;
+}
+// 프레디맥 PMMS 주간 CSV(www.freddiemac.com/pmms/docs/PMMS_history.csv — "date,pmms30,…" · 날짜 M/D/YYYY) → { 날짜: 30년 고정 금리 }
+export function parsePmmsCsv(csv: string): Record<string, number> | null {
+  const lines = String(csv || '').trim().split(/\r?\n/);
+  const head = (lines[0] || '').split(',').map(x => x.trim().toLowerCase());
+  const di = head.indexOf('date'), vi = head.indexOf('pmms30');
+  if (di < 0 || vi < 0) return null;
+  const out: Record<string, number> = {};
+  for (const line of lines.slice(1)) {
+    const c = line.split(',');
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((c[di] || '').trim());
+    const v = parseFloat(c[vi]);
+    if (m && Number.isFinite(v) && v > 0) out[`${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`] = v;
+  }
+  return out;
+}
+
 // 한국은행 ECOS StatisticSearch 응답 → { 'YYYY-MM-DD': 값 }. 오류 응답(RESULT)·모양이 틀리면 null(= 조회 실패).
 //   기준금리 = 통계표 722Y001(1.3.1. 한국은행 기준금리 및 여수신금리) · 항목 0101000(한국은행 기준금리) · 주기 D(일),
 //   단위 연% · 일별 자료 첫날 1999-05-06(ECOS StatisticItemList로 확인, 2026-10).

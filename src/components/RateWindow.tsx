@@ -435,16 +435,20 @@ export default function RateWindow() {
     let saving = Promise.resolve();
     const show = (k, series) => setHist(prev => (series === prev[k] || !Object.keys(series).length ? prev : { ...prev, [k]: series }));
     const runOne = async (j) => {
-      let series = j.base, ok = true;
+      let series = j.base, ok = true, got = false;
       for (const [s, e] of fetchChunks(j.plan)) {
         const rec = await fetchHistory(j.k, s, e);
-        if (!rec) { ok = false; break; }   // 실패하면 거기서 멈춘다 — 다음에 저장된 마지막 날짜부터(최초 수집이면 처음부터) 다시 받는다
+        if (!rec) { ok = false; break; }
+        got = true;   // 실패하면 거기서 멈춘다 — 다음에 저장된 마지막 날짜부터(최초 수집이면 처음부터) 다시 받는다
         series = mergeHist(series, rec, j.signed);
         show(j.k, series);
       }
       // 바뀐 게 없으면 항목을 다시 만들지 않는다(저장 대상에서 빠진다)
       if (series !== j.base) {
         const entry = encodeSeries(series, j.signed, 'api/history', new Date().toISOString());
+        // 최초 수집이 최근 구간만 받고 앞에서 멈췄으면 capped — 다음부터 처음부터 다시 받지 않는다(최신분은 기존 표시를 이어 간다)
+        const capped = j.plan.full ? got && !ok : !!storedRef.current[j.k]?.capped;
+        if (entry && capped) entry.capped = true;
         if (entry) storedRef.current = { ...storedRef.current, [j.k]: entry };
       }
       if (!ok) failed.push(j.k);

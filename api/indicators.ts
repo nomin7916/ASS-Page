@@ -3,7 +3,8 @@
 // [최적화] timeout 9000→6000ms(느린 응답 CPU 점유 단축), SWR 60→600s(캐시 만료 후 백그라운드 갱신 확대)
 export const config = { runtime: 'edge' };
 
-import { parseFredGraphCsv, parseBokBaseRateHtml, stepLatest } from './_indicatorSources.js';
+import { parseFredGraphCsv, parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv } from './_indicatorSources.js';
+import { US_FED_RATE_CHANGES } from './_usFedRateData.js';
 import { KR_BASE_RATE_CHANGES, KR_BASE_RATE_SNAPSHOT_AT } from './_krBaseRateData.js';
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
@@ -61,6 +62,35 @@ async function fetchFred(seriesId: string, diff = false) {
     }
   } catch { /* 폴백 실패 */ }
   return { price: null, change: null, source: 'FRED' };
+}
+
+// FRED 키가 없는 배포의 대체 출처(2026-10-18) — 배포 서버에서 fredgraph.csv가 응답하지 않는다.
+//   기준금리 = 변경 이력 스냅샷 + 뉴욕 연준 EFFR 목표 상단 · 30년 모기지 = 프레디맥 PMMS CSV(주간). 값을 지어내지 않는다.
+async function fetchUsFedRateNoKey() {
+  let obs = null;
+  try {
+    const res = await fetch('https://markets.newyorkfed.org/api/rates/unsecured/effr/last/10.json', { signal: AbortSignal.timeout(6000) });
+    if (res.ok) obs = parseNyFedTarget(await res.json());
+  } catch { obs = null; }
+  const v = stepLatest(extendStepChanges(US_FED_RATE_CHANGES, obs), new Date().toISOString().slice(0, 10));
+  return v ? { ...v, source: obs ? '뉴욕 연준' : 'FRED 스냅샷' } : { price: null, change: null, source: '뉴욕 연준' };
+}
+async function fetchPmmsLatest() {
+  try {
+    const res = await fetch('https://www.freddiemac.com/pmms/docs/PMMS_history.csv', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const rec = parsePmmsCsv(await res.text()) || {};
+      const ds = Object.keys(rec).sort().reverse();
+      if (ds.length) {
+        const price = rec[ds[0]], prev = ds.length > 1 ? rec[ds[1]] : null;
+        return { price, prev, date: ds[0], prevDate: ds[1] ?? null, change: prev ? ((price - prev) / prev) * 100 : null, source: '프레디맥' };
+      }
+    }
+  } catch { /* 빈 값 */ }
+  return { price: null, change: null, source: '프레디맥' };
 }
 
 // Naver m.stock front-api (국내금 M04020000 실시간 현재가 — fetchNaverBond와 동일 패턴)
@@ -296,7 +326,8 @@ export default async function handler(req: Request): Promise<Response> {
     btcYahoo, ethYahoo,
     btcCg, ethCg,
     us2y, us30y, us3m, t10y2y, t10y3m,
-    hyYield, hySpread, mort30, move,
+    hyYield, hySpread, mort30F, move,
+    us2yNaver, us30yNaver, us3mNaver, fedRateAlt, mort30Alt,
   ] = await Promise.allSettled([
     fetchFred('DGS10'),                                                // US 10Y (FRED — 영업일 종가 기준)
     fetchYahoo('^TNX'),                                                // US 10Y (Yahoo — 장중 실시간 fallback)
@@ -340,6 +371,11 @@ export default async function handler(req: Request): Promise<Response> {
     fetchFred('BAMLH0A0HYM2', true),                                   // 하이일드 스프레드 (%p)
     fetchFred('MORTGAGE30US'),                                         // 30년 모기지 (%, 주간)
     fetchYahoo('^MOVE'),                                               // MOVE 금리 변동성 지수
+    fetchNaverBond('US2YT=RR', 'Naver채권US'),                         // 미국 2년 (FRED 실패 시)
+    fetchNaverBond('US30YT=RR', 'Naver채권US'),                        // 미국 30년 (FRED 실패 시)
+    fetchNaverBond('US3MT=RR', 'Naver채권US'),                         // 미국 3개월 (FRED 실패 시)
+    FRED_KEY ? Promise.resolve(null) : fetchUsFedRateNoKey(),          // 기준금리 (FRED 키 없을 때)
+    FRED_KEY ? Promise.resolve(null) : fetchPmmsLatest(),              // 30년 모기지 (FRED 키 없을 때)
   ]);
 
   const ok = <T>(r: PromiseSettledResult<T>) =>
@@ -380,10 +416,23 @@ export default async function handler(req: Request): Promise<Response> {
   // 국내금: Naver front-api(M04020000) → HTML 기준가 순으로 fallback
   const goldKr = ok(goldKrMetal)?.price ? ok(goldKrMetal) : ok(goldKrHtml)?.price ? ok(goldKrHtml) : null;
 
+  // FRED가 비면 대체 출처 — 미국 국채는 네이버, 금리차는 네이버 10년 − 2년/3개월(전일 대비는 비운다), 기준금리·모기지는 위 대체 함수
+  const pick = (a: any, b: any) => (a?.price != null ? a : b?.price != null ? b : a);
+  const us2yV = pick(ok(us2y), ok(us2yNaver)), us30yV = pick(ok(us30y), ok(us30yNaver)), us3mV = pick(ok(us3m), ok(us3mNaver));
+  const ten = ok(us10yNaver)?.price != null ? ok(us10yNaver) : us10y;
+  const spreadAlt = (short: any) => (ten?.price != null && short?.price != null
+    ? { price: Math.round((ten.price - short.price) * 10000) / 10000, change: null, source: 'calc(네이버)' } : null);
+  const t10y2yV = pick(ok(t10y2y), spreadAlt(ok(us2yNaver))), t10y3mV = pick(ok(t10y3m), spreadAlt(ok(us3mNaver)));
+  const fedRateV = pick(ok(fedRate), ok(fedRateAlt));
+  const mort30 = { status: 'fulfilled', value: pick(ok(mort30F), ok(mort30Alt)) } as PromiseSettledResult<any>;
+  const todayKst = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+  const us10yForMbs = ok(us10yFred)?.price != null && ok(us10yFred)?.date ? ok(us10yFred)
+    : (us10y?.price != null ? { price: us10y.price, prev: null, date: todayKst, prevDate: null } : null);
+
   // MBS 스프레드(%p) = 30년 모기지 − 미국 10년(FRED DGS10 — 히스토리 /api/history mbsSpread와 같은 소스).
   //   10년물 최신일에 그날(또는 직전) 모기지 값을 맞춘다. 전일 대비도 같은 규칙의 %p 차이.
   const mbsSpread = (() => {
-    const m = ok(mort30), u = ok(us10yFred);
+    const m = ok(mort30), u = us10yForMbs;
     if (!m || !u || m.price == null || u.price == null || !m.date || !u.date) return { price: null, change: null, source: 'FRED' };
     const mortAt = (d: string | null) => (d && d >= m.date ? m.price : m.prev);
     const r4 = (v: number) => Math.round(v * 10000) / 10000;
@@ -396,12 +445,12 @@ export default async function handler(req: Request): Promise<Response> {
 
   const body = {
     us10y,
-    fedRate: ok(fedRate),
-    us2y:    ok(us2y),
-    us30y:   ok(us30y),
-    us3m:    ok(us3m),
-    t10y2y:  ok(t10y2y),
-    t10y3m:  ok(t10y3m),
+    fedRate: fedRateV,
+    us2y:    us2yV,
+    us30y:   us30yV,
+    us3m:    us3mV,
+    t10y2y:  t10y2yV,
+    t10y3m:  t10y3mV,
     hyYield: ok(hyYield),
     hySpread: ok(hySpread),
     mort30:  ok(mort30),
