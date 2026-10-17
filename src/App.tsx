@@ -11,6 +11,9 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
+import { applySettingsFile, buildSettingsFile } from './rateSettings';
+import { RATE_RULES } from './rateSignals';
+import { MANUAL_INPUTS } from './rateAssets';
 import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, uploadHtmlStudyMaterial, deleteDriveFileById, driveFileExists, updateDriveFileIfExists, getOrCreateAdminFolder } from './driveStorage';
 import { MIGRATION_FILES, buildMigrationPreview, migrationErrorPreview, prepareMigratedState, migrationBackupName } from './accountMigration';
 import PortfolioTable from './components/PortfolioTable';
@@ -3400,6 +3403,9 @@ export default function App() {
   const rateWinRef = useRef(null);
   const rateAccessRef = useRef(rateAccess);
   rateAccessRef.current = rateAccess;
+  // 메시지 핸들러(deps [])가 첫 렌더의 ensureDriveFolder(로그인 전 authUser)를 붙잡지 않게 최신 함수를 ref로 둔다
+  const ensureDriveFolderRef = useRef(ensureDriveFolder);
+  ensureDriveFolderRef.current = ensureDriveFolder;
   const openRateWindow = () => {
     if (!rateAccess) return;
     const existing = rateWinRef.current;
@@ -3413,9 +3419,49 @@ export default function App() {
     const onMsg = (e) => {
       if (e.origin !== window.location.origin) return;
       const d = e.data;
-      if (!d || typeof d !== 'object' || d.type !== 'rate:ping') return;
-      if (rateWinRef.current !== e.source) rateWinRef.current = e.source;   // 이 탭이 새로고침된 뒤의 재입양
-      try { e.source?.postMessage({ type: 'rate:pong', allowed: !!rateAccessRef.current, today: getTodayKST() }, window.location.origin); } catch {}
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string' || !d.type.startsWith('rate:')) return;
+      const reply = (msg) => { try { e.source?.postMessage(msg, window.location.origin); } catch {} };
+      // 저장 가능 = 권한 + Drive 토큰 + 관리자 접속(impersonation) 아님 — 관리자 접속 중에는 사용자 폴더에 쓰지 않는다
+      const canWrite = !!rateAccessRef.current && !!driveTokenRef.current && !adminViewingAsRef.current;
+      if (d.type === 'rate:ping') {
+        if (rateWinRef.current !== e.source) rateWinRef.current = e.source;   // 이 탭이 새로고침된 뒤의 재입양
+        reply({ type: 'rate:pong', allowed: !!rateAccessRef.current, today: getTodayKST(), canWrite });
+        return;
+      }
+      // ⑥ 설정(9-A) — 앱 탭이 사용자 Index_Data 폴더의 rate_monitor_settings.json을 읽고 쓴다.
+      // ⚠️ saveDriveFile만 쓴다(루트 저장 가드 경유) · 버전 백업(saveVersionedBackup) 금지 — 백업 상한 정리가 기존 백업을 지운다.
+      // ⚠️ 창이 보낸 내용은 믿지 않고 이 탭에서 기본값 위에 다시 병합·검증해 저장한다(손상값·범위 밖 값 차단).
+      if (rateWinRef.current !== e.source) return;   // 입양된 창만
+      if (d.type === 'rate:settingsLoad') {
+        (async () => {
+          if (!rateAccessRef.current) return reply({ type: 'rate:settings', reqId: d.reqId, ok: false, error: '권한이 없습니다' });
+          const token = driveTokenRef.current;
+          if (!token) return reply({ type: 'rate:settings', reqId: d.reqId, ok: false, error: 'Drive에 아직 연결되지 않았습니다' });
+          try {
+            const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+            const data = await loadDriveFile(token, folderId, DRIVE_FILES.RATE_SETTINGS);
+            reply({ type: 'rate:settings', reqId: d.reqId, ok: true, data: data || null, canWrite });
+          } catch (err) {
+            reply({ type: 'rate:settings', reqId: d.reqId, ok: false, error: `설정을 불러오지 못했습니다 (${err?.message || err})` });
+          }
+        })();
+        return;
+      }
+      if (d.type === 'rate:settingsSave') {
+        (async () => {
+          if (!canWrite) return reply({ type: 'rate:settingsSaved', reqId: d.reqId, ok: false, error: adminViewingAsRef.current ? '관리자 접속 중에는 저장하지 않습니다' : '저장할 수 없습니다(권한 또는 Drive 연결 확인)' });
+          try {
+            const token = driveTokenRef.current;
+            const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+            const merged = applySettingsFile(d.data, RATE_RULES, MANUAL_INPUTS);
+            const file = buildSettingsFile(RATE_RULES, merged.rules, merged.manual, merged.notes, new Date().toISOString());
+            await saveDriveFile(token, folderId, DRIVE_FILES.RATE_SETTINGS, file);
+            reply({ type: 'rate:settingsSaved', reqId: d.reqId, ok: true, data: file });
+          } catch (err) {
+            reply({ type: 'rate:settingsSaved', reqId: d.reqId, ok: false, error: `저장하지 못했습니다 (${err?.message || err})` });
+          }
+        })();
+      }
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);

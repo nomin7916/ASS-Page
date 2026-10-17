@@ -136,14 +136,16 @@ export interface RateAssetRow {
 }
 
 // 한 종목의 표 행 — 받지 못한 값은 null(0으로 단언하지 않는다)
-export function buildRateAssetRow(ticker: string, input: RateAssetInput | null | undefined, asOf: string, us10y?: number | null, isEtf = false): RateAssetRow {
+// manualInputs — 설정 화면(⑥)에서 고친 수동값(rateSettings.mergeManual). 미전달이면 코드 기본값
+export function buildRateAssetRow(ticker: string, input: RateAssetInput | null | undefined, asOf: string, us10y?: number | null, isEtf = false, manualInputs = MANUAL_INPUTS): RateAssetRow {
   const price = pos(input?.quote?.price) ? (input!.quote!.price as number) : null;
   const divs = input?.divs;
   const events = divs && divs.status === 'ok' ? divs.events : divs && divs.status === 'none' ? [] : null;
   const tr = events ? trailingDividend(events, asOf) : null;
   const yield12 = tr ? dividendYield(tr.sum, price) : null;
-  const manualKind = MANUAL_INPUTS.bookValue[ticker] ? 'bookValue' : MANUAL_INPUTS.nav[ticker] ? 'nav' : null;
-  const manual = manualKind ? MANUAL_INPUTS[manualKind][ticker] : null;
+  const mi = manualInputs || MANUAL_INPUTS;
+  const manualKind = mi.bookValue?.[ticker] ? 'bookValue' : mi.nav?.[ticker] ? 'nav' : null;
+  const manual = manualKind ? mi[manualKind][ticker] : null;
   const ratio = priceToManual(price, manual);
   return {
     ticker, isEtf, price,

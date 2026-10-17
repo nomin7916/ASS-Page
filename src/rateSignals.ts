@@ -24,6 +24,10 @@ export const RATE_RULES = {
   },
 };
 
+// 판정에 실제로 쓰는 기준치 — 기본은 RATE_RULES. evaluateRateSignals(…, rules)가 설정 화면의 값(rateSettings.mergeRules)으로
+// 잠시 바꿔 끼운다(동기 실행이라 다른 호출과 섞이지 않는다). 개별 eval 함수를 직접 부르면 기본값이다.
+let R: typeof RATE_RULES = RATE_RULES;
+
 export type SignalState = 'wait' | 'watch' | 'buy';
 export const SIGNAL_STATE_LABEL: Record<SignalState, string> = { wait: '대기', watch: '매수 관심', buy: '매수 적기' };
 
@@ -50,12 +54,12 @@ const M = (all: Record<string, MetricsLike> | null | undefined, k: string): Metr
   (all && all[k]) || { current: null, change1m: null, high52: null, position52: null, pct3y: null, turnedDown: false };
 
 const yieldOf = (label: string, v: number | null): SignalYield[] =>
-  num(v) ? [{ label, pre: v, post: v * (1 - RATE_RULES.withholdingPct / 100) }] : [];
+  num(v) ? [{ label, pre: v, post: v * (1 - R.withholdingPct / 100) }] : [];
 
 const pending = (label: string, detail = '입력 필요'): SignalCondition => ({ label, met: false, detail, pending: true });
 const A = (assets: Assets, t: string): AssetLike | null => (assets && assets[t]) || null;
 const yieldOfAsset = (label: string, a: AssetLike | null): SignalYield[] =>
-  a && num(a.yield12) ? [{ label, pre: a.yield12, post: a.yield12 * (1 - RATE_RULES.withholdingPct / 100) }] : [];
+  a && num(a.yield12) ? [{ label, pre: a.yield12, post: a.yield12 * (1 - R.withholdingPct / 100) }] : [];
 const ratio = (v: number | null) => (num(v) ? v.toFixed(2) : '자료 없음');
 
 function finish(base: Omit<AssetSignal, 'met' | 'total' | 'ratio'>): AssetSignal {
@@ -67,7 +71,7 @@ function finish(base: Omit<AssetSignal, 'met' | 'total' | 'ratio'>): AssetSignal
 
 // ① 미국 장기채(TLT)
 export function evalLongBond(all: Record<string, MetricsLike>): AssetSignal {
-  const r = RATE_RULES.tlt;
+  const r = R.tlt;
   const a = M(all, 'us10y'), b = M(all, 'us30y');
   const highPct = (m: MetricsLike) => num(m.pct3y) && m.pct3y >= r.pctMin;
   const nearHigh = (m: MetricsLike) => num(m.current) && num(m.high52) && m.high52 - m.current <= r.nearHighPp + 1e-9;
@@ -90,7 +94,7 @@ export function evalLongBond(all: Record<string, MetricsLike>): AssetSignal {
 
 // ② 하이일드 ETF
 export function evalHighYield(all: Record<string, MetricsLike>, assets?: Assets): AssetSignal {
-  const r = RATE_RULES.hy;
+  const r = R.hy;
   const s = M(all, 'hySpread'), y = M(all, 'hyYield');
   const c1 = num(s.position52) && s.position52 >= r.positionMin;
   const c2 = num(y.position52) && y.position52 >= r.positionMin;
@@ -112,7 +116,7 @@ export function evalHighYield(all: Record<string, MetricsLike>, assets?: Assets)
 
 // ③ 모기지 리츠(AGNC)
 export function evalMortgageReit(all: Record<string, MetricsLike>, assets?: Assets): AssetSignal {
-  const r = RATE_RULES.mreit;
+  const r = R.mreit;
   const c = M(all, 't10y2y'), m = M(all, 'mbsSpread'), v = M(all, 'move');
   const c1 = (num(c.current) && c.current <= 0) || (num(c.pct3y) && c.pct3y <= r.curvePctMax);
   const c2 = num(m.pct3y) && m.pct3y >= r.mbsPctMin;
@@ -142,7 +146,7 @@ export function evalMortgageReit(all: Record<string, MetricsLike>, assets?: Asse
 
 // ④ 실물 리츠(O)
 export function evalEquityReit(all: Record<string, MetricsLike>, assets?: Assets): AssetSignal {
-  const r = RATE_RULES.reit;
+  const r = R.reit;
   const a = M(all, 'us10y');
   const c1 = num(a.pct3y) && a.pct3y >= r.pctMin;
   const c2 = num(a.current) && a.turnedDown;
@@ -164,7 +168,7 @@ export function evalEquityReit(all: Record<string, MetricsLike>, assets?: Assets
 
 // ⑤ BDC(MAIN) — 금리가 높을 때 이자 수익이 느는 구조라 채권과 반대로 읽는다. ③(MAIN 가격)까지 맞으면 '매수 적기'.
 export function evalBdc(all: Record<string, MetricsLike>, assets?: Assets): AssetSignal {
-  const r = RATE_RULES.bdc;
+  const r = R.bdc;
   const f = M(all, 'fedRate'), s = M(all, 'hySpread');
   const c1 = num(f.pct3y) && f.pct3y >= r.fedPctMin;
   const c2 = num(s.change1m) && s.change1m < r.hyChangeMaxPp && num(s.pct3y) && s.pct3y < r.hyPctMax;
@@ -187,7 +191,7 @@ export function evalBdc(all: Record<string, MetricsLike>, assets?: Assets): Asse
 
 // ⑥ 한국 채권(비교용) — 미국 자산과 비교하기 위한 참고 줄. 세후는 이자소득세 15.4%.
 export function evalKrBond(all: Record<string, MetricsLike>): AssetSignal {
-  const r = RATE_RULES.krBond;
+  const r = R.krBond;
   const a = M(all, 'kr10y'), b = M(all, 'kr3y');
   const c1 = num(a.pct3y) && a.pct3y >= r.pctMin;
   const c2 = num(a.current) && a.turnedDown;
@@ -195,7 +199,7 @@ export function evalKrBond(all: Record<string, MetricsLike>): AssetSignal {
     { label: `국고채 10년이 최근 3년 중 ${r.pctMin} 이상`, met: !!c1, detail: `3년 ${rank(a.pct3y)}` },
     { label: '국고채 10년이 최근 20일 최고에서 꺾여 내려옴', met: !!c2, detail: a.turnedDown ? '꺾임' : '꺾임 없음' },
   ];
-  const tax = 1 - RATE_RULES.krInterestTaxPct / 100;
+  const tax = 1 - R.krInterestTaxPct / 100;
   const ky = (label: string, v: number | null): SignalYield[] => (num(v) ? [{ label, pre: v, post: v * tax }] : []);
   return finish({
     key: 'krBond', label: '한국 채권(비교용)', sample: '국고채', state: c1 && c2 ? 'buy' : c1 ? 'watch' : 'wait',
@@ -210,7 +214,7 @@ export function evalKrBond(all: Record<string, MetricsLike>): AssetSignal {
 //   세후 수익률은 만들지 않는다(조세협약 해석이 필요 — 세율을 지어내지 않는다).
 export interface BrazilExtras { exp12Change3m?: number | null; selicRose60d?: boolean | null; notes?: Array<{ date: string; impact: string }>; today?: string }
 export function evalBrazilBond(all: Record<string, MetricsLike>, extras?: BrazilExtras | null): AssetSignal {
-  const r = RATE_RULES.brBond;
+  const r = R.brBond;
   const x = extras || {};
   const t10 = M(all, 'br10y'), real = M(all, 'brReal'), ex = M(all, 'brExp12'), se = M(all, 'brSelic'), fx = M(all, 'brlkrw');
   const realNow = num(real.current) ? real.current : num(t10.current) && num(ex.current) ? t10.current - ex.current : null;
@@ -253,10 +257,14 @@ export function evalBrazilBond(all: Record<string, MetricsLike>, extras?: Brazil
 }
 
 // 7개 자산군 — 충족 비율 내림차순(같으면 정의 순서)
-export function evaluateRateSignals(all: Record<string, MetricsLike> | null | undefined, assets?: Assets, brazil?: BrazilExtras | null): AssetSignal[] {
+export function evaluateRateSignals(all: Record<string, MetricsLike> | null | undefined, assets?: Assets, brazil?: BrazilExtras | null, rules?: typeof RATE_RULES | null): AssetSignal[] {
   const m = all || {};
+  const prev = R;
+  R = rules || RATE_RULES;
+  try {
   const list = [evalLongBond(m), evalHighYield(m, assets), evalMortgageReit(m, assets), evalEquityReit(m, assets), evalBdc(m, assets), evalKrBond(m), evalBrazilBond(m, brazil)];
   return list.map((s, i) => [s, i] as const)
     .sort((x, y) => y[0].ratio - x[0].ratio || x[1] - y[1])
     .map(([s]) => s);
+  } finally { R = prev; }
 }

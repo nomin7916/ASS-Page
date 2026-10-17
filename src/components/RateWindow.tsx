@@ -11,11 +11,13 @@ import {
 } from '../rateMetrics';
 import { changeOverDays, roseWithinDays } from '../rateMetrics';
 import { readBrazilNotes } from '../brazilNotes';
+import { applySettingsFile } from '../rateSettings';
+import RateSettingsPanel from './RateSettingsPanel';
 import { computeBrlBond, BRL_BOND_FACE, BRL_BOND_COUPON, BRL_BOND_YEARS } from '../brlBond';
 import { evaluateRateSignals, SIGNAL_STATE_LABEL, RATE_RULES } from '../rateSignals';
 import { fetchWatchQuote, fetchWatchDaily, fetchUsDividendEvents } from '../watchlistQuote';
 import {
-  RATE_ASSET_GROUPS, RATE_ANCHOR_TICKERS, buildRateAssetRow, orderRateAssetRows, DIV_CYCLE_LABEL, DIV_CHANGE_LABEL,
+  RATE_ASSET_GROUPS, RATE_ANCHOR_TICKERS, MANUAL_INPUTS, buildRateAssetRow, orderRateAssetRows, DIV_CYCLE_LABEL, DIV_CHANGE_LABEL,
 } from '../rateAssets';
 
 /**
@@ -209,6 +211,14 @@ export default function RateWindow() {
   const [access, setAccess] = useState('pending');
   const [today, setToday] = useState('');
   const [linked, setLinked] = useState(true);
+  // ⑥ 설정(9-A) — 앱 탭이 Drive에서 읽어 준 파일. 창 메모리에만 두고 저장은 앱 탭에 맡긴다
+  const [canWrite, setCanWrite] = useState(false);
+  const [settingsFile, setSettingsFile] = useState(null);
+  const [settingsState, setSettingsState] = useState('loading');   // loading | ready | error
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsSeq, setSettingsSeq] = useState(0);                // 불러오기·저장 완료마다 올려 설정 패널 초안을 새로 잡는다
+  const reqSeqRef = useRef(0);
+  const pendingRef = useRef(new Map());
   const [bgMode, setBgMode] = useState('black');
   const [systemDark, setSystemDark] = useState(() => {
     try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return true; }
@@ -245,15 +255,52 @@ export default function RateWindow() {
       if (e.origin !== window.location.origin) return;
       if (window.opener && e.source !== window.opener) return;
       const d = e.data;
-      if (!d || typeof d !== 'object' || d.type !== 'rate:pong') return;
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
+      if (d.type === 'rate:settings' || d.type === 'rate:settingsSaved') {
+        const cb = pendingRef.current.get(d.reqId);
+        if (cb) { pendingRef.current.delete(d.reqId); cb(d); }
+        return;
+      }
+      if (d.type !== 'rate:pong') return;
       lastMsgRef.current = Date.now();
       setLinked(true);
       setAccess(d.allowed === true ? 'allowed' : 'denied');
+      setCanWrite(d.canWrite === true);
       if (typeof d.today === 'string') setToday(d.today);
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
   }, []);
+
+  // 앱 탭에 요청 1건 — 응답(reqId 일치) 또는 20초 시한
+  const request = useCallback((msg) => new Promise((resolve) => {
+    const reqId = ++reqSeqRef.current;
+    const timer = setTimeout(() => { pendingRef.current.delete(reqId); resolve({ ok: false, error: '앱 탭이 응답하지 않습니다' }); }, 20000);
+    pendingRef.current.set(reqId, (d) => { clearTimeout(timer); resolve(d); });
+    if (!post({ ...msg, reqId })) { clearTimeout(timer); pendingRef.current.delete(reqId); resolve({ ok: false, error: '앱 탭이 열려 있어야 합니다' }); }
+  }), [post]);
+
+  // 설정 불러오기 — 권한이 확인되면 한 번(실패하면 연결이 돌아올 때 다시)
+  useEffect(() => {
+    if (access !== 'allowed' || !linked || settingsState === 'ready') return;
+    let alive = true;
+    request({ type: 'rate:settingsLoad' }).then(d => {
+      if (!alive) return;
+      if (d?.ok) { setSettingsFile(d.data || null); setSettingsState('ready'); setSettingsError(''); setSettingsSeq(n => n + 1); }
+      else { setSettingsState('error'); setSettingsError(d?.error || '설정을 불러오지 못했습니다'); }
+    });
+    return () => { alive = false; };
+  }, [access, linked, settingsState, request]);
+
+  const saveSettings = useCallback(async (data) => {
+    const d = await request({ type: 'rate:settingsSave', data });
+    if (d?.ok) { setSettingsFile(d.data); setSettingsSeq(n => n + 1); }
+    return d;
+  }, [request]);
+
+  // 코드 기본값 위에 저장된 설정을 덮은 값 — ③ 판정·⑤ 표가 이것을 쓴다(파일이 없으면 기본값 그대로)
+  const eff = useMemo(() => applySettingsFile(settingsFile, RATE_RULES, MANUAL_INPUTS), [settingsFile]);
+  const effRules = eff.rules;
 
   useEffect(() => {
     const tick = () => {
@@ -377,21 +424,25 @@ export default function RateWindow() {
   const assetRows = useMemo(() => {
     const out = {};
     for (const g of RATE_ASSET_GROUPS) {
-      for (const tk of g.tickers) out[tk] = buildRateAssetRow(tk, assetData[tk], today, us10yNow, g.etfs.includes(tk));
+      for (const tk of g.tickers) {
+        const row = buildRateAssetRow(tk, assetData[tk], today, us10yNow, g.etfs.includes(tk), eff.manual);
+        // 세후는 설정의 원천징수율로 다시 계산한다(⑥에서 바꾸면 ⑤ 표도 따라온다)
+        out[tk] = { ...row, yieldPost: row.yield12 == null ? null : row.yield12 * (1 - effRules.withholdingPct / 100) };
+      }
     }
     return out;
-  }, [assetData, today, us10yNow]);
+  }, [assetData, today, us10yNow, eff, effRules]);
   const failedTickers = useMemo(() => Object.keys(assetData).filter(tk => assetData[tk]?.status === 'fail'), [assetData]);
 
   // ③ 판정 — 충족 비율 내림차순으로 이미 정렬돼 온다(대표 종목 행을 함께 넘긴다)
   // 브라질 국채 판정의 추가 입력 — 기대물가 3개월 변화 · 최근 60일 Selic 인상 · 정치 메모(readBrazilNotes 하나로만 읽는다)
-  const brazilNotes = useMemo(() => readBrazilNotes(), []);
+  const brazilNotes = useMemo(() => readBrazilNotes(eff.notes), [eff]);
   const brazilExtras = useMemo(() => ({
     exp12Change3m: changeOverDays(seriesByKey.brExp12, 90),
-    selicRose60d: roseWithinDays(seriesByKey.brSelic, RATE_RULES.brBond.selicCalmDays),
+    selicRose60d: roseWithinDays(seriesByKey.brSelic, effRules.brBond.selicCalmDays),
     notes: brazilNotes, today,
-  }), [seriesByKey, brazilNotes, today]);
-  const signals = useMemo(() => evaluateRateSignals(metrics, assetRows, brazilExtras), [metrics, assetRows, brazilExtras]);
+  }), [seriesByKey, brazilNotes, today, effRules]);
+  const signals = useMemo(() => evaluateRateSignals(metrics, assetRows, brazilExtras, effRules), [metrics, assetRows, brazilExtras, effRules]);
   const brBondPrice = brlBondPriceAt(metrics.br10y?.current);
   const brBondKrw = brBondPrice != null && Number.isFinite(metrics.brlkrw?.current) ? brBondPrice * metrics.brlkrw.current : null;
   const [openSignal, setOpenSignal] = useState(null);
@@ -497,7 +548,7 @@ export default function RateWindow() {
           <section className={`rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
             <div className="flex flex-wrap items-baseline gap-2 mb-2">
               <h2 className="text-[13px] font-bold">지금 적정 자산</h2>
-              <span className={`text-[10px] ${t.sub}`}>금리 지표 조건 충족 순 · 행을 누르면 조건별 ○× · 세후 = 미국 원천징수 {RATE_RULES.withholdingPct}% 차감(한국 채권은 이자소득세 {RATE_RULES.krInterestTaxPct}%)</span>
+              <span className={`text-[10px] ${t.sub}`}>금리 지표 조건 충족 순 · 행을 누르면 조건별 ○× · 세후 = 미국 원천징수 {effRules.withholdingPct}% 차감(한국 채권은 이자소득세 {effRules.krInterestTaxPct}%)</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-[12px] border-collapse">
@@ -674,7 +725,7 @@ export default function RateWindow() {
           <section className={`rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
             <div className="flex flex-wrap items-baseline gap-2 mb-2">
               <h2 className="text-[13px] font-bold">자산군별 종목</h2>
-              <span className={`text-[10px] ${t.sub}`}>배당률 = 최근 12개월 배당 합계 ÷ 현재가 · 세후 = 원천징수 {RATE_RULES.withholdingPct}% 차감 · 티커를 누르면 Yahoo Finance</span>
+              <span className={`text-[10px] ${t.sub}`}>배당률 = 최근 12개월 배당 합계 ÷ 현재가 · 세후 = 원천징수 {effRules.withholdingPct}% 차감 · 티커를 누르면 Yahoo Finance</span>
             </div>
             <div className="flex flex-wrap gap-1 mb-2" role="tablist">
               {RATE_ASSET_GROUPS.map(g => (
@@ -724,8 +775,8 @@ export default function RateWindow() {
                             if (!r.manualKind) extra = <span className={t.sub}>-</span>;
                             else if (!r.manualSet) extra = <span className="text-amber-400">입력 필요</span>;
                             else if (v == null) extra = cell('-');
-                            else if (g.extra === 'pb' && v >= RATE_RULES.mreit.pbWarn) extra = <span className="text-red-400 font-bold">{v.toFixed(2)}배 유상증자 위험</span>;
-                            else if (g.extra === 'pb' && v <= RATE_RULES.mreit.pbMax) extra = <span className="text-green-400 font-bold">{v.toFixed(2)}배</span>;
+                            else if (g.extra === 'pb' && v >= effRules.mreit.pbWarn) extra = <span className="text-red-400 font-bold">{v.toFixed(2)}배 유상증자 위험</span>;
+                            else if (g.extra === 'pb' && v <= effRules.mreit.pbMax) extra = <span className="text-green-400 font-bold">{v.toFixed(2)}배</span>;
                             else extra = `${v.toFixed(2)}배`;
                           } else if (g.extra === 'spread10y') {
                             extra = cell(r.spread10y == null ? '-' : fmtVal(r.spread10y, '%p'));
@@ -757,6 +808,31 @@ export default function RateWindow() {
             })()}
           </section>
         </main>
+
+        {/* ⑥ 설정 — 기준치·수동값·브라질 메모(앱 탭이 Drive에 저장) */}
+        <section className={`mx-4 mb-16 rounded-lg border ${t.border} p-3`} style={{ background: t.card }}>
+          <div className="flex flex-wrap items-baseline gap-2 mb-1">
+            <h2 className="text-[13px] font-bold">설정</h2>
+            <span className={`text-[10px] ${t.sub}`}>저장하면 ③ 판정과 ⑤ 표가 바로 다시 계산됩니다</span>
+          </div>
+          {settingsState === 'error' && <div className="text-[11px] text-red-400 mb-1">{settingsError}</div>}
+          {settingsState === 'loading'
+            ? <div className={`text-[11px] ${t.sub}`}>설정을 불러오는 중…</div>
+            : (
+              <RateSettingsPanel
+                key={settingsSeq}
+                t={t}
+                defaults={RATE_RULES}
+                rules={effRules}
+                manual={eff.manual}
+                notes={eff.notes}
+                today={today}
+                writable={linked && canWrite && settingsState === 'ready'}
+                lockReason={!linked ? '앱 탭이 열려 있어야 저장됩니다' : !canWrite ? '저장할 수 없습니다(관리자 접속 중이거나 Drive 연결 전)' : '설정을 불러오지 못해 수정할 수 없습니다'}
+                onSave={saveSettings}
+              />
+            )}
+        </section>
 
         {/* ⑥ 하단 고정 문구 */}
         <footer className={`fixed bottom-0 inset-x-0 px-4 py-2 border-t ${t.border} text-[11px] ${t.sub} text-center`} style={{ background: t.page }}>

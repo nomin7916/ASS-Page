@@ -123,8 +123,8 @@ console.log('\n── 파트③ 배선 가드 ──');
   ok('#G8 받은 자료를 브라우저 저장소에 두지 않는다', !/localStorage|sessionStorage/.test(strip(RW)));
   ok('#G9 티커를 누르면 Yahoo Finance 새 탭', /finance\.yahoo\.com\/quote\//.test(RW) && /target="_blank" rel="noopener noreferrer"/.test(RW));
   ok('#G10 수동값이 없으면 입력 필요 표시', /입력 필요/.test(RW) && /!r\.manualSet/.test(RW));
-  ok('#G11 장부가 배율 색 — 1.1 이상 빨강 유상증자 위험 · 0.9 이하 초록', /RATE_RULES\.mreit\.pbWarn\) extra = <span className="text-red-400 font-bold">\{v\.toFixed\(2\)\}배 유상증자 위험/.test(RW)
-    && /RATE_RULES\.mreit\.pbMax\) extra = <span className="text-green-400/.test(RW));
+  ok('#G11 장부가 배율 색 — 1.1 이상 빨강 유상증자 위험 · 0.9 이하 초록', /effRules\.mreit\.pbWarn\) extra = <span className="text-red-400 font-bold">\{v\.toFixed\(2\)\}배 유상증자 위험/.test(RW)
+    && /effRules\.mreit\.pbMax\) extra = <span className="text-green-400/.test(RW));
   ok('#G12 검증 스크립트가 게이트 목록에 있다', pkg.scripts['verify:rate-assets'] === 'node scripts/verify-rate-assets.mjs');
 }
 
