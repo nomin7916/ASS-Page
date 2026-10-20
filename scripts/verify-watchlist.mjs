@@ -797,6 +797,10 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
 
   // ── 차트 렌더 ──
   // ⚠️ 종목 코드를 선 dataKey로 쓰면 'BRK.B'의 점이 recharts 경로로 해석돼 선이 사라진다.
+  ok('#G85b 마우스 위치 값마다 가로줄 + 점 + 왼쪽 값 표시(수익률·종가 모드 모두) · 구간 선택 중엔 끔',
+    /const hoverLevels = !hover \|\| dim \? \[\] : shown\.flatMap\(/.test(CW) && /row\[mode === 'pct' \? s\.key : `px:\$\{s\.key\}`\]/.test(CW)
+    && /<ReferenceLine key=\{`hl-\$\{h\.key\}`\} y=\{h\.v\}/.test(CW) && /<ReferenceDot key=\{`hd-\$\{h\.key\}`\} x=\{hover\} y=\{h\.v\}/.test(CW)
+    && /position: 'left'/.test(CW) && /ReferenceLine, ReferenceDot, Tooltip as RechartsTooltip \} from 'recharts';/.test(CW));
   ok('#G85 선 dataKey 는 시리즈 키(s0…) — 종목 코드 금지', /const seriesKey = \(i\) => `s\$\{i\}`;/.test(CW)
     && /dataKey=\{mode === 'pct' \? s\.key : `px:\$\{s\.key\}`\}/.test(CW));
   {

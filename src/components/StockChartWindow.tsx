@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip } from 'recharts';
+import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Line, ReferenceArea, ReferenceLine, ReferenceDot, Tooltip as RechartsTooltip } from 'recharts';
 import { X, Plus, RefreshCw, ExternalLink, Calendar, Percent, TrendingUp } from 'lucide-react';
 import ErrorBoundary from './ErrorBoundary';
 import CustomDatePicker from './CustomDatePicker';
@@ -140,6 +140,13 @@ function StockChartPage() {
   const rows = useMemo(() => buildChartRows(series.map((s) => ({ key: s.key, win: s.win }))), [series]);
   const shown = mode === 'price' ? series.slice(0, 1) : series;
   const dim = sel.left && sel.right ? selectionDimBands(rows, sel.left, sel.right) : null;
+  // 마우스가 가리키는 날짜의 값마다 가로줄(수익률 차트와 같은 방식) — 그 값이 차트 전체에서 어느 시기와 같은 높이인지 보이게.
+  //   구간 선택(딤) 중에는 끄고, 그날 값이 없는 시리즈(휴장 등)는 건너뛴다
+  const hoverLevels = !hover || dim ? [] : shown.flatMap((s) => {
+    const row = rows.find((x) => x.date === hover);
+    const v = row ? row[mode === 'pct' ? s.key : `px:${s.key}`] : null;
+    return v == null || !Number.isFinite(v) ? [] : [{ key: s.key, color: s.color, v, text: mode === 'pct' ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : fmtWatchPrice(s.market, v) }];
+  });
   const firstDate = rows[0]?.date || '';
   const lastDate = rows[rows.length - 1]?.date || '';
 
@@ -435,6 +442,13 @@ function StockChartPage() {
                   connectNulls
                   isAnimationActive={false}
                 />
+              ))}
+              {hoverLevels.map((h) => (
+                <ReferenceLine key={`hl-${h.key}`} y={h.v} stroke={h.color} strokeOpacity={0.55} strokeWidth={1} ifOverflow="hidden"
+                  label={{ value: h.text, position: 'left', fill: h.color, fontSize: 10, fontWeight: 700 }} />
+              ))}
+              {hoverLevels.map((h) => (
+                <ReferenceDot key={`hd-${h.key}`} x={hover} y={h.v} r={4} fill="#f9fafb" stroke={h.color} strokeWidth={2} ifOverflow="hidden" />
               ))}
               {/* 비선택 구간 딤 — 선보다 **뒤에** 선언해야 선 위에 덮인다(paint 순서 = 선언 순서).
                   경계 날짜에서 discard로 밴드가 사라지지 않게 ifOverflow="hidden"(수익률 차트와 같은 규약). */}
