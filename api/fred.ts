@@ -58,7 +58,9 @@ function stepUrl(stage: 'api' | 'fredgraph', id: string, r: Range): string {
   return u;
 }
 
-// 한 시리즈 — 성공하면 { 날짜: 값 }, 끝내 실패하면 null. 실패마다 시리즈·단계·걸린 ms·HTTP 상태를 로그에 남긴다
+// 한 시리즈 — 성공하면 { 날짜: 값 }, 끝내 실패하면 null. 실패마다 시리즈·단계·걸린 ms·HTTP 상태를 로그에 남긴다.
+//   API가 정상 응답(200)으로 관측 0건을 주면 '그 구간엔 자료 없음'이 답이다 — 빈 기록을 돌려주고 fredgraph·재시도로 가지 않는다
+//   (월별 시리즈를 짧은 구간으로 물으면 정상적으로 0건이다. 2026-10-20 운영: IRLTLT01KRM156N이 여기서 9.6초를 썼다)
 async function fetchSeries(id: string, r: Range, deadline: number): Promise<Record<string, number> | null> {
   for (const st of STEPS) {
     if (st.stage === 'api' && !FRED_KEY) continue;
@@ -79,6 +81,7 @@ async function fetchSeries(id: string, r: Range, deadline: number): Promise<Reco
       const rec = st.stage === 'api' ? parseFredApiObservations(await res.json(), r.signed) : parseFredGraphCsv(await res.text(), r.signed);
       if (Object.keys(rec).length) return rec;
       console.error(`[fred] ${id} ${tag} 관측 0건 status=200 ${ms}ms (start=${r.start || '-'})`);
+      if (st.stage === 'api') return rec;
     } catch (e) {
       console.error(`[fred] ${id} ${tag} 오류 ${logSafe((e as any)?.name || e, FRED_KEY)} ${Date.now() - t0}ms`);
     }

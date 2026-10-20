@@ -213,6 +213,17 @@ export function fredStartFor(seriesId: string, startIso: string, todayIso: strin
   const floor = new Date(t).toISOString().slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(startIso) && startIso > floor ? startIso : floor;
 }
+// 조회 구간에 비해 관측이 충분한가(d1·d2 = YYYYMMDD) — '10건 이상' 고정 기준은 금리 창의 최신분 이어받기(5~35일)를
+//   늘 '부족'으로 판정해 월별 대체 시리즈로 갈아타게 했다(2026-10-20 운영: kr10y 10일 구간 → FRED 월별 0건 → 502).
+//   영업일(달력 × 5/7)의 절반, 최소 1건 · 최대 10건. 구간을 모르면 10건
+export function enoughRows(rec: Record<string, number> | null | undefined, d1: string, d2: string): boolean {
+  const n = Object.keys(rec || {}).length;
+  if (!n) return false;
+  const t = (d: string) => (/^\d{8}$/.test(d || '') ? Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)) : NaN);
+  const days = (t(d2) - t(d1)) / 86400000 + 1;
+  if (!Number.isFinite(days) || days < 1) return n >= 10;
+  return n >= Math.max(1, Math.min(10, Math.floor((days * 5) / 7 / 2)));
+}
 // FRED API(series/observations JSON) → { 날짜: 값 }. '.'(결측)·숫자 아님은 버린다. signed가 아니면 0 이하도 버린다
 export function parseFredApiObservations(json: any, signed = false): Record<string, number> {
   const out: Record<string, number> = {};

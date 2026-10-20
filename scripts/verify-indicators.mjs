@@ -172,7 +172,7 @@ if (C) {
 console.log('\n── 파트② 소스 병합 (api/_indicatorSources.ts 직접 import) ──');
 const I = await load('api/_indicatorSources.ts');
 if (I) {
-  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe, parseFredApiObservations, fredLatest, fredKvKey, packFredKv, unpackFredKv } = I;
+  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe, parseFredApiObservations, fredLatest, fredKvKey, packFredKv, unpackFredKv, enoughRows } = I;
   const bokHtml = '<table><tr><th>연도</th><th>변경일자</th><th>기준금리</th></tr><tr><td>2026</td><td>08월 27일</td><td>3.00</td></tr>'
     + '<tr><td>2026</td><td>07월 16일</td><td>2.75</td></tr><tr><td>1999</td><td>05월 06일</td><td>4.75</td></tr><tr><td>합계</td><td>x</td><td>1</td></tr></table>';
   eq('#41 한국은행 기준금리 공시 페이지 해석 — 날짜 오름차순 · 표 아닌 행 무시', parseBokBaseRateHtml(bokHtml), [['1999-05-06', 4.75], ['2026-07-16', 2.75], ['2026-08-27', 3]]);
@@ -199,6 +199,9 @@ if (I) {
   eq('#51 KV 보관값 — 시리즈별 키 · 저장·복원 왕복에 stale:true · 손상값 null',
     [fredKvKey('BAMLH0A0HYM2'), unpackFredKv(packFredKv({ price: 3.1, prev: 3, date: '2026-10-16', prevDate: '2026-10-15' }), true)?.stale, unpackFredKv(packFredKv({ price: 3.1, prev: 3, date: '2026-10-16', prevDate: '2026-10-15' }), true)?.change.toFixed(2), unpackFredKv('{bad'), unpackFredKv(null)],
     ['fred:latest:v1:BAMLH0A0HYM2', true, '0.10', null, null]);
+  eq('#52 관측 충분 — 짧은 구간(최신분 10일)은 영업일 절반이면 충분 · 긴 구간은 10건 · 0건은 부족 · 구간 모르면 10건',
+    [enoughRows({ a: 1, b: 1, c: 1, d: 1 }, '20261011', '20261020'), enoughRows({ a: 1, b: 1 }, '20261011', '20261020'), enoughRows({ a: 1 }, '20261001', '20261231'), enoughRows({}, '20261019', '20261020'), enoughRows({ a: 1 }, '20261020', '20261020'), enoughRows({ a: 1 }, '', '')],
+    [true, false, false, false, true, false]);
   eq('#43 오늘 금리 · 직전 변경 폭', [stepLatest(ch, '2026-10-18'), stepLatest(ch, '2026-08-01'), stepLatest(ch, '2026-01-01')], [{ price: 3, change: 0.25, date: '2026-08-27' }, { price: 2.75, change: 0, date: '2026-07-16' }, null]);
   eq('#37 헤알·원 = 원/달러 ÷ 헤알/달러(그날 또는 직전 헤알) · 소수 4자리', computeBrlKrw({ '2026-10-15': 1400, '2026-10-16': 1410 }, { '2026-10-15': 5.6 }), { '2026-10-15': 250, '2026-10-16': 251.7857 });
   eq('#37b 헤알 값이 0·없으면 만들지 않는다', [computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-15': 0 }), computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-16': 5 })], [{}, {}]);
@@ -316,6 +319,9 @@ ok('#G17k 하이일드 null 대책 — FRED 시작일 3년 안(ICE BofA) · 실�
   /start: fredStartFor\(id, since, today\)/.test(FR) && /const start = fredStartFor\(id, ISO\.test\(s0\) \? s0 : '', today\);/.test(FR)
   && /console\.error\(`\[fred\] \$\{id\} \$\{tag\} 실패 status=\$\{res\.status\} \$\{ms\}ms: \$\{logSafe\(await res\.text\(\)\.catch\(\(\) => ''\), FRED_KEY\)\}`\);/.test(FR)
   && /console\.error\(`\[fred\] \$\{id\} \$\{tag\} 오류 \$\{logSafe\(\(e as any\)\?\.name \|\| e, FRED_KEY\)\} \$\{Date\.now\(\) - t0\}ms`\);/.test(FR));
+ok('#G19 짧은 구간을 \'부족\'으로 보지 않는다(kr10y·us10y·네이버 채권) · kr10y는 네이버 일별을 버리지 않고 앞쪽만 월별 · API 정상 0건이면 그대로 끝',
+  (H.match(/enoughRows\(/g) || []).length === 4 && !/length (<|>=) 10\)/.test(H.replace(/allData\)\.length < 10/, '')) && /data = fillBefore\(data, await fetchFredHistory\('IRLTLT01KRM156N', d1, d2\)\);/.test(H)
+  && /fillBefore, fillAfter, enoughRows,/.test(H) && /if \(st\.stage === 'api'\) return rec;/.test(FR));
 ok('#G18 FRED는 미국 동부(iad1) 전용 함수 · 두 함수는 그대로(한국 출처) · KV 마지막 성공값(MSET 저장·MGET 읽기, stale) · 카드 기준일',
   /export const config = \{ runtime: 'edge', regions: \['iad1'\] \};/.test(FR) && /export const config = \{ runtime: 'edge' \};/.test(H) && /export const config = \{ runtime: 'edge' \};/.test(IND)
   && /redis\(\['MSET', \.\.\.fresh\]\)/.test(FR) && /redis\(\['MGET', \.\.\.missing\.map\(fredKvKey\)\]\)/.test(FR) && /unpackFredKv\(kept\[i\], diffs\.has\(id\)\)/.test(FR)

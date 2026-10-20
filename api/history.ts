@@ -8,7 +8,7 @@ const ECOS_KEY = process.env.ECOS_API_KEY ?? '';   // 한국은행 ECOS — 한�
 import { getKisToken } from './_kisToken.js';
 import { fetchKisDailyRange } from './_kisDaily.js';
 import {
-  fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread,
+  fillBefore, fillAfter, enoughRows, joinFedRate, isRecentRangeEnd, computeMbsSpread,
   computeKrUsSpread, parseEcosRows, parseNaverBondPrices,
   computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily,
   extendStepChanges, parseNyFedTarget, parsePmmsCsv, logSafe,
@@ -282,7 +282,7 @@ async function fetchNaverBondHistory(reutersCode: string, d1: string, d2: string
 //   kr10y·kr3y·krUs10y가 공유한다. 조회 구간 밖 날짜는 버린다.
 async function fetchNaverBondDaily(reutersCode: string, d1: string, d2: string, deadlineAt = Date.now() + 12000): Promise<Record<string, number>> {
   const old = await fetchNaverBondHistory(reutersCode, d1, d2, deadlineAt);
-  if (Object.keys(old).length >= 10) return old;
+  if (enoughRows(old, d1, d2)) return old;
   const lo = d1 ? `${d1.slice(0, 4)}-${d1.slice(4, 6)}-${d1.slice(6, 8)}` : '';
   const hi = d2 ? `${d2.slice(0, 4)}-${d2.slice(4, 6)}-${d2.slice(6, 8)}` : '9999-12-31';
   const out: Record<string, number> = { ...old };
@@ -821,7 +821,7 @@ export default async function handler(request: Request): Promise<Response> {
   // us10y: FRED DGS10(1962~, 하루 늦게 발표) → 최신 꼬리는 Naver 일별로 보충 · 실패 시 Naver → Yahoo ^TNX
   if (key === 'us10y') {
     let data = await fetchFredHistory('DGS10', d1, d2, FRED_TIMEOUT);
-    if (Object.keys(data).length >= 10) {
+    if (enoughRows(data, d1, d2)) {
       const last = lastKey(data);
       if (last && ymd(last) < d2 && budgetLeft() > 3000) {
         const tail = await fetchNaverBondHistory('US10YT=RR', shiftYmd(ymd(last), 1), d2, Date.now() + Math.min(8000, budgetLeft()));
@@ -829,7 +829,7 @@ export default async function handler(request: Request): Promise<Response> {
       }
     } else {
       data = await fetchNaverBondHistory('US10YT=RR', d1, d2);
-      if (Object.keys(data).length < 10) data = await fetchYahooHistory('^TNX', d1, d2);
+      if (!enoughRows(data, d1, d2)) data = await fetchYahooHistory('^TNX', d1, d2);
     }
     if (Object.keys(data).length === 0) return new Response('us10y 수집 실패', { status: 502 });
     return csvResponse(data, recent);
@@ -914,8 +914,9 @@ export default async function handler(request: Request): Promise<Response> {
   if (key === 'kr10y') {
     let data = await fetchNaverBondDaily('KR10YT=RR', d1, d2, Date.now() + 12000);
     const first = firstKey(data);
-    if (Object.keys(data).length < 10) {
-      data = await fetchFredHistory('IRLTLT01KRM156N', d1, d2);
+    // 네이버가 구간에 비해 모자랄 때만 FRED 월별 — 받은 네이버 일별은 버리지 않고 그 앞쪽만 월별로 채운다
+    if (!enoughRows(data, d1, d2)) {
+      data = fillBefore(data, await fetchFredHistory('IRLTLT01KRM156N', d1, d2));
     } else if (first && ymd(first) > shiftYmd(d1, 7) && budgetLeft() > 3000) {
       const head = await fetchFredHistory('IRLTLT01KRM156N', d1, shiftYmd(ymd(first), -1), Math.min(8000, budgetLeft()));
       data = fillBefore(data, head);
