@@ -3,16 +3,15 @@
 // [최적화] goldKr 100→20페이지·5페이지 배치 처리(동시요청 폭주 방지), goldKr 캐시 6h, 지표히스토리 csvResponse 24h
 export const config = { runtime: 'edge' };
 
-const FRED_KEY = process.env.FRED_API_KEY ?? '';
 const ECOS_KEY = process.env.ECOS_API_KEY ?? '';   // 한국은행 ECOS — 한국 기준금리(krBase). 없으면 '인증키 필요' 502
 
 import { getKisToken } from './_kisToken.js';
 import { fetchKisDailyRange } from './_kisDaily.js';
 import {
-  parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread,
+  fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread,
   computeKrUsSpread, parseEcosRows, parseNaverBondPrices,
   computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily,
-  extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe,
+  extendStepChanges, parseNyFedTarget, parsePmmsCsv, logSafe,
 } from './_indicatorSources.js';
 import { KR_BASE_RATE_CHANGES, KR_BASE_RATE_SNAPSHOT_AT } from './_krBaseRateData.js';
 import { US_FED_RATE_CHANGES } from './_usFedRateData.js';
@@ -162,80 +161,36 @@ async function fetchYahooHistory(symbol: string, d1: string, d2: string): Promis
   }
 }
 
-// FRED 과거 일별 데이터 수집 — ① API(키 있을 때) → ② fredgraph.csv(키 불필요) 폴백.
-// ⚠️ limit는 반드시 최대(100000)로 — 옛 값 2000 + sort_order=asc 조합은 조회 시작일부터 2000건만 돌려줘
-//    장기 조회에서 **최근 구간이 통째로 잘렸다**(기준금리 DFEDTARU는 주말 포함 일별이라 2000건 ≈ 5.5년 →
-//    2004년부터 조회하면 2014년 이후가 없음 = "현재 기준금리가 반영되지 않음"의 원인).
-// ⚠️ 키가 없거나 API가 실패해도 fredgraph.csv는 키 없이 같은 시계열을 준다(파이썬 pandas_datareader와 같은 경로).
+// FRED 과거 일별 데이터 — 같은 배포의 /api/fred(미국 동부 iad1 전용 함수)에서 받는다(2026-10-20).
+//   이 함수는 Singapore(sin1)에서 실행되는데 그곳에서 FRED 요청이 전부 TimeoutError였다(운영 로그). 네이버·KIS 같은
+//   한국 출처는 여기서 그대로 받고 FRED만 분리했다. /api/fred가 API → fredgraph → 1회 재시도·ICE BofA 3년 제한·로그를 맡는다.
+// ⚠️ limit은 /api/fred에서 최대(100000) — 옛 값 2000 + asc 조합은 장기 조회의 최근 구간을 통째로 잘랐다(기준금리 사고).
 const toIsoDate = (d: string) => `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+let SELF_ORIGIN = '';   // 요청마다 handler가 채운다(같은 배포의 /api/fred를 부르기 위해)
 
-async function fetchFredApiHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000, signed = false): Promise<Record<string, number>> {
-  if (!FRED_KEY) return {};
-  const params: Record<string, string> = {
-    series_id:  seriesId,
-    api_key:    FRED_KEY,
-    file_type:  'json',
-    sort_order: 'asc',
-    limit:      '100000',
-  };
-  // ICE BofA 시리즈는 최근 3년치만 — 시작일을 그 안으로 당긴다(없으면 FRED 기본 1776년이라 요청이 실패한다)
-  const start = fredStartFor(seriesId, d1 ? toIsoDate(d1) : '', new Date().toISOString().slice(0, 10));
-  if (start) params.observation_start = start;
-  if (d2) params.observation_end   = toIsoDate(d2);
-  if (start && d2 && start > toIsoDate(d2)) return {};   // 요청 구간 전체가 3년 제한 밖 — 부르지 않는다
-  try {
-    const url = `https://api.stlouisfed.org/fred/series/observations?${new URLSearchParams(params)}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) {
-      console.error(`[history] FRED ${seriesId} API ${res.status} (observation_start=${start || '-'}): ${logSafe(await res.text().catch(() => ''), FRED_KEY)}`);
-      return {};
-    }
-    const data: any = await res.json();
-    const record: Record<string, number> = {};
-    for (const obs of (data.observations ?? [])) {
-      if (obs.value === '.') continue;
-      const v = parseFloat(obs.value);
-      if (!isNaN(v) && (signed || v > 0)) record[obs.date] = v;
-    }
-    if (!Object.keys(record).length) console.error(`[history] FRED ${seriesId} API 관측 0건 (observation_start=${start || '-'})`);
-    return record;
-  } catch (e) {
-    console.error(`[history] FRED ${seriesId} API 오류: ${logSafe(e, FRED_KEY)}`);
-    return {};
-  }
-}
-
-async function fetchFredGraphHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000, signed = false): Promise<Record<string, number>> {
-  let url = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(seriesId)}`;
-  const start = fredStartFor(seriesId, d1 ? toIsoDate(d1) : '', new Date().toISOString().slice(0, 10));
-  if (start) url += `&cosd=${start}`;
-  if (d2) url += `&coed=${toIsoDate(d2)}`;
-  if (start && d2 && start > toIsoDate(d2)) return {};   // 요청 구간 전체가 3년 제한 밖 — 부르지 않는다
-  try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) { console.error(`[history] FRED ${seriesId} fredgraph ${res.status} (cosd=${start || '-'})`); return {}; }
-    return parseFredGraphCsv(await res.text(), signed);
-  } catch (e) {
-    console.error(`[history] FRED ${seriesId} fredgraph 오류: ${logSafe(e)}`);
-    return {};
-  }
-}
-
-// signed=true: 0·음수가 정상값인 시리즈(장단기 금리차) — 부호로 버리지 않는다.
+// signed=true: 0·음수가 정상값인 시리즈(장단기 금리차) — 부호로 버리지 않는다. 실패하면 빈 객체(호출부가 대체 출처로)
 async function fetchFredHistory(seriesId: string, d1: string, d2: string, timeoutMs = 10000, signed = false): Promise<Record<string, number>> {
-  const api = await fetchFredApiHistory(seriesId, d1, d2, timeoutMs, signed);
-  if (Object.keys(api).length > 0) return api;
-  return fetchFredGraphHistory(seriesId, d1, d2, timeoutMs, signed);
+  if (!SELF_ORIGIN) return {};
+  const p = new URLSearchParams({ mode: 'history', id: seriesId, ms: String(Math.max(2500, timeoutMs - 500)) });
+  if (d1) p.set('start', toIsoDate(d1));
+  if (d2) p.set('end', toIsoDate(d2));
+  if (signed) p.set('signed', '1');
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`${SELF_ORIGIN}/api/fred?${p}`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.ok) return await res.json();
+    console.error(`[history] /api/fred ${seriesId} status=${res.status} ${Date.now() - t0}ms`);
+  } catch (e) {
+    console.error(`[history] /api/fred ${seriesId} 오류 ${logSafe((e as any)?.name || e)} ${Date.now() - t0}ms`);
+  }
+  return {};
 }
 
 // ── FRED 키가 없는 배포의 대체 출처(2026-10-18) — 배포 서버에서 fredgraph.csv가 응답하지 않는다(실측 20초 시간 초과) ──
-//   키가 없으면 FRED는 4초만 기다리고 대체 출처로 넘어간다. 값을 지어내지 않는다 — 대체 출처가 없는 하이일드 2종은 비운다.
+//   FRED는 /api/fred(iad1)로 9초까지 기다리고, 실패하면 대체 출처로 넘어간다. 값을 지어내지 않는다 — 대체 출처가 없는 하이일드 2종은 비운다.
 //   미국 국채 3개월·2년·10년·30년 = 네이버 채권(최근 약 3년) · 기준금리 = FRED 변경 이력 스냅샷 + 뉴욕 연준 EFFR 목표 상단
 //   · 30년 모기지 = 프레디맥 PMMS CSV(1971~, 주간)
-const FRED_TIMEOUT = FRED_KEY ? 10000 : 4000;
+const FRED_TIMEOUT = 9000;   // /api/fred(iad1) 대기 — 뒤에 대체 출처(네이버 12초)가 붙어도 응답 제한(25초) 안
 const NAVER_US_BOND: Record<string, string> = { us3m: 'US3MT=RR', us2y: 'US2YT=RR', us10y: 'US10YT=RR', us30y: 'US30YT=RR' };
 async function fetchPmmsHistory(d1: string, d2: string, timeoutMs = 8000): Promise<Record<string, number>> {
   try {
@@ -627,7 +582,8 @@ async function fetchKisDomesticActualHistory(code: string, token: string, d1: st
 }
 
 export default async function handler(request: Request): Promise<Response> {
-  const { searchParams } = new URL(request.url);
+  const { searchParams, origin } = new URL(request.url);
+  SELF_ORIGIN = origin;
   const key   = searchParams.get('key') ?? '';
   const start = (searchParams.get('start') ?? '').replace(/-/g, '');
   const end   = (searchParams.get('end')   ?? '').replace(/-/g, '');

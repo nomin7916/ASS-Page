@@ -657,6 +657,8 @@ export function useMarketData({
               merged[`${k}Chg`]   = d.change;
               // 관측일 — 주간 지표(30년 모기지)는 카드에 '○월 ○일 값'으로 표시한다
               if (d.date) merged[`${k}Date`] = d.date;
+              // FRED 요청이 실패해 서버가 KV의 마지막 성공값을 준 경우(stale) — 카드에 '기준일 YYYY-MM-DD'
+              merged[`${k}Stale`] = d.stale === true;
             }
           } else {
             statusMap[k] = { status: 'fail', source: 'API', updatedAt: now };

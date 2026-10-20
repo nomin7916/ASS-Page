@@ -164,7 +164,7 @@ async function fetchHistoryServer(key, fromIso, toIso) {
   } catch { return null; }
 }
 
-function RateCard({ k, m, t, emptyText = null }) {
+function RateCard({ k, m, t, emptyText = null, staleDate = null }) {
   const def = RATE_DEFS[k];
   const band = m.band ? BAND[m.band] : null;
   const pos = m.position52 == null ? null : Math.max(0, Math.min(100, m.position52));
@@ -199,6 +199,7 @@ function RateCard({ k, m, t, emptyText = null }) {
         {def.hint}
         {def.weekly && m.asOf && <span className="ml-1 text-amber-400/90">· {asOfLabel(m.asOf)}</span>}
         {SHORT_DATA_KEYS.includes(k) && <span className="ml-1 text-amber-400/90">· 자료 3년</span>}
+        {staleDate && <span className="ml-1 text-amber-400/90" title="FRED 요청이 실패해 마지막으로 받은 값을 보여 줍니다">· 기준일 {staleDate}</span>}
       </div>
     </div>
   );
@@ -808,7 +809,7 @@ export default function RateWindow() {
                 <div key={row.title}>
                   <div className={`text-[11px] font-bold mb-1 ${t.sub}`}>{row.title}</div>
                   <div className="grid gap-2 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-                    {row.keys.map(k => <RateCard key={k} k={k} m={metrics[k]} t={t} emptyText={k === 'krBase' && krBaseNeedKey ? '인증키 필요' : k === 'br10y' ? '자료 없음' : null} />)}
+                    {row.keys.map(k => <RateCard key={k} k={k} m={metrics[k]} t={t} emptyText={k === 'krBase' && krBaseNeedKey ? '인증키 필요' : k === 'br10y' ? '자료 없음' : null} staleDate={live?.[k]?.stale ? live[k].date : null} />)}
                   </div>
                   {row.title === '브라질' && (
                     <div className={`mt-2 rounded border ${t.border} p-2 text-[11px]`}>

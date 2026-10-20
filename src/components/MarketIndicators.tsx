@@ -464,6 +464,8 @@ export default function MarketIndicators({
             {item.val !== null && item.val !== undefined ? item.fmt(item.val) : (item.emptyText || '-')}
             {/* 주간 지표 관측일 — '○월 ○일 값' */}
             {item.asOf && <span className="block text-[9px] text-gray-500 font-normal leading-none">{asOfLabel(item.asOf)}</span>}
+            {/* FRED 실패 → 마지막 성공값(stale) — 기준일을 작게 */}
+            {marketIndicators[`${item.key}Stale`] && marketIndicators[`${item.key}Date`] && <span className="block text-[9px] text-amber-400/80 font-normal leading-none">기준일 {marketIndicators[`${item.key}Date`]}</span>}
           </span>
           {item.chg !== null && item.chg !== undefined && (
             <span className={`font-bold font-mono text-[9px]

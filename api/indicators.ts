@@ -3,11 +3,10 @@
 // [최적화] timeout 9000→6000ms(느린 응답 CPU 점유 단축), SWR 60→600s(캐시 만료 후 백그라운드 갱신 확대)
 export const config = { runtime: 'edge' };
 
-import { parseFredGraphCsv, parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe } from './_indicatorSources.js';
+import { parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, logSafe } from './_indicatorSources.js';
 import { US_FED_RATE_CHANGES } from './_usFedRateData.js';
 import { KR_BASE_RATE_CHANGES, KR_BASE_RATE_SNAPSHOT_AT } from './_krBaseRateData.js';
 
-const FRED_KEY = process.env.FRED_API_KEY ?? '';
 // 한국은행 ECOS Open API 인증키 — 없으면 한국 기준금리는 빈 값 + needKey(화면에 '인증키 필요'). 값을 지어내지 않는다.
 const ECOS_KEY = process.env.ECOS_API_KEY ?? '';
 
@@ -21,64 +20,24 @@ async function safeJson(url: string, init?: RequestInit) {
   }
 }
 
-// FRED (미연준 공식): DGS10(US10Y), DFEDTARU(기준금리 상단)
-// ① API(키 있을 때) → ② fredgraph.csv(키 불필요) 폴백. 키가 없는 배포에서 기준금리가 통째로 '-'가 되거나
-//    재시도 경로(tradingeconomics 스크래핑 — 차단되기 쉽다)에만 의존하던 것을 막는다.
-// diff=true(장단기 금리차 T10Y2Y·T10Y3M): change를 비율(%)이 아니라 전일 대비 차이(%p)로 낸다 — 0 근처를 오가는
-//    값이라 비율은 무의미하게 폭발한다. 0·음수도 정상값이다.
-// 반환에 date(최신 관측일)·prev·prevDate를 싣는다 — 주간 지표(30년 모기지)는 카드에 '○월 ○일 값'을 표시하고,
-//    MBS 스프레드는 두 시리즈의 날짜를 맞춰 계산한다(2026-10).
-async function fetchFred(seriesId: string, diff = false) {
-  const fromLatest = (vals: number[], dates: string[] = []) => {
-    const price = vals[0];
-    const prev  = vals.length > 1 ? vals[1] : null;
-    return {
-      date:   dates[0] ?? null,
-      prev:   prev != null && Number.isFinite(prev) ? prev : null,
-      prevDate: dates[1] ?? null,
-      price:  Number.isFinite(price) ? price : null,
-      change: diff
-        ? (prev != null && Number.isFinite(prev) && Number.isFinite(price) ? price - prev : null)
-        : (prev && Number.isFinite(prev) ? ((price - prev) / Math.abs(prev)) * 100 : null),
-      source: 'FRED',
-    };
-  };
-  // 시작일은 최근 45일(ICE BofA 3년 제한 안) — 시작일이 없으면 FRED 기본값(1776년)이라 3년 제한 시리즈는 요청이 실패한다
-  const today = new Date().toISOString().slice(0, 10);
-  const since = fredStartFor(seriesId, new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10), today);
-  if (FRED_KEY) {
-    try {
-      const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5&observation_start=${since}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
-      if (res.ok) {
-        const data = await res.json();
-        const rows = (data?.observations ?? []).filter((o: any) => o.value !== '.' && Number.isFinite(parseFloat(o.value)));
-        if (rows.length) return fromLatest(rows.map((o: any) => parseFloat(o.value)), rows.map((o: any) => o.date));
-        console.error(`[indicators] FRED ${seriesId} API 관측 0건 (observation_start=${since})`);
-      } else {
-        console.error(`[indicators] FRED ${seriesId} API ${res.status} (observation_start=${since}): ${logSafe(await res.text().catch(() => ''), FRED_KEY)}`);
-      }
-    } catch (e) {
-      console.error(`[indicators] FRED ${seriesId} API 오류: ${logSafe(e, FRED_KEY)}`);
-    }
-  }
+// FRED (미연준 공식) — 같은 배포의 /api/fred(미국 동부 iad1 전용 함수)에서 한 번에 받는다(2026-10-20).
+//   이 함수는 Singapore(sin1)에서 실행되는데 그곳에서 FRED 요청이 전부 TimeoutError였다. 네이버·한국은행 같은
+//   한국 출처는 여기서 그대로 받고, FRED만 분리했다. /api/fred는 API → fredgraph → 1회 재시도, 실패하면 KV의
+//   마지막 성공값을 stale:true로 준다.
+// diff=true(금리차·하이일드 스프레드): change를 비율(%)이 아니라 전일 대비 차이(%p)로 낸다.
+// 반환에 date·prev·prevDate를 싣는다 — 주간 지표(30년 모기지) 카드 '○월 ○일 값', MBS 스프레드 날짜 맞추기에 쓴다.
+const FRED_LATEST = ['DGS10', 'DFEDTARU', 'DGS2', 'DGS30', 'DGS3MO', 'T10Y2Y', 'T10Y3M', 'BAMLH0A0HYM2EY', 'BAMLH0A0HYM2', 'MORTGAGE30US'];
+const FRED_DIFF = ['T10Y2Y', 'T10Y3M', 'BAMLH0A0HYM2'];
+async function fetchFredBatch(origin: string, fresh = false): Promise<Record<string, any>> {
+  const t0 = Date.now();
   try {
-    const res = await fetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(seriesId)}&cosd=${since}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' },
-      signal: AbortSignal.timeout(6000),
-    });
-    if (res.ok) {
-      const rec = parseFredGraphCsv(await res.text(), diff);
-      const ds = Object.keys(rec).sort().reverse();
-      if (ds.length) return fromLatest(ds.map(d => rec[d]), ds);
-      console.error(`[indicators] FRED ${seriesId} fredgraph 관측 0건 (cosd=${since})`);
-    } else {
-      console.error(`[indicators] FRED ${seriesId} fredgraph ${res.status} (cosd=${since})`);
-    }
+    const res = await fetch(`${origin}/api/fred?mode=latest&ids=${FRED_LATEST.join(',')}&diff=${FRED_DIFF.join(',')}${fresh ? `&t=${Date.now()}` : ''}`, { signal: AbortSignal.timeout(23000) });
+    if (res.ok) return await res.json();
+    console.error(`[indicators] /api/fred status=${res.status} ${Date.now() - t0}ms`);
   } catch (e) {
-    console.error(`[indicators] FRED ${seriesId} fredgraph 오류: ${logSafe(e)}`);
+    console.error(`[indicators] /api/fred 오류 ${logSafe((e as any)?.name || e)} ${Date.now() - t0}ms`);
   }
-  return { price: null, change: null, source: 'FRED' };
+  return {};
 }
 
 // FRED 키가 없는 배포의 대체 출처(2026-10-18) — 배포 서버에서 fredgraph.csv가 응답하지 않는다.
@@ -326,6 +285,9 @@ export default async function handler(req: Request): Promise<Response> {
   // ?fresh=1 — 사용자가 직접 누른 갱신(헤더 시장지표 칩·새로고침 버튼). 엣지 캐시(s-maxage=300)를
   // 건너뛰고 항상 업스트림에서 다시 수집한다. 자동 수집(앱 시작)은 파라미터 없이 캐시 경로를 그대로 쓴다.
   const fresh = new URL(req.url).searchParams.get('fresh') === '1';
+  // FRED 10건은 /api/fred(iad1) 한 번으로 — 각 자리는 그 결과에서 꺼낸다(없으면 빈 값)
+  const fredBatch = fetchFredBatch(new URL(req.url).origin, fresh);
+  const fetchFred = (seriesId: string, _diff = false) => fredBatch.then(m => m?.[seriesId] ?? { price: null, change: null, source: 'FRED' });
 
   // 모든 지표를 병렬 수집 — 개별 실패가 전체에 영향 없음
   const [

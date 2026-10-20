@@ -172,7 +172,7 @@ if (C) {
 console.log('\n── 파트② 소스 병합 (api/_indicatorSources.ts 직접 import) ──');
 const I = await load('api/_indicatorSources.ts');
 if (I) {
-  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe } = I;
+  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe, parseFredApiObservations, fredLatest, fredKvKey, packFredKv, unpackFredKv } = I;
   const bokHtml = '<table><tr><th>연도</th><th>변경일자</th><th>기준금리</th></tr><tr><td>2026</td><td>08월 27일</td><td>3.00</td></tr>'
     + '<tr><td>2026</td><td>07월 16일</td><td>2.75</td></tr><tr><td>1999</td><td>05월 06일</td><td>4.75</td></tr><tr><td>합계</td><td>x</td><td>1</td></tr></table>';
   eq('#41 한국은행 기준금리 공시 페이지 해석 — 날짜 오름차순 · 표 아닌 행 무시', parseBokBaseRateHtml(bokHtml), [['1999-05-06', 4.75], ['2026-07-16', 2.75], ['2026-08-27', 3]]);
@@ -190,6 +190,15 @@ if (I) {
     [fredStartFor('BAMLH0A0HYM2EY', '2023-10-17', '2026-10-20'), fredStartFor('BAMLH0A0HYM2', '', '2026-10-20'), fredStartFor('BAMLH0A0HYM2', '2026-09-05', '2026-10-20'), fredStartFor('DGS10', '1962-01-02', '2026-10-20'), fredStartFor('BAMLH0A0HYM2', '2020-01-01', '2028-02-29')],
     ['2023-10-22', '2023-10-22', '2026-09-05', '1962-01-02', '2025-03-03']);
   eq('#48 로그 문자열 — 키는 ***로 지우고 공백 정리 · 300자로 자름', [logSafe('{"error_message":"Bad  Request\n KEY123 bad"}', 'KEY123'), logSafe('x'.repeat(400)).length, logSafe(null)], ['{"error_message":"Bad Request *** bad"}', 300, '']);
+  eq('#49 FRED API JSON — 결측(.)·날짜 오류 버림 · 일반은 0 이하 버림 · signed는 보존',
+    [parseFredApiObservations({ observations: [{ date: '2026-10-16', value: '3.05' }, { date: '2026-10-15', value: '.' }, { date: 'x', value: '1' }, { date: '2026-10-14', value: '-0.2' }] }), parseFredApiObservations({ observations: [{ date: '2026-10-14', value: '-0.2' }] }, true), parseFredApiObservations(null)],
+    [{ '2026-10-16': 3.05 }, { '2026-10-14': -0.2 }, {}]);
+  eq('#50 최신값 — 가장 늦은 관측·직전 · 비율(%) / diff는 %p 차이 · 빈 기록 null',
+    [fredLatest({ '2026-10-15': 4, '2026-10-16': 5 }), fredLatest({ '2026-10-15': 3, '2026-10-16': 3.1 }, true)?.change.toFixed(2), fredLatest({})],
+    [{ price: 5, prev: 4, date: '2026-10-16', prevDate: '2026-10-15', change: 25, source: 'FRED' }, '0.10', null]);
+  eq('#51 KV 보관값 — 시리즈별 키 · 저장·복원 왕복에 stale:true · 손상값 null',
+    [fredKvKey('BAMLH0A0HYM2'), unpackFredKv(packFredKv({ price: 3.1, prev: 3, date: '2026-10-16', prevDate: '2026-10-15' }), true)?.stale, unpackFredKv(packFredKv({ price: 3.1, prev: 3, date: '2026-10-16', prevDate: '2026-10-15' }), true)?.change.toFixed(2), unpackFredKv('{bad'), unpackFredKv(null)],
+    ['fred:latest:v1:BAMLH0A0HYM2', true, '0.10', null, null]);
   eq('#43 오늘 금리 · 직전 변경 폭', [stepLatest(ch, '2026-10-18'), stepLatest(ch, '2026-08-01'), stepLatest(ch, '2026-01-01')], [{ price: 3, change: 0.25, date: '2026-08-27' }, { price: 2.75, change: 0, date: '2026-07-16' }, null]);
   eq('#37 헤알·원 = 원/달러 ÷ 헤알/달러(그날 또는 직전 헤알) · 소수 4자리', computeBrlKrw({ '2026-10-15': 1400, '2026-10-16': 1410 }, { '2026-10-15': 5.6 }), { '2026-10-15': 250, '2026-10-16': 251.7857 });
   eq('#37b 헤알 값이 0·없으면 만들지 않는다', [computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-15': 0 }), computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-16': 5 })], [{}, {}]);
@@ -238,14 +247,16 @@ if (I) {
 console.log('\n── 파트③ 배선 가드 ──');
 const H = stripComments(src('api/history.ts'));
 const IND = stripComments(src('api/indicators.ts'));
+const FR = stripComments(src('api/fred.ts'));
 const M = stripComments(src('src/hooks/useMarketData.ts'));
 const COV = src('src/indicatorCoverage.ts');
 const SRCS = src('api/_indicatorSources.ts');
 
-ok('#G1 FRED limit은 최대(100000) — 2000+오름차순은 최근 구간을 자른다', /limit:\s*'100000'/.test(H) && !/limit:\s*'2000'/.test(H));
-ok('#G2 FRED 키 없음/실패 → fredgraph.csv 폴백(히스토리)', /fetchFredApiHistory\(seriesId, d1, d2, timeoutMs(, signed)?\)[\s\S]{0,200}fetchFredGraphHistory\(seriesId, d1, d2, timeoutMs(, signed)?\)/.test(H)
-  && /fred\.stlouisfed\.org\/graph\/fredgraph\.csv/.test(H) && /parseFredGraphCsv\(await res\.text\(\)(, signed)?\)/.test(H));
-ok('#G3 실시간 기준금리도 fredgraph.csv 폴백', /fred\.stlouisfed\.org\/graph\/fredgraph\.csv/.test(IND) && /parseFredGraphCsv\(await res\.text\(\)(, diff)?\)/.test(IND));
+ok('#G1 FRED limit은 최대(100000) — 2000+오름차순은 최근 구간을 자른다(과거치는 /api/fred)', /p\.sort_order = 'asc'; p\.limit = '100000';/.test(FR) && !/limit\s*=?\s*:?\s*'2000'/.test(FR + H));
+ok('#G2 FRED API 실패 → fredgraph.csv 폴백 → 1회 재시도(API → fredgraph) — /api/fred 단계표',
+  /\{ stage: 'api', ms: 8000, retry: false \},\s*\{ stage: 'fredgraph', ms: 6000, retry: false \},\s*\{ stage: 'api', ms: 5000, retry: true \},\s*\{ stage: 'fredgraph', ms: 5000, retry: true \},/.test(FR)
+  && /fred\.stlouisfed\.org\/graph\/fredgraph\.csv/.test(FR) && /parseFredGraphCsv\(await res\.text\(\), r\.signed\)/.test(FR) && /for \(const st of STEPS\)/.test(FR));
+ok('#G3 실시간·과거치 모두 FRED는 /api/fred만 — 두 함수에 FRED 직접 호출 없음', !/stlouisfed\.org/.test(H + IND) && /\$\{origin\}\/api\/fred\?mode=latest/.test(IND) && /\$\{SELF_ORIGIN\}\/api\/fred\?\$\{p\}/.test(H));
 ok('#G4 기준금리 = DFEDTAR(~2008-12-15) + DFEDTARU 이음', /fetchFredHistory\('DFEDTARU'/.test(H) && /fetchFredHistory\('DFEDTAR', d1/.test(H) && /joinFedRate\(legacy, upper\)/.test(H));
 ok('#G5 US10Y 최신 꼬리를 Naver로 보충', /fillAfter\(data, tail\)/.test(H) && /fetchNaverBondHistory\('US10YT=RR', shiftYmd\(ymd\(last\), 1\)/.test(H));
 ok('#G6 KR10Y 앞쪽을 FRED 월별로 보충', /fetchFredHistory\('IRLTLT01KRM156N', d1, shiftYmd\(ymd\(first\), -1\)/.test(H) && /fillBefore\(data, head\)/.test(H));
@@ -301,21 +312,27 @@ if (UF) {
     c.length === 186 && c[0][0] === '1982-09-27' && c[0][1] === 10.25 && c[185][0] === '2026-09-17' && c[185][1] === 4
     && c.every((x, i) => i === 0 || (x[0] > c[i - 1][0] && x[1] !== c[i - 1][1])));
 }
-ok('#G17k 하이일드 null 대책 — FRED 요청 시작일을 3년 안으로(실시간·과거치·fredgraph 모두) · 실패 내용을 키 없이 로그로',
-  /&observation_start=\$\{since\}`;/.test(IND) && /const since = fredStartFor\(seriesId, /.test(IND) && /console\.error\(`\[indicators\] FRED \$\{seriesId\} API \$\{res\.status\}.*logSafe\(await res\.text\(\)\.catch\(\(\) => ''\), FRED_KEY\)/.test(IND)
-  && /fredStartFor, logSafe \} from '\.\/_indicatorSources\.js';/.test(IND) && /fredStartFor, logSafe,\s*\} from '\.\/_indicatorSources\.js';/.test(H)
-  && (H.match(/const start = fredStartFor\(seriesId, d1 \? toIsoDate\(d1\) : '', /g) || []).length === 2 && /if \(start\) params\.observation_start = start;/.test(H) && /if \(start\) url \+= `&cosd=\$\{start\}`;/.test(H)
-  && /console\.error\(`\[history\] FRED \$\{seriesId\} API \$\{res\.status\}.*logSafe\(await res\.text\(\)\.catch\(\(\) => ''\), FRED_KEY\)/.test(H) && !/console\.(error|log)\([^)]*FRED_KEY\)?`/.test(H + IND));
+ok('#G17k 하이일드 null 대책 — FRED 시작일 3년 안(ICE BofA) · 실패 로그(시리즈·단계·ms·상태, 키는 지움)',
+  /start: fredStartFor\(id, since, today\)/.test(FR) && /const start = fredStartFor\(id, ISO\.test\(s0\) \? s0 : '', today\);/.test(FR)
+  && /console\.error\(`\[fred\] \$\{id\} \$\{tag\} 실패 status=\$\{res\.status\} \$\{ms\}ms: \$\{logSafe\(await res\.text\(\)\.catch\(\(\) => ''\), FRED_KEY\)\}`\);/.test(FR)
+  && /console\.error\(`\[fred\] \$\{id\} \$\{tag\} 오류 \$\{logSafe\(\(e as any\)\?\.name \|\| e, FRED_KEY\)\} \$\{Date\.now\(\) - t0\}ms`\);/.test(FR));
+ok('#G18 FRED는 미국 동부(iad1) 전용 함수 · 두 함수는 그대로(한국 출처) · KV 마지막 성공값(MSET 저장·MGET 읽기, stale) · 카드 기준일',
+  /export const config = \{ runtime: 'edge', regions: \['iad1'\] \};/.test(FR) && /export const config = \{ runtime: 'edge' \};/.test(H) && /export const config = \{ runtime: 'edge' \};/.test(IND)
+  && /redis\(\['MSET', \.\.\.fresh\]\)/.test(FR) && /redis\(\['MGET', \.\.\.missing\.map\(fredKvKey\)\]\)/.test(FR) && /unpackFredKv\(kept\[i\], diffs\.has\(id\)\)/.test(FR)
+  && /parseFredGraphCsv, parseFredApiObservations, fredLatest, fredStartFor, logSafe,\s*fredKvKey, packFredKv, unpackFredKv,\s*\} from '\.\/_indicatorSources\.js';/.test(FR)
+  && /const fredBatch = fetchFredBatch\(new URL\(req\.url\)\.origin, fresh\);/.test(IND) && /SELF_ORIGIN = origin;/.test(H)
+  && /merged\[`\$\{k\}Stale`\] = d\.stale === true;/.test(M) && /기준일 \{marketIndicators\[`\$\{item\.key\}Date`\]\}/.test(src('src/components/MarketIndicators.tsx'))
+  && /staleDate=\{live\?\.\[k\]\?\.stale \? live\[k\]\.date : null\}/.test(src('src/components/RateWindow.tsx')) && /· 기준일 \{staleDate\}/.test(src('src/components/RateWindow.tsx')));
 ok('#G17j FRED 키 없는 배포 — 미국 국채는 네이버 · 금리차는 네이버 10년 − 2년/3개월 · 모기지 프레디맥 · 기준금리 스냅샷+뉴욕 연준 · 키 없으면 FRED 4초',
-  /const FRED_TIMEOUT = FRED_KEY \? 10000 : 4000;/.test(H) && /us3m: 'US3MT=RR', us2y: 'US2YT=RR', us10y: 'US10YT=RR', us30y: 'US30YT=RR'/.test(H)
+  /const FRED_TIMEOUT = 9000;/.test(H) && /us3m: 'US3MT=RR', us2y: 'US2YT=RR', us10y: 'US10YT=RR', us30y: 'US30YT=RR'/.test(H)
   && /if \(NAVER_US_BOND\[key\]\) data = await fetchNaverUsBond\(key, d1, d2\);/.test(H) && /data = computeKrUsSpread\(ten, short\);/.test(H)
   && /else if \(key === 'mort30'\) data = await fetchPmmsHistory\(d1, d2\);/.test(H) && /data = await fetchUsFedRateNoKey\(d1, d2,/.test(H)
   && /: await fetchPmmsHistory\(shiftYmd\(d1, -14\), d2\);/.test(H) && (H.match(/fetchUs10yAny\(/g) || []).length === 3
-  && /extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe,\s*\} from '\.\/_indicatorSources\.js';/.test(H) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(H)
+  && /extendStepChanges, parseNyFedTarget, parsePmmsCsv, logSafe,\s*\} from '\.\/_indicatorSources\.js';/.test(H) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(H)
   && /fetchNaverBond\('US2YT=RR'/.test(IND) && /fetchNaverBond\('US3MT=RR'/.test(IND) && /fetchNaverBond\('US30YT=RR'/.test(IND)
   && /\n\s+fetchUsFedRateNoKey\(\),/.test(IND) && /\n\s+fetchPmmsLatest\(\),/.test(IND) && /const fedRateV = pick\(ok\(fedRate\), ok\(fedRateAlt\)\);/.test(IND)
   && /fedRate: fedRateV,/.test(IND) && /us2y:\s*us2yV,/.test(IND) && /const m = ok\(mort30\), u = us10yForMbs;/.test(IND)
-  && /import \{ parseFredGraphCsv, parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe \} from '\.\/_indicatorSources\.js';/.test(IND) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(IND));
+  && /import \{ parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, logSafe \} from '\.\/_indicatorSources\.js';/.test(IND) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(IND));
 {
   const RWs = src('src/components/RateWindow.tsx'), BC = src('src/bcbClient.ts');
   ok('#G17h 브라질 BCB — 서버가 비면 브라우저가 직접(과거치·현재값), 해석은 서버와 같은 함수', /if \(rec \|\| !BCB_BROWSER_KEYS\.includes\(key\)\) return rec;/.test(RWs) && /fetchBcbHistoryBrowser\(key, fromIso, toIso, fetchHistoryServer\)/.test(RWs)

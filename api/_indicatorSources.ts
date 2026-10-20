@@ -213,6 +213,42 @@ export function fredStartFor(seriesId: string, startIso: string, todayIso: strin
   const floor = new Date(t).toISOString().slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(startIso) && startIso > floor ? startIso : floor;
 }
+// FRED API(series/observations JSON) → { 날짜: 값 }. '.'(결측)·숫자 아님은 버린다. signed가 아니면 0 이하도 버린다
+export function parseFredApiObservations(json: any, signed = false): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const o of (json?.observations ?? [])) {
+    const d = String(o?.date ?? ''), raw = o?.value;
+    if (raw === '.' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    const v = parseFloat(raw);
+    if (Number.isFinite(v) && (signed || v > 0)) out[d] = v;
+  }
+  return out;
+}
+// 최신값 카드 모양 — 가장 늦은 관측과 그 직전. diff(금리차·스프레드)면 변화는 %p 차이, 아니면 비율(%)
+export function fredLatest(rec: Record<string, number> | null | undefined, diff = false):
+  { price: number; prev: number | null; date: string; prevDate: string | null; change: number | null; source: string } | null {
+  const ds = keysOf(rec || {}).reverse();
+  if (!ds.length) return null;
+  const price = (rec as Record<string, number>)[ds[0]];
+  const prev = ds.length > 1 ? (rec as Record<string, number>)[ds[1]] : null;
+  const change = prev == null ? null : diff ? price - prev : prev ? ((price - prev) / Math.abs(prev)) * 100 : null;
+  return { price, prev, date: ds[0], prevDate: ds[1] ?? null, change, source: 'FRED' };
+}
+// 마지막 성공값 보관(KV) — 시리즈별 키 · 저장 모양 { price, prev, date, prevDate } · 읽을 때 stale:true를 붙인다
+export const fredKvKey = (id: string) => `fred:latest:v1:${id}`;
+export function packFredKv(v: { price: number; prev: number | null; date: string; prevDate: string | null }): string {
+  return JSON.stringify({ price: v.price, prev: v.prev, date: v.date, prevDate: v.prevDate });
+}
+export function unpackFredKv(raw: unknown, diff = false) {
+  let o: any = null;
+  try { o = typeof raw === 'string' ? JSON.parse(raw) : null; } catch { o = null; }
+  if (!o || !Number.isFinite(o.price) || !/^\d{4}-\d{2}-\d{2}$/.test(String(o.date || ''))) return null;
+  const rec: Record<string, number> = { [o.date]: o.price };
+  if (Number.isFinite(o.prev) && /^\d{4}-\d{2}-\d{2}$/.test(String(o.prevDate || ''))) rec[o.prevDate] = o.prev;
+  const v = fredLatest(rec, diff);
+  return v ? { ...v, stale: true } : null;
+}
+
 // 외부 응답 본문을 로그에 남길 때 — 키가 섞여 나오지 않게 지우고 300자로 자른다
 export function logSafe(text: unknown, secret = ''): string {
   let s = String(text ?? '');
