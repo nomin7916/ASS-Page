@@ -204,6 +204,22 @@ export function parsePmmsCsv(csv: string): Record<string, number> | null {
   return out;
 }
 
+// FRED ICE BofA 시리즈(하이일드 금리·스프레드)는 2026-04부터 최근 3년치만 준다 — 그보다 이른 observation_start면
+//   요청 자체가 실패한다(값 null). 시작일을 '오늘 − 3년 + 2일'보다 이르지 않게 당긴다. 다른 시리즈는 그대로.
+export const FRED_RECENT_3Y_SERIES = ['BAMLH0A0HYM2EY', 'BAMLH0A0HYM2'];
+export function fredStartFor(seriesId: string, startIso: string, todayIso: string): string {
+  if (!FRED_RECENT_3Y_SERIES.includes(seriesId) || !/^\d{4}-\d{2}-\d{2}$/.test(todayIso)) return startIso;
+  const t = Date.UTC(+todayIso.slice(0, 4) - 3, +todayIso.slice(5, 7) - 1, +todayIso.slice(8, 10)) + 2 * 86400000;
+  const floor = new Date(t).toISOString().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(startIso) && startIso > floor ? startIso : floor;
+}
+// 외부 응답 본문을 로그에 남길 때 — 키가 섞여 나오지 않게 지우고 300자로 자른다
+export function logSafe(text: unknown, secret = ''): string {
+  let s = String(text ?? '');
+  if (secret) s = s.split(secret).join('***');
+  return s.replace(/\s+/g, ' ').slice(0, 300);
+}
+
 // 한국은행 ECOS StatisticSearch 응답 → { 'YYYY-MM-DD': 값 }. 오류 응답(RESULT)·모양이 틀리면 null(= 조회 실패).
 //   기준금리 = 통계표 722Y001(1.3.1. 한국은행 기준금리 및 여수신금리) · 항목 0101000(한국은행 기준금리) · 주기 D(일),
 //   단위 연% · 일별 자료 첫날 1999-05-06(ECOS StatisticItemList로 확인, 2026-10).

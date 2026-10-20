@@ -3,7 +3,7 @@
 // [최적화] timeout 9000→6000ms(느린 응답 CPU 점유 단축), SWR 60→600s(캐시 만료 후 백그라운드 갱신 확대)
 export const config = { runtime: 'edge' };
 
-import { parseFredGraphCsv, parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv } from './_indicatorSources.js';
+import { parseFredGraphCsv, parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe } from './_indicatorSources.js';
 import { US_FED_RATE_CHANGES } from './_usFedRateData.js';
 import { KR_BASE_RATE_CHANGES, KR_BASE_RATE_SNAPSHOT_AT } from './_krBaseRateData.js';
 
@@ -43,14 +43,26 @@ async function fetchFred(seriesId: string, diff = false) {
       source: 'FRED',
     };
   };
+  // 시작일은 최근 45일(ICE BofA 3년 제한 안) — 시작일이 없으면 FRED 기본값(1776년)이라 3년 제한 시리즈는 요청이 실패한다
+  const today = new Date().toISOString().slice(0, 10);
+  const since = fredStartFor(seriesId, new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10), today);
   if (FRED_KEY) {
-    const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5`;
-    const data = await safeJson(url);
-    const rows = (data?.observations ?? []).filter((o: any) => o.value !== '.' && Number.isFinite(parseFloat(o.value)));
-    if (rows.length) return fromLatest(rows.map((o: any) => parseFloat(o.value)), rows.map((o: any) => o.date));
+    try {
+      const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5&observation_start=${since}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      if (res.ok) {
+        const data = await res.json();
+        const rows = (data?.observations ?? []).filter((o: any) => o.value !== '.' && Number.isFinite(parseFloat(o.value)));
+        if (rows.length) return fromLatest(rows.map((o: any) => parseFloat(o.value)), rows.map((o: any) => o.date));
+        console.error(`[indicators] FRED ${seriesId} API 관측 0건 (observation_start=${since})`);
+      } else {
+        console.error(`[indicators] FRED ${seriesId} API ${res.status} (observation_start=${since}): ${logSafe(await res.text().catch(() => ''), FRED_KEY)}`);
+      }
+    } catch (e) {
+      console.error(`[indicators] FRED ${seriesId} API 오류: ${logSafe(e, FRED_KEY)}`);
+    }
   }
   try {
-    const since = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
     const res = await fetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(seriesId)}&cosd=${since}`, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36' },
       signal: AbortSignal.timeout(6000),
@@ -59,8 +71,13 @@ async function fetchFred(seriesId: string, diff = false) {
       const rec = parseFredGraphCsv(await res.text(), diff);
       const ds = Object.keys(rec).sort().reverse();
       if (ds.length) return fromLatest(ds.map(d => rec[d]), ds);
+      console.error(`[indicators] FRED ${seriesId} fredgraph 관측 0건 (cosd=${since})`);
+    } else {
+      console.error(`[indicators] FRED ${seriesId} fredgraph ${res.status} (cosd=${since})`);
     }
-  } catch { /* 폴백 실패 */ }
+  } catch (e) {
+    console.error(`[indicators] FRED ${seriesId} fredgraph 오류: ${logSafe(e)}`);
+  }
   return { price: null, change: null, source: 'FRED' };
 }
 

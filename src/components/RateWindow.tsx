@@ -14,7 +14,7 @@ import { readBrazilNotes } from '../brazilNotes';
 import { applySettingsFile, appendStateChanges, manualToSave } from '../rateSettings';
 import {
   HIST_GROUPS, HIST_KEYS, HIST_BATCH_KEYS, HIST_REFRESH_MS, encodeSeries, decodeSeries, mergeHist,
-  planFetch, orderFetchJobs, fetchChunks, planGroupFiles, readHistFiles, changedGroups, latestStoredDate, provisionalDate,
+  planFetch, orderFetchJobs, fetchChunks, coversFloor, planGroupFiles, readHistFiles, changedGroups, latestStoredDate, provisionalDate,
 } from '../rateHistStore';
 import { INDICATOR_SOURCE_FLOOR, isSignedIndicator } from '../indicatorCoverage';
 import { BCB_BROWSER_KEYS, fetchBcbHistoryBrowser, fillBrazilLiveCapped } from '../bcbClient';
@@ -447,8 +447,9 @@ export default function RateWindow() {
       // 바뀐 게 없으면 항목을 다시 만들지 않는다(저장 대상에서 빠진다)
       if (series !== j.base) {
         const entry = encodeSeries(series, j.signed, 'api/history', new Date().toISOString());
-        // 최초 수집이 최근 구간만 받고 앞에서 멈췄으면 capped — 다음부터 처음부터 다시 받지 않는다(최신분은 기존 표시를 이어 간다)
-        const capped = j.plan.full ? got && !ok : !!storedRef.current[j.k]?.capped;
+        // 최초 수집이 최근 구간만 받고 앞에서 멈췄거나, 끝까지 받았는데 출처가 첫 날짜까지 주지 않으면(ICE BofA 최근 3년 제한) capped
+        //   — 다음부터 처음부터 다시 받지 않는다(최신분은 기존 표시를 이어 간다)
+        const capped = j.plan.full ? got && (!ok || !coversFloor(entry, INDICATOR_SOURCE_FLOOR[j.k] || '')) : !!storedRef.current[j.k]?.capped;
         if (entry && capped) entry.capped = true;
         if (entry) storedRef.current = { ...storedRef.current, [j.k]: entry };
       }

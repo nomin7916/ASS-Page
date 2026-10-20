@@ -172,7 +172,7 @@ if (C) {
 console.log('\n── 파트② 소스 병합 (api/_indicatorSources.ts 직접 import) ──');
 const I = await load('api/_indicatorSources.ts');
 if (I) {
-  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv } = I;
+  const { parseFredGraphCsv, fillBefore, fillAfter, joinFedRate, isRecentRangeEnd, computeMbsSpread, computeKrUsSpread, parseEcosRows, parseNaverBondPrices, computeBrlKrw, computeBrReal, parseBcbSgs, parseOlindaExpect, parseBokBaseRateHtml, stepToDaily, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe } = I;
   const bokHtml = '<table><tr><th>연도</th><th>변경일자</th><th>기준금리</th></tr><tr><td>2026</td><td>08월 27일</td><td>3.00</td></tr>'
     + '<tr><td>2026</td><td>07월 16일</td><td>2.75</td></tr><tr><td>1999</td><td>05월 06일</td><td>4.75</td></tr><tr><td>합계</td><td>x</td><td>1</td></tr></table>';
   eq('#41 한국은행 기준금리 공시 페이지 해석 — 날짜 오름차순 · 표 아닌 행 무시', parseBokBaseRateHtml(bokHtml), [['1999-05-06', 4.75], ['2026-07-16', 2.75], ['2026-08-27', 3]]);
@@ -186,6 +186,10 @@ if (I) {
   eq('#45 뉴욕 연준 EFFR — 날짜→목표 상단 · 모양이 틀리면 null', [parseNyFedTarget({ refRates: [{ effectiveDate: '2026-10-15', percentRate: 3.88, targetRateFrom: 3.75, targetRateTo: 4.0 }, { effectiveDate: 'x', targetRateTo: 1 }] }), parseNyFedTarget({})], [{ '2026-10-15': 4 }, null]);
   eq('#46 프레디맥 PMMS CSV — M/D/YYYY · pmms30 열 · 빈 값 버림 · 머리글이 다르면 null',
     [parsePmmsCsv('date,pmms30,pmms30p,pmms15\n4/2/1971,7.33, ,\n10/15/2026,7.4,,6.71\n10/22/2026,,,'), parsePmmsCsv('a,b\n1,2')], [{ '1971-04-02': 7.33, '2026-10-15': 7.4 }, null]);
+  eq('#47 ICE BofA(하이일드 2종) 시작일은 오늘 − 3년 + 2일보다 이르지 않게 · 3년 안이면 그대로 · 다른 시리즈는 그대로',
+    [fredStartFor('BAMLH0A0HYM2EY', '2023-10-17', '2026-10-20'), fredStartFor('BAMLH0A0HYM2', '', '2026-10-20'), fredStartFor('BAMLH0A0HYM2', '2026-09-05', '2026-10-20'), fredStartFor('DGS10', '1962-01-02', '2026-10-20'), fredStartFor('BAMLH0A0HYM2', '2020-01-01', '2028-02-29')],
+    ['2023-10-22', '2023-10-22', '2026-09-05', '1962-01-02', '2025-03-03']);
+  eq('#48 로그 문자열 — 키는 ***로 지우고 공백 정리 · 300자로 자름', [logSafe('{"error_message":"Bad  Request\n KEY123 bad"}', 'KEY123'), logSafe('x'.repeat(400)).length, logSafe(null)], ['{"error_message":"Bad Request *** bad"}', 300, '']);
   eq('#43 오늘 금리 · 직전 변경 폭', [stepLatest(ch, '2026-10-18'), stepLatest(ch, '2026-08-01'), stepLatest(ch, '2026-01-01')], [{ price: 3, change: 0.25, date: '2026-08-27' }, { price: 2.75, change: 0, date: '2026-07-16' }, null]);
   eq('#37 헤알·원 = 원/달러 ÷ 헤알/달러(그날 또는 직전 헤알) · 소수 4자리', computeBrlKrw({ '2026-10-15': 1400, '2026-10-16': 1410 }, { '2026-10-15': 5.6 }), { '2026-10-15': 250, '2026-10-16': 251.7857 });
   eq('#37b 헤알 값이 0·없으면 만들지 않는다', [computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-15': 0 }), computeBrlKrw({ '2026-10-15': 1400 }, { '2026-10-16': 5 })], [{}, {}]);
@@ -297,16 +301,21 @@ if (UF) {
     c.length === 186 && c[0][0] === '1982-09-27' && c[0][1] === 10.25 && c[185][0] === '2026-09-17' && c[185][1] === 4
     && c.every((x, i) => i === 0 || (x[0] > c[i - 1][0] && x[1] !== c[i - 1][1])));
 }
+ok('#G17k 하이일드 null 대책 — FRED 요청 시작일을 3년 안으로(실시간·과거치·fredgraph 모두) · 실패 내용을 키 없이 로그로',
+  /&observation_start=\$\{since\}`;/.test(IND) && /const since = fredStartFor\(seriesId, /.test(IND) && /console\.error\(`\[indicators\] FRED \$\{seriesId\} API \$\{res\.status\}.*logSafe\(await res\.text\(\)\.catch\(\(\) => ''\), FRED_KEY\)/.test(IND)
+  && /fredStartFor, logSafe \} from '\.\/_indicatorSources\.js';/.test(IND) && /fredStartFor, logSafe,\s*\} from '\.\/_indicatorSources\.js';/.test(H)
+  && (H.match(/const start = fredStartFor\(seriesId, d1 \? toIsoDate\(d1\) : '', /g) || []).length === 2 && /if \(start\) params\.observation_start = start;/.test(H) && /if \(start\) url \+= `&cosd=\$\{start\}`;/.test(H)
+  && /console\.error\(`\[history\] FRED \$\{seriesId\} API \$\{res\.status\}.*logSafe\(await res\.text\(\)\.catch\(\(\) => ''\), FRED_KEY\)/.test(H) && !/console\.(error|log)\([^)]*FRED_KEY\)?`/.test(H + IND));
 ok('#G17j FRED 키 없는 배포 — 미국 국채는 네이버 · 금리차는 네이버 10년 − 2년/3개월 · 모기지 프레디맥 · 기준금리 스냅샷+뉴욕 연준 · 키 없으면 FRED 4초',
   /const FRED_TIMEOUT = FRED_KEY \? 10000 : 4000;/.test(H) && /us3m: 'US3MT=RR', us2y: 'US2YT=RR', us10y: 'US10YT=RR', us30y: 'US30YT=RR'/.test(H)
   && /if \(NAVER_US_BOND\[key\]\) data = await fetchNaverUsBond\(key, d1, d2\);/.test(H) && /data = computeKrUsSpread\(ten, short\);/.test(H)
   && /else if \(key === 'mort30'\) data = await fetchPmmsHistory\(d1, d2\);/.test(H) && /data = await fetchUsFedRateNoKey\(d1, d2,/.test(H)
   && /: await fetchPmmsHistory\(shiftYmd\(d1, -14\), d2\);/.test(H) && (H.match(/fetchUs10yAny\(/g) || []).length === 3
-  && /extendStepChanges, parseNyFedTarget, parsePmmsCsv,\s*\} from '\.\/_indicatorSources\.js';/.test(H) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(H)
+  && /extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe,\s*\} from '\.\/_indicatorSources\.js';/.test(H) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(H)
   && /fetchNaverBond\('US2YT=RR'/.test(IND) && /fetchNaverBond\('US3MT=RR'/.test(IND) && /fetchNaverBond\('US30YT=RR'/.test(IND)
   && /\n\s+fetchUsFedRateNoKey\(\),/.test(IND) && /\n\s+fetchPmmsLatest\(\),/.test(IND) && /const fedRateV = pick\(ok\(fedRate\), ok\(fedRateAlt\)\);/.test(IND)
   && /fedRate: fedRateV,/.test(IND) && /us2y:\s*us2yV,/.test(IND) && /const m = ok\(mort30\), u = us10yForMbs;/.test(IND)
-  && /import \{ parseFredGraphCsv, parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv \} from '\.\/_indicatorSources\.js';/.test(IND) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(IND));
+  && /import \{ parseFredGraphCsv, parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, fredStartFor, logSafe \} from '\.\/_indicatorSources\.js';/.test(IND) && /import \{ US_FED_RATE_CHANGES \} from '\.\/_usFedRateData\.js';/.test(IND));
 {
   const RWs = src('src/components/RateWindow.tsx'), BC = src('src/bcbClient.ts');
   ok('#G17h 브라질 BCB — 서버가 비면 브라우저가 직접(과거치·현재값), 해석은 서버와 같은 함수', /if \(rec \|\| !BCB_BROWSER_KEYS\.includes\(key\)\) return rec;/.test(RWs) && /fetchBcbHistoryBrowser\(key, fromIso, toIso, fetchHistoryServer\)/.test(RWs)
