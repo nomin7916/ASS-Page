@@ -479,8 +479,9 @@ export default function MarketIndicators({
     );
   };
 
+  // xl 가로 배치: contain:size로 지표 목록이 행 높이를 키우지 않게 하고 차트 높이에 맞춰 늘어난다(하단 목록은 내부 스크롤)
   return (
-    <div className="w-full xl:w-[200px] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg flex flex-col overflow-hidden shrink-0">
+    <div className="w-full xl:w-[200px] xl:[contain:size] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg flex flex-col overflow-hidden shrink-0">
 
       {/* 헤더 */}
       <div className="p-2 bg-[#0f172a] text-white font-bold flex justify-between items-center text-[11px] border-b border-gray-700">
