@@ -1870,6 +1870,119 @@ export const calcPortfolioEvalDetail = (
 export const depositEvalOf = (detailItems: any[]): number =>
   (detailItems || []).reduce((s: number, it: any) => s + (it && it.type === 'deposit' ? cleanNum(it.eval) : 0), 0);
 
+// ── 메모 달력 🔄 종목 수량 변경 — holdingSnapshots 인접 diff에서 **라이브 파생**(복사 금지) ──
+// 반환: { [date]: [{ portfolioId, accountName, prevDate, rows, cashBefore, cashAfter, cashDelta, currency, origin, afterManual, deleted }] }
+// ⚠️ 달력(CalendarModal)과 종가 열 공급(buildQtyCloseMap, 앱 탭)이 **같은 함수**를 쓴다 — 한쪽만 따로
+//    diff를 내면 행 키(row.key)가 갈려 종가 열이 조용히 '-'로 빈다.
+// ⚠️ 스냅샷 kind는 baseline/auto 둘이 아니라 **manual**(자산검증 모달 withManualSnapshot)이 더 있고,
+//    그건 **과거 임의 날짜**에 삽입된다 → 아래 배제 규칙이 없으면 옛 baseline 날짜에 가짜 칩이 뜬다.
+//    `kind === 'baseline'` 단독 판정 금지: baseline 당일을 편집하면 그 kind가 'manual'로 덮여
+//    baseline이 사라지므로, 인덱스 0·kind·baselineDate 세 조건을 OR로 걸어야 한다.
+export const buildQtyChangesByDate = (portfolios: any[]): Record<string, any[]> => {
+  const out: Record<string, any[]> = {};
+  (portfolios || []).forEach((p: any) => {
+    if (!p || p.accountType === 'simple' || p.accountType === 'matong') return;
+    const snaps = (Array.isArray(p.holdingSnapshots) ? p.holdingSnapshots : [])
+      .filter((s: any) => s && isValidIsoDate(s.date) && Array.isArray(s.items));
+    if (snaps.length < 2) return;
+    const sorted = [...snaps].sort((a: any, b: any) => String(a.date).localeCompare(String(b.date)));
+    const baselineDate = p.baselineDate || '';
+    const accountName = String(p.name || '계좌').trim();
+    const keyOf = (it: any) => `${it?.type || 'stock'}:${it?.code || it?.name || ''}`;
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1];
+      const cur = sorted[i];
+      if (cur.kind === 'baseline') continue;                       // 부트스트랩은 '변경'이 아니다
+      if (baselineDate && cur.date <= baselineDate) continue;      // pre-baseline 편집 방어
+      if (p.deletedAt && cur.date >= p.deletedAt) continue;        // 삭제일 이후 기록 동결
+      const acc = new Map();
+      let cashBefore = 0;
+      let cashAfter = 0;
+      const add = (items: any[], field: 'before' | 'after') => (items || []).forEach((it: any) => {
+        if (!it) return;
+        if (it.type === 'deposit') {
+          if (field === 'before') cashBefore += cleanNum(it.depositAmount);
+          else cashAfter += cleanNum(it.depositAmount);
+          return;
+        }
+        const k = keyOf(it);
+        const e = acc.get(k) || {
+          key: k, name: it.name || it.code || '', code: it.code || '', type: it.type || 'stock',
+          before: 0, after: 0, unit: it.type === 'savings' ? 'krw' : 'qty',
+        };
+        if (it.name) e.name = it.name;
+        // 예적금은 수량 개념이 없어 적립 원금(investAmount)의 변화를 대신 본다
+        e[field] += it.type === 'savings' ? cleanNum(it.investAmount) : cleanNum(it.quantity);
+        acc.set(k, e);
+      });
+      add(prev.items, 'before');
+      add(cur.items, 'after');
+      const rows = [...acc.values()]
+        .map((r: any) => ({ ...r, delta: r.after - r.before }))
+        .filter((r: any) => Math.round(r.delta * 1e6) !== 0);
+      const cashDelta = cashAfter - cashBefore;
+      // 수량·현금 모두 그대로면 항목을 만들지 않는다(구성 지문은 매입금액도 보므로 무변경 스냅샷이 존재)
+      if (rows.length === 0 && Math.round(cashDelta) === 0) continue;
+      (out[cur.date] = out[cur.date] || []).push({
+        portfolioId: p.id, accountName, prevDate: prev.date, rows,
+        cashBefore, cashAfter, cashDelta,
+        // ⚠️ 해외계좌는 depositAmount 자체가 USD다(calcPortfolioEvalDetail의 deposit 분기가
+        // fxRate를 곱하는 대상). ₩로 하드코딩하면 $2,000이 ₩2,000으로 보여 약 1,390배 어긋난다.
+        // rebalTarget 기록의 currency 규약과 동일 — 원화 환산은 금지(환율 시점이 섞인다).
+        currency: p.accountType === 'overseas' ? 'USD' : 'KRW',
+        // manual = 매매가 아니라 자산검증 모달에서 사용자가 수량을 정정한 날
+        origin: cur.kind === 'manual' ? 'manual' : 'auto',
+        afterManual: prev.kind === 'manual',
+        deleted: !!p.deletedAt,
+      });
+    }
+  });
+  return out;
+};
+
+// 🔄 수량 변경 행의 '그날 종가' — 계좌 통화 그대로(해외=USD, 원화 환산 금지). 시세가 없는 행은 null.
+// 단가 결정은 자산검증·추이표와 **같은 resolvePriceForItem**(수동 종가 → 이력 → 순방향 근사)이다.
+// exact=false는 그 날짜 키가 없어 가까운 거래일 값을 쓴 경우(주말·휴장일·미수집) — 화면은 흐리게 표시.
+export const qtyClosePriceOf = (
+  row: any,
+  accountType: string,
+  date: string,
+  stockHistoryMap: Record<string, Record<string, number>>,
+  indicatorHistoryMap: Record<string, any>,
+  manualPriceOverrides?: Record<string, Record<string, number>> | null
+): { price: number; exact: boolean } | null => {
+  if (!row || row.type === 'savings' || row.type === 'deposit') return null;
+  const isGold = accountType === 'gold';
+  if (!isGold && !row.code) return null;   // 수동 현금 행 등 코드 없는 행은 시세가 없다
+  const { price, source } = resolvePriceForItem(row, date, stockHistoryMap, indicatorHistoryMap, isGold, manualPriceOverrides);
+  if (!(price > 0)) return null;
+  const src = isGold ? indicatorHistoryMap?.goldKr : stockHistoryMap?.[row.code];
+  return { price, exact: source === 'manual' || (source === 'history' && src?.[date] != null) };
+};
+
+// 메모 달력 🔄 패드의 종가 열 공급 — 키 `${portfolioId}|${date}` → { [row.key]: { price, exact } }.
+// ⚠️ 앱 탭에서만 계산한다(stockHistoryMap은 앱 탭에만 있다). 별도 달력 창에는 이 작은 맵만 보낸다 —
+//    종가 이력 전체를 창에 복제하지 말 것(수량이 바뀐 종목·날짜만 담아 수 KB 이내).
+export const buildQtyCloseMap = (
+  portfolios: any[],
+  stockHistoryMap: Record<string, Record<string, number>>,
+  indicatorHistoryMap: Record<string, any>
+): Record<string, Record<string, { price: number; exact: boolean }>> => {
+  const out: Record<string, Record<string, { price: number; exact: boolean }>> = {};
+  const byId = new Map((portfolios || []).filter(Boolean).map((p: any) => [p.id, p]));
+  const changes = buildQtyChangesByDate(portfolios);
+  Object.keys(changes).forEach((date) => changes[date].forEach((g: any) => {
+    const p: any = byId.get(g.portfolioId);
+    const m: Record<string, { price: number; exact: boolean }> = {};
+    g.rows.forEach((r: any) => {
+      const c = qtyClosePriceOf(r, p?.accountType, date, stockHistoryMap, indicatorHistoryMap, p?.manualPriceOverrides);
+      if (c) m[r.key] = c;
+    });
+    if (Object.keys(m).length > 0) out[`${g.portfolioId}|${date}`] = m;
+  }));
+  return out;
+};
+
 // 평가액 시계열을 계산할 날짜 집합 = 기록일(history) ∪ 구성 변경일(holdingSnapshots).
 // ⚠️ 구성 변경일을 빼지 말 것(회귀 주의 — 종목 이관 이중 계상): 종목을 전부 다른 계좌로 옮겨
 //    비운 계좌는 currentEval이 0이라 그날 라이브 기록이 만들어지지 않는다(useHistoryBackfill

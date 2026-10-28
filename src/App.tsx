@@ -95,7 +95,7 @@ import {
   listRebalTargetSnapshots,
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows, analyzeTransferMerge,
   depositRowOf, transferableCashOf, cashTransferBlockReason, depositKrwOf,
-  buildHistDetailRows, EMPTY_HIST_DETAIL,
+  buildHistDetailRows, EMPTY_HIST_DETAIL, buildQtyCloseMap,
   buildRebalTargetEntryFrom, sameRebalTargetEntry, upsertRebalTargetMemo,
   buildLadderTrade, upsertLadderTradeMemo, listLadderLogs, deleteLadderTrade,
   normalizeHistPeriod,
@@ -2573,6 +2573,11 @@ export default function App() {
     if (!w || w.closed) return;
     try { w.postMessage(msg, window.location.origin); } catch {}
   };
+  // 메모 달력 🔄 수량 변경 패드의 '종가' 열 — 수량이 바뀐 종목·날짜만 담은 작은 맵(인앱 prop + calendar:live).
+  // ⚠️ 달력이 닫혀 있고 새 창도 붙은 적 없으면 계산하지 않는다(시세 갱신마다 전 스냅샷 diff를 돌 이유가 없다).
+  const calQtyCloses = useMemo(
+    () => ((showCalendarModal || calWinNonce > 0) ? buildQtyCloseMap(portfolios, stockHistoryMap, indicatorHistoryMap) : {}),
+    [showCalendarModal, calWinNonce, portfolios, stockHistoryMap, indicatorHistoryMap]);
   // 새 창이 실제로 읽는 계좌 필드만 투영. 시세 갱신마다 portfolios 배열이 새로 생기므로
   // ⚠️ 전송은 **지문**으로 게이팅한다 — 지문 없이 보내면 보유 스냅샷 전량이 수십 초마다 복제된다.
   const calWinAccounts = useMemo(() => (portfolios || []).map(p => ({
@@ -2622,9 +2627,11 @@ export default function App() {
       // ⚠️ 인앱 prop과 **같은 표현**을 써야 두 렌더러의 게이팅이 구조적으로 일치한다 —
       //    raw로 보내면 권한이 꺼진 사용자의 별도 달력 창에만 BUDGET 칩이 남는다.
       ledgerBooks: ledgerAccess ? ledgerBooks : [],
+      // 🔄 수량 변경 패드 종가 열 — 종가가 바뀌는 시점은 시세 틱이라 지문 게이팅된 accounts가 아니라 여기.
+      qtyCloses: calQtyCloses,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, hideAmounts, ledgerBooks, ledgerAccess, calWinNonce]);
+  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, hideAmounts, ledgerBooks, ledgerAccess, calQtyCloses, calWinNonce]);
 
   // 새 창의 '계좌별 현황' 패드가 열려 있는 동안 소스 데이터가 바뀌면 **다시 밀어 준다**(구독).
   // ⚠️ 1회성 스냅샷으로 되돌리지 말 것 — 같은 패드 상단의 지표 밴드(metricsByDate)는 calendar:live로
@@ -5597,6 +5604,7 @@ export default function App() {
         // ⚠️ 권한이 없으면 빈 배열을 넘겨 칩 자체가 렌더되지 않게 한다.
         ledgerBooks={ledgerAccess ? ledgerBooks : []}
         onOpenLedger={ledgerAccess ? openLedgerWindow : null}
+        qtyCloses={calQtyCloses}
       />
       </ErrorBoundary>
       {/* 자금 흐름도 — App 최상위 형제(계좌 탭/뷰 전환에도 언마운트 안 됨).

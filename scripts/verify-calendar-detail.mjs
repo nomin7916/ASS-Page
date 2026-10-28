@@ -11,6 +11,8 @@
 //     표현할 수 없어 소스를 직접 읽어 계약을 단언한다(verify-transfer #17~#33 선례).
 //     ⚠️ 전부 '선언'이 아니라 **사용부**를 단언한다 — 존재 확인만 하면 셀 삭제·값 바꿔치기가 통과한다.
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+//   파트④ 🔄 수량 변경 패드의 종가 열 (#Q1~#Q12)
+//     utils.buildQtyChangesByDate·buildQtyCloseMap을 실제 모듈로 검증 + 인앱/별도 창 배선 가드.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -706,6 +708,95 @@ console.log('\n── 파트③ 소스 텍스트 가드 ──');
   const sentinel = cal.slice(cal.indexOf('const transfersByDate'), cal.indexOf('// 패드는 전부 앵커'));
   ok('#G17 신규 훅이 transfersByDate 센티넬 구간을 침범하지 않는다 (verify:transfer #27b 보호)',
     sentinel.length > 200 && !/setPad/.test(sentinel) && !/padDetail/.test(sentinel));
+}
+
+console.log('\n── 파트④ 🔄 수량 변경 패드의 종가 열 (#Q1~#Q12) ──');
+{
+  // 실제 모듈을 직접 불러 검증한다(미러 없음 — 파트②-b와 같은 근거로 utils.ts는 Node가 그대로 실행한다).
+  let real = null;
+  try { real = await import(new URL('../src/utils.ts', import.meta.url).href); }
+  catch (e) { real = null; console.log(`  … 실제 모듈 import 불가로 건너뜀 (${String(e && e.message).slice(0, 80)})`); }
+
+  if (real && typeof real.buildQtyCloseMap === 'function') {
+    const snap = (date, kind, items) => ({ date, kind, items });
+    const st = (code, quantity, name = code) => ({ type: 'stock', code, name, quantity });
+    const portfolios = [
+      {
+        id: 'A', name: '연금저축', accountType: 'portfolio', baselineDate: '2026-10-01',
+        manualPriceOverrides: { '0144L0': { '2026-10-20': 9999 } },
+        holdingSnapshots: [
+          snap('2026-09-30', 'manual', [st('441640', 1)]),   // pre-baseline 정정 — 칩·종가 대상 아님
+          snap('2026-10-01', 'baseline', [st('441640', 1252), st('0144L0', 1900), { type: 'deposit', depositAmount: 3907 },
+            { type: 'savings', name: '적금', investAmount: 100000 }]),
+          snap('2026-10-20', 'auto', [st('441640', 1262), st('0144L0', 1000), st('490590', 2377), st('999999', 5), { type: 'deposit', depositAmount: 3745 },
+            { type: 'savings', name: '적금', investAmount: 200000 }]),
+          snap('2026-10-24', 'auto', [st('441640', 1262), st('0144L0', 1000), st('490590', 3004), st('999999', 5), { type: 'deposit', depositAmount: 3745 },
+            { type: 'savings', name: '적금', investAmount: 200000 }]),
+        ],
+      },
+      {
+        id: 'O', name: '해외', accountType: 'overseas', baselineDate: '2026-10-01',
+        holdingSnapshots: [snap('2026-10-01', 'baseline', [st('AAPL', 10)]), snap('2026-10-21', 'auto', [st('AAPL', 12)])],
+      },
+      {
+        id: 'G', name: '금', accountType: 'gold', baselineDate: '2026-10-01',
+        holdingSnapshots: [snap('2026-10-01', 'baseline', [st('', 10, 'KRX 금현물')]), snap('2026-10-21', 'auto', [st('', 15, 'KRX 금현물')])],
+      },
+    ];
+    const shm = {
+      '441640': { '2026-10-20': 12345, '2026-10-23': 12400 },
+      '0144L0': { '2026-10-20': 9876 },
+      '490590': { '2026-10-20': 11000, '2026-10-23': 11100 },
+      AAPL: { '2026-10-21': 250.5 },
+    };
+    const ihm = { goldKr: { '2026-10-21': 190000 }, usdkrw: { '2026-10-21': 1400 } };
+
+    const changes = real.buildQtyChangesByDate(portfolios);
+    const g20 = (changes['2026-10-20'] || []).find(g => g.portfolioId === 'A');
+    ok('#Q1 diff 행이 key를 갖고, 10-20 변경은 3종목 + 신규 1종목 + 예적금 1행이다',
+      !!g20 && g20.rows.every(r => typeof r.key === 'string' && r.key.length > 0)
+      && g20.rows.map(r => r.key).sort().join(',') === 'savings:적금,stock:0144L0,stock:441640,stock:490590,stock:999999');
+    ok('#Q2 pre-baseline 정정·baseline 날짜에는 변경 항목이 없다',
+      !changes['2026-09-30'] && !changes['2026-10-01']);
+
+    const m = real.buildQtyCloseMap(portfolios, shm, ihm);
+    const a20 = m['A|2026-10-20'] || {};
+    ok('#Q3 그날 종가가 있으면 그 값 · exact',
+      a20['stock:441640']?.price === 12345 && a20['stock:441640']?.exact === true
+      && a20['stock:490590']?.price === 11000 && a20['stock:490590']?.exact === true);
+    ok('#Q4 수동 종가(manualPriceOverrides)가 이력보다 우선한다',
+      a20['stock:0144L0']?.price === 9999 && a20['stock:0144L0']?.exact === true);
+    ok('#Q5 예적금·시세 없는 종목은 값을 만들지 않는다 (화면 \'-\')',
+      !('savings:적금' in a20) && !('stock:999999' in a20));
+    const a24 = m['A|2026-10-24'] || {};
+    ok('#Q6 휴장일(토)은 직전 거래일 값 · exact=false (흐리게 표시)',
+      Object.keys(a24).join(',') === 'stock:490590' && a24['stock:490590'].price === 11100 && a24['stock:490590'].exact === false);
+    ok('#Q7 해외계좌 종가는 USD 그대로 (환율 미적용)',
+      m['O|2026-10-21']?.['stock:AAPL']?.price === 250.5);
+    ok('#Q8 금 계좌는 goldKr 이력을 쓴다 (코드 없음에도 값)',
+      m['G|2026-10-21']?.['stock:KRX 금현물']?.price === 190000);
+    ok('#Q9 수동 현금 행(코드 없음)은 null',
+      real.qtyClosePriceOf({ type: 'stock', code: '', name: '현금' }, 'portfolio', '2026-10-20', shm, ihm, null) === null);
+  } else if (real) {
+    ok('#Q0 utils가 buildQtyCloseMap을 내보낸다', false);
+  }
+
+  const app = read('src/App.tsx');
+  const cal = stripComments(read('src/components/CalendarModal.tsx'));
+  const win = read('src/components/CalendarWindow.tsx');
+  // ⚠️ 행 키가 두 계산에서 같아야 종가가 붙는다 — 달력이 diff를 따로 계산하면 조용히 '-'만 남는다.
+  ok('#Q10 달력은 utils.buildQtyChangesByDate로 diff를 얻고 자체 diff를 갖지 않는다',
+    /buildQtyChangesByDate\(portfolios\)/.test(cal) && !/holdingSnapshots/.test(cal)
+    && /padQtyCloses\[r\.key\]/.test(cal) && /qtyCloses\[`\$\{pad\.portfolioId\}\|\$\{pad\.dayKey\}`\]/.test(cal));
+  const liveMsg = app.slice(app.indexOf("type: 'calendar:live',"), app.indexOf('}, [calendarMemos,'));
+  const liveDeps = app.slice(app.indexOf('}, [calendarMemos,'), app.indexOf(']);', app.indexOf('}, [calendarMemos,')));
+  const appCal = app.slice(app.indexOf('<CalendarModal'), app.indexOf('</ErrorBoundary>', app.indexOf('<CalendarModal')));
+  ok('#Q11 앱이 같은 맵을 인앱 prop과 calendar:live(payload·deps 양쪽)로 보낸다',
+    /const calQtyCloses = useMemo\(/.test(app) && /buildQtyCloseMap\(portfolios, stockHistoryMap, indicatorHistoryMap\)/.test(app)
+    && /qtyCloses=\{calQtyCloses\}/.test(appCal) && /qtyCloses: calQtyCloses,/.test(liveMsg) && /calQtyCloses/.test(liveDeps));
+  ok('#Q12 별도 창이 calendar:live의 qtyCloses를 받아 달력에 넘긴다',
+    /qtyCloses: d\.qtyCloses && typeof d\.qtyCloses === 'object' \? d\.qtyCloses : \{\}/.test(win)
+    && /qtyCloses=\{data\.qtyCloses\}/.test(win) && /qtyCloses: \{\},/.test(win));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:cal-detail — ${pass} passed, ${fail} failed`);

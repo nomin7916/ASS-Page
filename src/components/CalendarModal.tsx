@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, ExternalLink } from 'lucide-react';
 import { BG } from '../design';
-import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, spanFromText, EMPTY_HIST_DETAIL } from '../utils';
+import { generateId, formatNumber, formatFundPrice, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, spanFromText, EMPTY_HIST_DETAIL, buildQtyChangesByDate } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { ledgerEventsByDate, LEDGER_DIVERGING } from '../ledger';
 
@@ -144,7 +144,9 @@ const pnlColor = (v) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-blue-400' : 'tex
 //              onRequestAccountDetail(dayKey|null)로 앱 탭에 구독을 등록/해제하고, 앱이 보내 준
 //              accountDetail({date,status,rows,…})을 그대로 렌더한다.
 //   둘 다 없으면 클릭 진입점 자체를 만들지 않는다(hover 강조도 없음 → 죽은 클릭 방지).
-export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null, variant = 'floating', readOnly = false, headerNotice = null, onOpenWindow = null, buildHistDetail = null, accountDetail = null, onRequestAccountDetail = null, hideAmounts = false, ledgerBooks = [], onOpenLedger = null }) {
+// qtyCloses: 🔄 수량 변경 패드의 '종가' 열 — 앱 탭이 utils.buildQtyCloseMap으로 계산해 두 모드 모두 같은
+//   맵을 준다(인앱 prop / 별도 창은 calendar:live). 없거나 그 행 값이 없으면 '-'.
+export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null, variant = 'floating', readOnly = false, headerNotice = null, onOpenWindow = null, buildHistDetail = null, accountDetail = null, onRequestAccountDetail = null, hideAmounts = false, ledgerBooks = [], onOpenLedger = null, qtyCloses = null }) {
   const isPage = variant === 'page';
   const todayStr = getTodayKST();
   /** 오늘이 속한 달 — 가계부 이벤트의 미래 게이트(`ledgerEventsByDate` 3번째 인자). `new Date()` 금지. */
@@ -313,72 +315,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   }, [portfolios, open]);
 
   // ── 🔄 종목 수량 변경 — holdingSnapshots 인접 diff에서 **라이브 파생**(복사 금지) ──
-  // ⚠️ 스냅샷 kind는 baseline/auto 둘이 아니라 **manual**(자산검증 모달 withManualSnapshot)이 더 있고,
-  //    그건 **과거 임의 날짜**에 삽입된다 → 아래 배제 규칙이 없으면 옛 baseline 날짜에 가짜 칩이 뜬다.
-  //    `kind === 'baseline'` 단독 판정 금지: baseline 당일을 편집하면 그 kind가 'manual'로 덮여
-  //    baseline이 사라지므로, 인덱스 0·kind·baselineDate 세 조건을 OR로 걸어야 한다.
-  const qtyChangesByDate = useMemo(() => {
-    const out = {};
-    if (!open) return out;
-    (portfolios || []).forEach((p) => {
-      if (!p || p.accountType === 'simple' || p.accountType === 'matong') return;
-      const snaps = (Array.isArray(p.holdingSnapshots) ? p.holdingSnapshots : [])
-        .filter((s) => s && isValidIsoDate(s.date) && Array.isArray(s.items));
-      if (snaps.length < 2) return;
-      const sorted = [...snaps].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-      const baselineDate = p.baselineDate || '';
-      const accountName = String(p.name || '계좌').trim();
-      const keyOf = (it) => `${it?.type || 'stock'}:${it?.code || it?.name || ''}`;
-      for (let i = 1; i < sorted.length; i++) {
-        const prev = sorted[i - 1];
-        const cur = sorted[i];
-        if (cur.kind === 'baseline') continue;                       // 부트스트랩은 '변경'이 아니다
-        if (baselineDate && cur.date <= baselineDate) continue;      // pre-baseline 편집 방어
-        if (p.deletedAt && cur.date >= p.deletedAt) continue;        // 삭제일 이후 기록 동결
-        const acc = new Map();
-        let cashBefore = 0;
-        let cashAfter = 0;
-        const add = (items, field) => (items || []).forEach((it) => {
-          if (!it) return;
-          if (it.type === 'deposit') {
-            if (field === 'before') cashBefore += cleanNum(it.depositAmount);
-            else cashAfter += cleanNum(it.depositAmount);
-            return;
-          }
-          const k = keyOf(it);
-          const e = acc.get(k) || {
-            name: it.name || it.code || '', code: it.code || '', type: it.type || 'stock',
-            before: 0, after: 0, unit: it.type === 'savings' ? 'krw' : 'qty',
-          };
-          if (it.name) e.name = it.name;
-          // 예적금은 수량 개념이 없어 적립 원금(investAmount)의 변화를 대신 본다
-          e[field] += it.type === 'savings' ? cleanNum(it.investAmount) : cleanNum(it.quantity);
-          acc.set(k, e);
-        });
-        add(prev.items, 'before');
-        add(cur.items, 'after');
-        const rows = [...acc.values()]
-          .map((r) => ({ ...r, delta: r.after - r.before }))
-          .filter((r) => Math.round(r.delta * 1e6) !== 0);
-        const cashDelta = cashAfter - cashBefore;
-        // 수량·현금 모두 그대로면 항목을 만들지 않는다(구성 지문은 매입금액도 보므로 무변경 스냅샷이 존재)
-        if (rows.length === 0 && Math.round(cashDelta) === 0) continue;
-        (out[cur.date] = out[cur.date] || []).push({
-          portfolioId: p.id, accountName, prevDate: prev.date, rows,
-          cashBefore, cashAfter, cashDelta,
-          // ⚠️ 해외계좌는 depositAmount 자체가 USD다(utils.ts calcPortfolioEvalDetail의 deposit 분기가
-          // fxRate를 곱하는 대상). ₩로 하드코딩하면 $2,000이 ₩2,000으로 보여 약 1,390배 어긋난다.
-          // rebalTarget 기록의 currency 규약과 동일 — 원화 환산은 금지(환율 시점이 섞인다).
-          currency: p.accountType === 'overseas' ? 'USD' : 'KRW',
-          // manual = 매매가 아니라 자산검증 모달에서 사용자가 수량을 정정한 날
-          origin: cur.kind === 'manual' ? 'manual' : 'auto',
-          afterManual: prev.kind === 'manual',
-          deleted: !!p.deletedAt,
-        });
-      }
-    });
-    return out;
-  }, [portfolios, open]);
+  // ⚠️ diff 규칙(baseline·manual 배제 등)은 utils.buildQtyChangesByDate 한 곳에 있다 — 앱 탭의 종가 열
+  //    공급(buildQtyCloseMap)과 행 키가 맞아야 하므로 여기서 따로 계산하지 말 것.
+  const qtyChangesByDate = useMemo(() => (open ? buildQtyChangesByDate(portfolios) : {}), [portfolios, open]);
 
   // ── 🔁 종목 계좌 간 이관 — 입출금 원장의 transfer 태그에서 **라이브 파생**(복사 금지) ──
   // ⚠️ calendarMemos에 복사하지 말 것(투자기록·수량변경 파생과 동일 계약) — 원장이 유일한 원본이라
@@ -575,6 +514,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   const padQty = pad && pad.kind === 'qty'
     ? (qtyChangesByDate[pad.dayKey] || []).find((g) => g.portfolioId === pad.portfolioId) || null
     : null;
+  const padQtyCloses = padQty && qtyCloses ? qtyCloses[`${pad.portfolioId}|${pad.dayKey}`] || null : null;
   const padTransfer = pad && pad.kind === 'transfer'
     ? (transfersByDate[pad.dayKey] || []).find((g) => g.portfolioId === pad.portfolioId) || null
     : null;
@@ -1087,7 +1027,8 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       <th className="text-left font-normal py-1 pr-1">종목명</th>
                       <th className="text-right font-normal py-1 px-1">이전</th>
                       <th className="text-right font-normal py-1 px-1">이후</th>
-                      <th className="text-right font-normal py-1 pl-1">증감</th>
+                      <th className="text-right font-normal py-1 px-1">증감</th>
+                      <th className="text-right font-normal py-1 pl-1">종가</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1099,9 +1040,24 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                         </td>
                         <td className="text-right text-gray-400 py-1 px-1">{r.unit === 'krw' ? fmtMoney(r.before, 'KRW') : qfmt(r.before)}</td>
                         <td className="text-right text-gray-200 py-1 px-1">{r.unit === 'krw' ? fmtMoney(r.after, 'KRW') : qfmt(r.after)}</td>
-                        <td className={`text-right py-1 pl-1 font-bold ${r.delta > 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        <td className={`text-right py-1 px-1 font-bold ${r.delta > 0 ? 'text-red-400' : 'text-blue-400'}`}>
                           {r.delta > 0 ? '+' : ''}{r.unit === 'krw' ? fmtMoney(r.delta, 'KRW') : qfmt(r.delta)}
                         </td>
+                        {(() => {
+                          const c = padQtyCloses ? padQtyCloses[r.key] : null;
+                          if (!c) return <td className="text-right text-gray-600 py-1 pl-1">-</td>;
+                          // 해외계좌는 USD 그대로(원화 환산 금지), 펀드 기준가는 소수 둘째 자리까지
+                          const txt = padQty.currency === 'USD' ? fmtMoney(c.price, 'USD')
+                            : r.type === 'fund' ? `₩${formatFundPrice(c.price)}` : fmtMoney(c.price, 'KRW');
+                          return (
+                            <td
+                              className={`text-right py-1 pl-1 ${c.exact ? 'text-amber-200' : 'text-gray-500'}`}
+                              title={c.exact ? `${pad.dayKey} 종가` : `${pad.dayKey} 종가가 없어 가장 가까운 거래일 값입니다`}
+                            >
+                              {txt}
+                            </td>
+                          );
+                        })()}
                       </tr>
                     ))}
                   </tbody>
@@ -1120,7 +1076,8 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               )}
               <div className="text-[9px] text-gray-600 pt-2 leading-relaxed">
                 보유 스냅샷 비교로 자동 산출됩니다. 국내 계좌는 21:00 이후 변경이 다음 날 칸에 기록되고,
-                같은 날 여러 번 고치면 그날의 순변화만 표시됩니다.
+                같은 날 여러 번 고치면 그날의 순변화만 표시됩니다. 종가는 이 날짜의 종가이며, 흐린 값은
+                그날 종가가 없어(휴장일 등) 가장 가까운 거래일 값을 쓴 것입니다.
               </div>
             </div>
           ) : null) : pad.kind === 'transfer' ? (padTransfer ? (
