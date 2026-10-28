@@ -477,7 +477,13 @@ if (U) {
   ok('#46b 옛 depositRowNative(USD + 원화 ÷ 환율)가 되살아나지 않았다',
     !/export const depositRowNative/.test(utils));
   // 차트 TWR(accountDailySeries)·차트 라인(finalChartData)이 원화를 섞지 않고, 흐름도 원화 행을 뺀다.
-  eq('#47 App의 USD 프레임 평가 2곳이 모두 3인자 호출', (app.match(/overseasUsdEvalAt\(portfolio, (h\.)?date, stockHistoryMap\)/g) || []).length, 2);
+  // 보유는 그날 스냅샷 — 현재 보유(portfolio)를 넘기면 입금마다 TWR 라인이 보류로 몇 주씩 평평해진다.
+  eq('#47 App의 USD 프레임 평가 2곳이 모두 그날 스냅샷(resolveHoldings) 3인자 호출',
+    (app.match(/overseasUsdEvalAt\(resolveHoldings\(activePortfolio, (h\.)?date\)\.items, (h\.)?date, stockHistoryMap\)/g) || []).length, 2);
+  ok('#47c App이 resolveHoldings를 utils에서 import한다',
+    /import \{[^}]*\bresolveHoldings\b[^}]*\} from '\.\/utils'/.test(app));
+  ok('#47d 현재 보유(portfolio)로 해외 평가하던 호출이 되살아나지 않았다',
+    !/overseasUsdEvalAt\(portfolio,/.test(app));
   ok('#47b App의 USD 프레임 흐름이 rateOf 없이 호출된다 (원화 원장 행 제외)',
     /externalFlowInRange\(depositHistory, depositHistory2, prev\.date, h\.date\)/.test(app));
   // 표: 달러 예수금 행은 원화를 뺀 값, TOTAL 투자금액·평가금액은 분리 표기.

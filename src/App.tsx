@@ -89,7 +89,7 @@ import {
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries, evalSeriesDates,
-  externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt, depositRowEval, krwFlowRateOf,
+  externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt, resolveHoldings, depositRowEval, krwFlowRateOf,
   buildBookCostSeries, bookDeltaBetween, computeDailyMetricsSeries,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
@@ -1767,7 +1767,11 @@ export default function App() {
       const flow = prev
         ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date)
         : { in: 0, out: 0 };
-      const ovEval = isOv ? overseasUsdEvalAt(portfolio, h.date, stockHistoryMap) : null;
+      // ⚠️ 보유는 **그날 스냅샷**(resolveHoldings)으로 — 현재 보유(portfolio)를 과거에 덧씌우면 입금 전
+      //    날짜에도 오늘 예수금이 들어 있어 입금일 ΔV가 흐름을 못 담고, '미반영' 보류가 최대 15행 이어져
+      //    TWR 라인이 입금 뒤 몇 주씩 평평했다가 한꺼번에 뛴다(실측 2026-09~10, 입금 3건 직후 전부).
+      //    추이표(HistoryPanel)·통합(useIntegratedData)과 같은 보유 소스다.
+      const ovEval = isOv ? overseasUsdEvalAt(resolveHoldings(activePortfolio, h.date).items, h.date, stockHistoryMap) : null;
       const cb = isOv ? null : activeCloseEvalByDate.get(h.date);
       const ev = ovEval != null ? ovEval : (cb != null ? cb : cleanNum(h.evalAmount));
       // ⚠️ bookDelta를 빼지 말 것 — 추이표(HistoryPanel)와 같은 관측을 써야 같은 날짜에 두 화면이
@@ -1782,7 +1786,7 @@ export default function App() {
     //    이 함수의 twr은 `computeCumulativeTwrSeries`와 문자 그대로 같다(verify-period #10이 단언).
     const { profit, twr } = accumulateDailySeries(rows.map(r => r.date), computeDailyMetricsSeries(rows));
     return { twr, cumProfit: profit };
-  }, [history, activePortfolioAccountType, portfolio, stockHistoryMap, activeCloseEvalByDate, activeBookByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
+  }, [history, activePortfolioAccountType, activePortfolio, stockHistoryMap, activeCloseEvalByDate, activeBookByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
   const accountTwrByDate = accountDailySeries.twr;
   const accountCumProfitByDate = accountDailySeries.cumProfit;
 
@@ -1841,7 +1845,7 @@ export default function App() {
         if (isOverseasChart) {
           // 해외계좌: USD 주가 이력으로만 계산 — KRW evalAmount/fxRate 완전 미사용
           // ⚠️ accountTwrByDate와 **같은 함수**를 쓴다(overseasUsdEvalAt) — 라인과 % 소스 일치.
-          const usdRaw = overseasUsdEvalAt(portfolio, date, stockHistoryMap);
+          const usdRaw = overseasUsdEvalAt(resolveHoldings(activePortfolio, date).items, date, stockHistoryMap);
           const hasData = usdRaw != null;
           const usdEval = hasData ? usdRaw : 0;
           trueEvalAtDate = usdEval;
@@ -2014,7 +2018,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, indicatorHistoryMap, activeCloseEvalByDate, accountTwrByDate, accountCumProfitByDate]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, activePortfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, indicatorHistoryMap, activeCloseEvalByDate, accountTwrByDate, accountCumProfitByDate]);
 
   // ── 통합 대시보드 계산 ──
   const {

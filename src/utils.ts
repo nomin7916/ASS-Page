@@ -1045,7 +1045,9 @@ export const accumulateDailySeries = (ascDates, metricsMap) => {
   return { profit, twr, count };
 };
 
-// 해외계좌 차트용 USD 평가액 — 현재 보유 × 해당일 USD 종가(환율 미적용, 예수금은 USD 그대로).
+// 해외계좌 차트용 USD 평가액 — 보유 × 해당일 USD 종가(환율 미적용, 예수금은 USD 그대로).
+// ⚠️ items는 호출부가 **그날 스냅샷**(resolveHoldings(p, date).items)으로 넘긴다 — 현재 보유를 넘기면
+//    입금 전 날짜에도 오늘 예수금이 들어가 입금일마다 TWR이 보류로 평평해진다(App.tsx accountDailySeries 주석).
 // ⚠️ App.tsx finalChartData 해외 분기와 개별 계좌 누적 TWR이 반드시 이 한 함수를 공유할 것.
 //    한쪽만 자체 계산으로 되돌리면 같은 날짜에 라인과 %가 갈린다.
 // 반환: USD 평가액 (가격/예수금 데이터가 하나도 없으면 null)
