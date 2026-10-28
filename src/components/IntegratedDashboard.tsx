@@ -1,6 +1,6 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { Plus, Download, Trash2, Maximize2, X, Check, TrendingUp, Settings, BarChart3, RotateCcw } from 'lucide-react';
+import { Plus, Download, Trash2, Maximize2, X, Check, TrendingUp, Settings, BarChart3, RotateCcw, GripVertical } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
 import HistPeriodSeg from './HistPeriodSeg';
@@ -99,7 +99,7 @@ export default function IntegratedDashboard({
   restorePortfolio,
   purgePortfolio,
   switchToPortfolio,
-  movePortfolio,
+  reorderPortfolios,
   updatePortfolioColor,
   togglePortfolioTest,
   updatePortfolioStartDate,
@@ -168,6 +168,52 @@ export default function IntegratedDashboard({
   const memoDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const [showSimpleMenu, setShowSimpleMenu] = useState(false);
   const simpleMenuRef = useRef(null);
+
+  // ── 계좌 순서 드래그: 손잡이 pointerdown → 행 중간선 기준으로 끼울 자리 계산 → 놓으면 reorderPortfolios ──
+  const accTableWrapRef = useRef(null);
+  const accTbodyRef = useRef(null);
+  const rowDragRef = useRef(null);
+  const [rowDrag, setRowDrag] = useState(null);
+  const getReorderRows = () => accTbodyRef.current ? Array.from(accTbodyRef.current.querySelectorAll('tr[data-reorder-id]')) : [];
+  const onRowDragStart = (e, id) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    rowDragRef.current = { id, dropIdx: null };
+    setRowDrag({ id, lineTop: null });
+  };
+  const onRowDragMove = (e) => {
+    const d = rowDragRef.current;
+    if (!d) return;
+    const rows = getReorderRows();
+    const wrap = accTableWrapRef.current;
+    if (!rows.length || !wrap) return;
+    let idx = rows.length;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i].getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) { idx = i; break; }
+    }
+    d.dropIdx = idx;
+    const from = rows.findIndex(r => r.dataset.reorderId === d.id);
+    const noop = idx === from || idx === from + 1;
+    const edge = idx < rows.length ? rows[idx].getBoundingClientRect().top : rows[rows.length - 1].getBoundingClientRect().bottom;
+    const lineTop = noop ? null : edge - wrap.getBoundingClientRect().top;
+    setRowDrag(prev => prev && prev.lineTop === lineTop ? prev : { id: d.id, lineTop });
+  };
+  const onRowDragEnd = (apply) => {
+    const d = rowDragRef.current;
+    rowDragRef.current = null;
+    setRowDrag(null);
+    if (!apply || !d || d.dropIdx == null) return;
+    const ids = getReorderRows().map(r => r.dataset.reorderId);
+    const from = ids.indexOf(d.id);
+    if (from === -1) return;
+    const to = d.dropIdx > from ? d.dropIdx - 1 : d.dropIdx;
+    if (to === from) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, d.id);
+    reorderPortfolios(ids);
+  };
   useEffect(() => {
     if (!showSimpleMenu) return;
     const handler = (e) => { if (simpleMenuRef.current && !simpleMenuRef.current.contains(e.target)) setShowSimpleMenu(false); };
@@ -580,7 +626,10 @@ export default function IntegratedDashboard({
                   </button>
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto relative" ref={accTableWrapRef}>
+                {rowDrag?.lineTop != null && (
+                  <div className="absolute left-0 right-0 h-[3px] bg-blue-400 rounded-full pointer-events-none z-30 shadow-[0_0_6px_rgba(96,165,250,0.8)]" style={{ top: rowDrag.lineTop - 1 }} />
+                )}
                 <table className="w-full text-xs whitespace-nowrap">
                   <thead className="bg-[#0f172a] text-gray-400 border-b border-gray-700">
                     <tr>
@@ -599,23 +648,24 @@ export default function IntegratedDashboard({
                       <th className="py-2 px-2 text-center">삭제</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody ref={accTbodyRef}>
                     {(() => {
                       const regularAccounts = portfolioSummaries.filter(s => s.accountType !== 'matong' && !s.deletedAt);
                       const matongAccounts = portfolioSummaries.filter(s => s.accountType === 'matong' && !s.deletedAt);
                       const sortedSummaries = [...regularAccounts, ...matongAccounts];
-                      return sortedSummaries.map((s, sIdx) => {
+                      return sortedSummaries.map((s) => {
                       const allocRatio = intTotals.totalEval > 0 ? s.currentEval / intTotals.totalEval * 100 : 0;
                       const isCatOpen = intExpandedCat === s.id;
                       const isSimple = s.accountType === 'simple';
                       const isMatong = s.accountType === 'matong';
                       const matongMonthlyInterest = isMatong ? Math.round((s.currentWithdrawal || 0) * ((s.agreedRate || 0) / 100 / 12)) : 0;
                       const isMatongIdx = isMatong;
-                      const regularCount = regularAccounts.length;
+                      const isDragging = rowDrag?.id === s.id;
                       return (
                         <React.Fragment key={s.id}>
                           <tr
-                            className={`border-b border-gray-700 transition-colors ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : isMatong ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40') : ''}`}
+                            data-reorder-id={isMatong ? undefined : s.id}
+                            className={`border-b border-gray-700 transition-colors ${isDragging ? 'opacity-40' : ''} ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : isMatong ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40') : ''}`}
                             style={s.rowColor ? { backgroundColor: hexToRgba(s.rowColor, 0.18) } : {}}
                           >
                             {/* 색상 스트립 — 클릭 시 노랑→슬레이트→로즈→갈색→해제 사이클 */}
@@ -627,17 +677,23 @@ export default function IntegratedDashboard({
                                 onClick={() => updatePortfolioColor(s.id, nextRowColor(s.rowColor || ''))}
                               />
                             </td>
-                            {/* 순서 화살표 */}
+                            {/* 순서 — 손잡이를 잡고 끌어서 원하는 위치에 놓기(마통 계좌는 항상 맨 아래 고정) */}
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               {isMatong ? (
-                                <div className="flex flex-col items-center gap-0.5 opacity-20 cursor-not-allowed">
-                                  <span className="leading-none text-[10px] text-gray-500">▲</span>
-                                  <span className="leading-none text-[10px] text-gray-500">▼</span>
+                                <div className="flex justify-center opacity-20 cursor-not-allowed" title="마통 계좌는 항상 맨 아래에 표시됩니다">
+                                  <GripVertical size={16} className="text-gray-500" />
                                 </div>
                               ) : (
-                                <div className="flex flex-col items-center gap-0.5">
-                                  <button onClick={() => movePortfolio(s.id, -1)} disabled={sIdx === 0} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="위로">▲</button>
-                                  <button onClick={() => movePortfolio(s.id, 1)} disabled={sIdx === regularCount - 1} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="아래로">▼</button>
+                                <div
+                                  className={`flex justify-center py-1 rounded select-none ${isDragging ? 'cursor-grabbing text-blue-400' : 'cursor-grab text-gray-500 hover:text-blue-400 hover:bg-blue-900/20'}`}
+                                  style={{ touchAction: 'none' }}
+                                  title="잡고 끌어서 순서 변경"
+                                  onPointerDown={e => onRowDragStart(e, s.id)}
+                                  onPointerMove={onRowDragMove}
+                                  onPointerUp={() => onRowDragEnd(true)}
+                                  onPointerCancel={() => onRowDragEnd(false)}
+                                >
+                                  <GripVertical size={16} />
                                 </div>
                               )}
                             </td>

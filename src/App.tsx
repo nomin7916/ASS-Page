@@ -937,7 +937,7 @@ export default function App() {
     resetAllPortfolioColors,
     updateSettingsForType,
     updatePortfolioMemo,
-    movePortfolio,
+    reorderPortfolios,
     handleUpdate,
     handleDeleteStock,
     transferStockToPortfolio,
@@ -5445,7 +5445,7 @@ export default function App() {
             restorePortfolio={restorePortfolio}
             purgePortfolio={purgePortfolio}
             switchToPortfolio={switchToPortfolioWithSnapshot}
-            movePortfolio={movePortfolio}
+            reorderPortfolios={reorderPortfolios}
             updatePortfolioColor={updatePortfolioColor}
             togglePortfolioTest={togglePortfolioTest}
             updatePortfolioStartDate={updatePortfolioStartDate}

@@ -407,16 +407,15 @@ export function usePortfolioState({
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, memo } : p));
   };
 
-  // ── 계좌 순서 이동 ──
-  const movePortfolio = (id, direction) => {
+  // ── 계좌 순서 변경(드래그) — orderedIds의 계좌들이 차지하던 자리에 새 순서로 다시 채운다.
+  //    목록에 없는 계좌(마통·삭제됨)는 제자리 유지 ──
+  const reorderPortfolios = (orderedIds) => {
     setPortfolios(prev => {
-      const idx = prev.findIndex(p => p.id === id);
-      if (idx === -1) return prev;
-      const newIdx = idx + direction;
-      if (newIdx < 0 || newIdx >= prev.length) return prev;
-      const next = [...prev];
-      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
-      return next;
+      const idSet = new Set(orderedIds);
+      const byId = new Map(prev.map(p => [p.id, p]));
+      if (orderedIds.length !== idSet.size || prev.filter(p => idSet.has(p.id)).length !== idSet.size) return prev;
+      let k = 0;
+      return prev.map(p => idSet.has(p.id) ? byId.get(orderedIds[k++]) : p);
     });
   };
 
@@ -1195,7 +1194,7 @@ export function usePortfolioState({
     resetAllPortfolioColors,
     updateSettingsForType,
     updatePortfolioMemo,
-    movePortfolio,
+    reorderPortfolios,
     handleUpdate,
     handleDeleteStock,
     transferStockToPortfolio,
