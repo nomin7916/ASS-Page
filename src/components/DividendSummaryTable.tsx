@@ -229,7 +229,7 @@ const normalizeLinkUrl = (u) => {
   return /^https?:\/\//i.test(s) ? s : `https://${s}`;
 };
 
-function DividendLinkBar({ links, onChange }) {
+function DividendLinkBar({ links, onChange, note }) {
   const [editing, setEditing] = useState(false);
   const [anchor, setAnchor] = useState(null); // {top,right} — 카드 overflow-hidden 탈출용 fixed 좌표
   const wrapRef = useRef(null);
@@ -337,13 +337,18 @@ function DividendLinkBar({ links, onChange }) {
           <div className="mt-2 text-[10px] text-gray-500 leading-relaxed">
             이니셜(영문·한글 1자)과 링크를 입력하세요. 버튼을 누르면 새 탭으로 열립니다.
           </div>
+          {note && (
+            <div className={`mt-1.5 text-[10px] leading-relaxed ${note.tone === 'error' ? 'text-red-400' : note.tone === 'ok' ? 'text-green-400' : 'text-sky-300/80'}`}>
+              {note.text}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, updateTaxBaseAvgAdj, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks, onExpand, cardWindowOpen }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, updateTaxBaseAvgAdj, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks, dividendLinksNote = null, onExpand, cardWindowOpen }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -1608,7 +1613,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         )}
         {hiddenMonthChips()}
         <div className="ml-auto flex items-center gap-1.5 shrink-0 self-center">
-          <DividendLinkBar links={dividendLinks} onChange={setDividendLinks} />
+          <DividendLinkBar links={dividendLinks} onChange={setDividendLinks} note={dividendLinksNote} />
           <span className="w-px h-5 bg-gray-700/60 mx-0.5" />
           {activeTab === 'actual' && addPortfolioExtraRow && (
             <button

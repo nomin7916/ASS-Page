@@ -6,6 +6,26 @@
 
 ---
 
+## 2026-10-29 — [분배금 현황] 관리자 사이트 링크(7칸)를 분배금 사용자에게 공유
+
+**대상 파일**: `src/utils.ts` · `src/App.tsx` · `src/hooks/usePortfolioState.ts` · `src/components/DividendSummaryTable.tsx` ·
+`_downloads/AppsScript_계정관리_arui114501.js` · `scripts/verify-div-links.mjs` · `package.json` · `CLAUDE.md`
+
+> 분배금 카드를 사용하기 허용한 모든 사용자들에게 관리자가 즐겨찾기한 사이트를 공유합니다. 관리자가 사용하는 즐겨 찾기를
+> 분배현황 사용가능하게 한 사용자들에게만 즐겨 찾기 링크를 기본으로 넣어 줍니다. 이후에 관리자가 즐겨 찾기를 변경하면
+> 분배현황 사용자들에게도 즐겨찾기 링크 주소는 공유 합니다.
+> (질문 답변) 기본값 + 사용자 수정 가능.
+
+- 관리자: 정상 로드 뒤 세션 첫 1회 + 링크를 바꿀 때마다(1.5초 뒤) Apps Script 설정 시트 `dividendLinks`에 7칸을 쓴다(직렬화).
+  링크 편집창 맨 아래에 '공유됨 / 공유 중 / 공유 실패' 한 줄(벨 알림 없음).
+- 분배금 사용자(feature3): 접속할 때 시트 값을 읽어 칸별 병합 — 처음은 빈 칸만 채우고(이미 넣은 개인 링크 보존),
+  이후엔 관리자가 바꾼 칸만 덮는다(사용자가 고친 다른 칸 유지). 기준값은 STATE `dividendLinksSeen`에 저장.
+- Apps Script: `setSettings` 허용 목록과 `getSettings` 응답에 `dividendLinks` 추가 — **사용자가 새 버전으로 재배포해야 동작**.
+  재배포 전에는 관리자 편집창에 '공유 실패'가 뜨고 사용자 쪽은 아무것도 바뀌지 않는다.
+- 참고: `setSettings`는 원래부터 인증 없이 열려 있다(유튜브·학습자료 링크와 같은 노출). 링크는 새 탭 + noopener + https 강제.
+- 검증: gate 전체 통과 · 신규 `verify:div-links` 27건(병합 규칙 단위 + 배선 가드) · 변이 5건 전부 검출 ·
+  build 실행 불가(클라우드) · 전역 typescript 구문 검사 0건 · Apps Script `node --check` 통과. 화면 확인은 아직 못 함.
+
 ## 2026-10-29 — [계좌 차트] '백테스트(현재비중)' 버튼·선 삭제
 
 **대상 파일**: `src/components/PortfolioChart.tsx` · `src/hooks/useHistoryChart.ts` · `src/hooks/useChartInteraction.ts` · `src/App.tsx`

@@ -92,6 +92,15 @@ src/
   벨에 남기지 않는다(창을 열 때마다 알림이 쌓이면 진짜 오류가 묻힌다). 저장 실패만 설정 패널 안 빨간 글씨.
 - 검증: `verify:rate-metrics`·`verify:rate-signals`·`verify:rate-assets`·`verify:rate-settings`(전부 src 직접 import).
 
+## 분배금 사이트 링크 공유 (관리자 → 분배금 사용자, ⚠️ 회귀 주의)
+
+- 경로: 관리자 STATE `dividendLinks`(7칸, 정본) → Apps Script 설정 시트 키 `dividendLinks` → feature3 사용자 부팅 시 `getSettings`.
+  Apps Script(`_downloads/AppsScript_계정관리_*.js`)의 `setSettings` 허용 목록·`getSettings` 응답에 이 키가 있어야 한다(재배포 필요).
+- 병합 규칙(`utils.mergeSharedDividendLinks`, 사용자 확정 2026-10-29): 처음은 **빈 칸만** 채우고, 이후엔 관리자가 바꾼 칸만 덮는다.
+  기준값 `dividendLinksSeen`은 사용자 STATE에 저장(payload·deps·구조 지문·applyStateData 네 곳). 공유값이 없으면(키 없음·빈 배열) 아무것도 안 바꾼다.
+- ⚠️ 배포·병합 모두 `divLinksBootFor`(STATE를 정상 로드한 계정) 게이트를 지난다 — 빼면 로드 전 기본값(빈 7칸)이 모든 사용자 칸을 지운다.
+  관리자 접속(impersonation) 중엔 배포도 병합도 하지 않는다. 벨 알림 없음 — 공유 상태는 링크 편집창 안 한 줄. 검증: `verify:div-links`.
+
 ## 상세 문서 위치 (⚠️ 자동 로드 금지 — 이 절이 생긴 이유: 2026-10-18 CLAUDE.md가 916KB까지 커져 모든 세션이 시작과 동시에 작업 기억 한계에 걸려 압축만 반복했다)
 
 - `docs/claude/architecture-log.md` — 주요 아키텍처·Phase별 작업 이력 전부 (옛 「주요 아키텍처」 절, 763KB)

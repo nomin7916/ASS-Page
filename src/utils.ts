@@ -208,6 +208,37 @@ export const normalizeDividendLinks = (raw) => {
   }));
 };
 
+// 관리자가 공유한 분배금 링크(설정 시트 dividendLinks — 배열 또는 JSON 문자열) 해석.
+// 키가 없거나 빈 배열이면 null = '공유값 없음'(Apps Script 미갱신·관리자 미배포) — 사용자 링크를 건드리지 않는다.
+export const parseSharedDividendLinks = (raw) => {
+  let arr = raw;
+  if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch { return null; } }
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  return normalizeDividendLinks(arr);
+};
+
+// 관리자 공유 링크를 사용자 링크에 칸별로 병합(사용자 확정 2026-10: 기본값 + 사용자 수정 가능).
+// - 처음(seen 없음): 사용자 칸이 비어 있는 곳만 관리자 값으로 채운다 — 이미 넣어 둔 개인 링크는 지우지 않는다.
+// - 이후: 관리자 값이 지난번 반영값(seen)과 달라진 칸만 관리자 값으로 덮는다(사용자가 고친 다른 칸은 유지).
+// 결과의 seen은 언제나 이번 공유값이다. shared가 없으면 null(아무것도 바꾸지 않는다).
+export const mergeSharedDividendLinks = (userRaw, shared, seenRaw) => {
+  if (!Array.isArray(shared) || shared.length === 0) return null;
+  const user = normalizeDividendLinks(userRaw);
+  const next = normalizeDividendLinks(shared);
+  const seen = Array.isArray(seenRaw) && seenRaw.length > 0 ? normalizeDividendLinks(seenRaw) : null;
+  const same = (a, b) => a.initial === b.initial && a.url === b.url;
+  const links = user.map((u, i) => {
+    if (seen) return same(next[i], seen[i]) ? u : next[i];
+    return (!u.initial && !u.url.trim()) ? next[i] : u;
+  });
+  return {
+    links,
+    seen: next,
+    changed: links.some((s, i) => !same(s, user[i])),
+    seenChanged: !seen || next.some((s, i) => !same(s, seen[i])),
+  };
+};
+
 // YYYY-MM-DD 문자열이 **실제 달력에 존재하는 날짜**인지 검사.
 // ⚠️ 정규식(`^\d{4}-\d{2}-\d{2}$`)만으로는 부족하다 — 2026-13-45 같은 값이 통과해 메모 달력의
 // 날짜 키로 들어가면 CalendarModal이 실제 날짜로만 셀을 그리므로(dayKeyOf) 그 기록은 화면에

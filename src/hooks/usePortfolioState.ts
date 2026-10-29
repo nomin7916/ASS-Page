@@ -40,6 +40,8 @@ export function usePortfolioState({
   const [dividendLinks, setDividendLinks] = useState(
     () => Array.from({ length: 7 }, () => ({ initial: '', url: '' }))
   );
+  // 마지막으로 반영한 관리자 공유 링크(utils.mergeSharedDividendLinks의 seen) — null = 아직 한 번도 반영 안 함.
+  const [dividendLinksSeen, setDividendLinksSeen] = useState(null);
   const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
   // 입출금 표 기본 = 일자 최신순(▼) — 맨 윗줄 합계가 총합계다(utils.ledgerRowsWithRunningSum).
   const [depositSortConfig, setDepositSortConfig] = useState({ key: 'date', direction: -1 });
@@ -1168,6 +1170,7 @@ export function usePortfolioState({
     customLinks, setCustomLinks,
     overseasLinks, setOverseasLinks,
     dividendLinks, setDividendLinks,
+    dividendLinksSeen, setDividendLinksSeen,
     lookupRows, setLookupRows,
     hiddenColumnsPortfolio, hiddenColumnsRebalancing,
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,

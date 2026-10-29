@@ -91,7 +91,7 @@ import {
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries, evalSeriesDates,
   externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt, resolveHoldings, depositRowEval, krwFlowRateOf,
   buildBookCostSeries, bookDeltaBetween, computeDailyMetricsSeries,
-  noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
+  noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, parseSharedDividendLinks, mergeSharedDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows, analyzeTransferMerge,
   depositRowOf, transferableCashOf, cashTransferBlockReason, depositKrwOf,
@@ -297,6 +297,11 @@ export default function App() {
   //    (관리자 페이지 진입 직후 URL을 붙여넣고 바로 저장하면 재현). 저장 이후에는 로드 반영을 건너뛴다.
   const settingsWrittenRef = useRef(false);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
+  // ── 분배금 링크 공유(관리자 → 분배금 사용자) ── 아래 '분배금 링크 공유' effect 두 개 참조.
+  // STATE를 정상으로 불러온 계정 이메일(소문자) — 로드 전·실패·계정 전환 직후의 기본값(빈 7칸)을 배포하거나 병합하지 않는 게이트.
+  const [divLinksBootFor, setDivLinksBootFor] = useState<string | null>(null);
+  const [sharedDividendLinks, setSharedDividendLinks] = useState<any[] | null>(null);   // 설정 시트의 관리자 링크(세션 메모리)
+  const [dividendLinksShareStatus, setDividendLinksShareStatus] = useState<'idle' | 'saving' | 'ok' | 'fail'>('idle');
   const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
   const adminTargetNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 목표 비중 공지는 관리자 접속(impersonation) 세션당 1회만 — 발송 완료한 대상 이메일을 래치.
@@ -329,6 +334,8 @@ export default function App() {
   const handleLoginApproved = (email: string, token: string, features: UserFeatures) => {
     setAdminViewingAs(null);
     adminViewingAsRef.current = null;
+    setDivLinksBootFor(null);
+    setSharedDividendLinks(null);
     adminTransitioningRef.current = false;
     // 새 접속 세션 시작 — 목표 비중 공지 1회 래치 해제(같은 사용자로 재접속하면 다시 1건 발송 가능)
     if (adminTargetNotifTimerRef.current) {
@@ -911,6 +918,7 @@ export default function App() {
     customLinks, setCustomLinks,
     overseasLinks, setOverseasLinks,
     dividendLinks, setDividendLinks,
+    dividendLinksSeen, setDividendLinksSeen,
     lookupRows, setLookupRows,
     hiddenColumnsPortfolio, hiddenColumnsRebalancing,
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
@@ -1076,6 +1084,7 @@ export default function App() {
     setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
     setDividendLinks(normalizeDividendLinks(stateData.dividendLinks));
+    setDividendLinksSeen(Array.isArray(stateData.dividendLinksSeen) ? normalizeDividendLinks(stateData.dividendLinksSeen) : null);
     if (stateData.adminAccessAllowed !== undefined) setAdminAccessAllowed(stateData.adminAccessAllowed);
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
@@ -3663,6 +3672,56 @@ export default function App() {
     } catch { return false; }
   };
 
+  // ── 분배금 링크 공유 ① 관리자 → 설정 시트(dividendLinks) ──
+  // 관리자 본인 STATE의 7칸이 정본이다. 정상 로드 뒤 세션 첫 1회 + 바뀔 때마다(1.5초 디바운스) 시트에 쓴다.
+  // ⚠️ divLinksBootFor 게이트를 빼지 말 것 — 로드 전·실패·접속(impersonation) 복귀 직후의 기본값(빈 7칸)이나
+  //    남의 링크가 배포되면 모든 분배금 사용자의 공유 칸이 그 값으로 덮인다.
+  // ⚠️ 배포는 한 줄로 직렬화한다(Apps Script 응답이 수 초라, 겹치면 먼저 보낸 옛 값이 나중에 기록될 수 있다).
+  const divLinksLatestRef = useRef('');
+  const divLinksDeployedRef = useRef('');
+  const divLinksChainRef = useRef<Promise<void>>(Promise.resolve());
+  const isRealAdmin = !!authUser && !adminViewingAs && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  useEffect(() => {
+    if (!isRealAdmin || divLinksBootFor !== authUser.email.toLowerCase()) return;
+    const json = JSON.stringify(normalizeDividendLinks(dividendLinks));
+    divLinksLatestRef.current = json;
+    if (json === divLinksDeployedRef.current) return;
+    const t = setTimeout(() => {
+      divLinksChainRef.current = divLinksChainRef.current.then(async () => {
+        const v = divLinksLatestRef.current;
+        if (v === divLinksDeployedRef.current) return;
+        setDividendLinksShareStatus('saving');
+        const ok = await deploySettingToSheet('dividendLinks', v);
+        if (ok) divLinksDeployedRef.current = v;
+        setDividendLinksShareStatus(ok ? 'ok' : 'fail');
+      });
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [isRealAdmin, divLinksBootFor, dividendLinks]);
+
+  // ── 분배금 링크 공유 ② 설정 시트 → 분배금 사용자(feature3) — 칸별 병합(utils.mergeSharedDividendLinks) ──
+  // 결과 seen(dividendLinksSeen)은 STATE에 저장된다 — 다음 접속에서 '관리자가 바꾼 칸'만 골라 덮는 기준이다.
+  // 관리자 접속(impersonation) 중에는 사용자 데이터를 바꾸지 않는다.
+  useEffect(() => {
+    if (!authUser || adminViewingAs || !sharedDividendLinks || !userFeatures.feature3) return;
+    if (authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return;
+    if (divLinksBootFor !== authUser.email.toLowerCase()) return;
+    const r = mergeSharedDividendLinks(dividendLinks, sharedDividendLinks, dividendLinksSeen);
+    if (!r) return;
+    if (r.changed) setDividendLinks(r.links);
+    if (r.seenChanged) setDividendLinksSeen(r.seen);
+  }, [authUser, adminViewingAs, sharedDividendLinks, userFeatures.feature3, divLinksBootFor, dividendLinks, dividendLinksSeen]);
+
+  const dividendLinksNote = isRealAdmin
+    ? (dividendLinksShareStatus === 'fail'
+      ? { tone: 'error', text: '분배금 사용자 공유 실패 — Apps Script 최신 코드 배포가 필요할 수 있습니다' }
+      : dividendLinksShareStatus === 'saving'
+        ? { tone: 'info', text: '분배금 사용자에게 공유하는 중…' }
+        : dividendLinksShareStatus === 'ok'
+          ? { tone: 'ok', text: '분배금 사용자에게 공유됨' }
+          : { tone: 'info', text: '이 링크는 분배금 사용자에게 공유됩니다' })
+    : (dividendLinksSeen ? { tone: 'info', text: '관리자가 공유한 링크입니다. 관리자가 같은 칸을 바꾸면 그 칸은 관리자 값으로 바뀝니다.' } : null);
+
   const handleSetYoutubeUrl = async (url: string) => {
     // 관리자 Drive가 정본 — Apps Script 상태와 무관하게 즉시 반영
     const err = await writeAppSettings({ youtubeUrl: url });
@@ -3898,6 +3957,7 @@ export default function App() {
       //    '파일 없음'(신규 사용자)은 정당한 빈 장부라 ready, 로드 **실패**는 error로 잠근다 —
       //    Drive엔 기록이 있는데 못 읽은 상태에서 편집을 허용하면 다음 저장이 그 기록을 덮는다.
       setLedgerDataState(syncStatusRef.current === 'error' ? 'error' : 'ready');
+      if (syncStatusRef.current !== 'error') setDivLinksBootFor(authUser.email.toLowerCase());
 
       // ⚠️ 여기서 오버레이를 닫지 않는다(사용자 확정 2026-09) — 로딩 팝업이 '과거 종가 동기화'까지 담당하고,
       //    닫히는 순간 앱이 완전한 상태여야 한다. 해제는 아래 '정착(settled) 시 해제' effect 한 곳이 맡는다.
@@ -3975,6 +4035,7 @@ export default function App() {
             setYoutubeUrl(yu);
             if (Array.isArray(nl)) setNotebookLinks(nl);
             if (Array.isArray(rl)) setReportUrl(ru);
+            if (!isAdmin) setSharedDividendLinks(parseSharedDividendLinks(settingsData.dividendLinks));
             // 관리자: Drive에 저장 (이후 Drive가 정본으로 동작)
             // 일반 사용자: Drive에 캐시 저장
             // ⚠️ 읽기가 실패한 세션에서는 저장을 건너뛴다 — 파일 내용을 모르는 채로 전체 교체하면
@@ -4232,7 +4293,7 @@ export default function App() {
       //    portfolioUpdatedAt이 오르지 않아 STATE 저장 가드에 막혀 조용히 유실됐다
       //    (historyVerifyKey·investmentNotesKey·calendarMemos·targetAmount와 동일 버그 클래스).
       //    customLinks처럼 raw로 둘 것 — 바깥 JSON.stringify가 배열을 그대로 직렬화한다.
-      activePortfolioId, customLinks, overseasLinks, JSON.stringify(dividendLinks),
+      activePortfolioId, customLinks, overseasLinks, JSON.stringify(dividendLinks), JSON.stringify(dividendLinksSeen),
       JSON.stringify(calendarMemos),
       JSON.stringify(watchlistGroups),
       // ⚠️ 흐름도 지문 — 없으면 portfolioUpdatedAt이 안 올라 STATE 저장이 통째로 스킵된다
@@ -4274,7 +4335,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, rebalExtraQtyMap, rebalMaxAddLinkMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, dividendLinksSeen, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, rebalExtraQtyMap, rebalMaxAddLinkMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -4289,7 +4350,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, rebalExtraKey, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, dividendLinksSeen, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, rebalExtraKey, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -5159,6 +5220,7 @@ export default function App() {
             onDividendTaxHistoryUpdate={setDividendTaxHistory}
             dividendLinks={dividendLinks}
             setDividendLinks={setDividendLinks}
+            dividendLinksNote={dividendLinksNote}
             onExpand={() => openCardWindow('dividend', activePortfolioId)}
             cardWindowOpen={cardWinOpenSet.has(`dividend:${activePortfolioId}`)}
           />

@@ -1,6 +1,6 @@
 // ============================================================
 //  Google Apps Script — 계정 관리 (arui114501@gmail.com 전용)
-//  최종 갱신: 2026-08-04 (백테스트 기능 추가 — L열)
+//  최종 갱신: 2026-10-29 (settings 시트 dividendLinks — 관리자 분배금 링크를 분배금 사용자에게 공유)
 //
 //  [구글 보안 정책 준수 사항]
 //  - 구글 시트를 비공개로 유지 (공개 링크 불필요)
@@ -26,6 +26,7 @@
 //
 //  [settings 시트: A=key  B=value]
 //    youtubeUrl / notebookLinks / reportLinks / youtubeUrlHistory
+//    dividendLinks — 분배금 현황 사이트 링크 7칸(JSON) ★신규(2026-10-29) — 관리자 앱이 자동으로 쓴다
 //
 //  [적용 방법]
 //  1. script.google.com → 기존 프로젝트 열기
@@ -160,7 +161,7 @@ function handleGetSettings() {
   try {
     const ss = SpreadsheetApp.openById(SHEET_ID);
     let sheet = ss.getSheetByName(SETTINGS_SHEET);
-    if (!sheet) return jsonResponse({ youtubeUrl: '', notebookLinks: [], reportLinks: [], youtubeUrlHistory: [] });
+    if (!sheet) return jsonResponse({ youtubeUrl: '', notebookLinks: [], reportLinks: [], youtubeUrlHistory: [], dividendLinks: [] });
     const data = sheet.getDataRange().getValues();
     const map = {};
     for (const row of data) {
@@ -171,6 +172,7 @@ function handleGetSettings() {
       notebookLinks:     safeParseJson(map['notebookLinks'], []),
       reportLinks:       safeParseJson(map['reportLinks'], []),
       youtubeUrlHistory: safeParseJson(map['youtubeUrlHistory'], []),
+      dividendLinks:     safeParseJson(map['dividendLinks'], []),
     });
   } catch (err) {
     return jsonResponse({ youtubeUrl: '', notebookLinks: [], reportLinks: [], error: err.toString() });
@@ -287,7 +289,7 @@ function handleSetReset(email, value) {
 }
 
 function handleSetSettings(key, value) {
-  const allowed = { youtubeUrl: true, notebookLinks: true, reportLinks: true, youtubeUrlHistory: true, feature1Label: true };
+  const allowed = { youtubeUrl: true, notebookLinks: true, reportLinks: true, youtubeUrlHistory: true, feature1Label: true, dividendLinks: true };
   if (!allowed[key]) return jsonResponse({ success: false, error: 'invalid key: ' + key });
   try {
     const ss = SpreadsheetApp.openById(SHEET_ID);
