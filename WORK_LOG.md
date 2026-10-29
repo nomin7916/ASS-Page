@@ -1,10 +1,23 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-10-28  
+> 마지막 작업일: 2026-10-29  
 > 브랜치: main  
-> 작업 PC: 사용자 Mac mini 로컬 세션(node 없음 — python3 대체 검증)
+> 작업 PC: 클라우드 세션(node 있음 · node_modules 없음 — build 실행 불가)
 
 ---
+
+## 2026-10-29 — [계좌 차트] '백테스트(현재비중)' 버튼·선 삭제
+
+**대상 파일**: `src/components/PortfolioChart.tsx` · `src/hooks/useHistoryChart.ts` · `src/hooks/useChartInteraction.ts` · `src/App.tsx`
+
+> 자산 백테스트 버튼 및 기능 삭제합니다.
+
+- 계좌 차트 도구막대의 주황 색상칸 + 시계 아이콘 버튼(현재 종목·비중을 조회시작부터 투자했을 때 수익률)을 삭제.
+- 함께 지운 것: 차트의 점선 영역(`backtestRate`)·구간 정보의 '백테스트 +x.xx%' 줄·그라데이션, App의 날짜별
+  가중 수익률 계산, 구간 수익률(`backtestPeriodRate`) 두 곳, 상태 `showBacktest`/`backtestColor`와 그 저장·복원
+  (chartPrefs·계좌별 차트 상태). 옛 저장본에 남은 두 값은 읽지 않으므로 무해하다.
+- **별도 창 '리밸런싱 백테스트'(상단 아이콘, `BacktestPage`)는 다른 기능이라 그대로 둔다.**
+- 검증: gate 전체 통과 · build 실행 불가(클라우드, node_modules 없음) · 전역 typescript로 네 파일 구문 검사 0건.
 
 ## 2026-10-28 — [통합] 통합 계좌 현황 순서 변경을 ▲▼ 화살표 → 손잡이 드래그로
 

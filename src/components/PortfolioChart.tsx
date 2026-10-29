@@ -1,6 +1,6 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect, useMemo } from 'react';
-import { Settings, Search, BarChart2, Percent, History, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
+import { Settings, Search, BarChart2, Percent, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates, externalFlowInRange, selectionDimBands } from '../utils';
 import { CHART_SELECTION } from '../design';
@@ -19,8 +19,6 @@ export default function PortfolioChart({
   chartPeriod, setChartPeriod,
   showTotalEval, setShowTotalEval,
   showReturnRate, setShowReturnRate,
-  showBacktest, setShowBacktest,
-  backtestColor, setBacktestColor,
   isAvgPriceMode, setIsAvgPriceMode,
   showCalcVerify, setShowCalcVerify,
   showMarketPanel, setShowMarketPanel,
@@ -269,24 +267,6 @@ export default function PortfolioChart({
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
               title="기간 수익률(%) 표시 — 조회시작을 0%로 두고 입출금 영향을 제거한 순수 시장 수익률(TWR)입니다. 입금·출금이 있어도 곡선이 왜곡되지 않습니다."
             ><Percent size={14} /></button>
-            <div
-              className="flex items-stretch rounded border overflow-hidden transition-colors"
-              style={{ borderColor: showBacktest ? backtestColor + '80' : '#374151', height: '29px' }}
-            >
-              <div
-                className="relative w-[10px] shrink-0 cursor-pointer hover:opacity-75 transition-opacity"
-                style={{ backgroundColor: backtestColor }}
-                title="백테스트 선 색상 변경"
-              >
-                <input type="color" value={backtestColor} onChange={e => setBacktestColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-              </div>
-              <button
-                onClick={() => setShowBacktest(!showBacktest)}
-                className="px-2 flex items-center justify-center transition-colors hover:opacity-80"
-                style={{ color: showBacktest ? backtestColor : '#6b7280', backgroundColor: showBacktest ? backtestColor + '18' : '#1e293b' }}
-                title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률 (백테스트)"
-              ><History size={13} /></button>
-            </div>
             {activePortfolioAccountType !== 'gold' && (<>
               <div className="w-px h-3 bg-gray-700 mx-0.5" />
               <button
@@ -660,15 +640,6 @@ export default function PortfolioChart({
                       <span className="text-[10px] text-gray-500 whitespace-nowrap">입출금 내역 또는 투자 원금 입력 필요</span>
                     )}
                   </div>
-                  {showBacktest && displayResult.backtestPeriodRate != null && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                      <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />
-                      <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">백테스트</span>
-                      <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.backtestPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                        {displayResult.backtestPeriodRate > 0 ? '+' : ''}{displayResult.backtestPeriodRate.toFixed(2)}%
-                      </span>
-                    </div>
-                  )}
                 </div>
                 {compStocks.some(c => c.active && c.code) && (
                   <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
@@ -823,10 +794,6 @@ export default function PortfolioChart({
                 <stop offset="50%" stopColor="#ff453a" stopOpacity={0.1}/>
                 <stop offset="100%" stopColor="#ff453a" stopOpacity={0.02}/>
               </linearGradient>
-              <linearGradient id="backtestGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={backtestColor} stopOpacity={0.35}/>
-                <stop offset="95%" stopColor={backtestColor} stopOpacity={0.02}/>
-              </linearGradient>
               <linearGradient id="goldKrGradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor={goldIndicatorColors.goldKr} stopOpacity={0.4}/>
                 <stop offset="95%" stopColor={goldIndicatorColors.goldKr} stopOpacity={0.02}/>
@@ -961,7 +928,6 @@ export default function PortfolioChart({
             {userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks.map((comp, idx) =>
               comp.active ? <Line key={comp.id} yAxisId="left" type="monotone" dataKey={`comp${idx + 1}Rate`} name={comp.name} stroke={comp.color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} /> : null
             )}
-            {showBacktest && <Area isAnimationActive={false} yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke={backtestColor} strokeWidth={2} fill="url(#backtestGradient)" strokeDasharray="6 3" dot={false} connectNulls />}
             {depositMarkers.map((evt, i) => (
               <ReferenceLine key={`dep-${i}`} yAxisId="left" x={evt.date} stroke="#22c55e" strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.7}
                 label={({ viewBox }) => {

@@ -15,8 +15,6 @@ export function useHistoryChart() {
   const [anchorDate, setAnchorDate] = useState('');
   const [showTotalEval, setShowTotalEval] = useState(true);
   const [showReturnRate, setShowReturnRate] = useState(true);
-  const [showBacktest, setShowBacktest] = useState(false);
-  const [backtestColor, setBacktestColor] = useState('#f97316');
   const [isAvgPriceMode, setIsAvgPriceMode] = useState(false);
   const [showCalcVerify, setShowCalcVerify] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState(null);
@@ -70,8 +68,6 @@ export function useHistoryChart() {
     anchorDate, setAnchorDate,
     showTotalEval, setShowTotalEval,
     showReturnRate, setShowReturnRate,
-    showBacktest, setShowBacktest,
-    backtestColor, setBacktestColor,
     isAvgPriceMode, setIsAvgPriceMode,
     showCalcVerify, setShowCalcVerify,
     hoveredPoint, setHoveredPoint,

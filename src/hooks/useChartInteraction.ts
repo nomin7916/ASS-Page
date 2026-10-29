@@ -145,9 +145,6 @@ export function useChartInteraction({
         ? (sp != null && ep != null ? ep - sp : null)
         : (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
     });
-    const backtestPeriodRate = (sData.backtestRate != null && eData.backtestRate != null)
-      ? ((100 + eData.backtestRate) / (100 + sData.backtestRate) - 1) * 100
-      : null;
     const sPrin = Number(sData.principalAmount) || 0;
     const ePrin = Number(eData.principalAmount) || 0;
     return {
@@ -159,7 +156,6 @@ export function useChartInteraction({
       kospiPeriodRate: sData.kospiPoint > 0 ? ((eData.kospiPoint / sData.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: sData.sp500Point > 0 ? ((eData.sp500Point / sData.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: sData.nasdaqPoint > 0 ? ((eData.nasdaqPoint / sData.nasdaqPoint) - 1) * 100 : null,
-      backtestPeriodRate,
       principalReturnRateAtEnd: eData.principalReturnRate ?? null,
       principalAtEnd: eData.principalAmount ?? null,
       // 조회시작 0%(TWR) 모드 전용 구간 수익률 — 라인이 재베이스된 누적 TWR이므로 구간값은

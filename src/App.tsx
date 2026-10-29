@@ -694,7 +694,7 @@ export default function App() {
   const applyBackupDataRef = useRef<Function | null>(null);
   const refreshPricesRef = useRef<Function | null>(null);
   // 계좌별 차트 상태 독립 관리
-  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false, showTotalEval: true, showReturnRate: true, histPeriod: 'day' });
+  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, showTotalEval: true, showReturnRate: true, histPeriod: 'day' });
   const accountChartStatesRef = useRef<Record<string, any>>({});
   const intDashCompStocksRef = useRef<any[]>(defaultCompStocks);
   // ── 리밸런싱 목표비중 → 메모 달력 자동 기록 ──
@@ -760,8 +760,6 @@ export default function App() {
     anchorDate, setAnchorDate,
     showTotalEval, setShowTotalEval,
     showReturnRate, setShowReturnRate,
-    showBacktest, setShowBacktest,
-    backtestColor, setBacktestColor,
     isAvgPriceMode, setIsAvgPriceMode,
     showCalcVerify, setShowCalcVerify,
     hoveredPoint, setHoveredPoint,
@@ -1110,8 +1108,6 @@ export default function App() {
       if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
       if (stateData.chartPrefs.goldIndicatorColors) setGoldIndicatorColors(stateData.chartPrefs.goldIndicatorColors);
       if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
-      if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
-      if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
       if (stateData.chartPrefs.sectionCollapsedMap) {
         const _secMap = unhideCardsOnce(stateData.chartPrefs.sectionCollapsedMap);
         setSectionCollapsedMap(_secMap);
@@ -1269,8 +1265,6 @@ export default function App() {
       if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
       if (stateData.chartPrefs.goldIndicatorColors) setGoldIndicatorColors(stateData.chartPrefs.goldIndicatorColors);
       if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
-      if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
-      if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
       if (stateData.chartPrefs.sectionCollapsedMap) {
         const _secMap = unhideCardsOnce(stateData.chartPrefs.sectionCollapsedMap);
         setSectionCollapsedMap(_secMap);
@@ -1340,8 +1334,6 @@ export default function App() {
       chartPeriod,
       dateRange,
       appliedRange,
-      backtestColor,
-      showBacktest,
       // ⚠️ 평가자산·수익률 토글은 **반드시 여기 있어야** 계좌별로 분리된다. 과거엔 app 레벨
       //    chartPrefs에만 있어서, A계좌에서 켠 버튼이 B계좌로 그대로 새어 나갔다(계좌 전환
       //    이펙트가 저장도 복원도 하지 않았다). 비교종목·시장지표·조회기간과 같은 등급이다.
@@ -1353,13 +1345,13 @@ export default function App() {
       //    동작하던 문제도 함께 사라진다. 통합 대시보드(intHistPeriod)는 종전대로 별도 값이다.
       histPeriod: acctHistPeriod,
     };
-  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, compStocks, chartPeriod, dateRange, appliedRange, backtestColor, showBacktest, showTotalEval, showReturnRate, acctHistPeriod]);
+  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, compStocks, chartPeriod, dateRange, appliedRange, showTotalEval, showReturnRate, acctHistPeriod]);
 
   // 차트 설정 변경 시 chartPrefsUpdatedAt 갱신 — Drive STATE 저장 트리거용
   useEffect(() => {
     if (isInitialLoad.current) return;
     chartPrefsUpdatedAtRef.current = Date.now();
-  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, compStocks]);
+  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, compStocks]);
 
   // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
@@ -1388,9 +1380,6 @@ export default function App() {
         if (saved.chartPeriod) setChartPeriod(saved.chartPeriod);
         setDateRange(saved.dateRange || { start: '', end: '' });
         setAppliedRange(saved.appliedRange || { start: '', end: '' });
-        // 백테스트 색상 복원
-        if (saved.backtestColor) setBacktestColor(saved.backtestColor);
-        if (saved.showBacktest !== undefined) setShowBacktest(saved.showBacktest);
         // 평가자산·수익률 복원 — 필드가 없는 옛 저장본은 컴포넌트 기본값(둘 다 true)으로 폴백해야
         // 한다. `saved.showTotalEval`(undefined)을 그대로 넣으면 버튼이 꺼진 채로 뜨고,
         // '그대로 두기'로 폴백하면 마이그레이션 첫 한 바퀴 동안 원래의 누수가 그대로 보인다.
@@ -1408,8 +1397,6 @@ export default function App() {
         setChartPeriod(defaultPeriod);
         setDateRange({ start: '', end: '' });
         setAppliedRange({ start: '', end: '' });
-        setBacktestColor('#f97316');
-        setShowBacktest(false);
         // 처음 방문하는 계좌는 직전 계좌의 토글을 물려받지 않는다(useHistoryChart 기본값과 동일).
         setShowTotalEval(true);
         setShowReturnRate(true);
@@ -1985,38 +1972,13 @@ export default function App() {
         };
       });
     })();
-    // 백테스트: 현재 종목·비중을 조회기간 시작일부터 투자했을 경우 수익률
-    const backtestItems = portfolio.filter(item => item.type === 'stock' && item.code && stockHistoryMap[item.code]);
-    const backtestTotalEval = backtestItems.reduce((s, item) => s + cleanNum(item.currentPrice) * cleanNum(item.quantity), 0);
-    const backtestBasePrices: Record<string, number | null> = {};
-    if (filteredDates.length > 0 && backtestTotalEval > 0) {
-      const firstDate = filteredDates[0];
-      backtestItems.forEach(item => {
-        backtestBasePrices[item.code] = getClosestValue(stockHistoryMap[item.code], firstDate);
-      });
-    }
     return zeroBasedData.map(item => {
       const scaled = {};
       INDICATOR_CHART_KEYS.forEach(k => {
         const r = item[`${k}Rate`];
         if (r != null) scaled[`${k}RateScaled`] = r * (indicatorScales[k] || 1);
       });
-      let backtestRate: number | null = null;
-      if (backtestItems.length > 0 && backtestTotalEval > 0) {
-        let weightedReturn = 0;
-        let coveredWeight = 0;
-        backtestItems.forEach(btItem => {
-          const basePrice = backtestBasePrices[btItem.code];
-          const curPrice = getClosestValue(stockHistoryMap[btItem.code], item.date);
-          const w = (cleanNum(btItem.currentPrice) * cleanNum(btItem.quantity)) / backtestTotalEval;
-          if (basePrice && basePrice > 0 && curPrice) {
-            weightedReturn += w * ((curPrice / basePrice) - 1) * 100;
-            coveredWeight += w;
-          }
-        });
-        if (coveredWeight > 0.01) backtestRate = weightedReturn / coveredWeight;
-      }
-      return { ...item, ...scaled, backtestRate };
+      return { ...item, ...scaled };
     });
   }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, activePortfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, indicatorHistoryMap, activeCloseEvalByDate, accountTwrByDate, accountCumProfitByDate]);
 
@@ -4312,7 +4274,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, rebalExtraQtyMap, rebalMaxAddLinkMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, rebalExtraQtyMap, rebalMaxAddLinkMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -4327,7 +4289,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, rebalExtraKey, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, rebalExtraKey, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, watchlistView, watchlistSize, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -4550,8 +4512,6 @@ export default function App() {
       const sp = s[`${k}Point`]; const ep = e[`${k}Point`];
       indRates[`${k}PeriodRate`] = sp == null ? null : indRateOf(k, ep, sp);
     });
-    const backtestPeriodRate = (s.backtestRate != null && e.backtestRate != null)
-      ? ((100 + e.backtestRate) / (100 + s.backtestRate) - 1) * 100 : null;
     const compRates = Object.fromEntries(compStocks.map((_, ci) => {
       const pk = `comp${ci + 1}Point`;
       return [`comp${ci + 1}PeriodRate`, (s[pk] > 0 && e[pk] != null) ? ((e[pk] / s[pk]) - 1) * 100 : null];
@@ -4560,7 +4520,6 @@ export default function App() {
       startDate: s.date, endDate: e.date, profit,
       rate: s.evalAmount > 0 ? (profit / s.evalAmount) * 100 : 0,
       startEval: s.evalAmount, endEval: e.evalAmount,
-      backtestPeriodRate,
       kospiPeriodRate: s.kospiPoint > 0 ? ((e.kospiPoint / s.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: s.sp500Point > 0 ? ((e.sp500Point / s.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
@@ -5253,10 +5212,6 @@ export default function App() {
             setShowTotalEval={setShowTotalEval}
             showReturnRate={showReturnRate}
             setShowReturnRate={setShowReturnRate}
-            showBacktest={showBacktest}
-            setShowBacktest={setShowBacktest}
-            backtestColor={backtestColor}
-            setBacktestColor={setBacktestColor}
             isAvgPriceMode={isAvgPriceMode}
             setIsAvgPriceMode={setIsAvgPriceMode}
             showCalcVerify={showCalcVerify}
