@@ -885,10 +885,19 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
 
   // ── 차트 렌더 ──
   // ⚠️ 종목 코드를 선 dataKey로 쓰면 'BRK.B'의 점이 recharts 경로로 해석돼 선이 사라진다.
-  ok('#G85b 마우스 위치 값마다 가로줄 + 점 + 왼쪽 값 표시(수익률·종가 모드 모두) · 구간 선택 중엔 끔',
+  ok('#G85b 마우스 위치 값마다 가로줄 + 점 + 눈금 쪽 값 표시(수익률·종가 모드 모두) · 구간 선택 중엔 끔',
     /const hoverLevels = !hover \|\| dim \? \[\] : shown\.flatMap\(/.test(CW) && /row\[mode === 'pct' \? s\.key : `px:\$\{s\.key\}`\]/.test(CW)
-    && /<ReferenceLine key=\{`hl-\$\{h\.key\}`\} y=\{h\.v\}/.test(CW) && /<ReferenceDot key=\{`hd-\$\{h\.key\}`\} x=\{hover\} y=\{h\.v\}/.test(CW)
-    && /position: 'left'/.test(CW) && /ReferenceLine, ReferenceDot, Tooltip as RechartsTooltip \} from 'recharts';/.test(CW));
+    && /<ReferenceLine key=\{`hl-\$\{h\.key\}`\} y=\{h\.v\} yAxisId=\{h\.axisId\}/.test(CW) && /<ReferenceDot key=\{`hd-\$\{h\.key\}`\} x=\{hover\} y=\{h\.v\} yAxisId=\{h\.axisId\}/.test(CW)
+    && /position: h\.axisId === RIGHT_AXIS \? 'right' : 'left'/.test(CW) && /ReferenceLine, ReferenceDot, Tooltip as RechartsTooltip \} from 'recharts';/.test(CW));
+  // ⚠️ 종가 보기도 비교 종목을 함께 그린다(사용자 요청 2026-10-30 — 옛 '기준 종목만'(series.slice(0, 1)) 금지).
+  //    통화가 다른 종목(원화 ↔ 달러)은 오른쪽 눈금 — 선·매입가 선·호버 선/점이 모두 자기 시리즈의 yAxisId를 따라가야
+  //    한 종목의 점선·호버 점이 남의 눈금 높이에 찍히지 않는다.
+  ok('#G85c 종가 보기도 모든 종목 · 통화 다르면 오른쪽 눈금(RIGHT_AXIS) · 선·매입가 선이 시리즈 눈금을 따른다',
+    !/series\.slice\(0, 1\)/.test(CW)
+    && /const shown = series\.map\(\(s\) => \(\{ \.\.\.s, axisId: mode === 'price' && isUsd\(s\.market\) !== isUsd\(main\.market\) \? RIGHT_AXIS : 0 \}\)\);/.test(CW)
+    && /\{rightS && \(\s*\n\s*<YAxis yAxisId=\{RIGHT_AXIS\} orientation="right"[^\n]*fmtWatchPrice\(rightS\.market, v\)/.test(CW)
+    && /dataKey=\{mode === 'pct' \? s\.key : `px:\$\{s\.key\}`\}\s*\n\s*yAxisId=\{s\.axisId\}/.test(CW)
+    && /<ReferenceLine key=\{l\.key\} y=\{l\.v\} yAxisId=\{l\.s\.axisId\}/.test(CW));
   ok('#G85 선 dataKey 는 시리즈 키(s0…) — 종목 코드 금지', /const seriesKey = \(i\) => `s\$\{i\}`;/.test(CW)
     && /dataKey=\{mode === 'pct' \? s\.key : `px:\$\{s\.key\}`\}/.test(CW));
   {
@@ -978,10 +987,12 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   ok('#G98 미니차트 매입가 = 그 행의 보유분 합산(holdingsFor → holdingAvg) · holdingLayout(40%)로 눈금/가장자리 결정',
     /const hold = holdingsFor\(holdings, s\.code, s\.market\);/.test(P) && /const holdSum = holdingAvg\(hold\);/.test(P)
     && /holdingLayout\(min, max, \[avg\], 0\.4\)/.test(P));
-  ok('#G99 차트 창 매입가 선 — 계좌마다(holdingsFor) · 수익률 보기는 holdingPct · holdingLayout(40% — 미니차트와 같은 규칙)',
+  ok('#G99 차트 창 매입가 선 — 계좌마다(holdingsFor) · 수익률 보기는 holdingPct · 눈금마다 holdingLayout(40% — 미니차트와 같은 규칙)',
     /hold: holdingsFor\(holdings, s\.code, s\.market\),/.test(CW)
     && /const v = mode === 'pct' \? holdingPct\(h\.avg, base\) : h\.avg;/.test(CW)
-    && /holdingLayout\([^;]*avgLines\.map\(\(l\) => l\.v\), 0\.4\)/.test(CW));
+    && /if \(s\.axisId !== ax\) continue;/.test(CW)
+    && /holdingLayout\([^;]*avgLines\.map\(\(l\) => \(l\.s\.axisId === ax \? l\.v : NaN\)\), 0\.4\)/.test(CW)
+    && /avgLines\.forEach\(\(l, i\) => \{ if \(l\.s\.axisId === ax\) pins\[i\] = lay\.pins\[i\]; \}\);/.test(CW));
   // ⚠️ 눈금을 넓히는 선(extendDomain)은 holdingLayout이 받아들인 것만 — 먼 매입가까지 넓히면 시세가 납작해진다.
   ok('#G99b 눈금 안 선만 ReferenceLine(extendDomain), 범위 밖은 가장자리 표시',
     /\{avgLines\.map\(\(l, i\) => avgLayout\.pins\[i\] === '' && \(\s*\n\s*<ReferenceLine key=\{l\.key\} y=\{l\.v\}[^>]*ifOverflow="extendDomain"/.test(CW)

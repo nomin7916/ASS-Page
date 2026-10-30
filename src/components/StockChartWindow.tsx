@@ -41,6 +41,9 @@ const rateCls = (r) => (r == null ? 'text-gray-500' : r > 0 ? 'text-red-400' : r
 const fmtPct = (r) => (r == null || !Number.isFinite(r) ? '-' : `${r > 0 ? '+' : ''}${r.toFixed(2)}%`);
 // 선 데이터 키는 's0'…'s8' — 종목 코드를 그대로 쓰면 'BRK.B' 같은 점이 recharts 경로로 해석된다.
 const seriesKey = (i) => `s${i}`;
+// 종가 보기의 오른쪽 눈금 id — 왼쪽은 recharts 기본(0)이라 딤·시작점·0% 선은 yAxisId 없이 그대로 왼쪽을 쓴다.
+const RIGHT_AXIS = 'R';
+const isUsd = (market) => market === 'us';
 // 보유 매입가 물음 주기 — 앱에서 종목을 사고팔거나 계좌를 고치면 이 주기 안에 선이 따라온다.
 const HOLD_PING_MS = 4000;
 // 국내 원화 매입가는 포트폴리오 테이블처럼 원 단위로 반올림해 보인다(선 높이는 반올림 전 값).
@@ -245,14 +248,17 @@ function StockChartPage() {
   }), [all, quotes, dailyMap, view, cutoff, today, holdings]);
 
   const rows = useMemo(() => buildChartRows(series.map((s) => ({ key: s.key, win: s.win }))), [series]);
-  const shown = mode === 'price' ? series.slice(0, 1) : series;
+  // 종가 보기도 모든 종목을 겹쳐 그린다 — 통화가 같은 종목끼리 한 눈금(실제 가격 그대로 비교),
+  // 기준 종목과 통화가 다른 종목(원화 ↔ 달러)만 오른쪽 눈금. 수익률 보기는 전부 왼쪽(%) 하나.
+  const shown = series.map((s) => ({ ...s, axisId: mode === 'price' && isUsd(s.market) !== isUsd(main.market) ? RIGHT_AXIS : 0 }));
+  const rightS = shown.find((s) => s.axisId === RIGHT_AXIS);
   const dim = sel.left && sel.right ? selectionDimBands(rows, sel.left, sel.right) : null;
   // 마우스가 가리키는 날짜의 값마다 가로줄(수익률 차트와 같은 방식) — 그 값이 차트 전체에서 어느 시기와 같은 높이인지 보이게.
   //   구간 선택(딤) 중에는 끄고, 그날 값이 없는 시리즈(휴장 등)는 건너뛴다
   const hoverLevels = !hover || dim ? [] : shown.flatMap((s) => {
     const row = rows.find((x) => x.date === hover);
     const v = row ? row[mode === 'pct' ? s.key : `px:${s.key}`] : null;
-    return v == null || !Number.isFinite(v) ? [] : [{ key: s.key, color: s.color, v, text: mode === 'pct' ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : fmtWatchPrice(s.market, v) }];
+    return v == null || !Number.isFinite(v) ? [] : [{ key: s.key, axisId: s.axisId, color: s.color, v, text: mode === 'pct' ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : fmtWatchPrice(s.market, v) }];
   });
   // ── 보유 매입가 가로선(계좌마다 한 줄, 그 종목 선 색 점선) ──
   // 수익률 보기: 그 종목 구간 첫 종가(= buildChartRows의 0% 기준)로 환산한 높이 · 종가 보기: 매입가 그대로.
@@ -269,14 +275,21 @@ function StockChartPage() {
   });
   const avgMulti = avgLines.length > 1;
   const avgText = (l) => `매입가 ${fmtAvg(l.s.market, l.h.avg)}${l.ret != null ? ` · ${fmtPct(l.ret)}` : ''}${avgMulti ? ` · ${l.h.acct}` : ''}`;
+  // 눈금마다 따로 잰다(원화·달러 눈금은 서로를 넓히지 않는다) — 다른 눈금의 매입가는 NaN으로 넘겨 이번 판정에서 뺀다.
   const avgLayout = (() => {
-    let lo = Infinity, hi = -Infinity;
-    for (const r of rows) for (const s of shown) {
-      const v = r[mode === 'pct' ? s.key : `px:${s.key}`];
-      if (v != null && Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    const pins = avgLines.map(() => '');
+    for (const ax of new Set(shown.map((s) => s.axisId))) {
+      let lo = Infinity, hi = -Infinity;
+      for (const r of rows) for (const s of shown) {
+        if (s.axisId !== ax) continue;
+        const v = r[mode === 'pct' ? s.key : `px:${s.key}`];
+        if (v != null && Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      }
+      if (mode === 'pct' && Number.isFinite(lo)) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }   // 0% 기준선도 눈금 안
+      const lay = holdingLayout(Number.isFinite(lo) ? lo : NaN, Number.isFinite(hi) ? hi : NaN, avgLines.map((l) => (l.s.axisId === ax ? l.v : NaN)), 0.4);
+      avgLines.forEach((l, i) => { if (l.s.axisId === ax) pins[i] = lay.pins[i]; });
     }
-    if (mode === 'pct' && Number.isFinite(lo)) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }   // 0% 기준선도 눈금 안
-    return holdingLayout(Number.isFinite(lo) ? lo : NaN, Number.isFinite(hi) ? hi : NaN, avgLines.map((l) => l.v), 0.4);
+    return { pins };
   })();
   const holdAny = series.some((s) => s.hold.length > 0);
   const chartBoxRef = useRef(null);
@@ -527,7 +540,7 @@ function StockChartPage() {
           ><Percent size={11} /> 수익률</button>
           <button
             onClick={() => setMode('price')}
-            title="종가 — 기준 종목의 실제 시세(비교 종목은 가격 단위가 달라 수익률 보기에서만 겹쳐 그린다)"
+            title="종가 — 각 종목의 실제 시세를 겹쳐 비교(같은 통화는 한 눈금 · 원화와 달러가 섞이면 기준 종목과 다른 통화는 오른쪽 눈금)"
             className={`flex items-center gap-1 px-2 py-1 border-l border-gray-700 transition-colors ${mode === 'price' ? 'bg-sky-900/30 text-sky-300' : 'text-gray-500 hover:text-gray-300'}`}
           ><TrendingUp size={11} /> 종가</button>
         </span>
@@ -597,6 +610,9 @@ function StockChartPage() {
               ) : (
                 <YAxis stroke="#9ca3af" tick={{ fontSize: 10 }} tickFormatter={(v) => fmtWatchPrice(main.market, v)} width={72} domain={['auto', 'auto']} />
               )}
+              {rightS && (
+                <YAxis yAxisId={RIGHT_AXIS} orientation="right" stroke="#9ca3af" tick={{ fontSize: 10 }} tickFormatter={(v) => fmtWatchPrice(rightS.market, v)} width={72} domain={['auto', 'auto']} />
+              )}
               {mode === 'pct' && <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="4 3" />}
               <RechartsTooltip content={() => null} cursor={{ stroke: '#e5e7eb', strokeWidth: 1 }} />
               {shown.map((s) => (
@@ -604,6 +620,7 @@ function StockChartPage() {
                   key={s.key}
                   type="monotone"
                   dataKey={mode === 'pct' ? s.key : `px:${s.key}`}
+                  yAxisId={s.axisId}
                   stroke={s.color}
                   strokeWidth={s.i === 0 ? 2 : 1.5}
                   dot={false}
@@ -615,15 +632,15 @@ function StockChartPage() {
                   ifOverflow="extendDomain": 눈금을 넓혀 선을 넣는다 — 시세가 납작해질 만큼 먼 매입가는
                   holdingLayout이 미리 가장자리 표시로 돌려 이 목록에서 빠진다(pins[i] !== ''). */}
               {avgLines.map((l, i) => avgLayout.pins[i] === '' && (
-                <ReferenceLine key={l.key} y={l.v} stroke={l.s.color} strokeOpacity={0.9} strokeWidth={1.2} strokeDasharray="6 4" ifOverflow="extendDomain"
+                <ReferenceLine key={l.key} y={l.v} yAxisId={l.s.axisId} stroke={l.s.color} strokeOpacity={0.9} strokeWidth={1.2} strokeDasharray="6 4" ifOverflow="extendDomain"
                   label={({ viewBox }) => <AvgTag viewBox={viewBox} text={avgText(l)} color={l.s.color} />} />
               ))}
               {hoverLevels.map((h) => (
-                <ReferenceLine key={`hl-${h.key}`} y={h.v} stroke={h.color} strokeOpacity={0.55} strokeWidth={1} ifOverflow="hidden"
-                  label={{ value: h.text, position: 'left', fill: h.color, fontSize: 10, fontWeight: 700 }} />
+                <ReferenceLine key={`hl-${h.key}`} y={h.v} yAxisId={h.axisId} stroke={h.color} strokeOpacity={0.55} strokeWidth={1} ifOverflow="hidden"
+                  label={{ value: h.text, position: h.axisId === RIGHT_AXIS ? 'right' : 'left', fill: h.color, fontSize: 10, fontWeight: 700 }} />
               ))}
               {hoverLevels.map((h) => (
-                <ReferenceDot key={`hd-${h.key}`} x={hover} y={h.v} r={4} fill="#f9fafb" stroke={h.color} strokeWidth={2} ifOverflow="hidden" />
+                <ReferenceDot key={`hd-${h.key}`} x={hover} y={h.v} yAxisId={h.axisId} r={4} fill="#f9fafb" stroke={h.color} strokeWidth={2} ifOverflow="hidden" />
               ))}
               {/* 비선택 구간 딤 — 선보다 **뒤에** 선언해야 선 위에 덮인다(paint 순서 = 선언 순서).
                   경계 날짜에서 discard로 밴드가 사라지지 않게 ifOverflow="hidden"(수익률 차트와 같은 규약). */}
@@ -647,7 +664,7 @@ function StockChartPage() {
         )}
         {/* 매입가가 차트 범위 밖(눈금을 넓히면 시세 선이 납작해지는 거리) — 그 방향 가장자리에 값만 표시 */}
         {rows.length > 1 && ['top', 'bottom'].map((pin) => avgLines.some((l, i) => avgLayout.pins[i] === pin) && (
-          <div key={pin} className={`absolute right-6 ${pin === 'top' ? 'top-4' : 'bottom-12'} flex flex-col items-end gap-1 pointer-events-none`}>
+          <div key={pin} className={`absolute ${rightS ? 'right-24' : 'right-6'} ${pin === 'top' ? 'top-4' : 'bottom-12'} flex flex-col items-end gap-1 pointer-events-none`}>
             {avgLines.map((l, i) => avgLayout.pins[i] === pin && (
               <span key={l.key} className="rounded border px-1.5 py-0.5 text-[10.5px] font-bold tabular-nums bg-[#0b1120]/90" style={{ borderColor: l.s.color, color: l.s.color }}>
                 {pin === 'top' ? '▲' : '▼'} {avgText(l)} <span className="font-normal text-gray-500">— 차트 {pin === 'top' ? '위' : '아래'}쪽 범위 밖</span>
@@ -657,7 +674,8 @@ function StockChartPage() {
         ))}
       </div>
       <div className="px-4 pb-2 text-[10px] text-gray-600">
-        수익률 = 각 종목의 조회 시작 후 첫 종가를 0%로 둔 등락(관심종목 등락율과 같은 계산) · 종가는 관심종목 미니차트와 같은 소스 ·
+        수익률 = 각 종목의 조회 시작 후 첫 종가를 0%로 둔 등락(관심종목 등락율과 같은 계산) · 종가는 관심종목 미니차트와 같은 소스
+        (종가 보기: 같은 통화는 한 눈금, 원화·달러가 섞이면 기준 종목과 다른 통화는 오른쪽 눈금) ·
         직접 선택 기간에서 종료일을 비우면 마지막 값은 실시간 현재가입니다. 이 창은 아무것도 저장하지 않습니다(비교 종목·기간은 주소에만 남습니다).
         {holdAny && ' · 점선 = 포트폴리오 테이블에 있는 종목의 매입가(구매단가, 계좌마다 한 줄 — 앱 창에서 읽어 옵니다).'}
       </div>
