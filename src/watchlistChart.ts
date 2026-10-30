@@ -292,7 +292,9 @@ export function chartSelStep(st: any, ev: any): { dragging: boolean; left: strin
 // ⚠️ 통화가 차트 시장과 다르면 긋지 않는다(해외 = USD ↔ 'us', 그 외 = KRW ↔ 'kr'·'fund') — 원화 매입가를
 //    달러 차트에 그으면 1,300배 엉뚱한 자리에 선이 선다.
 
-type Holding = { acct: string; avg: number; qty: number; cur: 'KRW' | 'USD' };
+// ord = 계좌 탭 순서·행 순서대로 붙인 일련번호(관심종목 '보유종목' 그룹의 줄 순서 — 객체 키 순서는 숫자 코드가 앞으로 섞인다).
+// mk·code·name = 그 줄을 관심종목 행으로 조회할 시장·원래 코드·종목명(포트폴리오 행 그대로).
+type Holding = { acct: string; avg: number; qty: number; cur: 'KRW' | 'USD'; ord?: number; mk?: 'kr' | 'us' | 'fund'; code?: string; name?: string };
 
 const HOLD_SKIP_ACCOUNTS = ['simple', 'matong', 'gold', 'crypto'];
 const MAX_HOLD_KEYS = 500;
@@ -333,13 +335,14 @@ export function holdingKey(code: any): string {
 export function buildHoldings(portfolios: any): Record<string, Holding[]> {
   const out: Record<string, Holding[]> = {};
   const list = Array.isArray(portfolios) ? portfolios : [];
+  let ord = 0;
   for (const p of list) {
     if (!p || typeof p !== 'object' || p.deletedAt || p.isTest) continue;
     const type = p.accountType || 'portfolio';
     if (HOLD_SKIP_ACCOUNTS.includes(type)) continue;
     const overseas = type === 'overseas';
     const acct = typeof p.name === 'string' && p.name.trim() ? p.name.trim().slice(0, 40) : '계좌';
-    const sums = new Map<string, { cost: number; qty: number }>();
+    const sums = new Map<string, { cost: number; qty: number; code: string; name: string; fund: boolean }>();
     for (const it of Array.isArray(p.portfolio) ? p.portfolio : []) {
       if (!it || typeof it !== 'object' || (it.type !== 'stock' && it.type !== 'fund')) continue;
       const key = holdingKey(it.code);
@@ -355,16 +358,19 @@ export function buildHoldings(portfolios: any): Record<string, Holding[]> {
         cost = inv > 0 ? inv : holdNum(it.purchasePrice) * qty;
       }
       if (!(cost > 0)) continue;
-      const s = sums.get(key) || { cost: 0, qty: 0 };
+      const s = sums.get(key) || { cost: 0, qty: 0, code: it.code.trim().toUpperCase(), name: '', fund: it.type === 'fund' };
       s.cost += cost;
       s.qty += qty;
+      if (!s.name && typeof it.name === 'string' && it.name.trim()) s.name = it.name.trim().slice(0, 80);
       sums.set(key, s);
     }
     for (const [key, s] of sums) {
       const avg = s.cost / s.qty;
       if (!Number.isFinite(avg) || avg <= 0) continue;
       if (!out[key]) out[key] = [];
-      if (out[key].length < MAX_HOLD_PER_KEY) out[key].push({ acct, avg, qty: s.qty, cur: overseas ? 'USD' : 'KRW' });
+      if (out[key].length >= MAX_HOLD_PER_KEY) continue;
+      const mk = overseas ? 'us' : s.fund ? 'fund' : 'kr';
+      out[key].push({ acct, avg, qty: s.qty, cur: overseas ? 'USD' : 'KRW', ord: ord++, mk, code: s.code, ...(s.name ? { name: s.name } : {}) });
     }
   }
   return out;
@@ -410,7 +416,12 @@ export function normalizeHoldings(raw: any): Record<string, Holding[]> | null {
       const qty = typeof h.qty === 'number' && Number.isFinite(h.qty) && h.qty > 0 ? h.qty : 0;
       if (!avg || !qty || (h.cur !== 'KRW' && h.cur !== 'USD')) continue;
       const acct = typeof h.acct === 'string' && h.acct.trim() ? h.acct.trim().slice(0, 40) : '계좌';
-      good.push({ acct, avg, qty, cur: h.cur });
+      const g: Holding = { acct, avg, qty, cur: h.cur };
+      if (Number.isInteger(h.ord) && h.ord >= 0) g.ord = h.ord;
+      if (h.mk === 'kr' || h.mk === 'us' || h.mk === 'fund') g.mk = h.mk;
+      if (typeof h.code === 'string' && key && holdingKey(h.code) === key) g.code = h.code.trim();
+      if (typeof h.name === 'string' && h.name.trim()) g.name = h.name.trim().slice(0, 80);
+      good.push(g);
     }
     if (key && good.length) { out[key] = good; n++; }
   }
@@ -418,8 +429,53 @@ export function normalizeHoldings(raw: any): Record<string, Holding[]> | null {
 }
 
 /**
- * 여러 계좌 보유분의 합산 매입가(총 투자금액 ÷ 총 수량) — 미니차트처럼 선을 **하나만** 그을 곳과 머리글 요약용.
- * 차트 창의 가로선은 계좌마다 따로 긋는다(이 값으로 합치지 않는다).
+ * 관심종목 자동 '보유종목' 그룹의 줄 목록(사용자 요청 2026-10-30 — 전체 계좌의 보유 종목).
+ * 한 줄 = (종목, 계좌) 하나 — 같은 종목을 여러 계좌에 보유하면 **계좌마다 한 줄**(그 계좌의 매입가)이고 서로 붙어 있다.
+ * 순서 = 종목이 처음 나온 순서(계좌 탭 순서 → 행 순서, ord) · 같은 종목 안에서는 계좌 탭 순서.
+ * ⚠️ 저장하지 않는 가상 줄이다(정본은 앱 탭 portfolios) — 그룹 배열(watchlistGroups)에 넣지 말 것.
+ * mk·code가 없는 옛 모양은 통화·키로 시장을 추정한다(USD = 해외, 6자 숫자 포함 = 국내, 그 외 = 펀드).
+ */
+export function holdingWatchStocks(map: any): any[] {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return [];
+  const byKey: { key: string; first: number; list: { h: any; ord: number }[] }[] = [];
+  let seq = 0;
+  for (const key of Object.keys(map)) {
+    const list: { h: any; ord: number }[] = [];
+    for (const h of Array.isArray(map[key]) ? map[key] : []) {
+      if (!h || typeof h !== 'object' || !(h.avg > 0) || !(h.qty > 0) || (h.cur !== 'KRW' && h.cur !== 'USD')) continue;
+      list.push({ h, ord: Number.isInteger(h.ord) && h.ord >= 0 ? h.ord : 1e9 + seq });
+      seq++;
+    }
+    if (!list.length) continue;
+    list.sort((a, b) => a.ord - b.ord);
+    byKey.push({ key, first: list[0].ord, list });
+  }
+  byKey.sort((a, b) => a.first - b.first);
+  const out: any[] = [];
+  for (const { key, list } of byKey) {
+    list.forEach(({ h }, j) => {
+      const market = h.mk === 'kr' || h.mk === 'us' || h.mk === 'fund' ? h.mk
+        : h.cur === 'USD' ? 'us' : /^[A-Z0-9]{6}$/.test(key) && /\d/.test(key) ? 'kr' : 'fund';
+      out.push({
+        id: `hold:${key}:${j}`, code: typeof h.code === 'string' && h.code ? h.code : key, market,
+        name: typeof h.name === 'string' ? h.name : '', acct: h.acct, avg: h.avg, qty: h.qty, virtual: true,
+      });
+    });
+  }
+  return out;
+}
+
+/**
+ * 보유분 h가 '보유종목' 그룹의 줄 row(그 계좌)의 것인가 — 미니차트에서 그 계좌 선과 다른 계좌 선을 가른다.
+ * 계좌 이름·매입가·수량이 모두 같으면 같은 줄로 본다(이름이 같은 두 계좌라도 선이 정확히 겹쳐 화면에선 구분이 없다).
+ */
+export function isRowHolding(h: any, row: any): boolean {
+  return !!h && !!row && h.acct === row.acct && h.avg === row.avg && h.qty === row.qty;
+}
+
+/**
+ * 여러 계좌 보유분의 합산 매입가(총 투자금액 ÷ 총 수량) — 툴팁·머리글의 합산 요약용.
+ * 가로선은 미니차트·차트 창 모두 계좌마다 따로 긋는다(이 값으로 합치지 않는다 — 사용자 요청 2026-10-30).
  */
 export function holdingAvg(list: any): { avg: number; qty: number; n: number } | null {
   const arr = (Array.isArray(list) ? list : []).filter(

@@ -18,7 +18,8 @@
 //     #96~#96m 차트 구간 선택 상태 전이 — 드래그 · 더블클릭 시작점 고정 → 끝점 클릭(수익률 차트와 같은 제스처)
 //     #97a~#97o 보유 종목 매입가 — 표의 구매단가와 같은 식 · 계좌별 · 통화 맞춤 · 눈금 넓히기/가장자리 판정
 //     #98a~#98b 앞자리 0이 빠진 국내 코드 복원 후보(241D0 → 0241D0)
-//   파트② 소스 텍스트 가드 (#G1~#G103)
+//     #99a~#99i 자동 '보유종목' 그룹 — 전체 계좌 종목 · 같은 종목은 계좌마다 한 줄(붙어서) · 그 계좌/다른 계좌 구분
+//   파트② 소스 텍스트 가드 (#G1~#G107)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다.
@@ -570,6 +571,60 @@ if (C) {
       ['241D0', '5930', '660', ' 241d0 ', '1'].map(krCodeWithZeros).join(','), '0241D0,005930,000660,0241D0,000001');
     eq('#98b 후보 없음 — 이미 6자 · 순수 알파벳(해외) · 7자 이상 · MA:/점 · 비문자열',
       ['0241D0', '005930', 'AAPL', 'QQQM', '1234567', 'MA:12345', 'BRK.B', '', null, 241].map(krCodeWithZeros).join('|'), '|||||||||');
+    // ── 자동 '보유종목' 그룹(사용자 요청 2026-10-30 — 전체 계좌 종목 · 같은 종목은 계좌마다 따로) ──
+    const { holdingWatchStocks, isRowHolding } = C;
+    eq('#99a buildHoldings — 관심종목 행으로 조회할 시장·원래 코드(대문자)를 함께 싣는다',
+      JSON.stringify([H['005930'][0].mk, H['005930'][0].code, H.GOOG[0].mk, H.GOOG[0].code, H.AB123[0].mk, H.AB123[0].code]),
+      JSON.stringify(['kr', '005930', 'us', 'GOOG', 'fund', 'MA:AB123']));
+    eq('#99b ord = 계좌 탭 순서 → 행 순서(보유 아닌 행은 번호를 먹지 않는다)',
+      [H['005930'].map((h) => h.ord).join(','), H['069500'][0].ord, H.GOOG[0].ord, H.SCHD[0].ord, H.AB123[0].ord].join('|'), '0,2|1|3|4|5');
+    const PF2 = [
+      { id: 'a', name: 'A', accountType: 'overseas', portfolio: [{ type: 'stock', code: 'qqqm', name: 'Invesco QQQM', quantity: 1, investAmountUsd: 100 }] },
+      { id: 'b', name: 'B', accountType: 'portfolio', portfolio: [
+        { type: 'stock', code: '498410', name: ' KODEX 금융고배당 ', quantity: 10, investAmount: 100000 },
+        { type: 'stock', code: '005930', name: '삼성전자', quantity: 1, investAmount: 70000 },
+      ] },
+      { id: 'c', name: 'C', accountType: 'isa', portfolio: [
+        { type: 'stock', code: '005930', quantity: 2, investAmount: 120000 },
+        { type: 'stock', code: '498410', quantity: 5, investAmount: 60000 },
+      ] },
+    ];
+    const H2 = buildHoldings(PF2);
+    const R2 = holdingWatchStocks(H2);
+    // ⚠️ 객체 키 순서는 정수 모양 코드('498410')가 맨 앞으로 섞인다 — 줄 순서는 ord로만 정한다.
+    eq('#99c 줄 순서 = 종목이 처음 나온 순서(계좌 탭 → 행) · 같은 종목은 계좌마다 한 줄씩 붙어서',
+      R2.map((r) => `${r.code}@${r.acct}`).join(','), 'QQQM@A,498410@B,498410@C,005930@B,005930@C');
+    ok('#99c2 (전제) 객체 키 순서는 실제로 섞인다 — ord 없이 키 순서를 쓰면 위 순서가 깨진다', Object.keys(H2)[0] === '498410');
+    eq('#99d 줄마다 그 계좌의 매입가·수량·시장 · 종목명은 포트폴리오 행 그대로(공백 정리)',
+      JSON.stringify(R2.map((r) => [r.market, r.avg, r.qty, r.name])),
+      JSON.stringify([['us', 100, 1, 'Invesco QQQM'], ['kr', 10000, 10, 'KODEX 금융고배당'], ['kr', 12000, 5, ''], ['kr', 70000, 1, '삼성전자'], ['kr', 60000, 2, '']]));
+    ok('#99d2 줄 id는 겹치지 않고, 모두 가상 줄(virtual)', new Set(R2.map((r) => r.id)).size === R2.length && R2.every((r) => r.virtual === true));
+    eq('#99e 창 사이 왕복(JSON → normalizeHoldings) 뒤에도 같은 줄·같은 순서',
+      JSON.stringify(holdingWatchStocks(normalizeHoldings(JSON.parse(JSON.stringify(H2))))), JSON.stringify(R2));
+    eq('#99f 옛 모양(ord·mk·code 없음) — 통화·키로 시장 추정(USD=해외 · 6자 숫자 포함=국내 · 그 외=펀드), 코드 = 키',
+      holdingWatchStocks({ AAPL: [{ acct: 'x', avg: 1, qty: 1, cur: 'USD' }], AB123: [{ acct: 'x', avg: 1, qty: 1, cur: 'KRW' }], '0241D0': [{ acct: 'x', avg: 1, qty: 1, cur: 'KRW' }] })
+        .map((r) => `${r.code}:${r.market}`).join(','), 'AAPL:us,AB123:fund,0241D0:kr');
+    eq('#99g normalizeHoldings — 맞는 덧붙임(ord·mk·code·name)만 남기고 틀린 것은 버린다(줄 자체는 살린다)',
+      JSON.stringify(normalizeHoldings({ a: [
+        { acct: 'x', avg: 1, qty: 1, cur: 'KRW', ord: 3, mk: 'kr', code: ' a ', name: ' 삼성 ' },
+        { acct: 'y', avg: 1, qty: 1, cur: 'KRW', ord: -1, mk: 'jp', code: 'B', name: 5 },
+        { acct: 'z', avg: 1, qty: 1, cur: 'KRW', ord: 1.5, code: 'ma:a' },
+      ] })),
+      JSON.stringify({ A: [
+        { acct: 'x', avg: 1, qty: 1, cur: 'KRW', ord: 3, mk: 'kr', code: 'a', name: '삼성' },
+        { acct: 'y', avg: 1, qty: 1, cur: 'KRW' },
+        { acct: 'z', avg: 1, qty: 1, cur: 'KRW', code: 'ma:a' },
+      ] }));
+    {
+      const row = R2.find((r) => r.code === '005930' && r.acct === 'B');
+      const hold = holdingsFor(H2, row.code, row.market);
+      eq('#99h isRowHolding — 그 줄의 계좌 1 · 같은 종목의 다른 계좌 1(미니차트 호박/보라)',
+        [hold.filter((h) => isRowHolding(h, row)).length, hold.filter((h) => !isRowHolding(h, row)).length].join(','), '1,1');
+      ok('#99h2 isRowHolding 손상 입력 → false', !isRowHolding(null, row) && !isRowHolding(hold[0], null) && !isRowHolding({ acct: 'B', avg: 70000, qty: 2 }, row));
+    }
+    S('#99i 손상 입력에도 던지지 않는다(빈 목록)',
+      () => [holdingWatchStocks(null), holdingWatchStocks([]), holdingWatchStocks('x'), holdingWatchStocks({ a: 'no' }), holdingWatchStocks({ a: [null, { avg: -1, qty: 1, cur: 'KRW' }, { avg: 1, qty: 1, cur: 'EUR' }] })],
+      (v) => v.every((x) => Array.isArray(x) && x.length === 0));
     S('#97o 손상 입력에도 던지지 않는다(시세 범위가 없으면 lo·hi = NaN, 잘못된 매입가 = none)',
       () => [holdingLayout(NaN, 1, [1]), holdingLayout(5, 1, [1]), holdingLayout(1, 2, [NaN, 'x', 1.5]), holdingLayout(1, 2, null), buildHoldings(null), buildHoldings([{ portfolio: 'x' }])],
       (v) => Number.isNaN(v[0].lo) && Number.isNaN(v[1].hi) && v[2].pins.join(',') === 'none,none,' && v[3].pins.length === 0
@@ -801,9 +856,10 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   ok('#G66 모두 해제도 같은 통로',
     /updateGroups\(\(prev\) => clearWatchHighlights\(prev, gid\)\)/.test(P));
   // ⚠️ 읽기 전용(관리자 열람·창 연결 끊김)에서는 누를 수 없고, 이미 칠한 색은 보인다.
-  const strip = (() => { const i = P.indexOf('{readOnly ? ('); const j = P.indexOf('data-watch-row', i); return i < 0 || j < 0 ? '' : P.slice(i, j); })();
-  ok('#G67 읽기 전용이면 띠는 표시만(클릭 없음), 아니면 toggleHighlight(s.id)',
-    /\{readOnly \? \(\s*hl && <span className="absolute left-0 top-0 bottom-0 w-2\.5" style=\{\{ backgroundColor: hl\.hex \}\} \/>/.test(strip)
+  // 보유종목(가상) 줄도 표시만 — 칠할 저장 행이 없다(updateGroups는 저장된 그룹만 본다).
+  const strip = (() => { const i = P.indexOf('{readOnly || s.virtual ? ('); const j = P.indexOf('data-watch-row', i); return i < 0 || j < 0 ? '' : P.slice(i, j); })();
+  ok('#G67 읽기 전용·보유종목 줄이면 띠는 표시만(클릭 없음), 아니면 toggleHighlight(s.id)',
+    /\{readOnly \|\| s\.virtual \? \(\s*hl && <span className="absolute left-0 top-0 bottom-0 w-2\.5" style=\{\{ backgroundColor: hl\.hex \}\} \/>/.test(strip)
     && /onClick=\{\(\) => toggleHighlight\(s\.id\)\}/.test(strip));
   ok('#G68 칠한 행은 행 전체를 그 색으로(정렬을 바꿔도 눈이 따라간다)',
     /const hl = watchHighlightOf\(s\.highlight\);/.test(P)
@@ -869,7 +925,7 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
 
   // ── 미니차트 클릭 배선 ──
   ok('#G83 미니차트는 버튼 안에 있고 클릭하면 openChartWindow(s, q)',
-    /onClick=\{\(\) => openChartWindow\(s, q\)\}[\s\S]{0,700}?<Sparkline points=\{v\.points \|\| \[\]\} rate=\{v\.rate\} avg=\{holdSum \? holdSum\.avg : null\} \/>\s*\n\s*<\/button>/.test(P));
+    /onClick=\{\(\) => openChartWindow\(s, q\)\}[\s\S]{0,700}?<Sparkline points=\{v\.points \|\| \[\]\} rate=\{v\.rate\} avgs=\{holdAvgs\(hv\)\} \/>\s*\n\s*<\/button>/.test(P));
   {
     const m = P.match(/const openChartWindow = \(s, q\) => \{[\s\S]*?\n  \};/);
     const body = m ? m[0] : '';
@@ -944,7 +1000,7 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   eq('#G89b 펼친 칸(DIV_COL_W)도 헤더·행 2곳', (P.match(/style=\{\{ width: DIV_COL_W \}\}/g) || []).length, 2);
   ok('#G90 펼치기/접기는 보기 상태(patchView)로 — Drive 저장 대상', /const toggleDiv = \(\) => patchView\(\(v\) => \(\{ showDiv: !v\.showDiv \}\)\);/.test(P)
     && (P.match(/onClick=\{toggleDiv\}/g) || []).length === 3);
-  ok('#G91 분배금 조회는 열을 펼쳤을 때만(effect 게이트)', /if \(!open \|\| !activeGroup \|\| !showDiv\) return;\s*\n\s*\(activeGroup\.stocks \|\| \[\]\)\.forEach\(\(s\) => loadDividend\(s\)\);/.test(P));
+  ok('#G91 분배금 조회는 열을 펼쳤을 때만(effect 게이트)', /if \(!open \|\| !activeGroup \|\| !showDiv\) return;\s*\n\s*uniqueStocks\(activeGroup\.stocks\)\.forEach\(\(s\) => loadDividend\(s\)\);/.test(P));
   ok('#G92 분배금 결과는 팝업 로컬(divMap)에만 — 계좌 분배 이력에 쓰지 않는다', /setDivMap\(\(p\) => \(\{ \.\.\.p, \[stock\.code\]: r \}\)\);/.test(P)
     && !/dividendHistory|actualDividend/.test(P));
   ok('#G93 헤더는 종목 1개부터(분배금 토글이 헤더에 있다)', /\{activeStocks\.length >= 1 && \(/.test(P));
@@ -984,9 +1040,12 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
       && /e\.source\.postMessage\(\{ type: 'stockchart:holdings', holdings: h \? pickHoldings\(h, d\.codes\) : null \}, window\.location\.origin\);/.test(P)
       && /const onMsg = \(e\) => \{\s*\n\s*if \(e\.origin !== window\.location\.origin\) return;\s*\n\s*const d = e\.data;\s*\n\s*if \(!d \|\| typeof d !== 'object' \|\| d\.type !== 'stockchart:ping'/.test(P));
   }
-  ok('#G98 미니차트 매입가 = 그 행의 보유분 합산(holdingsFor → holdingAvg) · holdingLayout(40%)로 눈금/가장자리 결정',
-    /const hold = holdingsFor\(holdings, s\.code, s\.market\);/.test(P) && /const holdSum = holdingAvg\(hold\);/.test(P)
-    && /holdingLayout\(min, max, \[avg\], 0\.4\)/.test(P));
+  // ⚠️ 계좌마다 한 줄(사용자 요청 2026-10-30) — 합산 매입가 하나로 긋던 옛 방식(avg=)으로 되돌리지 말 것.
+  ok('#G98 미니차트 매입가 = 계좌마다 한 줄(holdView → holdAvgs) · 전 계좌 매입가로 holdingLayout(40%) 눈금/가장자리 결정',
+    /const hold = holdingsFor\(holdings, s\.code, s\.market\);/.test(P) && /const hv = holdView\(s\);/.test(P)
+    && /\.\.\.hv\.others\.map\(\(h\) => \(\{ v: h\.avg, color: HOLD_OTHER_COLOR \}\)\),\s*\n\s*\.\.\.hv\.own\.map\(\(h\) => \(\{ v: h\.avg, color: HOLD_COLOR \}\)\),/.test(P)
+    && /holdingLayout\(min, max, lv\.map\(\(a\) => a\.v\), 0\.4\)/.test(P)
+    && !/<Sparkline[^>]*\savg=/.test(P));
   ok('#G99 차트 창 매입가 선 — 계좌마다(holdingsFor) · 수익률 보기는 holdingPct · 눈금마다 holdingLayout(40% — 미니차트와 같은 규칙)',
     /hold: holdingsFor\(holdings, s\.code, s\.market\),/.test(CW)
     && /const v = mode === 'pct' \? holdingPct\(h\.avg, base\) : h\.avg;/.test(CW)
@@ -1002,6 +1061,29 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     const iAvg = CW.indexOf('avgLines.map((l, i) => avgLayout.pins[i]');
     ok('#G99c 매입가 선은 시세 선보다 뒤에 선언(태그가 위에 보인다)', iLine > 0 && iAvg > iLine);
   }
+  // ── 자동 '보유종목' 그룹(사용자 요청 2026-10-30) — 전체 계좌 종목, 같은 종목은 계좌마다 한 줄 ──
+  // ⚠️ 가상 그룹은 **화면에만** — 저장 그룹(watchlistGroups)에 들어가면 판 종목이 관심종목에 낡은 사본으로 남는다.
+  ok('#G104 보유종목 = holdingWatchStocks(holdings)로 화면에만 끼운 auto·virtual 그룹 · 사이드바/빈 화면 판정은 shownGroups',
+    /const holdStocks = useMemo\(\(\) => holdingWatchStocks\(holdings\), \[holdings\]\);/.test(P)
+    && /const real = list\.filter\(\(g\) => g && g\.id !== HOLD_ID\);/.test(P)
+    && /const vg = \{ id: HOLD_ID, name: HOLD_NAME, auto: true, virtual: true, stocks: holdStocks \};/.test(P)
+    && /const activeGroup = shownGroups\.find\(/.test(P)
+    && /\{shownGroups\.map\(\(g\) => \{/.test(P) && /\{shownGroups\.length === 0 \? \(/.test(P)
+    && /const HOLD_ID = WATCH_HOLD_ID;/.test(P)
+    && !/updateGroups\([^;]*(shownGroups|holdStocks|HOLD_ID)/.test(P));
+  // 같은 종목이 계좌마다 줄이 있어 그대로 돌리면 같은 시세를 줄 수만큼 받는다 — 네 조회 effect 모두 코드:시장 한 번씩.
+  ok('#G105 조회 effect 4곳 = uniqueStocks(코드:시장 한 번씩) · 보유종목은 코드 목록이 바뀌면 다시 조회(activeCodesKey)',
+    (P.match(/uniqueStocks\(activeGroup\.stocks\)\.forEach/g) || []).length === 4
+    && /const activeCodesKey = isHoldGroup \? activeGroup\.stocks\.map\(\(s\) => `\$\{s\.code\}:\$\{s\.market\}`\)\.join\(','\) : '';/.test(P)
+    && /\}, \[open, activeGroup\?\.id, activeCodesKey\]\);/.test(P));
+  ok('#G106 보유종목 줄은 쓰기 경로 없음 — 삭제·시장 보정 숨김 · 종목명 캐시·코드 복원 안 함',
+    /\{!readOnly && !s\.virtual && \(\s*\n\s*<button\s*\n\s*onClick=\{\(\) => removeStock\(s\.id\)\}/.test(P)
+    && /\{!readOnly && !s\.virtual && \(\['kr', 'us', 'fund'\]\)\.map/.test(P)
+    && /if \(d\.name && d\.name !== stock\.name && !stock\.virtual\) \{/.test(P));
+  ok('#G107 차트 창 — 머리글·칩은 계좌마다 매입가(합산 표기 없음) · 점선 무늬가 계좌마다 다르다',
+    !/개 계좌 합산/.test(CW) && /\{mainS\.hold\.map\(\(h, j\) => \{/.test(CW)
+    && /s\.hold\.slice\(0, 3\)\.map\(\(h\) => fmtAvg\(s\.market, h\.avg\)\)\.join\(' \/ '\)/.test(CW)
+    && /dash: AVG_DASHES\[j % AVG_DASHES\.length\]/.test(CW) && /strokeDasharray=\{l\.dash\}/.test(CW));
 }
 
 // ── 앞자리 0이 빠진 국내 코드 복원(사용자 신고 2026-10-30 — 0241D0 이 241D0 으로 들어가 조회 실패) ──
@@ -1014,8 +1096,8 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   const CW = stripComments(CHART);
   const SDc = stripComments(SD);
   ok('#G100 관심종목: 조회 실패 시 krCodeWithZeros 후보를 국내로 다시 묻고 맞으면 행을 고친다(해외 판정은 후보 먼저)',
-    /krCodeWithZeros,\n\} from '\.\.\/watchlistChart';/.test(POPUP)
-    && /const zero = readOnly \? '' : krCodeWithZeros\(stock\.code\);/.test(P)
+    /krCodeWithZeros, holdingWatchStocks, isRowHolding,\n\} from '\.\.\/watchlistChart';/.test(POPUP)
+    && /const zero = readOnly \|\| stock\.virtual \? '' : krCodeWithZeros\(stock\.code\);/.test(P)
     && /if \(zero && stock\.market === 'us'\) \{\s*\n\s*const dz = await fetchWatchQuote\('kr', zero\);\s*\n\s*if \(dz\) \{ repairStockCode\(stock, zero, dz\); return; \}/.test(P)
     && /if \(!d && zero && stock\.market !== 'us'\) \{\s*\n\s*const dz = await fetchWatchQuote\('kr', zero\);\s*\n\s*if \(dz\) \{ repairStockCode\(stock, zero, dz\); return; \}/.test(P));
   ok('#G100b 관심종목: 고친 코드가 그룹에 이미 있으면 고장 난 행을 지운다 · 시장은 국내로',

@@ -1,14 +1,14 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose, ExternalLink, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose, ExternalLink, Calendar, ChevronLeft, ChevronRight, Wallet } from 'lucide-react';
 import CustomDatePicker from './CustomDatePicker';
 import { generateId, formatNumber, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday, fetchWatchDividend, fmtWatchPrice } from '../watchlistQuote';
 import {
   periodCutoff, watchPeriodWindow, windowRate, stockDetailUrl, stockChartUrl, stockChartWindowName, chartPeriodFromWatch,
-  holdingsFor, holdingAvg, holdingLayout, pickHoldings, krCodeWithZeros,
+  holdingsFor, holdingAvg, holdingLayout, pickHoldings, krCodeWithZeros, holdingWatchStocks, isRowHolding,
 } from '../watchlistChart';
-import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize, watchHighlightOf, nextWatchHighlight, toggleWatchHighlight, clearWatchHighlights } from '../watchlistGroups';
+import { WATCH_RECENT_ID, WATCH_HOLD_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize, watchHighlightOf, nextWatchHighlight, toggleWatchHighlight, clearWatchHighlights } from '../watchlistGroups';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
 // - 단일 position:fixed div (백드롭/오버레이 없음 → 아래 앱 클릭·스크롤 통과)
@@ -49,6 +49,8 @@ const MARKET_LABEL = { kr: '국내', us: '해외', fund: '펀드' };
 const RECENT_ID = WATCH_RECENT_ID;   // 자동 '최근조회' 그룹의 예약 id
 const RECENT_NAME = '최근조회';
 const RECENT_CAP = 20;            // 최근조회 보관 개수
+const HOLD_ID = WATCH_HOLD_ID;    // 자동 '보유종목' 가상 그룹의 예약 id(저장하지 않는다 — 정본은 portfolios)
+const HOLD_NAME = '보유종목';
 const MAX_GROUPS = 30;           // 수동 그룹 소프트 상한(최근조회 제외)
 const MAX_STOCKS = 100;          // 그룹당 종목 소프트 상한
 
@@ -97,21 +99,23 @@ const detailUrl = stockDetailUrl;
 
 // 보유 종목 매입가 표시색(미니차트 점선 · '보유' 표시) — 시세 선의 빨강·파랑과 헷갈리지 않는 호박색.
 const HOLD_COLOR = '#fbbf24';
+// '보유종목' 그룹에서 **다른 계좌**의 같은 종목 매입가(미니차트 점선 · '외 n계좌' 표시) — 호박색(그 줄의 계좌)과 갈리는 보라색.
+const HOLD_OTHER_COLOR = '#c4b5fd';
 
 // 최근 종가 미니 라인차트(인라인 SVG — 행마다 recharts 컨테이너를 쓰지 않아 가벼움).
 // 상승 red / 하락 blue (한국식). 데이터 2점 미만이면 빈칸.
 // ⚠️ 선 색은 옆 칸 등락율과 **같은 값**(rate)으로 칠한다 — 점 비교로 되돌리면 등락률이 정확히 0이거나
 //    1일 탭(전일 종가 대비 실시간)에서 "선은 빨강인데 숫자는 파랑"이 다시 난다. rate 미제공 시에만 점 비교로 폴백.
-// avg = 보유 종목의 합산 매입가(포트폴리오 테이블 구매단가) → 호박색 점선. 매입가가 시세와 멀어 눈금을
-//   넓히면 시세 선이 높이의 40% 미만으로 눌리는 경우엔 넓히지 않고 위·아래 가장자리에 성긴 점선으로만
-//   표시한다(holdingLayout — 종목 차트 창과 같은 40% 규칙).
-function Sparkline({ points, rate, avg = null, width = 56, height = 20 }) {
+// avgs = 보유 매입가 점선 `[{ v, color }]`(포트폴리오 테이블 구매단가 — **계좌마다 한 줄**, 합산하지 않는다).
+//   배열 뒤쪽이 위에 그려진다. 매입가가 시세와 멀어 눈금을 넓히면 시세 선이 높이의 40% 미만으로 눌리는
+//   경우엔 넓히지 않고 위·아래 가장자리에 성긴 점선으로만 표시한다(holdingLayout — 종목 차트 창과 같은 40% 규칙).
+function Sparkline({ points, rate, avgs = [], width = 56, height = 20 }) {
   if (!Array.isArray(points) || points.length < 2) return <div style={{ width, height }} className="shrink-0" />;
   let min = Math.min(...points);
   let max = Math.max(...points);
-  const avgLay = typeof avg === 'number' && avg > 0 ? holdingLayout(min, max, [avg], 0.4) : null;
-  const avgPin = avgLay ? avgLay.pins[0] : 'none';
-  if (avgPin === '') { min = avgLay.lo; max = avgLay.hi; }
+  const lv = (Array.isArray(avgs) ? avgs : []).filter((a) => a && typeof a.v === 'number' && a.v > 0);
+  const avgLay = lv.length ? holdingLayout(min, max, lv.map((a) => a.v), 0.4) : null;
+  if (avgLay && Number.isFinite(avgLay.lo) && Number.isFinite(avgLay.hi)) { min = avgLay.lo; max = avgLay.hi; }
   const range = max - min || 1;
   const up = points[points.length - 1] >= points[0];
   const stroke = (rate != null && Number.isFinite(rate))
@@ -123,13 +127,16 @@ function Sparkline({ points, rate, avg = null, width = 56, height = 20 }) {
   const d = points
     .map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * stepX).toFixed(1)},${(pad + h - ((v - min) / range) * h).toFixed(1)}`)
     .join(' ');
-  const avgY = avgPin === '' ? pad + h - ((avg - min) / range) * h : avgPin === 'top' ? 0.5 : avgPin === 'bottom' ? height - 0.5 : null;
   return (
     <svg width={width} height={height} className="shrink-0" style={{ display: 'block' }}>
-      {avgY != null && (
-        <line x1={0} x2={width} y1={avgY} y2={avgY} stroke={HOLD_COLOR} strokeWidth={1}
-          strokeDasharray={avgPin === '' ? '3 2' : '1 2'} strokeOpacity={avgPin === '' ? 0.95 : 0.7} />
-      )}
+      {lv.map((a, i) => {
+        const pin = avgLay.pins[i];
+        const y = pin === '' ? pad + h - ((a.v - min) / range) * h : pin === 'top' ? 0.5 : pin === 'bottom' ? height - 0.5 : null;
+        return y != null && (
+          <line key={i} x1={0} x2={width} y1={y} y2={y} stroke={a.color || HOLD_COLOR} strokeWidth={1}
+            strokeDasharray={pin === '' ? '3 2' : '1 2'} strokeOpacity={pin === '' ? 0.95 : 0.7} />
+        );
+      })}
       <path d={d} fill="none" stroke={stroke} strokeWidth={1} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
@@ -316,7 +323,23 @@ export default function WatchlistPopup({
   const dailySeqRef = useRef({});                      // 코드:market → 조회 세대(늦게 온 짧은 응답이 긴 응답을 덮지 않게)
 
   const list = Array.isArray(groups) ? groups : [];
-  const activeGroup = list.find((g) => g.id === activeGroupId) || list[0] || null;
+  // 화면의 그룹 목록 = 저장된 그룹 + 자동 '보유종목'(전체 계좌의 포트폴리오 테이블 종목 — 사용자 요청 2026-10-30).
+  // ⚠️ 보유종목은 **화면에만** 끼우는 가상 그룹이다 — 쓰기(updateGroups)는 저장된 그룹(prev)만 보므로 그 안에 들어갈 수 없다.
+  //    자리 = 앞쪽 자동 그룹(최근조회) 바로 뒤 · 수동 그룹 앞. 보유 종목이 없거나 아직 모르면(null) 그룹을 띄우지 않는다.
+  const holdStocks = useMemo(() => holdingWatchStocks(holdings), [holdings]);
+  const shownGroups = useMemo(() => {
+    const real = list.filter((g) => g && g.id !== HOLD_ID);
+    if (!holdStocks.length) return real;
+    const at = real.findIndex((g) => !isAutoGroupOf(g));
+    const i = at < 0 ? real.length : at;
+    const vg = { id: HOLD_ID, name: HOLD_NAME, auto: true, virtual: true, stocks: holdStocks };
+    return [...real.slice(0, i), vg, ...real.slice(i)];
+  }, [list, holdStocks]);
+  const activeGroup = shownGroups.find((g) => g.id === activeGroupId) || shownGroups[0] || null;
+  const isHoldGroup = activeGroup?.id === HOLD_ID;
+  // 보유종목 그룹은 포트폴리오에서 종목을 사고팔면 줄이 바뀐다 → 그 그룹을 보는 동안만 코드 목록을 조회 트리거에 넣는다
+  // (수동 그룹은 추가할 때 그 자리에서 조회하므로 넣지 않는다 — 넣으면 종목 하나 추가에 그룹 전체를 다시 조회한다).
+  const activeCodesKey = isHoldGroup ? activeGroup.stocks.map((s) => `${s.code}:${s.market}`).join(',') : '';
 
   // ⚠️ **그룹 쓰기의 단일 통로**(fail-closed). 호출부가 10곳이라 개별 게이팅으로 두면 하나만
   //    빠뜨려도 읽기 전용에서 그 경로만 조용히 저장을 흘려보낸다(종목명 캐시·최근조회 기록처럼
@@ -379,7 +402,8 @@ export default function WatchlistPopup({
   const loadQuote = async (stock) => {
     const key = stock.code;
     setStatus((p) => ({ ...p, [key]: 'loading' }));
-    const zero = readOnly ? '' : krCodeWithZeros(stock.code);
+    // 보유종목(가상) 줄은 고칠 행이 없다 — 코드는 포트폴리오 테이블이 정본(그 표가 앞자리 0을 스스로 고친다).
+    const zero = readOnly || stock.virtual ? '' : krCodeWithZeros(stock.code);
     if (zero && stock.market === 'us') {
       const dz = await fetchWatchQuote('kr', zero);
       if (dz) { repairStockCode(stock, zero, dz); return; }
@@ -393,7 +417,7 @@ export default function WatchlistPopup({
       setQuotes((p) => ({ ...p, [key]: d }));
       setStatus((p) => ({ ...p, [key]: 'success' }));
       // 종목명 캐시(STATE 저장) — 로드 직후 코드만 뜨는 깜빡임 방지. 이름 다를 때만 갱신(저장 churn 최소화)
-      if (d.name && d.name !== stock.name) {
+      if (d.name && d.name !== stock.name && !stock.virtual) {
         updateGroups((prev) => (Array.isArray(prev) ? prev : []).map((g) => ({
           ...g,
           stocks: (g.stocks || []).map((s) => (s.id === stock.id ? { ...s, name: d.name } : s)),
@@ -486,34 +510,46 @@ export default function WatchlistPopup({
     if (showDiv) loadDividend(stock, true);
   };
 
+  // 조회 대상 = 활성 그룹의 종목을 코드:시장으로 한 번씩 — 보유종목 그룹은 같은 종목이 계좌마다 줄이 있어
+  // 그대로 돌리면 같은 시세를 줄 수만큼 다시 받는다(진행 중인 일별 조회를 서로 끊기도 한다).
+  const uniqueStocks = (arr) => {
+    const seen = new Set();
+    return (arr || []).filter((s) => {
+      const k = `${s.code}:${s.market}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  };
+
   // 팝업 열 때 + 그룹 전환 시 활성 그룹 종목만 조회(전체 그룹 동시 조회 금지)
   useEffect(() => {
     if (!open || !activeGroup) return;
-    (activeGroup.stocks || []).forEach((s) => { loadQuote(s); loadDaily(s); });
-  }, [open, activeGroup?.id]);
+    uniqueStocks(activeGroup.stocks).forEach((s) => { loadQuote(s); loadDaily(s); });
+  }, [open, activeGroup?.id, activeCodesKey]);
 
   // 직접 선택 시작일이 1년보다 이전이면 그만큼 일별 이력을 더 받는다(활성 그룹 종목만)
   useEffect(() => {
     if (!open || !activeGroup || period !== CUSTOM || !customStart) return;
-    (activeGroup.stocks || []).forEach((s) => loadDaily(s, customStart));
-  }, [open, activeGroup?.id, period, customStart]);
+    uniqueStocks(activeGroup.stocks).forEach((s) => loadDaily(s, customStart));
+  }, [open, activeGroup?.id, period, customStart, activeCodesKey]);
 
   // 기간이 '1일'이면(1일 상태로 열림/그룹전환/토글) 활성 그룹 인트라데이 조회
   useEffect(() => {
     if (!open || !activeGroup || period !== '1일') return;
-    (activeGroup.stocks || []).forEach((s) => loadIntraday(s));
-  }, [open, activeGroup?.id, period]);
+    uniqueStocks(activeGroup.stocks).forEach((s) => loadIntraday(s));
+  }, [open, activeGroup?.id, period, activeCodesKey]);
 
   // 분배금 열을 펼쳤으면(펼침/그룹 전환/열림) 활성 그룹 종목의 최근 분배금 조회
   useEffect(() => {
     if (!open || !activeGroup || !showDiv) return;
-    (activeGroup.stocks || []).forEach((s) => loadDividend(s));
-  }, [open, activeGroup?.id, showDiv]);
+    uniqueStocks(activeGroup.stocks).forEach((s) => loadDividend(s));
+  }, [open, activeGroup?.id, showDiv, activeCodesKey]);
 
   // 활성 그룹 미지정 시 첫 그룹으로 고정 — recordRecent가 최근조회를 앞으로 재정렬해도 뷰가 튀지 않게
   useEffect(() => {
-    if (open && !activeGroupId && list.length) setActiveGroupId(list[0].id);
-  }, [open, list.length, activeGroupId]);
+    if (open && !activeGroupId && shownGroups.length) setActiveGroupId(shownGroups[0].id);
+  }, [open, shownGroups.length, activeGroupId]);
 
   // ───────── 그룹 CRUD ─────────
   const addGroup = () => {
@@ -737,14 +773,36 @@ export default function WatchlistPopup({
   // 국내 원화 매입가는 표처럼 원 단위로 반올림해 보인다(선 높이는 반올림 전 값).
   const fmtAvg = (market, v) => fmtPrice(market, market === 'kr' ? Math.round(v) : v);
   const fmtQty = (n) => new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 }).format(n);
-  const holdTitle = (s, hold, q) => {
+  // 한 줄의 보유분 — 보유종목(가상) 줄이면 그 줄의 계좌(own)와 같은 종목의 다른 계좌(others)로 가르고,
+  // 수동 그룹 줄이면 전 계좌가 own이다. ⚠️ 매입가는 계좌마다 따로 — 합산 값으로 선을 긋지 않는다(사용자 요청 2026-10-30).
+  const holdView = (s) => {
+    const hold = holdingsFor(holdings, s.code, s.market);
+    if (!s.virtual) return { hold, own: hold, others: [] };
+    const own = hold.filter((h) => isRowHolding(h, s));
+    return {
+      hold,
+      own: own.length ? own : [{ acct: s.acct, avg: s.avg, qty: s.qty }],
+      others: hold.filter((h) => !isRowHolding(h, s)),
+    };
+  };
+  // 미니차트 점선 — 다른 계좌(보라)를 먼저, 그 줄의 계좌(호박)를 나중에 그려 위에 보이게.
+  const holdAvgs = (hv) => [
+    ...hv.others.map((h) => ({ v: h.avg, color: HOLD_OTHER_COLOR })),
+    ...hv.own.map((h) => ({ v: h.avg, color: HOLD_COLOR })),
+  ];
+  const holdTitle = (s, hv, q) => {
     const px = q ? Number(q.price) : 0;
-    const lines = hold.map((h) => {
+    const all = s.virtual ? [...hv.own, ...hv.others] : hv.own;
+    const lines = all.map((h) => {
       const r = px > 0 ? ` · 현재가 대비 ${formatChangeRate((px / h.avg - 1) * 100)}` : '';
-      return `${h.acct} · ${fmtQty(h.qty)}${s.market === 'fund' ? '좌' : '주'} · 매입가 ${fmtAvg(s.market, h.avg)}${r}`;
+      const mark = s.virtual ? (hv.own.includes(h) ? '▶ ' : '   ') : '';
+      return `${mark}${h.acct} · ${fmtQty(h.qty)}${s.market === 'fund' ? '좌' : '주'} · 매입가 ${fmtAvg(s.market, h.avg)}${r}`;
     });
-    const sum = hold.length > 1 ? holdingAvg(hold) : null;
-    return `보유 종목(포트폴리오 테이블)\n${lines.join('\n')}${sum ? `\n합산 매입가 ${fmtAvg(s.market, sum.avg)}` : ''}\n미니차트의 호박색 점선 = 매입가${hold.length > 1 ? '(합산)' : ''}`;
+    const sum = all.length > 1 ? holdingAvg(all) : null;
+    const legend = s.virtual
+      ? (hv.others.length ? '미니차트 점선: 호박색 = 이 계좌 매입가 · 보라색 = 다른 계좌 매입가' : '미니차트의 호박색 점선 = 이 계좌 매입가')
+      : `미니차트의 호박색 점선 = 매입가${all.length > 1 ? '(계좌마다 한 줄)' : ''}`;
+    return `보유 종목(포트폴리오 테이블 구매단가)\n${lines.join('\n')}${sum ? `\n(참고) 전체 합산 매입가 ${fmtAvg(s.market, sum.avg)}` : ''}\n${legend}`;
   };
 
   // 분배금 칸 표시 — 상태 6종(조회 중 · 최근 1회 · 연간 · 기록 없음 · 펀드 미지원 · 조회 실패)을 뭉뚱그리지 않는다.
@@ -998,7 +1056,7 @@ export default function WatchlistPopup({
             </button>
           </div>
           <div ref={sidebarListRef} className={`flex-1 overflow-y-auto py-1 ${gDragId != null ? 'select-none' : ''}`}>
-        {list.map((g) => {
+        {shownGroups.map((g) => {
           const isActive = activeGroup?.id === g.id;
           const isAuto = isAutoGroupOf(g);
           if (!isAuto && editingId === g.id) {
@@ -1068,9 +1126,10 @@ export default function WatchlistPopup({
                 onClick={() => setActiveGroupId(g.id)}
                 onDoubleClick={() => { if (!isAuto && !readOnly) { setEditingId(g.id); setEditName(g.name); } }}
                 className="flex-1 min-w-0 flex items-center gap-1 text-left"
-                title={isAuto ? g.name : `${g.name} — 더블클릭하면 이름 변경`}
+                title={g.id === HOLD_ID ? `${g.name} — 전체 계좌 포트폴리오 테이블의 종목(자동 · 같은 종목은 계좌마다 한 줄)`
+                  : isAuto ? g.name : `${g.name} — 더블클릭하면 이름 변경`}
               >
-                {isAuto && <Clock size={11} className="shrink-0" />}
+                {isAuto && (g.id === HOLD_ID ? <Wallet size={11} className="shrink-0" /> : <Clock size={11} className="shrink-0" />)}
                 <span className="truncate font-medium">{g.name}</span>
               </button>
               <span className="shrink-0 text-[9px] text-gray-600 tabular-nums">{(g.stocks || []).length}</span>
@@ -1126,7 +1185,7 @@ export default function WatchlistPopup({
 
         {/* 종목 리스트 */}
         <div className="flex-1 min-w-0 overflow-y-auto px-3 py-3" style={{ touchAction: 'auto' }}>
-        {list.length === 0 ? (
+        {shownGroups.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center gap-2 py-8">
             <Star size={28} className="text-gray-600" />
             {/* ⚠️ 읽기 전용(별도 창의 로드 대기·연결 끊김)에서 '만들어 보세요'라고 하면 안 된다 —
@@ -1148,7 +1207,16 @@ export default function WatchlistPopup({
         ) : activeGroup ? (
           <>
             {/* 코드 입력 (최근조회 자동 그룹은 입력창 대신 안내) */}
-            {readOnly ? null : isAutoGroup ? (
+            {isHoldGroup ? (
+              <div className="flex items-start gap-1 mb-2 text-[11px] text-gray-500">
+                <Wallet size={11} className="shrink-0 mt-0.5" />
+                <span>
+                  전체 계좌 포트폴리오 테이블의 종목이 자동으로 표시됩니다. 같은 종목은 계좌마다 한 줄 —
+                  미니차트 점선 <span style={{ color: HOLD_COLOR }}>호박색 = 이 계좌 매입가</span> ·{' '}
+                  <span style={{ color: HOLD_OTHER_COLOR }}>보라색 = 다른 계좌 매입가</span>.
+                </span>
+              </div>
+            ) : readOnly ? null : isAutoGroup ? (
               <div className="flex items-center gap-1 mb-2 text-[11px] text-gray-500">
                 <Clock size={11} className="shrink-0" /> 등락율을 클릭해 상세페이지를 연 종목이 자동으로 기록됩니다.
               </div>
@@ -1333,8 +1401,8 @@ export default function WatchlistPopup({
                 {sortedStocks.map((s, idx) => {
                   const q = quotes[s.code];
                   const v = viewByCode[s.code] || {};   // 차트·등락율·툴팁 공용(단일 소스)
-                  const hold = holdingsFor(holdings, s.code, s.market);   // 포트폴리오 테이블에 있는 종목(계좌별)
-                  const holdSum = holdingAvg(hold);
+                  const hv = holdView(s);   // 포트폴리오 테이블에 있는 종목(계좌별 — 보유종목 줄은 그 계좌 / 다른 계좌)
+                  const held = hv.own.length > 0;
                   const st = status[s.code];
                   const isDragging = dragId === s.id;
                   const dropTop = canReorder && dragId != null && !isDragging && dragOverIndex === idx;
@@ -1350,7 +1418,7 @@ export default function WatchlistPopup({
                     >
                       {/* 하이라이트 띠 = 행 왼쪽 끝. 누르면 칠하고 다시 누르면 지운다(칠할 때마다 다른 색).
                           ⚠️ 행 안의 다른 칸(그립·등락율·현재가)과 겹치지 않게 왼쪽 여백(pl-3) 안에만 둔다. */}
-                      {readOnly ? (
+                      {readOnly || s.virtual ? (
                         hl && <span className="absolute left-0 top-0 bottom-0 w-2.5" style={{ backgroundColor: hl.hex }} />
                       ) : (
                         <button
@@ -1387,12 +1455,22 @@ export default function WatchlistPopup({
                           <div className="text-gray-100 text-[13px] font-medium truncate" title={q?.name || s.name || s.code}>
                             {q?.name || s.name || s.code}
                           </div>
-                          <div className="text-gray-500 text-[10px] flex items-center gap-1">
-                            <span>{s.code}</span>
-                            <span className="text-gray-600">· {MARKET_LABEL[s.market] || s.market}</span>
-                            {holdSum && (
-                              <span className="font-semibold cursor-help" style={{ color: HOLD_COLOR }} title={holdTitle(s, hold, q)}>
-                                · 보유 {fmtAvg(s.market, holdSum.avg)}
+                          <div className="text-gray-500 text-[10px] flex items-center gap-1 min-w-0 whitespace-nowrap overflow-hidden">
+                            <span className="shrink-0">{s.code}</span>
+                            <span className="text-gray-600 shrink-0">· {MARKET_LABEL[s.market] || s.market}</span>
+                            {/* 보유종목 줄 = 그 계좌 이름 + 그 계좌 매입가, 같은 종목을 가진 다른 계좌는 '외 n계좌'(보라 — 미니차트 점선과 같은 색).
+                                수동 그룹 줄 = 계좌마다의 매입가를 / 로(합산하지 않는다). 계좌·수량·수익률은 툴팁에. */}
+                            {s.virtual && (
+                              <span className="min-w-0 truncate rounded border border-amber-500/40 px-1 leading-[13px] text-amber-200/90" title={s.acct}>{s.acct}</span>
+                            )}
+                            {held && (
+                              <span className="font-semibold cursor-help truncate" style={{ color: HOLD_COLOR }} title={holdTitle(s, hv, q)}>
+                                {s.virtual ? '' : '· '}보유 {hv.own.map((h) => fmtAvg(s.market, h.avg)).join(' / ')}
+                              </span>
+                            )}
+                            {hv.others.length > 0 && (
+                              <span className="truncate cursor-help" style={{ color: HOLD_OTHER_COLOR }} title={holdTitle(s, hv, q)}>
+                                · 외 {hv.others.length}계좌
                               </span>
                             )}
                           </div>
@@ -1400,10 +1478,10 @@ export default function WatchlistPopup({
                         {/* 미니차트 클릭 = 이 종목의 비교 차트를 별도 브라우저 창으로(시세 반영 수익률 차트) */}
                         <button
                           onClick={() => openChartWindow(s, q)}
-                          title={`${q?.name || s.name || s.code} — 클릭하면 종목 비교 차트를 새 창으로 엽니다${holdSum ? `\n호박색 점선 = 보유 매입가 ${fmtAvg(s.market, holdSum.avg)}${hold.length > 1 ? `(${hold.length}개 계좌 합산)` : ''}` : ''}`}
+                          title={`${q?.name || s.name || s.code} — 클릭하면 종목 비교 차트를 새 창으로 엽니다(계좌마다의 매입가 점선 포함)${held ? `\n${holdTitle(s, hv, q)}` : ''}`}
                           className="shrink-0 rounded cursor-pointer hover:bg-white/[0.07] hover:ring-1 hover:ring-gray-600 transition"
                         >
-                          <Sparkline points={v.points || []} rate={v.rate} avg={holdSum ? holdSum.avg : null} />
+                          <Sparkline points={v.points || []} rate={v.rate} avgs={holdAvgs(hv)} />
                         </button>
                         <button
                           onClick={() => viewStock(s, q)}
@@ -1459,7 +1537,7 @@ export default function WatchlistPopup({
                             <ChevronLeft size={11} />
                           </button>
                         )}
-                        {!readOnly && (
+                        {!readOnly && !s.virtual && (
                           <button
                             onClick={() => removeStock(s.id)}
                             title="종목 삭제"
@@ -1471,8 +1549,8 @@ export default function WatchlistPopup({
                       </div>
                       {st === 'fail' && (
                         <div className="flex items-center gap-1 px-3 pb-1.5 pt-0.5 text-[10px] text-red-400/80">
-                          <span>{readOnly ? '조회 실패' : '조회 실패 — 시장 선택:'}</span>
-                          {!readOnly && (['kr', 'us', 'fund']).map((m) => (
+                          <span>{readOnly || s.virtual ? '조회 실패' : '조회 실패 — 시장 선택:'}</span>
+                          {!readOnly && !s.virtual && (['kr', 'us', 'fund']).map((m) => (
                             <button
                               key={m}
                               onClick={() => setStockMarket(s, m)}

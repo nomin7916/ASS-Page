@@ -48,6 +48,8 @@ const isUsd = (market) => market === 'us';
 const HOLD_PING_MS = 4000;
 // 국내 원화 매입가는 포트폴리오 테이블처럼 원 단위로 반올림해 보인다(선 높이는 반올림 전 값).
 const fmtAvg = (market, v) => fmtWatchPrice(market, market === 'kr' ? Math.round(v) : v);
+// 매입가 점선 무늬 — 같은 종목을 여러 계좌에 보유하면 계좌마다 무늬가 달라 선끼리 구분된다(색은 그 종목 색 그대로).
+const AVG_DASHES = ['6 4', '2 3', '10 3 2 3', '1 4'];
 // 매입가 태그 폭 어림(SVG 글자 폭 — 한글·기호는 넓게).
 const tagWidth = (t) => [...t].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2000 ? 10.5 : 6.2), 10);
 
@@ -270,7 +272,7 @@ function StockChartPage() {
     return s.hold.map((h, j) => {
       const v = mode === 'pct' ? holdingPct(h.avg, base) : h.avg;
       const ret = px > 0 ? (px / h.avg - 1) * 100 : null;
-      return { key: `avg-${s.key}-${j}`, s, h, v, ret };
+      return { key: `avg-${s.key}-${j}`, s, h, v, ret, dash: AVG_DASHES[j % AVG_DASHES.length] };
     }).filter((l) => l.v != null && Number.isFinite(l.v));
   });
   const avgMulti = avgLines.length > 1;
@@ -373,10 +375,16 @@ function StockChartPage() {
 
   const mainQ = quotes[main.code];
   const mainS = series[0];
-  const mainHold = holdingAvg(mainS?.hold);
-  const mainHoldRet = mainHold && mainQ && Number(mainQ.price) > 0 ? (Number(mainQ.price) / mainHold.avg - 1) * 100 : null;
+  // 보유 매입가는 **계좌마다 따로** 보인다(사용자 요청 2026-10-30 — 같은 종목을 여러 계좌에 보유하면 계좌별 평균단가).
+  // 합산 값은 툴팁의 참고 한 줄뿐이다(선·머리글·칩에 합산을 쓰지 않는다).
+  const mainPx = mainQ && Number(mainQ.price) > 0 ? Number(mainQ.price) : 0;
   const fmtQty = (n) => new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 }).format(n);
-  const holdTitle = (s) => `보유 종목(포트폴리오 테이블 구매단가)\n${s.hold.map((h) => `${h.acct} · ${fmtQty(h.qty)}${s.market === 'fund' ? '좌' : '주'} · 매입가 ${fmtAvg(s.market, h.avg)}`).join('\n')}\n차트의 점선 = 계좌마다의 매입가`;
+  const holdTitle = (s) => {
+    const px = Number(quotes[s.code]?.price) > 0 ? Number(quotes[s.code].price) : 0;
+    const sum = s.hold.length > 1 ? holdingAvg(s.hold) : null;
+    const lines = s.hold.map((h) => `${h.acct} · ${fmtQty(h.qty)}${s.market === 'fund' ? '좌' : '주'} · 매입가 ${fmtAvg(s.market, h.avg)}${px > 0 ? ` · 현재가 대비 ${fmtPct((px / h.avg - 1) * 100)}` : ''}`);
+    return `보유 종목(포트폴리오 테이블 구매단가 — 계좌마다)\n${lines.join('\n')}${sum ? `\n(참고) 전체 합산 매입가 ${fmtAvg(s.market, sum.avg)}` : ''}\n차트의 점선 = 계좌마다의 매입가${s.hold.length > 1 ? '(점선 무늬로 계좌 구분)' : ''}`;
+  };
   const periodLabel = view.period === CHART_CUSTOM_PERIOD
     ? `${fmtShort(view.customStart)}~${view.customEnd ? fmtShort(view.customEnd) : '현재'}`
     : view.period;
@@ -403,12 +411,24 @@ function StockChartPage() {
             <span className="ml-1 text-[10px] text-gray-500">전일 대비</span>
           </span>
         )}
-        {mainHold && (
-          <span className="text-xs tabular-nums cursor-help" title={holdTitle(mainS)}>
-            <span className="font-semibold" style={{ color: CHART_SERIES_COLORS[0] }}>
-              보유 {fmtQty(mainHold.qty)}{main.market === 'fund' ? '좌' : '주'} · 매입가 {fmtAvg(main.market, mainHold.avg)}{mainHold.n > 1 ? `(${mainHold.n}개 계좌 합산)` : ''}
-            </span>
-            {mainHoldRet != null && <span className={`ml-1.5 font-bold ${rateCls(mainHoldRet)}`}>{fmtPct(mainHoldRet)}</span>}
+        {mainS?.hold.length > 0 && (
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs tabular-nums cursor-help" title={holdTitle(mainS)}>
+            {mainS.hold.length > 1 && <span className="text-gray-500">보유</span>}
+            {mainS.hold.map((h, j) => {
+              const r = mainPx > 0 ? (mainPx / h.avg - 1) * 100 : null;
+              return (
+                <span key={j} className="flex items-center whitespace-nowrap">
+                  {/* 여러 계좌면 그 계좌 점선 무늬 견본 — 차트의 어느 선이 어느 계좌인지 머리글에서 바로 짝짓는다 */}
+                  {mainS.hold.length > 1 && (
+                    <svg width={18} height={6} className="mr-1 shrink-0"><line x1={0} x2={18} y1={3} y2={3} stroke={CHART_SERIES_COLORS[0]} strokeWidth={1.5} strokeDasharray={AVG_DASHES[j % AVG_DASHES.length]} /></svg>
+                  )}
+                  <span className="font-semibold" style={{ color: CHART_SERIES_COLORS[0] }}>
+                    {mainS.hold.length > 1 ? h.acct : '보유'} {fmtQty(h.qty)}{main.market === 'fund' ? '좌' : '주'} · 매입가 {fmtAvg(main.market, h.avg)}
+                  </span>
+                  {r != null && <span className={`ml-1.5 font-bold ${rateCls(r)}`}>{fmtPct(r)}</span>}
+                </span>
+              );
+            })}
           </span>
         )}
         <button
@@ -443,7 +463,7 @@ function StockChartPage() {
               <span className={`tabular-nums font-semibold ${rateCls(s.stat.rate)}`}>{fmtPct(s.stat.rate)}</span>
               {s.hold.length > 0 && (
                 <span className="tabular-nums text-gray-400 cursor-help" title={holdTitle(s)}>
-                  매입 {fmtAvg(s.market, holdingAvg(s.hold).avg)}{s.hold.length > 1 ? `(${s.hold.length}계좌)` : ''}
+                  매입 {s.hold.slice(0, 3).map((h) => fmtAvg(s.market, h.avg)).join(' / ')}{s.hold.length > 3 ? ` 외 ${s.hold.length - 3}계좌` : ''}
                 </span>
               )}
               {st === 'loading' && <RefreshCw size={10} className="animate-spin text-gray-500" />}
@@ -632,7 +652,7 @@ function StockChartPage() {
                   ifOverflow="extendDomain": 눈금을 넓혀 선을 넣는다 — 시세가 납작해질 만큼 먼 매입가는
                   holdingLayout이 미리 가장자리 표시로 돌려 이 목록에서 빠진다(pins[i] !== ''). */}
               {avgLines.map((l, i) => avgLayout.pins[i] === '' && (
-                <ReferenceLine key={l.key} y={l.v} yAxisId={l.s.axisId} stroke={l.s.color} strokeOpacity={0.9} strokeWidth={1.2} strokeDasharray="6 4" ifOverflow="extendDomain"
+                <ReferenceLine key={l.key} y={l.v} yAxisId={l.s.axisId} stroke={l.s.color} strokeOpacity={0.9} strokeWidth={1.2} strokeDasharray={l.dash} ifOverflow="extendDomain"
                   label={({ viewBox }) => <AvgTag viewBox={viewBox} text={avgText(l)} color={l.s.color} />} />
               ))}
               {hoverLevels.map((h) => (
@@ -677,7 +697,7 @@ function StockChartPage() {
         수익률 = 각 종목의 조회 시작 후 첫 종가를 0%로 둔 등락(관심종목 등락율과 같은 계산) · 종가는 관심종목 미니차트와 같은 소스
         (종가 보기: 같은 통화는 한 눈금, 원화·달러가 섞이면 기준 종목과 다른 통화는 오른쪽 눈금) ·
         직접 선택 기간에서 종료일을 비우면 마지막 값은 실시간 현재가입니다. 이 창은 아무것도 저장하지 않습니다(비교 종목·기간은 주소에만 남습니다).
-        {holdAny && ' · 점선 = 포트폴리오 테이블에 있는 종목의 매입가(구매단가, 계좌마다 한 줄 — 앱 창에서 읽어 옵니다).'}
+        {holdAny && ' · 점선 = 포트폴리오 테이블에 있는 종목의 매입가(구매단가, 계좌마다 한 줄 · 무늬로 계좌 구분 — 앱 창에서 읽어 옵니다).'}
       </div>
     </div>
   );

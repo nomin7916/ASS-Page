@@ -9,6 +9,13 @@
 export const WATCH_RECENT_ID = '__recent__';
 
 /**
+ * 자동 '보유종목' 그룹의 예약 id — 포트폴리오 테이블(전체 계좌)에서 화면에만 만드는 **가상 그룹**이다.
+ * ⚠️ 그룹 배열(watchlistGroups — Drive 저장)에 넣지 말 것: 정본은 portfolios이고, 저장하면 산 종목·판 종목이
+ *    관심종목에 낡은 사본으로 남는다. `auto: true`라 이름 변경·삭제·순서 드래그 게이트를 그대로 탄다.
+ */
+export const WATCH_HOLD_ID = '__holdings__';
+
+/**
  * 그룹이 '자동 그룹(최근조회)'인가 — 이름 변경·삭제·순서 드래그의 공통 게이트.
  *
  * ⚠️ 이 판정을 손복제하지 말 것: `recordRecent`가 최근조회를 **항상 배열 맨 앞**에 다시 붙이므로
