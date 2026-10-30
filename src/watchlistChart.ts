@@ -306,6 +306,19 @@ const holdNum = (v: any): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/**
+ * 앞자리 0이 빠진 국내 종목 코드의 복원 후보 — '241D0' → '0241D0', '5930' → '005930'(사용자 신고 2026-10-30:
+ * 0241D0을 넣었는데 241D0이 들어가 조회 실패). 국내 단축코드는 **늘 6자**라 앞을 0으로 채운다.
+ * 후보는 숫자가 든 1~5자 영숫자만(순수 알파벳은 해외 티커, 'MA:'·URL은 펀드라 후보 없음 = '').
+ * ⚠️ 이 값은 '국내로 조회해 보고 **맞으면** 쓰는' 후보다 — 확인 없이 바꾸지 말 것(5자 미래에셋 펀드 코드가 있다).
+ */
+export function krCodeWithZeros(code: any): string {
+  if (typeof code !== 'string') return '';
+  const c = code.trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,5}$/.test(c) || !/\d/.test(c)) return '';
+  return c.padStart(6, '0');
+}
+
 /** 보유 종목 매칭 키 — 대소문자 무시 · 미래에셋 펀드 'MA:' 접두어 무시(관심종목은 접두어 없이 넣기도 한다). */
 export function holdingKey(code: any): string {
   if (typeof code !== 'string') return '';

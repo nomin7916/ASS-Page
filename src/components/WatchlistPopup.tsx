@@ -6,7 +6,7 @@ import { generateId, formatNumber, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday, fetchWatchDividend, fmtWatchPrice } from '../watchlistQuote';
 import {
   periodCutoff, watchPeriodWindow, windowRate, stockDetailUrl, stockChartUrl, stockChartWindowName, chartPeriodFromWatch,
-  holdingsFor, holdingAvg, holdingLayout, pickHoldings,
+  holdingsFor, holdingAvg, holdingLayout, pickHoldings, krCodeWithZeros,
 } from '../watchlistChart';
 import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize, watchHighlightOf, nextWatchHighlight, toggleWatchHighlight, clearWatchHighlights } from '../watchlistGroups';
 
@@ -372,10 +372,23 @@ export default function WatchlistPopup({
   }, [open]);
 
   // ───────── 시세 조회 ─────────
+  // ⚠️ 앞자리 0이 빠진 국내 코드('241D0' → '0241D0', '5930' → '005930')는 국내로 다시 조회해 보고 **맞으면**
+  //    그 행의 코드·시장을 고친다(repairStockCode) — 이미 저장된 행도 열 때 스스로 낫는다.
+  //    해외로 판정된 코드는 숫자가 든 5자 이하 티커가 사실상 없어 복원 후보를 **먼저**, 펀드(5~7자 미래에셋)는
+  //    진짜 펀드 코드일 수 있어 원래 코드를 먼저 조회한다(펀드 행마다 국내 조회가 덧붙지 않게).
   const loadQuote = async (stock) => {
     const key = stock.code;
     setStatus((p) => ({ ...p, [key]: 'loading' }));
+    const zero = readOnly ? '' : krCodeWithZeros(stock.code);
+    if (zero && stock.market === 'us') {
+      const dz = await fetchWatchQuote('kr', zero);
+      if (dz) { repairStockCode(stock, zero, dz); return; }
+    }
     const d = await fetchWatchQuote(stock.market, stock.code);
+    if (!d && zero && stock.market !== 'us') {
+      const dz = await fetchWatchQuote('kr', zero);
+      if (dz) { repairStockCode(stock, zero, dz); return; }
+    }
     if (d) {
       setQuotes((p) => ({ ...p, [key]: d }));
       setStatus((p) => ({ ...p, [key]: 'success' }));
@@ -389,6 +402,26 @@ export default function WatchlistPopup({
     } else {
       setStatus((p) => ({ ...p, [key]: 'fail' }));
     }
+  };
+  // 복원한 국내 코드로 그 행을 고친다 — 같은 그룹에 그 코드가 이미 있으면 고장 난 행을 지운다(중복 방지).
+  // 시세는 이미 받았으니 그대로 싣고, 일별 종가·인트라데이·분배금만 새 코드로 받는다.
+  const repairStockCode = (stock, code, d) => {
+    const fixed = { ...stock, code, market: 'kr', name: d.name || stock.name || '' };
+    setQuotes((p) => ({ ...p, [code]: d }));
+    setStatus((p) => ({ ...p, [code]: 'success', [stock.code]: 'success' }));
+    updateGroups((prev) => (Array.isArray(prev) ? prev : []).map((g) => {
+      const arr = g.stocks || [];
+      if (!arr.some((s) => s.id === stock.id)) return g;
+      const dup = arr.some((s) => s.id !== stock.id && (s.code || '').toUpperCase() === code);
+      return {
+        ...g,
+        stocks: dup ? arr.filter((s) => s.id !== stock.id)
+          : arr.map((s) => (s.id === stock.id ? { ...s, code, market: 'kr', name: fixed.name } : s)),
+      };
+    }));
+    loadDaily(fixed, period === CUSTOM ? customStart : '');
+    if (period === '1일') loadIntraday(fixed);
+    if (showDiv) loadDividend(fixed);
   };
 
   // 미니차트 일별 종가(~1년) — 팝업 로컬 dailyMap에만 저장(공유 stockHistoryMap 미접촉으로 보유종목 평가 불변식 보호)
@@ -507,7 +540,9 @@ export default function WatchlistPopup({
 
   // ───────── 종목 CRUD ─────────
   const addStock = () => {
-    const code = codeInput.trim();
+    const raw = codeInput.trim();
+    // 국내 코드는 대문자가 정본이다(0241d0으로 조회하면 네이버가 0건 — api.normalizeKrCode와 같은 규칙).
+    const code = detectMarket(raw) === 'kr' ? raw.toUpperCase() : raw;
     if (!code || !activeGroup) return;
     if ((activeGroup.stocks || []).length >= MAX_STOCKS) { setCodeInput(''); return; }
     if ((activeGroup.stocks || []).some((s) => (s.code || '').toLowerCase() === code.toLowerCase())) {

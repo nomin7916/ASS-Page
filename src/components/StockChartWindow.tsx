@@ -12,7 +12,7 @@ import {
   periodCutoff, watchPeriodWindow, windowRate, buildChartRows, closeOnOrBefore, rangeRate, chartDateLabel,
   normalizeChartCode, normalizeChartComps, normalizeChartView, stockDetailUrl, stockChartUrl,
   EMPTY_CHART_SEL, chartSelStep,
-  holdingsFor, holdingAvg, holdingPct, holdingLayout, normalizeHoldings,
+  holdingsFor, holdingAvg, holdingPct, holdingLayout, normalizeHoldings, krCodeWithZeros,
 } from '../watchlistChart';
 
 /**
@@ -92,7 +92,8 @@ function stackAvgTags(root) {
 
 function readInitial() {
   const p = new URLSearchParams(window.location.search);
-  const code = normalizeChartCode(p.get('code') || '');
+  const code0 = normalizeChartCode(p.get('code') || '');
+  const code = detectMarket(code0) === 'kr' ? code0.toUpperCase() : code0;
   const mk = p.get('market');
   const market = MARKETS.includes(mk) ? mk : detectMarket(code);
   const view = normalizeChartView({ period: p.get('period'), customStart: p.get('from') || '', customEnd: p.get('to') || '' });
@@ -163,11 +164,33 @@ function StockChartPage() {
       setDailyMap((p) => ({ ...p, [s.code]: pairs }));
       setStatus((p) => ({ ...p, [s.code]: 'ok' }));
     } else {
+      // 앞자리 0이 빠진 국내 코드('241D0' → '0241D0') — 국내 6자리로 다시 받아 보고 맞으면 그 종목의 코드를 고친다.
+      // 받은 이력을 새 코드로 먼저 실어 두므로, 코드가 바뀐 뒤의 loadDaily는 다시 받지 않는다(시세만 새로 묻는다).
+      const zero = krCodeWithZeros(s.code);
+      const isMain = !!all[0] && all[0].code === s.code;
+      if (zero && !isMain && all.some((x) => x.code.toUpperCase() === zero)) {
+        setComps((p) => p.filter((c) => c.code !== s.code));   // 고친 코드가 이미 차트에 있다 — 겹친 비교 종목을 뺀다
+        return;
+      }
+      if (zero && !all.some((x) => x.code.toUpperCase() === zero)) {
+        const p2 = await fetchWatchDaily('kr', zero, from || undefined);
+        if (dailySeqRef.current[key] !== seq) return;
+        if (p2 && p2.length >= 2) {
+          const oneYear = periodCutoff('1년', todayKST());
+          dailyFromRef.current[zero + ':kr'] = from && from < oneYear ? from : oneYear;
+          setDailyMap((p) => ({ ...p, [zero]: p2 }));
+          setStatus((p) => ({ ...p, [zero]: 'ok' }));
+          loadQuote({ code: zero, market: 'kr' });
+          if (isMain) setMain((m) => (m.code === s.code ? { ...m, code: zero, market: 'kr' } : m));
+          else setComps((p) => p.map((c) => (c.code === s.code ? { ...c, code: zero, market: 'kr' } : c)));
+          return;
+        }
+      }
       setDailyMap((p) => (Array.isArray(p[s.code]) ? p : { ...p, [s.code]: null }));
       setStatus((p) => ({ ...p, [s.code]: 'fail' }));
       delete dailyFromRef.current[key];
     }
-  }, [loadQuote]);
+  }, [loadQuote, all]);
 
   useEffect(() => {
     all.forEach((s) => loadDaily(s, needFrom));
@@ -306,7 +329,8 @@ function StockChartPage() {
 
   // ── 종목 추가·삭제·시장 보정 ──
   const addComp = () => {
-    const c = normalizeChartCode(input);
+    const c0 = normalizeChartCode(input);
+    const c = detectMarket(c0) === 'kr' ? c0.toUpperCase() : c0;   // 국내 코드는 대문자가 정본(관심종목 추가와 같은 규칙)
     if (!c) { setInputMsg('종목 코드를 입력하세요.'); return; }
     if (all.some((s) => s.code.toLowerCase() === c.toLowerCase())) { setInputMsg('이미 차트에 있는 종목입니다.'); setInput(''); return; }
     if (comps.length >= MAX_CHART_COMPS) { setInputMsg(`비교 종목은 ${MAX_CHART_COMPS}개까지입니다.`); return; }

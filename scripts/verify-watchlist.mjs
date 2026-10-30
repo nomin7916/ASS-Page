@@ -11,13 +11,14 @@
 //     #21~#32 normalizeWatchView / sameWatchView — 보기 상태(기간·직접 선택 날짜·정렬) 저장값 정규화
 //     #33~#50 normalizeWatchSize / sameWatchSize / resizeWatchRect / watchSizeAfterResize — 팝업 크기 조절
 //     #51~#69 종목 하이라이트 — 팔레트 · 다음 색(칠할 때마다 다른 색) · 켜고 끄기 · 모두 해제
-//   파트①-b `src/watchlistChart.ts` **직접 import** (#80~#97o)
+//   파트①-b `src/watchlistChart.ts` **직접 import** (#80~#98b)
 //     #80~#83 기간 구간·등락율 — 옛 팝업 본문(legacy*)과 무작위 대조(팝업 숫자가 한 글자도 안 바뀌었는가)
 //     #84~#92 종목 비교 차트 창 — 행·직전 종가·구간 수익률·날짜 라벨·주소·창 이름
 //     #93~#95 최근 분배금 — 네이버 ETF 이력 · 일반 주식 연간 요약 · 야후(직전 종가 대비 분배율)
 //     #96~#96m 차트 구간 선택 상태 전이 — 드래그 · 더블클릭 시작점 고정 → 끝점 클릭(수익률 차트와 같은 제스처)
 //     #97a~#97o 보유 종목 매입가 — 표의 구매단가와 같은 식 · 계좌별 · 통화 맞춤 · 눈금 넓히기/가장자리 판정
-//   파트② 소스 텍스트 가드 (#G1~#G99c)
+//     #98a~#98b 앞자리 0이 빠진 국내 코드 복원 후보(241D0 → 0241D0)
+//   파트② 소스 텍스트 가드 (#G1~#G103)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다.
@@ -563,6 +564,12 @@ if (C) {
     eq('#97n3 가까운 매입가부터 받아들인다(입력 순서 무관)', JSON.stringify(holdingLayout(100, 110, [145, 128], 0.25).pins), JSON.stringify(['top', '']));
     eq('#97n4 시세가 한 값뿐이면 넓힌다(눌릴 모양이 없다)', JSON.stringify(holdingLayout(100, 100, [300], 0.25)), JSON.stringify({ pins: [''], lo: 100, hi: 300 }));
     eq('#97n5 미니차트 기준(40%) — 같은 거리라도 더 일찍 가장자리', JSON.stringify([holdingLayout(100, 110, [127], 0.4).pins[0], holdingLayout(100, 110, [127], 0.25).pins[0]]), JSON.stringify(['top', '']));
+    // ── 앞자리 0이 빠진 국내 코드 복원 후보(사용자 신고 2026-10-30: 0241D0 → 241D0 조회 실패) ──
+    const { krCodeWithZeros } = C;
+    eq('#98a krCodeWithZeros — 숫자가 든 1~5자 영숫자만 6자로(대문자)',
+      ['241D0', '5930', '660', ' 241d0 ', '1'].map(krCodeWithZeros).join(','), '0241D0,005930,000660,0241D0,000001');
+    eq('#98b 후보 없음 — 이미 6자 · 순수 알파벳(해외) · 7자 이상 · MA:/점 · 비문자열',
+      ['0241D0', '005930', 'AAPL', 'QQQM', '1234567', 'MA:12345', 'BRK.B', '', null, 241].map(krCodeWithZeros).join('|'), '|||||||||');
     S('#97o 손상 입력에도 던지지 않는다(시세 범위가 없으면 lo·hi = NaN, 잘못된 매입가 = none)',
       () => [holdingLayout(NaN, 1, [1]), holdingLayout(5, 1, [1]), holdingLayout(1, 2, [NaN, 'x', 1.5]), holdingLayout(1, 2, null), buildHoldings(null), buildHoldings([{ portfolio: 'x' }])],
       (v) => Number.isNaN(v[0].lo) && Number.isNaN(v[1].hi) && v[2].pins.join(',') === 'none,none,' && v[3].pins.length === 0
@@ -984,6 +991,39 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     const iAvg = CW.indexOf('avgLines.map((l, i) => avgLayout.pins[i]');
     ok('#G99c 매입가 선은 시세 선보다 뒤에 선언(태그가 위에 보인다)', iLine > 0 && iAvg > iLine);
   }
+}
+
+// ── 앞자리 0이 빠진 국내 코드 복원(사용자 신고 2026-10-30 — 0241D0 이 241D0 으로 들어가 조회 실패) ──
+// 네 입구(관심종목 · 종목 차트 창 · 포트폴리오 테이블 · 수익률 차트 비교종목)가 같은 후보 함수로 국내 6자리를 다시 묻고,
+// **조회가 맞을 때만** 코드를 고친다(5자 미래에셋 펀드 코드가 있어 확인 없이 바꾸면 안 된다).
+{
+  const CHART = src('src/components/StockChartWindow.tsx');
+  const SD = src('src/hooks/useStockData.ts');
+  const P = stripComments(POPUP);
+  const CW = stripComments(CHART);
+  const SDc = stripComments(SD);
+  ok('#G100 관심종목: 조회 실패 시 krCodeWithZeros 후보를 국내로 다시 묻고 맞으면 행을 고친다(해외 판정은 후보 먼저)',
+    /krCodeWithZeros,\n\} from '\.\.\/watchlistChart';/.test(POPUP)
+    && /const zero = readOnly \? '' : krCodeWithZeros\(stock\.code\);/.test(P)
+    && /if \(zero && stock\.market === 'us'\) \{\s*\n\s*const dz = await fetchWatchQuote\('kr', zero\);\s*\n\s*if \(dz\) \{ repairStockCode\(stock, zero, dz\); return; \}/.test(P)
+    && /if \(!d && zero && stock\.market !== 'us'\) \{\s*\n\s*const dz = await fetchWatchQuote\('kr', zero\);\s*\n\s*if \(dz\) \{ repairStockCode\(stock, zero, dz\); return; \}/.test(P));
+  ok('#G100b 관심종목: 고친 코드가 그룹에 이미 있으면 고장 난 행을 지운다 · 시장은 국내로',
+    /const dup = arr\.some\(\(s\) => s\.id !== stock\.id && \(s\.code \|\| ''\)\.toUpperCase\(\) === code\);/.test(P)
+    && /stocks: dup \? arr\.filter\(\(s\) => s\.id !== stock\.id\)/.test(P) && /\{ \.\.\.s, code, market: 'kr', name: fixed\.name \}/.test(P));
+  ok('#G100c 관심종목·차트 창: 국내 코드는 대문자로 추가한다',
+    /const code = detectMarket\(raw\) === 'kr' \? raw\.toUpperCase\(\) : raw;/.test(P)
+    && /const c = detectMarket\(c0\) === 'kr' \? c0\.toUpperCase\(\) : c0;/.test(CW));
+  ok('#G101 종목 차트 창: 종가 이력 조회 실패 시 국내 6자리로 다시 받고 맞으면 종목 코드를 고친다(겹치면 비교 종목을 뺀다)',
+    /krCodeWithZeros,\n\} from '\.\.\/watchlistChart';/.test(CHART)
+    && /const zero = krCodeWithZeros\(s\.code\);/.test(CW) && /const p2 = await fetchWatchDaily\('kr', zero, from \|\| undefined\);/.test(CW)
+    && /if \(isMain\) setMain\(\(m\) => \(m\.code === s\.code \? \{ \.\.\.m, code: zero, market: 'kr' \} : m\)\);/.test(CW)
+    && /setComps\(\(p\) => p\.filter\(\(c\) => c\.code !== s\.code\)\);/.test(CW));
+  ok('#G102 포트폴리오 테이블(국내): 6자 미만·소문자 코드는 6자·대문자로 조회하고 맞으면 칸의 코드를 고친다',
+    /import \{ krCodeWithZeros \} from '\.\.\/watchlistChart';/.test(SD)
+    && /const fixed = zero \|\| \(isKoreanCode\(upper\) \? upper : ''\);/.test(SDc)
+    && /\{ \.\.\.p, code: fixed, name: dz\.name, currentPrice: dz\.price, changeRate: dz\.changeRate \}/.test(SDc));
+  ok('#G103 수익률 차트 비교종목: 후보를 국내로 먼저 묻고 맞으면 칩 코드를 고쳐 같은 함수를 다시 탄다',
+    /patchComp\(index, code, \{ code: zero, name: dz\.name \|\| zero \}\);\s*\n\s*return handleCompStockBlur\(index, zero\);/.test(SDc));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:watchlist — ${pass} passed, ${fail} failed\n`);

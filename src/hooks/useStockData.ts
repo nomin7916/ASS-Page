@@ -5,6 +5,7 @@ import { buildIndexStatus, cleanNum, isWeekend, savingsEval, depositRowEval, isM
 import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount, getTodayKST, getKrSettledTodayDate } from './useMarketCalendar';
 import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays, mergeCodeHistory, applyStagedMerges, mergeStagedPatch, mergeStockMeta, REAL_CLOSE_MARKER_VERSION } from '../stockHistorySync';
 import type { StagedCodeMerge } from '../stockHistorySync';
+import { krCodeWithZeros } from '../watchlistChart';
 
 // 이력 패스 워치독(ms) — 스트림(KIS·US·NAV)이 이 시간 안에 못 끝나면 도착분만 커밋하고 settled(partial=true)로 강등한다.
 // 늦게 끝난 스트림은 끝나는 시점에 한 번 더 커밋한다(강등 경로에서만 2회).
@@ -222,7 +223,31 @@ export function useStockData({
       return;
     }
     const isOverseas = activePortfolioAccountType === 'overseas';
-    if (!code || (!isOverseas && code.length < 5)) return;
+    if (!code) return;
+    // 국내 계좌의 종목 코드는 늘 6자 · 대문자가 정본이다(사용자 신고 2026-10-30: 0241D0이 241D0으로 들어가 조회 실패).
+    // 앞자리 0이 빠진 코드('241D0'·'5930')는 6자로 채워 조회하고, 맞으면 그 칸의 코드를 고친다.
+    // 소문자 영숫자 코드('0241d0')도 대문자로 조회·저장한다(네이버가 소문자 코드는 0건 — api.normalizeKrCode).
+    // ⚠️ CRYPTO·금현물 계좌는 뺀다 — 같은 국내 조회 경로를 타지만 코드 체계가 KRX 6자가 아니다.
+    if (!isOverseas && activePortfolioAccountType !== 'crypto' && activePortfolioAccountType !== 'gold') {
+      const zero = krCodeWithZeros(code);
+      const upper = String(code).trim().toUpperCase();
+      const fixed = zero || (isKoreanCode(upper) ? upper : '');
+      if (fixed && fixed !== code) {
+        setStockFetchStatus(prev => ({ ...prev, [fixed]: 'loading' }));
+        const dz = await fetchStockInfo(fixed);
+        if (dz) {
+          setPortfolio(prev => prev.map(p => p.id === id ? { ...p, code: fixed, name: dz.name, currentPrice: dz.price, changeRate: dz.changeRate } : p));
+          setStockFetchStatus(prev => ({ ...prev, [fixed]: 'success' }));
+          const stampZ = stampDateFor(activePortfolioAccountType);
+          if (stampZ) setStockHistoryMap(prev => ({ ...prev, [fixed]: { ...(prev[fixed] || {}), [stampZ]: dz.price } }));
+          return;
+        }
+        // 6자·대문자로도 없으면 원래 코드로 다시 묻지 않는다(국내에 5자·소문자 코드는 없다 — 느린 프록시 폴백만 탄다).
+        setStockFetchStatus(prev => ({ ...prev, [fixed]: 'fail', [code]: 'fail' }));
+        return;
+      }
+    }
+    if (!isOverseas && code.length < 5) return;
     setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
     const d = isOverseas ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
     if (d) {
@@ -356,6 +381,18 @@ export function useStockData({
   const handleCompStockBlur = async (index, rawCode) => {
     const code = String(rawCode || '').trim();
     if (!code) return;
+    // 앞자리 0이 빠진 국내 코드('241D0' → '0241D0', '5930' → '005930') — 비교종목은 국내·해외 주식뿐이고
+    // 숫자가 든 5자 이하 해외 티커는 사실상 없어, 6자로 채워 **먼저** 국내로 조회한다. 맞으면 칩 코드를 고치고
+    // 그 코드로 이 함수를 다시 탄다(이름·이력·상태점이 전부 새 코드 기준이 되게).
+    const zero = krCodeWithZeros(code);
+    if (zero && zero !== code) {
+      const dz = await fetchStockInfo(zero);
+      if (dz) {
+        if (dz.name) compNameCacheRef.current[zero] = dz.name;
+        patchComp(index, code, { code: zero, name: dz.name || zero });
+        return handleCompStockBlur(index, zero);
+      }
+    }
     // 포트폴리오에 같은 코드가 있으면 저장된 종목명 재사용 (API 호출 불필요)
     let resolvedName: string | null = null;
     for (const p of portfoliosRef.current) {
