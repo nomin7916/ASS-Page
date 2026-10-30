@@ -105,6 +105,7 @@ import {
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
 import { DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize } from './watchlistGroups';
+import { buildHoldings } from './watchlistChart';
 
 // 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
@@ -3483,6 +3484,16 @@ export default function App() {
     return () => window.removeEventListener('message', onMsg);
   }, []);
 
+  // 보유 종목 매입가 — 관심종목 미니차트·종목 비교 차트 창의 가로선(사용자 요청 2026-10-30).
+  // 정본은 portfolios(단일 소스)이고 계산은 watchlistChart.buildHoldings 한 곳이다(표의 '구매단가'와 같은 식).
+  // ⚠️ STATE 로드 전에는 null('모른다') — 빈 객체를 보내면 받는 창이 '보유 없음'으로 알고 선을 지운다.
+  // ⚠️ portfolios는 시세가 갱신될 때마다 바뀐다 → 결과 문자열로 한 번 걸러야 관심종목 창 전송이 폭주하지 않는다.
+  const watchHoldingsJson = useMemo(
+    () => (ledgerDataState === 'ready' ? JSON.stringify(buildHoldings(portfolios)) : ''),
+    [portfolios, ledgerDataState],
+  );
+  const watchHoldings = useMemo(() => (watchHoldingsJson ? JSON.parse(watchHoldingsJson) : null), [watchHoldingsJson]);
+
   // ── 관심종목 브릿지 ──
   const postToWatchlistWin = (msg) => {
     const w = watchlistWinRef.current;
@@ -3502,9 +3513,10 @@ export default function App() {
      * ⚠️ deps에 `ledgerDataState` 필수 — 없으면 로드가 끝나도 창이 잠긴 채 남는다.
      */
     // 보기 상태(view)도 함께 싣는다 — 창은 dataState가 'ready'가 된 첫 메시지에서 한 번만 채택한다.
-    postToWatchlistWin({ type: 'watchlist:live', groups: watchlistGroups, view: watchlistView, readOnly: !!adminViewingAs, dataState: ledgerDataState });
+    // 보유 종목 매입가(holdings)도 싣는다 — 창의 미니차트·그 창에서 연 종목 차트 창이 읽기만 한다.
+    postToWatchlistWin({ type: 'watchlist:live', groups: watchlistGroups, view: watchlistView, readOnly: !!adminViewingAs, dataState: ledgerDataState, holdings: watchHoldings });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchlistGroups, watchlistView, adminViewingAs, ledgerDataState, watchlistWinNonce]);
+  }, [watchlistGroups, watchlistView, adminViewingAs, ledgerDataState, watchlistWinNonce, watchHoldings]);
 
   useEffect(() => {
     const onMsg = (e) => {
@@ -5557,6 +5569,7 @@ export default function App() {
         // 크기도 같은 규칙 — 관리자 열람 중에는 사용자 저장값을 바꾸지 않는다(팝업 로컬로만 조절).
         onSizeChange={adminViewingAs ? null : setWatchlistSize}
         onOpenWindow={openWatchlistWindow}
+        holdings={watchHoldings}
         readOnly={!!adminViewingAs}
         notice={
           adminViewingAs ? '관리자 접속 중이라 읽기 전용입니다.'

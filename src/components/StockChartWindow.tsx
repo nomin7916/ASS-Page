@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Line, ReferenceArea, ReferenceLine, ReferenceDot, Tooltip as RechartsTooltip } from 'recharts';
-import { X, Plus, RefreshCw, ExternalLink, Calendar, Percent, TrendingUp } from 'lucide-react';
+import { X, Plus, RefreshCw, ExternalLink, Calendar, Percent, TrendingUp, Wallet } from 'lucide-react';
 import ErrorBoundary from './ErrorBoundary';
 import CustomDatePicker from './CustomDatePicker';
 import { formatChangeRate, selectionDimBands } from '../utils';
@@ -12,6 +12,7 @@ import {
   periodCutoff, watchPeriodWindow, windowRate, buildChartRows, closeOnOrBefore, rangeRate, chartDateLabel,
   normalizeChartCode, normalizeChartComps, normalizeChartView, stockDetailUrl, stockChartUrl,
   EMPTY_CHART_SEL, chartSelStep,
+  holdingsFor, holdingAvg, holdingPct, holdingLayout, normalizeHoldings,
 } from '../watchlistChart';
 
 /**
@@ -19,8 +20,12 @@ import {
  * 관심종목의 미니차트를 누르면 열린다(사용자 요청 2026-10 — 사진2의 수익률 비교 차트를 종목 하나에 대해).
  *
  * ⚠️ 이 창은 App을 마운트하지 않는다 — 시세·종가를 **스스로** 조회하고(공개 프록시/Edge 함수, 인증 불필요)
- *    아무것도 저장하지 않는다. 그래서 opener 브릿지가 **없다**(쓰기 0 — writer는 끝까지 앱 탭 하나).
+ *    아무것도 저장하지 않는다(쓰기 0 — writer는 끝까지 앱 탭 하나).
  *    비교 종목·기간은 이 창의 주소(URL)에만 남긴다(새로고침해도 유지 — localStorage·Drive 금지).
+ * ⚠️ opener와는 **읽기 전용 물음 하나**만 주고받는다(사용자 요청 2026-10-30 — 보유 종목 매입가 가로선):
+ *    창 → opener `stockchart:ping { codes }` / opener(관심종목 팝업 — 앱 탭 또는 관심종목 창) →
+ *    `stockchart:holdings { holdings }`. 받은 값은 이 창 메모리에만 두고, 이 창이 보내는 메시지는 ping 하나뿐이다
+ *    (쓰기 메시지를 늘리면 '두 번째 writer'가 된다). 매입가를 주소에 싣지 말 것 — 주소창·방문 기록에 남는다.
  * ⚠️ 구간 자르기·기간 수익률은 관심종목 팝업과 **같은 함수**(watchlistChart.watchPeriodWindow·windowRate)를
  *    쓰고 종가도 같은 소스(fetchWatchDaily)라, 같은 기간이면 팝업 등락율과 차트 끝점이 한 글자도 다르지 않다.
  * ⚠️ 조회 결과를 공유 stockHistoryMap에 병합하지 말 것 — 이 창은 그 맵에 닿을 수조차 없고(App 미마운트),
@@ -36,6 +41,54 @@ const rateCls = (r) => (r == null ? 'text-gray-500' : r > 0 ? 'text-red-400' : r
 const fmtPct = (r) => (r == null || !Number.isFinite(r) ? '-' : `${r > 0 ? '+' : ''}${r.toFixed(2)}%`);
 // 선 데이터 키는 's0'…'s8' — 종목 코드를 그대로 쓰면 'BRK.B' 같은 점이 recharts 경로로 해석된다.
 const seriesKey = (i) => `s${i}`;
+// 보유 매입가 물음 주기 — 앱에서 종목을 사고팔거나 계좌를 고치면 이 주기 안에 선이 따라온다.
+const HOLD_PING_MS = 4000;
+// 국내 원화 매입가는 포트폴리오 테이블처럼 원 단위로 반올림해 보인다(선 높이는 반올림 전 값).
+const fmtAvg = (market, v) => fmtWatchPrice(market, market === 'kr' ? Math.round(v) : v);
+// 매입가 태그 폭 어림(SVG 글자 폭 — 한글·기호는 넓게).
+const tagWidth = (t) => [...t].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2000 ? 10.5 : 6.2), 10);
+
+// 매입가 가로선 오른쪽 끝의 태그(증권사 차트의 '매입가' 표시처럼) — 선 높이에 그 종목 색 테두리 상자.
+// 높이가 비슷한 선의 태그끼리 겹치면 렌더 뒤 stackAvgTags가 위아래로 벌린다(data-avg-y = 선의 실제 높이).
+const TAG_H = 17;
+function AvgTag({ viewBox, text, color }) {
+  if (!viewBox || !Number.isFinite(viewBox.y) || !Number.isFinite(viewBox.x) || !Number.isFinite(viewBox.width)) return null;
+  const w = tagWidth(text);
+  const x0 = viewBox.x + viewBox.width - w - 4;
+  return (
+    <g pointerEvents="none" data-avg-tag="" data-avg-y={viewBox.y}>
+      <rect x={x0} y={viewBox.y - 9} width={w} height={17} rx={3} fill="#0b1120" fillOpacity={0.88} stroke={color} strokeWidth={1} />
+      <text x={x0 + 5} y={viewBox.y + 3.5} fill={color} fontSize={10.5} fontWeight={700}>{text}</text>
+    </g>
+  );
+}
+
+// 매입가 태그 겹침 풀기 — 렌더된 태그를 선 높이(data-avg-y) 순으로 훑어 위에서부터 태그 높이만큼 띄우고,
+// 플롯 아래로 넘치면 위로 민다. 선 자체는 제자리이고 태그만 옮긴다(transform — React가 관리하지 않는 속성).
+// ⚠️ ResponsiveContainer는 크기가 바뀌면 **자기만** 다시 그린다 → 부모 effect가 아니라 MutationObserver로 따라간다.
+//    관찰은 태그 추가·삭제(childList)와 data-avg-y 변화뿐 — 여기서 쓰는 transform은 관찰 대상이 아니라 되먹임이 없다.
+function stackAvgTags(root) {
+  if (!root) return;
+  const tags = [...root.querySelectorAll('g[data-avg-tag]')]
+    .map((g) => ({ g, y: Number(g.getAttribute('data-avg-y')) }))
+    .filter((t) => Number.isFinite(t.y))
+    .sort((a, b) => a.y - b.y);
+  if (!tags.length) return;
+  const axis = root.querySelector('.recharts-yAxis .recharts-cartesian-axis-line');
+  const ay1 = axis ? Number(axis.getAttribute('y1')) : NaN;
+  const ay2 = axis ? Number(axis.getAttribute('y2')) : NaN;
+  const top = Number.isFinite(ay1) && Number.isFinite(ay2) ? Math.min(ay1, ay2) + TAG_H / 2 : -Infinity;
+  const bottom = Number.isFinite(ay1) && Number.isFinite(ay2) ? Math.max(ay1, ay2) - TAG_H / 2 : Infinity;
+  const gap = TAG_H + 2;
+  const pos = tags.map((t) => t.y);
+  for (let i = 0; i < pos.length; i++) pos[i] = Math.max(pos[i], i ? pos[i - 1] + gap : top);
+  for (let i = pos.length - 1; i >= 0; i--) pos[i] = Math.min(pos[i], i === pos.length - 1 ? bottom : pos[i + 1] - gap);
+  tags.forEach((t, i) => {
+    const dy = pos[i] - t.y;
+    if (Math.abs(dy) < 0.5) t.g.removeAttribute('transform');
+    else t.g.setAttribute('transform', `translate(0 ${dy.toFixed(1)})`);
+  });
+}
 
 function readInitial() {
   const p = new URLSearchParams(window.location.search);
@@ -61,6 +114,9 @@ function StockChartPage() {
   const [hover, setHover] = useState('');
   const [sel, setSel] = useState(EMPTY_CHART_SEL);
   const selRef = useRef(EMPTY_CHART_SEL);
+  // 보유 종목 매입가 `{ [holdingKey]: [{ acct, avg, qty, cur }] }` — opener가 답해 준 값(메모리 전용).
+  const [holdings, setHoldings] = useState({});
+  const [showAvg, setShowAvg] = useState(true);       // 매입가 선 보이기(이 창 안에서만 — 저장하지 않는다)
   const dailyFromRef = useRef({});                     // code:market → 받은 이력의 시작일
   const dailySeqRef = useRef({});                      // code:market → 조회 세대(늦게 온 응답 폐기)
   const today = todayKST();
@@ -117,6 +173,33 @@ function StockChartPage() {
     all.forEach((s) => loadDaily(s, needFrom));
   }, [all, needFrom, loadDaily]);
 
+  // ── 보유 매입가: opener에 묻고(ping) 답(holdings)만 받는다 — 읽기 전용 ──
+  const codesKey = all.map((s) => s.code).join(',');
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;           // ⚠️ 필수 — 교차 출처 무시
+      if (!window.opener || e.source !== window.opener) return;   // opener의 답만
+      const d = e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'stockchart:holdings') return;
+      const h = normalizeHoldings(d.holdings);
+      if (!h) return;   // null = opener가 아직 계좌를 다 읽지 못했다 → 기존 선을 지우지 않는다
+      setHoldings((prev) => (JSON.stringify(prev) === JSON.stringify(h) ? prev : h));
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+  useEffect(() => {
+    const codes = codesKey ? codesKey.split(',') : [];
+    const ping = () => {
+      const op = window.opener;
+      if (!op || op.closed) return;
+      try { op.postMessage({ type: 'stockchart:ping', codes }, window.location.origin); } catch { /* 닫히는 중 */ }
+    };
+    ping();
+    const id = setInterval(ping, HOLD_PING_MS);
+    return () => clearInterval(id);
+  }, [codesKey]);
+
   const refreshAll = () => {
     dailyFromRef.current = {};
     all.forEach((s) => loadDaily(s, needFrom, true));
@@ -134,8 +217,9 @@ function StockChartPage() {
       name: q?.name || s.name || s.code,
       color: CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length],
       stat: windowRate(win),
+      hold: holdingsFor(holdings, s.code, s.market),   // 포트폴리오 테이블에 있는 종목이면 계좌별 매입가
     };
-  }), [all, quotes, dailyMap, view, cutoff, today]);
+  }), [all, quotes, dailyMap, view, cutoff, today, holdings]);
 
   const rows = useMemo(() => buildChartRows(series.map((s) => ({ key: s.key, win: s.win }))), [series]);
   const shown = mode === 'price' ? series.slice(0, 1) : series;
@@ -147,6 +231,40 @@ function StockChartPage() {
     const v = row ? row[mode === 'pct' ? s.key : `px:${s.key}`] : null;
     return v == null || !Number.isFinite(v) ? [] : [{ key: s.key, color: s.color, v, text: mode === 'pct' ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : fmtWatchPrice(s.market, v) }];
   });
+  // ── 보유 매입가 가로선(계좌마다 한 줄, 그 종목 선 색 점선) ──
+  // 수익률 보기: 그 종목 구간 첫 종가(= buildChartRows의 0% 기준)로 환산한 높이 · 종가 보기: 매입가 그대로.
+  // 매입가가 시세와 멀어 눈금을 넓히면 시세 선이 높이의 40% 미만으로 눌리는 경우엔 넓히지 않고
+  // 차트 위·아래 가장자리에 '범위 밖' 표시만 한다(holdingLayout — 미니차트와 같은 규칙).
+  const avgLines = !showAvg ? [] : shown.flatMap((s) => {
+    const base = s.stat.first ? s.stat.first[1] : 0;
+    const px = Number(quotes[s.code]?.price) > 0 ? Number(quotes[s.code].price) : (s.stat.last ? s.stat.last[1] : 0);
+    return s.hold.map((h, j) => {
+      const v = mode === 'pct' ? holdingPct(h.avg, base) : h.avg;
+      const ret = px > 0 ? (px / h.avg - 1) * 100 : null;
+      return { key: `avg-${s.key}-${j}`, s, h, v, ret };
+    }).filter((l) => l.v != null && Number.isFinite(l.v));
+  });
+  const avgMulti = avgLines.length > 1;
+  const avgText = (l) => `매입가 ${fmtAvg(l.s.market, l.h.avg)}${l.ret != null ? ` · ${fmtPct(l.ret)}` : ''}${avgMulti ? ` · ${l.h.acct}` : ''}`;
+  const avgLayout = (() => {
+    let lo = Infinity, hi = -Infinity;
+    for (const r of rows) for (const s of shown) {
+      const v = r[mode === 'pct' ? s.key : `px:${s.key}`];
+      if (v != null && Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    }
+    if (mode === 'pct' && Number.isFinite(lo)) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }   // 0% 기준선도 눈금 안
+    return holdingLayout(Number.isFinite(lo) ? lo : NaN, Number.isFinite(hi) ? hi : NaN, avgLines.map((l) => l.v), 0.4);
+  })();
+  const holdAny = series.some((s) => s.hold.length > 0);
+  const chartBoxRef = useRef(null);
+  useEffect(() => {
+    const box = chartBoxRef.current;
+    if (!box || typeof MutationObserver === 'undefined') return;
+    stackAvgTags(box);
+    const mo = new MutationObserver(() => stackAvgTags(box));
+    mo.observe(box, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-avg-y'] });
+    return () => mo.disconnect();
+  }, []);
   const firstDate = rows[0]?.date || '';
   const lastDate = rows[rows.length - 1]?.date || '';
 
@@ -218,6 +336,10 @@ function StockChartPage() {
 
   const mainQ = quotes[main.code];
   const mainS = series[0];
+  const mainHold = holdingAvg(mainS?.hold);
+  const mainHoldRet = mainHold && mainQ && Number(mainQ.price) > 0 ? (Number(mainQ.price) / mainHold.avg - 1) * 100 : null;
+  const fmtQty = (n) => new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 }).format(n);
+  const holdTitle = (s) => `보유 종목(포트폴리오 테이블 구매단가)\n${s.hold.map((h) => `${h.acct} · ${fmtQty(h.qty)}${s.market === 'fund' ? '좌' : '주'} · 매입가 ${fmtAvg(s.market, h.avg)}`).join('\n')}\n차트의 점선 = 계좌마다의 매입가`;
   const periodLabel = view.period === CHART_CUSTOM_PERIOD
     ? `${fmtShort(view.customStart)}~${view.customEnd ? fmtShort(view.customEnd) : '현재'}`
     : view.period;
@@ -242,6 +364,14 @@ function StockChartPage() {
             <span className="text-gray-100 font-semibold">{fmtWatchPrice(main.market, mainQ.price)}</span>
             <span className={`ml-2 text-xs ${rateCls(mainQ.changeRate)}`}>{formatChangeRate(mainQ.changeRate)}</span>
             <span className="ml-1 text-[10px] text-gray-500">전일 대비</span>
+          </span>
+        )}
+        {mainHold && (
+          <span className="text-xs tabular-nums cursor-help" title={holdTitle(mainS)}>
+            <span className="font-semibold" style={{ color: CHART_SERIES_COLORS[0] }}>
+              보유 {fmtQty(mainHold.qty)}{main.market === 'fund' ? '좌' : '주'} · 매입가 {fmtAvg(main.market, mainHold.avg)}{mainHold.n > 1 ? `(${mainHold.n}개 계좌 합산)` : ''}
+            </span>
+            {mainHoldRet != null && <span className={`ml-1.5 font-bold ${rateCls(mainHoldRet)}`}>{fmtPct(mainHoldRet)}</span>}
           </span>
         )}
         <button
@@ -274,6 +404,11 @@ function StockChartPage() {
               <span className="font-mono text-gray-400">{s.code}</span>
               <span className="font-bold max-w-[180px] truncate" style={{ color: s.color }} title={s.name}>{s.name}</span>
               <span className={`tabular-nums font-semibold ${rateCls(s.stat.rate)}`}>{fmtPct(s.stat.rate)}</span>
+              {s.hold.length > 0 && (
+                <span className="tabular-nums text-gray-400 cursor-help" title={holdTitle(s)}>
+                  매입 {fmtAvg(s.market, holdingAvg(s.hold).avg)}{s.hold.length > 1 ? `(${s.hold.length}계좌)` : ''}
+                </span>
+              )}
               {st === 'loading' && <RefreshCw size={10} className="animate-spin text-gray-500" />}
               {st === 'fail' && (
                 <span className="flex items-center gap-0.5 text-red-400/90">
@@ -351,6 +486,15 @@ function StockChartPage() {
           </span>
         )}
         <span className="flex-1" />
+        {holdAny && (
+          <button
+            onClick={() => setShowAvg((v) => !v)}
+            title={showAvg ? '보유 종목 매입가 점선 숨기기' : '보유 종목 매입가 점선 보이기(포트폴리오 테이블의 구매단가)'}
+            className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] border transition-colors ${
+              showAvg ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-gray-700 text-gray-500 hover:text-amber-300'
+            }`}
+          ><Wallet size={11} /> 매입가</button>
+        )}
         <span className="flex items-center rounded border border-gray-700 overflow-hidden text-[11px]">
           <button
             onClick={() => setMode('pct')}
@@ -409,7 +553,7 @@ function StockChartPage() {
       </div>
 
       {/* 차트 */}
-      <div className="flex-1 min-h-[300px] px-2 py-3 select-none cursor-crosshair">
+      <div ref={chartBoxRef} className="relative flex-1 min-h-[300px] px-2 py-3 select-none cursor-crosshair">
         {rows.length < 2 ? (
           <div className="h-full flex items-center justify-center text-sm text-gray-500">
             {Object.values(status).includes('loading') || !(main.code in dailyMap)
@@ -443,6 +587,13 @@ function StockChartPage() {
                   isAnimationActive={false}
                 />
               ))}
+              {/* 보유 매입가 점선 — 선보다 **뒤**에 선언해 태그가 시세 선 위에 보이게(paint 순서 = 선언 순서).
+                  ifOverflow="extendDomain": 눈금을 넓혀 선을 넣는다 — 시세가 납작해질 만큼 먼 매입가는
+                  holdingLayout이 미리 가장자리 표시로 돌려 이 목록에서 빠진다(pins[i] !== ''). */}
+              {avgLines.map((l, i) => avgLayout.pins[i] === '' && (
+                <ReferenceLine key={l.key} y={l.v} stroke={l.s.color} strokeOpacity={0.9} strokeWidth={1.2} strokeDasharray="6 4" ifOverflow="extendDomain"
+                  label={({ viewBox }) => <AvgTag viewBox={viewBox} text={avgText(l)} color={l.s.color} />} />
+              ))}
               {hoverLevels.map((h) => (
                 <ReferenceLine key={`hl-${h.key}`} y={h.v} stroke={h.color} strokeOpacity={0.55} strokeWidth={1} ifOverflow="hidden"
                   label={{ value: h.text, position: 'left', fill: h.color, fontSize: 10, fontWeight: 700 }} />
@@ -470,10 +621,21 @@ function StockChartPage() {
             </ComposedChart>
           </ResponsiveContainer>
         )}
+        {/* 매입가가 차트 범위 밖(눈금을 넓히면 시세 선이 납작해지는 거리) — 그 방향 가장자리에 값만 표시 */}
+        {rows.length > 1 && ['top', 'bottom'].map((pin) => avgLines.some((l, i) => avgLayout.pins[i] === pin) && (
+          <div key={pin} className={`absolute right-6 ${pin === 'top' ? 'top-4' : 'bottom-12'} flex flex-col items-end gap-1 pointer-events-none`}>
+            {avgLines.map((l, i) => avgLayout.pins[i] === pin && (
+              <span key={l.key} className="rounded border px-1.5 py-0.5 text-[10.5px] font-bold tabular-nums bg-[#0b1120]/90" style={{ borderColor: l.s.color, color: l.s.color }}>
+                {pin === 'top' ? '▲' : '▼'} {avgText(l)} <span className="font-normal text-gray-500">— 차트 {pin === 'top' ? '위' : '아래'}쪽 범위 밖</span>
+              </span>
+            ))}
+          </div>
+        ))}
       </div>
       <div className="px-4 pb-2 text-[10px] text-gray-600">
         수익률 = 각 종목의 조회 시작 후 첫 종가를 0%로 둔 등락(관심종목 등락율과 같은 계산) · 종가는 관심종목 미니차트와 같은 소스 ·
         직접 선택 기간에서 종료일을 비우면 마지막 값은 실시간 현재가입니다. 이 창은 아무것도 저장하지 않습니다(비교 종목·기간은 주소에만 남습니다).
+        {holdAny && ' · 점선 = 포트폴리오 테이블에 있는 종목의 매입가(구매단가, 계좌마다 한 줄 — 앱 창에서 읽어 옵니다).'}
       </div>
     </div>
   );

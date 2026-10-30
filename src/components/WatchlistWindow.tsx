@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import WatchlistPopup from './WatchlistPopup';
 import ErrorBoundary from './ErrorBoundary';
 import { DEFAULT_WATCH_VIEW, normalizeWatchView } from '../watchlistGroups';
+import { normalizeHoldings } from '../watchlistChart';
 
 /**
  * 관심종목 **별도 브라우저 창** (`/?watchlistWindow=1`).
@@ -56,6 +57,9 @@ export default function WatchlistWindow() {
    *    (새로고침으로 복구)이고, 반대편은 되돌릴 수 없는 유실이라 비대칭이 이 방향을 강제한다.
    */
   const [appDataState, setAppDataState] = useState('loading');
+  // 보유 종목 매입가(미니차트 가로선 · 이 창에서 연 종목 차트 창에 건넨다) — **읽기 전용**, 앱 탭이 정본.
+  // null = 아직 모른다(로드 전 — 앱이 null을 보낸다). 모양이 틀린 값은 normalizeHoldings가 null로 돌려 기존 값을 지키게 한다.
+  const [holdings, setHoldings] = useState(null);
   const [gotData, setGotData] = useState(false);
   const [linked, setLinked] = useState(true);
 
@@ -90,6 +94,8 @@ export default function WatchlistWindow() {
           setGroups(d.groups);
         }
         setAppReadOnly(!!d.readOnly);
+        const h = normalizeHoldings(d.holdings);
+        if (h) setHoldings(h);
         if (d.dataState === 'ready' && !viewSeededRef.current) {
           viewSeededRef.current = true;
           setView(normalizeWatchView(d.view));
@@ -170,6 +176,7 @@ export default function WatchlistWindow() {
         open
         variant="page"
         groups={groups}
+        holdings={holdings}
         onUpdateGroups={onUpdateGroups}
         view={view}
         onViewChange={onViewChange}

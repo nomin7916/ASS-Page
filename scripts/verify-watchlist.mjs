@@ -11,12 +11,13 @@
 //     #21~#32 normalizeWatchView / sameWatchView — 보기 상태(기간·직접 선택 날짜·정렬) 저장값 정규화
 //     #33~#50 normalizeWatchSize / sameWatchSize / resizeWatchRect / watchSizeAfterResize — 팝업 크기 조절
 //     #51~#69 종목 하이라이트 — 팔레트 · 다음 색(칠할 때마다 다른 색) · 켜고 끄기 · 모두 해제
-//   파트①-b `src/watchlistChart.ts` **직접 import** (#80~#96m)
+//   파트①-b `src/watchlistChart.ts` **직접 import** (#80~#97o)
 //     #80~#83 기간 구간·등락율 — 옛 팝업 본문(legacy*)과 무작위 대조(팝업 숫자가 한 글자도 안 바뀌었는가)
 //     #84~#92 종목 비교 차트 창 — 행·직전 종가·구간 수익률·날짜 라벨·주소·창 이름
 //     #93~#95 최근 분배금 — 네이버 ETF 이력 · 일반 주식 연간 요약 · 야후(직전 종가 대비 분배율)
 //     #96~#96m 차트 구간 선택 상태 전이 — 드래그 · 더블클릭 시작점 고정 → 끝점 클릭(수익률 차트와 같은 제스처)
-//   파트② 소스 텍스트 가드 (#G1~#G95)
+//     #97a~#97o 보유 종목 매입가 — 표의 구매단가와 같은 식 · 계좌별 · 통화 맞춤 · 눈금 넓히기/가장자리 판정
+//   파트② 소스 텍스트 가드 (#G1~#G99c)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다.
@@ -496,6 +497,77 @@ if (C) {
     S('#96m 손상 입력에도 던지지 않는다', () => [ST(null, null), ST(undefined, { type: 'down', label: 3 }), ST('x', { type: 'move' })],
       (v) => v.every((s) => s && typeof s.left === 'string'));
   }
+
+  // ── 보유 종목 매입가 가로선(사용자 요청 2026-10-30) ──
+  // ⚠️ 매입가는 포트폴리오 테이블 '구매단가' 칸과 같은 식이어야 한다 — 표와 선이 갈리면 사용자가 어느 쪽도 믿지 못한다.
+  {
+    const { buildHoldings, holdingsFor, pickHoldings, normalizeHoldings, holdingAvg, holdingPct, holdingLayout, holdingKey } = C;
+    const PF = [
+      { id: 'a', name: '일반', accountType: 'portfolio', portfolio: [
+        { type: 'stock', code: '005930', quantity: 3, investAmount: 200000 },
+        { type: 'stock', code: '005930', quantity: '2', investAmount: '150,000' },        // 같은 계좌 같은 종목 = 합산
+        { type: 'stock', code: '069500', quantity: 10, investAmount: 0, purchasePrice: 35000 }, // 투자금액 없는 옛 행
+        { type: 'stock', code: '000660', quantity: 0, investAmount: 100000 },            // 수량 0 = 보유 아님
+        { type: 'stock', code: '035720', quantity: 5, investAmount: 0 },                  // 원가 0 = 매입가 없음
+        { type: 'deposit', code: '', depositAmount: 1000 },
+        null, 'x',
+      ] },
+      { id: 'b', name: 'ISA', accountType: 'isa', portfolio: [{ type: 'stock', code: '005930', quantity: 1, investAmount: 60000 }] },
+      { id: 'c', name: '해외', accountType: 'overseas', portfolio: [
+        { type: 'stock', code: 'goog', quantity: 4, investAmountUsd: 1310.6664, purchasePrice: 999 },  // 입력값 우선
+        { type: 'stock', code: 'SCHD', quantity: 10, investAmountUsd: '', purchasePrice: 27.5 },     // 입력 없는 옛 행
+      ] },
+      { id: 'd', name: '퇴직', accountType: 'dc-irp', portfolio: [{ type: 'fund', code: 'MA:ab123', quantity: 1000, investAmount: 1234560 }] },
+      { id: 'e', name: '삭제됨', accountType: 'portfolio', deletedAt: '2026-10-01', portfolio: [{ type: 'stock', code: '005930', quantity: 1, investAmount: 1 }] },
+      { id: 'f', name: '테스트', accountType: 'portfolio', isTest: true, portfolio: [{ type: 'stock', code: '005930', quantity: 1, investAmount: 1 }] },
+      { id: 'g', name: '금', accountType: 'gold', portfolio: [{ type: 'stock', code: 'M04020000', quantity: 1, purchasePrice: 150000 }] },
+      { id: 'h', name: '코인', accountType: 'crypto', portfolio: [{ type: 'stock', code: 'BTC', quantity: 1, purchasePrice: 1 }] },
+      { id: 'i', name: '직접', accountType: 'simple', evalAmount: 100 },
+    ];
+    const H = buildHoldings(PF);
+    const sam = H['005930'] || [];
+    eq('#97a 국내: 같은 계좌의 같은 종목 행은 합산(총 투자금액 ÷ 총 수량)', sam[0] && sam[0].avg, 70000);
+    eq('#97a2 계좌가 다르면 계좌마다 한 줄(탭 순서) — 삭제·TEST 계좌는 빠진다', JSON.stringify(sam.map((h) => [h.acct, h.avg, h.qty, h.cur])),
+      JSON.stringify([['일반', 70000, 5, 'KRW'], ['ISA', 60000, 1, 'KRW']]));
+    eq('#97b 투자금액이 빈 옛 국내 행은 저장된 purchasePrice', H['069500'] && H['069500'][0].avg, 35000);
+    ok('#97c 수량 0 · 원가 0 · 예수금 · 손상 행은 매입가 없음', !H['000660'] && !H['035720'] && !H[''] && Object.keys(H).every((k) => k));
+    eq('#97d 해외: 투자금액(USD) 입력 ÷ 수량(purchasePrice 미러보다 우선) · 키는 대문자', H.GOOG && H.GOOG[0].avg, 1310.6664 / 4);
+    eq('#97d2 해외 입력 없는 옛 행 = purchasePrice · 통화 USD', JSON.stringify(H.SCHD && H.SCHD.map((h) => [h.avg, h.cur])), JSON.stringify([[27.5, 'USD']]));
+    eq('#97e 펀드 = 투자금액 ÷ 좌수 · MA: 접두어를 뗀 키', H.AB123 && H.AB123[0].avg, 1234.56);
+    ok('#97f 금현물·CRYPTO·직접입력 계좌는 긋지 않는다(시세 단위가 다르다)', !H.M04020000 && !H.BTC);
+    // ⚠️ 표의 국내 구매단가 칸 = Math.round(투자금액 ÷ 수량) — 선 높이는 반올림 전, 표기는 같은 반올림.
+    eq('#97g 표의 구매단가 식과 같은 값(국내 1,000,000원 ÷ 3주)', Math.round(buildHoldings([{ name: 'x', portfolio: [{ type: 'stock', code: 'A', quantity: 3, investAmount: 1000000 }] }]).A[0].avg),
+      Math.round(1000000 / 3));
+    eq('#97h holdingKey — 공백·대소문자·MA: 무시, 비문자열은 빈 키', [holdingKey(' ma:Ab1 '), holdingKey('brk.b'), holdingKey(5), holdingKey(null)].join('|'), 'AB1|BRK.B||');
+    eq('#97i holdingsFor — 통화가 시장과 맞는 것만(원화 매입가를 달러 차트에 긋지 않는다)',
+      [holdingsFor(H, '005930', 'kr').length, holdingsFor(H, '005930', 'us').length, holdingsFor(H, 'goog', 'us').length, holdingsFor(H, 'GOOG', 'kr').length,
+        holdingsFor(H, 'ab123', 'fund').length, holdingsFor(H, 'MA:AB123', 'fund').length, holdingsFor(null, 'x', 'kr').length].join(','), '2,0,1,0,1,1,0');
+    eq('#97j pickHoldings — 물어본 종목 몫만(계좌 전체를 보내지 않는다)', JSON.stringify(Object.keys(pickHoldings(H, ['goog', '005930', 'ZZZ', 7]))), JSON.stringify(['GOOG', '005930']));
+    ok('#97j2 pickHoldings 손상 입력 → 빈 객체', JSON.stringify(pickHoldings(null, ['A'])) === '{}' && JSON.stringify(pickHoldings(H, 'A')) === '{}');
+    // ⚠️ null('모른다')과 {}('보유 없음')을 구분해야 받는 창이 로드 전 메시지로 선을 지우지 않는다.
+    ok('#97k normalizeHoldings — null·배열·원시값은 null(모름), {}는 {}(보유 없음)',
+      normalizeHoldings(null) === null && normalizeHoldings([]) === null && normalizeHoldings('x') === null && JSON.stringify(normalizeHoldings({})) === '{}');
+    eq('#97k2 normalizeHoldings — 모양이 틀린 항목은 버리고 계좌 이름은 자른다',
+      JSON.stringify(normalizeHoldings({ a: [{ acct: 'x'.repeat(60), avg: 10, qty: 2, cur: 'KRW' }, { avg: -1, qty: 1, cur: 'KRW' }, { avg: 1, qty: 1, cur: 'EUR' }, { avg: NaN, qty: 1, cur: 'USD' }, 3], b: 'no', c: [] })),
+      JSON.stringify({ A: [{ acct: 'x'.repeat(40), avg: 10, qty: 2, cur: 'KRW' }] }));
+    ok('#97k3 normalizeHoldings(buildHoldings) 왕복은 그대로', JSON.stringify(normalizeHoldings(JSON.parse(JSON.stringify(H)))) === JSON.stringify(H));
+    eq('#97l holdingAvg — 여러 계좌 합산(70,000×5 + 60,000×1) ÷ 6', JSON.stringify(holdingAvg(sam)), JSON.stringify({ avg: 410000 / 6, qty: 6, n: 2 }));
+    ok('#97l2 holdingAvg 손상·빈 입력 → null', holdingAvg([]) === null && holdingAvg(null) === null && holdingAvg([{ avg: 0, qty: 1 }]) === null);
+    eq('#97m holdingPct — 구간 첫 종가 0% 눈금(매입 90 / 기준 100 = -10%)', holdingPct(90, 100), (90 / 100 - 1) * 100);
+    ok('#97m2 holdingPct — 기준가 없음·0·문자열 → null', holdingPct(90, 0) === null && holdingPct(0, 100) === null && holdingPct('90', 100) === null);
+    // holdingLayout: 시세 100~110(span 10). minShare 0.25 → 눈금을 40까지만 넓힐 수 있다.
+    const L1 = holdingLayout(100, 110, [105, 95, 140, 60], 0.25);
+    eq('#97n 범위 안 · 가까운 바깥은 눈금 안(넓힘), 먼 바깥은 위·아래 가장자리', JSON.stringify(L1.pins), JSON.stringify(['', '', 'top', 'bottom']));
+    eq('#97n2 넓힌 눈금 = 받아들인 매입가까지', `${L1.lo}~${L1.hi}`, '95~110');
+    // 가까운 것부터 받아들인다 — 먼 것(입력 순서 앞)이 가까운 것까지 밀어내지 않게.
+    eq('#97n3 가까운 매입가부터 받아들인다(입력 순서 무관)', JSON.stringify(holdingLayout(100, 110, [145, 128], 0.25).pins), JSON.stringify(['top', '']));
+    eq('#97n4 시세가 한 값뿐이면 넓힌다(눌릴 모양이 없다)', JSON.stringify(holdingLayout(100, 100, [300], 0.25)), JSON.stringify({ pins: [''], lo: 100, hi: 300 }));
+    eq('#97n5 미니차트 기준(40%) — 같은 거리라도 더 일찍 가장자리', JSON.stringify([holdingLayout(100, 110, [127], 0.4).pins[0], holdingLayout(100, 110, [127], 0.25).pins[0]]), JSON.stringify(['top', '']));
+    S('#97o 손상 입력에도 던지지 않는다(시세 범위가 없으면 lo·hi = NaN, 잘못된 매입가 = none)',
+      () => [holdingLayout(NaN, 1, [1]), holdingLayout(5, 1, [1]), holdingLayout(1, 2, [NaN, 'x', 1.5]), holdingLayout(1, 2, null), buildHoldings(null), buildHoldings([{ portfolio: 'x' }])],
+      (v) => Number.isNaN(v[0].lo) && Number.isNaN(v[1].hi) && v[2].pins.join(',') === 'none,none,' && v[3].pins.length === 0
+        && JSON.stringify(v[4]) === '{}' && JSON.stringify(v[5]) === '{}');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -570,7 +642,7 @@ ok('#G17 main.tsx 가 URL 파라미터로 App 대신 창을 렌더한다',
 //    한 번 덮으면 백업으로도 되돌릴 수 없다(가계부 2026-08-30 사고와 같은 부류).
 ok('#G18 앱이 dataState를 함께 보내고 deps에도 넣는다',
   /type: 'watchlist:live'[^}]*dataState: ledgerDataState/.test(APP)
-  && /\}, \[watchlistGroups, watchlistView, adminViewingAs, ledgerDataState, watchlistWinNonce\]\);/.test(APP));
+  && /\}, \[watchlistGroups, watchlistView, adminViewingAs, ledgerDataState, watchlistWinNonce, watchHoldings\]\);/.test(APP));
 ok('#G19 창은 dataState==="ready" 일 때만 쓰기를 연다(gotData·linked·readOnly 포함)',
   /const\s+writable\s*=\s*linked\s*&&\s*gotData\s*&&\s*!appReadOnly\s*&&\s*appDataState === 'ready'\s*;/.test(WIN));
 ok('#G20 창의 dataState 채택은 화이트리스트(fail-closed — 모르는 값은 loading)',
@@ -773,15 +845,24 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     /const\s+STOCK_CHART_WINDOW_BOOT\s*=\s*_params\.get\('stockChartWindow'\)\s*===\s*'1'/.test(MAIN)
     && /STOCK_CHART_WINDOW_BOOT \? <StockChartWindow \/>/.test(MAIN));
   ok('#G80 차트 창은 자체 ErrorBoundary label 을 갖는다', /<ErrorBoundary label="종목 차트">/.test(CHART));
-  // ⚠️ 이 창은 쓰기가 0이다 — opener 브릿지·브라우저 저장소·공유 종가 맵에 닿는 순간 '두 번째 writer'나 평가액 오염이 된다.
-  ok('#G81 차트 창은 브릿지·저장소·stockHistoryMap 을 쓰지 않는다',
-    !/window\.opener|postMessage|localStorage|sessionStorage|stockHistoryMap|saveDriveFile/.test(CW));
+  // ⚠️ 이 창은 쓰기가 0이다 — 브라우저 저장소·공유 종가 맵에 닿거나 opener에 쓰기 메시지를 보내는 순간
+  //    '두 번째 writer'나 평가액 오염이 된다. opener와는 **읽기 전용 물음 하나**(stockchart:ping)만 허용한다
+  //    (보유 매입가 가로선 — 2026-10-30). 보내는 메시지가 늘면 이 가드가 잡는다.
+  ok('#G81 차트 창은 저장소·stockHistoryMap 을 쓰지 않고, opener에는 stockchart:ping 하나만 보낸다',
+    !/localStorage|sessionStorage|stockHistoryMap|saveDriveFile/.test(CW)
+    && (CW.match(/postMessage\(/g) || []).length === 1
+    && /op\.postMessage\(\{ type: 'stockchart:ping', codes \}, window\.location\.origin\);/.test(CW));
+  ok('#G81b 차트 창은 같은 출처 · opener의 답(stockchart:holdings)만 받고, null(모름)이면 기존 선을 지우지 않는다',
+    /if \(e\.origin !== window\.location\.origin\) return;/.test(CW) && /if \(!window\.opener \|\| e\.source !== window\.opener\) return;/.test(CW)
+    && /d\.type !== 'stockchart:holdings'/.test(CW) && /const h = normalizeHoldings\(d\.holdings\);\s*\n\s*if \(!h\) return;/.test(CW));
+  // ⚠️ 매입가는 사용자 데이터다 — 주소창·방문 기록에 남는 URL에 실으면 안 된다.
+  ok('#G81c 매입가는 주소(stockChartUrl)에 싣지 않는다', !/holding|avg/i.test(stripComments(CMOD.slice(CMOD.indexOf('export function stockChartUrl'), CMOD.indexOf('export function chartPeriodFromWatch')))));
   ok('#G82 비교 종목·기간은 주소에만 남긴다(replaceState + 공용 URL 함수)',
     /window\.history\.replaceState\(null, '', stockChartUrl\(\{/.test(CW));
 
   // ── 미니차트 클릭 배선 ──
   ok('#G83 미니차트는 버튼 안에 있고 클릭하면 openChartWindow(s, q)',
-    /onClick=\{\(\) => openChartWindow\(s, q\)\}[\s\S]{0,400}?<Sparkline points=\{v\.points \|\| \[\]\} rate=\{v\.rate\} \/>\s*\n\s*<\/button>/.test(P));
+    /onClick=\{\(\) => openChartWindow\(s, q\)\}[\s\S]{0,700}?<Sparkline points=\{v\.points \|\| \[\]\} rate=\{v\.rate\} avg=\{holdSum \? holdSum\.avg : null\} \/>\s*\n\s*<\/button>/.test(P));
   {
     const m = P.match(/const openChartWindow = \(s, q\) => \{[\s\S]*?\n  \};/);
     const body = m ? m[0] : '';
@@ -858,6 +939,51 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     /if \(market === 'fund'\) return \{ status: 'unsupported' \};/.test(QUOTE)
     && /pickYahooDividend, 10000\)/.test(QUOTE)
     && QUOTE.indexOf('pickNaverDividend);') > 0 && QUOTE.indexOf('pickNaverDividend);') < QUOTE.indexOf('pickNaverAnnualDividend);'));
+}
+
+// ── 보유 종목 매입가 가로선(사용자 요청 2026-10-30) — 앱 탭 → 관심종목(팝업·창) → 종목 차트 창, 읽기만 ──
+{
+  const CHART = src('src/components/StockChartWindow.tsx');
+  const P = stripComments(POPUP);
+  const CW = stripComments(CHART);
+  const A = stripComments(APP);
+  const WN = stripComments(WIN);
+  // ⚠️ 매입가 계산은 buildHoldings 한 곳 — 화면마다 따로 나누면 표의 구매단가와 선이 갈린다.
+  ok('#G96 앱은 portfolios 로 buildHoldings 를 한 번 계산하고, STATE 로드 전에는 null(모름)',
+    /import \{ buildHoldings \} from '\.\/watchlistChart';/.test(APP)
+    && /\(ledgerDataState === 'ready' \? JSON\.stringify\(buildHoldings\(portfolios\)\) : ''\)/.test(A)
+    && /\[portfolios, ledgerDataState\]/.test(A));
+  ok('#G96b 인앱 팝업에 holdings 를 넘기고, 관심종목 창 live 메시지에도 싣는다',
+    /holdings=\{watchHoldings\}/.test(A) && /type: 'watchlist:live'[^}]*holdings: watchHoldings \}\);/.test(A));
+  ok('#G96c 관심종목 창은 받은 holdings 를 정규화해 팝업에 넘기고, null 이면 기존 값을 지킨다',
+    /const h = normalizeHoldings\(d\.holdings\);\s*\n\s*if \(h\) setHoldings\(h\);/.test(WN) && /holdings=\{holdings\}/.test(WN)
+    && /import \{ normalizeHoldings \} from '\.\.\/watchlistChart';/.test(WIN));
+  // ⚠️ 응답자는 팝업 컴포넌트 하나 — 앱 탭(인앱 팝업)과 관심종목 창 어느 쪽에서 연 차트 창이든 그 opener가 답한다.
+  //    if (!open) return null 보다 **앞**의 effect라 팝업을 닫아도 살아 있어야 한다.
+  {
+    const iResp = P.indexOf("d.type !== 'stockchart:ping'");
+    const iNull = P.indexOf('if (!open) return null;');
+    ok('#G97 팝업이 stockchart:ping 에 같은 출처 검사 후 물어본 종목 몫만(pickHoldings) 답한다 · 모르면 null',
+      iResp > 0 && iNull > iResp
+      && /e\.source\.postMessage\(\{ type: 'stockchart:holdings', holdings: h \? pickHoldings\(h, d\.codes\) : null \}, window\.location\.origin\);/.test(P)
+      && /const onMsg = \(e\) => \{\s*\n\s*if \(e\.origin !== window\.location\.origin\) return;\s*\n\s*const d = e\.data;\s*\n\s*if \(!d \|\| typeof d !== 'object' \|\| d\.type !== 'stockchart:ping'/.test(P));
+  }
+  ok('#G98 미니차트 매입가 = 그 행의 보유분 합산(holdingsFor → holdingAvg) · holdingLayout(40%)로 눈금/가장자리 결정',
+    /const hold = holdingsFor\(holdings, s\.code, s\.market\);/.test(P) && /const holdSum = holdingAvg\(hold\);/.test(P)
+    && /holdingLayout\(min, max, \[avg\], 0\.4\)/.test(P));
+  ok('#G99 차트 창 매입가 선 — 계좌마다(holdingsFor) · 수익률 보기는 holdingPct · holdingLayout(40% — 미니차트와 같은 규칙)',
+    /hold: holdingsFor\(holdings, s\.code, s\.market\),/.test(CW)
+    && /const v = mode === 'pct' \? holdingPct\(h\.avg, base\) : h\.avg;/.test(CW)
+    && /holdingLayout\([^;]*avgLines\.map\(\(l\) => l\.v\), 0\.4\)/.test(CW));
+  // ⚠️ 눈금을 넓히는 선(extendDomain)은 holdingLayout이 받아들인 것만 — 먼 매입가까지 넓히면 시세가 납작해진다.
+  ok('#G99b 눈금 안 선만 ReferenceLine(extendDomain), 범위 밖은 가장자리 표시',
+    /\{avgLines\.map\(\(l, i\) => avgLayout\.pins\[i\] === '' && \(\s*\n\s*<ReferenceLine key=\{l\.key\} y=\{l\.v\}[^>]*ifOverflow="extendDomain"/.test(CW)
+    && /avgLines\.some\(\(l, i\) => avgLayout\.pins\[i\] === pin\)/.test(CW));
+  {
+    const iLine = CW.indexOf('<Line');
+    const iAvg = CW.indexOf('avgLines.map((l, i) => avgLayout.pins[i]');
+    ok('#G99c 매입가 선은 시세 선보다 뒤에 선언(태그가 위에 보인다)', iLine > 0 && iAvg > iLine);
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:watchlist — ${pass} passed, ${fail} failed\n`);

@@ -280,6 +280,181 @@ export function chartSelStep(st: any, ev: any): { dragging: boolean; left: strin
   }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// 보유 종목 매입가 가로선(사용자 요청 2026-10-30 — 증권사 차트의 '매입가' 점선처럼).
+// 관심종목 미니차트 · 종목 비교 차트 창에서 **포트폴리오 테이블에 있는 종목**이면 매입가 높이에 가로선을 긋는다.
+// ⚠️ 매입가 = 포트폴리오 테이블 '구매단가' 칸과 **같은 식** — 따로 정의하면 표와 선이 갈린다.
+//    국내 주식 · 펀드: 투자금액 ÷ 보유수량(투자금액이 비어 있는 옛 주식 행만 저장된 purchasePrice).
+//    해외 주식: 투자금액(USD, investAmountUsd) ÷ 보유수량(입력이 없는 옛 행은 purchasePrice — utils.overseasInvestAmount 규칙).
+// ⚠️ 한 계좌에 같은 종목 행이 둘이면 합산(총 투자금액 ÷ 총 수량), 계좌가 다르면 **계좌마다 한 줄**.
+// ⚠️ 삭제된 계좌(deletedAt)·TEST 계좌는 뺀다 — 통합 대시보드의 '합산·차트 제외' 규약과 같다.
+//    직접입력·마통(종목 행 없음), KRX 금현물·CRYPTO(차트 시세와 가격 단위가 다르다)도 뺀다.
+// ⚠️ 통화가 차트 시장과 다르면 긋지 않는다(해외 = USD ↔ 'us', 그 외 = KRW ↔ 'kr'·'fund') — 원화 매입가를
+//    달러 차트에 그으면 1,300배 엉뚱한 자리에 선이 선다.
+
+type Holding = { acct: string; avg: number; qty: number; cur: 'KRW' | 'USD' };
+
+const HOLD_SKIP_ACCOUNTS = ['simple', 'matong', 'gold', 'crypto'];
+const MAX_HOLD_KEYS = 500;
+const MAX_HOLD_PER_KEY = 20;
+
+// utils.cleanNum과 같은 규칙(이 파일은 import 0 — 미러가 아니라 같은 한 줄 파서).
+const holdNum = (v: any): number => {
+  if (v === null || v === undefined || v === '') return 0;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  const n = parseFloat(String(v).replace(/[^0-9.-]+/g, ''));
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** 보유 종목 매칭 키 — 대소문자 무시 · 미래에셋 펀드 'MA:' 접두어 무시(관심종목은 접두어 없이 넣기도 한다). */
+export function holdingKey(code: any): string {
+  if (typeof code !== 'string') return '';
+  const c = code.trim().toUpperCase().replace(/^MA:/, '');
+  return c && c.length <= 200 ? c : '';
+}
+
+/**
+ * portfolios(계좌 배열 — 앱의 단일 소스) → { [holdingKey]: [{ acct, avg, qty, cur }] }.
+ * 순서 = 계좌 탭 순서. 매입가를 낼 수 없는 행(수량 0 · 투자금액 0)은 건너뛴다.
+ */
+export function buildHoldings(portfolios: any): Record<string, Holding[]> {
+  const out: Record<string, Holding[]> = {};
+  const list = Array.isArray(portfolios) ? portfolios : [];
+  for (const p of list) {
+    if (!p || typeof p !== 'object' || p.deletedAt || p.isTest) continue;
+    const type = p.accountType || 'portfolio';
+    if (HOLD_SKIP_ACCOUNTS.includes(type)) continue;
+    const overseas = type === 'overseas';
+    const acct = typeof p.name === 'string' && p.name.trim() ? p.name.trim().slice(0, 40) : '계좌';
+    const sums = new Map<string, { cost: number; qty: number }>();
+    for (const it of Array.isArray(p.portfolio) ? p.portfolio : []) {
+      if (!it || typeof it !== 'object' || (it.type !== 'stock' && it.type !== 'fund')) continue;
+      const key = holdingKey(it.code);
+      const qty = holdNum(it.quantity);
+      if (!key || !(qty > 0)) continue;
+      let cost: number;
+      if (it.type === 'fund') cost = holdNum(it.investAmount);
+      else if (overseas) {
+        const usd = it.investAmountUsd;
+        cost = usd === null || usd === undefined || usd === '' ? holdNum(it.purchasePrice) * qty : holdNum(usd);
+      } else {
+        const inv = holdNum(it.investAmount);
+        cost = inv > 0 ? inv : holdNum(it.purchasePrice) * qty;
+      }
+      if (!(cost > 0)) continue;
+      const s = sums.get(key) || { cost: 0, qty: 0 };
+      s.cost += cost;
+      s.qty += qty;
+      sums.set(key, s);
+    }
+    for (const [key, s] of sums) {
+      const avg = s.cost / s.qty;
+      if (!Number.isFinite(avg) || avg <= 0) continue;
+      if (!out[key]) out[key] = [];
+      if (out[key].length < MAX_HOLD_PER_KEY) out[key].push({ acct, avg, qty: s.qty, cur: overseas ? 'USD' : 'KRW' });
+    }
+  }
+  return out;
+}
+
+/** 차트 한 종목의 보유분 — 키가 같고 **통화가 시장과 맞는** 것만. */
+export function holdingsFor(map: any, code: any, market: any): Holding[] {
+  const key = holdingKey(code);
+  if (!key || !map || typeof map !== 'object') return [];
+  const arr = Array.isArray(map[key]) ? map[key] : [];
+  const cur = market === 'us' ? 'USD' : 'KRW';
+  return arr.filter((h: any) => h && h.cur === cur && typeof h.avg === 'number' && h.avg > 0);
+}
+
+/** 요청한 종목 코드의 보유분만 골라 낸다(차트 창에 계좌 전체를 보내지 않는다). */
+export function pickHoldings(map: any, codes: any): Record<string, Holding[]> {
+  const out: Record<string, Holding[]> = {};
+  if (!map || typeof map !== 'object' || !Array.isArray(codes)) return out;
+  for (const c of codes.slice(0, MAX_HOLD_KEYS)) {
+    const key = holdingKey(c);
+    if (key && Array.isArray(map[key]) && map[key].length) out[key] = map[key];
+  }
+  return out;
+}
+
+/**
+ * 창 사이 메시지로 받은 보유분 정리 — 모양이 틀린 항목은 버린다(렌더 중 예외 방지).
+ * null·배열·원시값 → null(= '아직 모른다' — 받는 쪽은 기존 값을 지우지 않는다).
+ */
+export function normalizeHoldings(raw: any): Record<string, Holding[]> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out: Record<string, Holding[]> = {};
+  let n = 0;
+  for (const k of Object.keys(raw)) {
+    if (n >= MAX_HOLD_KEYS) break;
+    const key = holdingKey(k);
+    const arr = Array.isArray(raw[k]) ? raw[k] : [];
+    const good: Holding[] = [];
+    for (const h of arr) {
+      if (good.length >= MAX_HOLD_PER_KEY) break;
+      if (!h || typeof h !== 'object') continue;
+      const avg = typeof h.avg === 'number' && Number.isFinite(h.avg) && h.avg > 0 ? h.avg : 0;
+      const qty = typeof h.qty === 'number' && Number.isFinite(h.qty) && h.qty > 0 ? h.qty : 0;
+      if (!avg || !qty || (h.cur !== 'KRW' && h.cur !== 'USD')) continue;
+      const acct = typeof h.acct === 'string' && h.acct.trim() ? h.acct.trim().slice(0, 40) : '계좌';
+      good.push({ acct, avg, qty, cur: h.cur });
+    }
+    if (key && good.length) { out[key] = good; n++; }
+  }
+  return out;
+}
+
+/**
+ * 여러 계좌 보유분의 합산 매입가(총 투자금액 ÷ 총 수량) — 미니차트처럼 선을 **하나만** 그을 곳과 머리글 요약용.
+ * 차트 창의 가로선은 계좌마다 따로 긋는다(이 값으로 합치지 않는다).
+ */
+export function holdingAvg(list: any): { avg: number; qty: number; n: number } | null {
+  const arr = (Array.isArray(list) ? list : []).filter(
+    (h: any) => h && typeof h.avg === 'number' && h.avg > 0 && typeof h.qty === 'number' && h.qty > 0,
+  );
+  if (!arr.length) return null;
+  let cost = 0, qty = 0;
+  for (const h of arr) { cost += h.avg * h.qty; qty += h.qty; }
+  const avg = cost / qty;
+  return Number.isFinite(avg) && avg > 0 ? { avg, qty, n: arr.length } : null;
+}
+
+/** 매입가 → 수익률 차트 높이(%) — 그 종목 구간 첫 종가(base)를 0%로 둔 같은 눈금. base가 없으면 null. */
+export function holdingPct(avg: any, base: any): number | null {
+  if (typeof avg !== 'number' || typeof base !== 'number' || !(avg > 0) || !(base > 0)) return null;
+  return (avg / base - 1) * 100;
+}
+
+/**
+ * 매입가 선을 눈금 안에 넣을지(눈금 넓히기) · 가장자리에 표시만 할지(pin) 정한다.
+ * 매입가가 시세와 멀면 눈금을 넓히는 순간 시세 선이 한쪽 끝에 납작하게 눌린다 → 시세 선이 높이의
+ * minShare 미만으로 줄어드는 매입가는 눈금을 넓히지 않고 위('top')·아래('bottom') 가장자리 표시로 돌린다.
+ * levels = 매입가 높이 배열(같은 눈금). 반환 = 같은 순서의 pin('' = 눈금 안) + 최종 눈금 lo·hi.
+ */
+export function holdingLayout(dataMin: any, dataMax: any, levels: any, minShare: any = 0.4): { pins: string[]; lo: number; hi: number } {
+  const lv: any[] = Array.isArray(levels) ? levels : [];
+  const okMin = typeof dataMin === 'number' && Number.isFinite(dataMin);
+  const okMax = typeof dataMax === 'number' && Number.isFinite(dataMax);
+  if (!okMin || !okMax || dataMax < dataMin) return { pins: lv.map(() => ''), lo: NaN, hi: NaN };
+  const share = typeof minShare === 'number' && minShare > 0 && minShare < 1 ? minShare : 0.4;
+  const span = dataMax - dataMin;
+  let lo = dataMin, hi = dataMax;
+  const pins = lv.map(() => '');
+  // 시세 범위에서 가까운 매입가부터 받아들인다 — 먼 것 하나가 가까운 것까지 가장자리로 밀어내지 않게.
+  const order = lv.map((v, i) => ({ v, i }))
+    .filter((o) => typeof o.v === 'number' && Number.isFinite(o.v))
+    .sort((a, b) => Math.max(dataMin - a.v, a.v - dataMax, 0) - Math.max(dataMin - b.v, b.v - dataMax, 0));
+  for (const { v, i } of order) {
+    if (v >= lo && v <= hi) continue;
+    const nlo = Math.min(lo, v), nhi = Math.max(hi, v);
+    // 시세가 한 값뿐(span 0)이면 눌릴 모양이 없다 — 넓힌다.
+    if (span <= 0 || span / (nhi - nlo) >= share) { lo = nlo; hi = nhi; }
+    else pins[i] = v > dataMax ? 'top' : 'bottom';
+  }
+  lv.forEach((v, i) => { if (typeof v !== 'number' || !Number.isFinite(v)) pins[i] = 'none'; });
+  return { pins, lo, hi };
+}
+
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
 /** 'YYYY-MM-DD' → 'YY/MM/DD (요일)'. ⚠️ 요일은 UTC로 잰다(`new Date('YYYY-MM-DD')`는 뷰어 타임존에 따라 하루 밀린다). */
 export function chartDateLabel(d: any): string {

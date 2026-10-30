@@ -4,7 +4,10 @@ import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, P
 import CustomDatePicker from './CustomDatePicker';
 import { generateId, formatNumber, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday, fetchWatchDividend, fmtWatchPrice } from '../watchlistQuote';
-import { periodCutoff, watchPeriodWindow, windowRate, stockDetailUrl, stockChartUrl, stockChartWindowName, chartPeriodFromWatch } from '../watchlistChart';
+import {
+  periodCutoff, watchPeriodWindow, windowRate, stockDetailUrl, stockChartUrl, stockChartWindowName, chartPeriodFromWatch,
+  holdingsFor, holdingAvg, holdingLayout, pickHoldings,
+} from '../watchlistChart';
 import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize, watchHighlightOf, nextWatchHighlight, toggleWatchHighlight, clearWatchHighlights } from '../watchlistGroups';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
@@ -92,14 +95,23 @@ const cutoffFor = (period) => periodCutoff(period, todayKST());
 // 등락율 클릭 시 여는 종목 상세페이지 URL (PortfolioTable과 동일 규칙 — 차트 창과 공유)
 const detailUrl = stockDetailUrl;
 
+// 보유 종목 매입가 표시색(미니차트 점선 · '보유' 표시) — 시세 선의 빨강·파랑과 헷갈리지 않는 호박색.
+const HOLD_COLOR = '#fbbf24';
+
 // 최근 종가 미니 라인차트(인라인 SVG — 행마다 recharts 컨테이너를 쓰지 않아 가벼움).
 // 상승 red / 하락 blue (한국식). 데이터 2점 미만이면 빈칸.
 // ⚠️ 선 색은 옆 칸 등락율과 **같은 값**(rate)으로 칠한다 — 점 비교로 되돌리면 등락률이 정확히 0이거나
 //    1일 탭(전일 종가 대비 실시간)에서 "선은 빨강인데 숫자는 파랑"이 다시 난다. rate 미제공 시에만 점 비교로 폴백.
-function Sparkline({ points, rate, width = 56, height = 20 }) {
+// avg = 보유 종목의 합산 매입가(포트폴리오 테이블 구매단가) → 호박색 점선. 매입가가 시세와 멀어 눈금을
+//   넓히면 시세 선이 높이의 40% 미만으로 눌리는 경우엔 넓히지 않고 위·아래 가장자리에 성긴 점선으로만
+//   표시한다(holdingLayout — 종목 차트 창과 같은 40% 규칙).
+function Sparkline({ points, rate, avg = null, width = 56, height = 20 }) {
   if (!Array.isArray(points) || points.length < 2) return <div style={{ width, height }} className="shrink-0" />;
-  const min = Math.min(...points);
-  const max = Math.max(...points);
+  let min = Math.min(...points);
+  let max = Math.max(...points);
+  const avgLay = typeof avg === 'number' && avg > 0 ? holdingLayout(min, max, [avg], 0.4) : null;
+  const avgPin = avgLay ? avgLay.pins[0] : 'none';
+  if (avgPin === '') { min = avgLay.lo; max = avgLay.hi; }
   const range = max - min || 1;
   const up = points[points.length - 1] >= points[0];
   const stroke = (rate != null && Number.isFinite(rate))
@@ -111,8 +123,13 @@ function Sparkline({ points, rate, width = 56, height = 20 }) {
   const d = points
     .map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * stepX).toFixed(1)},${(pad + h - ((v - min) / range) * h).toFixed(1)}`)
     .join(' ');
+  const avgY = avgPin === '' ? pad + h - ((avg - min) / range) * h : avgPin === 'top' ? 0.5 : avgPin === 'bottom' ? height - 0.5 : null;
   return (
     <svg width={width} height={height} className="shrink-0" style={{ display: 'block' }}>
+      {avgY != null && (
+        <line x1={0} x2={width} y1={avgY} y2={avgY} stroke={HOLD_COLOR} strokeWidth={1}
+          strokeDasharray={avgPin === '' ? '3 2' : '1 2'} strokeOpacity={avgPin === '' ? 0.95 : 0.7} />
+      )}
       <path d={d} fill="none" stroke={stroke} strokeWidth={1} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
@@ -120,6 +137,10 @@ function Sparkline({ points, rate, width = 56, height = 20 }) {
 
 export default function WatchlistPopup({
   open, onClose, groups = [], onUpdateGroups,
+  // 보유 종목 매입가 `{ [holdingKey]: [{ acct, avg, qty, cur }] }`(watchlistChart.buildHoldings) | null(아직 모름).
+  // ⚠️ **읽기 전용** — 정본은 앱 탭의 portfolios. 이 팝업은 미니차트에 긋고, 여기서 연 종목 차트 창의
+  //    물음(`stockchart:ping`)에 그 종목 몫만 답한다(아래 응답 effect).
+  holdings = null,
   // 'popup' = 인앱 플로팅 패널 / 'page' = 별도 브라우저 창(`/?watchlistWindow=1`).
   // ⚠️ 창용으로 화면을 복제하지 말 것 — 두 화면이 갈라진다(LedgerPage·CalendarModal과 같은 규약).
   variant = 'popup',
@@ -172,6 +193,25 @@ export default function WatchlistPopup({
   // 종목 차트 창 — 종목마다 하나. 같은 종목을 다시 누르면 새로 열지 않고 그 창을 앞으로(추가한 비교 종목 보존).
   const chartWinsRef = useRef({});
   const [chartBlocked, setChartBlocked] = useState(false);
+  // 종목 차트 창의 보유 매입가 물음에 답한다 — 이 팝업이 사는 창(앱 탭 · 관심종목 창)이 그 창의 opener다.
+  // ⚠️ 답만 보낸다(읽기 전용). 차트 창은 쓰기 0 — 받은 값을 어디에도 저장하지 않는다.
+  // ⚠️ 계좌 전체가 아니라 **물어본 종목 몫만**(pickHoldings). 아직 모르면(null) null로 답해 창이 기존 선을 지우지 않게 한다.
+  // ⚠️ 팝업이 닫혀 있어도(open=false) 이 effect는 살아 있다 — 팝업을 닫은 뒤에도 열어 둔 차트 창에 선이 남는다.
+  const holdingsRef = useRef(holdings);
+  holdingsRef.current = holdings;
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'stockchart:ping' || !e.source) return;
+      const h = holdingsRef.current;
+      try {
+        e.source.postMessage({ type: 'stockchart:holdings', holdings: h ? pickHoldings(h, d.codes) : null }, window.location.origin);
+      } catch { /* 창이 닫히는 중이면 무시 */ }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
   // ── 보기 상태: 기간(period) · 직접 선택 시작일/종료일('' = 현재까지 실시간) · 등락율 정렬(null|'desc'|'asc') ──
   // ⚠️ 네 값을 **한 객체**로 다룬다. 따로 setState하면 한 클릭에서 두 값을 바꿀 때(📅 기간 = 시작일 채우기 +
   //    기간 전환) 제어 모드에서 뒤 호출이 앞 호출을 낡은 값 위에 덮어 시작일이 사라진다.
@@ -656,6 +696,20 @@ export default function WatchlistPopup({
       : period === CUSTOM
         ? `${periodLabel} 등락율 기준가 · ${b.date} 종가 ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(시작일이 휴장일이거나 상장 전이면 그 뒤 첫 거래일을 기준으로 합니다)\n${REFRESH_HINT}`
         : `${period} 등락율 기준가 · ${b.date} 종가 ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(휴장·상장일 때문에 정확히 ${period} 전이 아닐 수 있어 실제 기준일을 표시합니다)\n${REFRESH_HINT}`;
+  };
+
+  // 보유 종목 툴팁 — 계좌마다 수량·매입가·현재가 대비 수익률(포트폴리오 테이블 구매단가와 같은 값).
+  // 국내 원화 매입가는 표처럼 원 단위로 반올림해 보인다(선 높이는 반올림 전 값).
+  const fmtAvg = (market, v) => fmtPrice(market, market === 'kr' ? Math.round(v) : v);
+  const fmtQty = (n) => new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 }).format(n);
+  const holdTitle = (s, hold, q) => {
+    const px = q ? Number(q.price) : 0;
+    const lines = hold.map((h) => {
+      const r = px > 0 ? ` · 현재가 대비 ${formatChangeRate((px / h.avg - 1) * 100)}` : '';
+      return `${h.acct} · ${fmtQty(h.qty)}${s.market === 'fund' ? '좌' : '주'} · 매입가 ${fmtAvg(s.market, h.avg)}${r}`;
+    });
+    const sum = hold.length > 1 ? holdingAvg(hold) : null;
+    return `보유 종목(포트폴리오 테이블)\n${lines.join('\n')}${sum ? `\n합산 매입가 ${fmtAvg(s.market, sum.avg)}` : ''}\n미니차트의 호박색 점선 = 매입가${hold.length > 1 ? '(합산)' : ''}`;
   };
 
   // 분배금 칸 표시 — 상태 6종(조회 중 · 최근 1회 · 연간 · 기록 없음 · 펀드 미지원 · 조회 실패)을 뭉뚱그리지 않는다.
@@ -1244,6 +1298,8 @@ export default function WatchlistPopup({
                 {sortedStocks.map((s, idx) => {
                   const q = quotes[s.code];
                   const v = viewByCode[s.code] || {};   // 차트·등락율·툴팁 공용(단일 소스)
+                  const hold = holdingsFor(holdings, s.code, s.market);   // 포트폴리오 테이블에 있는 종목(계좌별)
+                  const holdSum = holdingAvg(hold);
                   const st = status[s.code];
                   const isDragging = dragId === s.id;
                   const dropTop = canReorder && dragId != null && !isDragging && dragOverIndex === idx;
@@ -1299,15 +1355,20 @@ export default function WatchlistPopup({
                           <div className="text-gray-500 text-[10px] flex items-center gap-1">
                             <span>{s.code}</span>
                             <span className="text-gray-600">· {MARKET_LABEL[s.market] || s.market}</span>
+                            {holdSum && (
+                              <span className="font-semibold cursor-help" style={{ color: HOLD_COLOR }} title={holdTitle(s, hold, q)}>
+                                · 보유 {fmtAvg(s.market, holdSum.avg)}
+                              </span>
+                            )}
                           </div>
                         </div>
                         {/* 미니차트 클릭 = 이 종목의 비교 차트를 별도 브라우저 창으로(시세 반영 수익률 차트) */}
                         <button
                           onClick={() => openChartWindow(s, q)}
-                          title={`${q?.name || s.name || s.code} — 클릭하면 종목 비교 차트를 새 창으로 엽니다`}
+                          title={`${q?.name || s.name || s.code} — 클릭하면 종목 비교 차트를 새 창으로 엽니다${holdSum ? `\n호박색 점선 = 보유 매입가 ${fmtAvg(s.market, holdSum.avg)}${hold.length > 1 ? `(${hold.length}개 계좌 합산)` : ''}` : ''}`}
                           className="shrink-0 rounded cursor-pointer hover:bg-white/[0.07] hover:ring-1 hover:ring-gray-600 transition"
                         >
-                          <Sparkline points={v.points || []} rate={v.rate} />
+                          <Sparkline points={v.points || []} rate={v.rate} avg={holdSum ? holdSum.avg : null} />
                         </button>
                         <button
                           onClick={() => viewStock(s, q)}
