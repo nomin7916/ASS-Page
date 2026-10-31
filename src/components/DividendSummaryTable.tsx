@@ -1,14 +1,14 @@
 // @ts-nocheck
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { cleanNum, formatCurrency, dividendPayDate, buildHeldNameMap, parseDividendApiResult, overseasInvestAmount } from '../utils';
+import { cleanNum, formatCurrency, dividendPayDate, buildHeldNameMap, parseDividendApiResult, overseasInvestAmount, resolveHoldings } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
 import KrEtfTaxMatrix from './KrEtfTaxMatrix';
 import ErrorBoundary from './ErrorBoundary';
 import CardExpandButton from './CardExpandButton';
 import { resolveAvgAdjState, avgAdjTooltip } from '../krEtfTaxHelpers';
+import { dividendYearChoices, resolveDividendViewYear } from '../dividendYear';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
-const CURRENT_YEAR = new Date().getFullYear().toString();
 const formatUsd = (v) => v > 0 ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
 
 const isKrCode = (code) => /^[A-Z0-9]{5,6}$/i.test(String(code || ''));
@@ -23,8 +23,8 @@ const getCodeType = (code, pf) => {
 // 계속 표시·편집할 수 있도록 유령 행으로 노출한다(금액이 실제 입력된 맵만 트리거 — 수량 override
 // 단독은 제외해 빈 행 방지). 저장 키(exYm)는 삭제 전과 동일한 dividendHistory/exDate에서 산출되므로
 // 삭제 후에도 같은 셀에 그대로 매핑된다.
-function getDividendOrphanCodes(pf) {
-  const inPortfolio = new Set((pf.portfolio || []).map(i => String(i.code)));
+function getDividendOrphanCodes(pf, items = pf.portfolio) {
+  const inPortfolio = new Set((items || []).map(i => String(i.code)));
   // 같은 코드로 만든 '수동 추가 행'(extraDividendRows)이 이미 있으면 유령 행을 만들지 않는다.
   // extraDividendRows도 '제거된 종목의 과거 배당 기록용'이라 목적이 동일 — 둘 다 합산되면 같은
   // 배당이 월/연 합계에서 이중 계상되고 같은 종목이 2줄로 뜬다. 기존 수동 행(사용자의 명시적 선택)을
@@ -44,12 +44,13 @@ function getDividendOrphanCodes(pf) {
   return [...codes];
 }
 
-function buildMonthPrediction(codeHistory) {
+// maxYear가 있으면 그 해 이하의 값만 본다 — 지난 연도 표에 그 뒤 해의 공시액이 끌려오지 않게(look-ahead 금지).
+function buildMonthPrediction(codeHistory, maxYear = null) {
   const pred = {};
   for (let m = 1; m <= 12; m++) {
     const mo = String(m).padStart(2, '0');
     const entries = Object.entries(codeHistory || {})
-      .filter(([key]) => key.endsWith(`-${mo}`))
+      .filter(([key]) => key.endsWith(`-${mo}`) && (maxYear == null || Number(key.slice(0, 4)) <= maxYear))
       .sort(([a], [b]) => b.localeCompare(a));
     if (entries.length > 0) pred[m] = entries[0][1];
   }
@@ -57,12 +58,12 @@ function buildMonthPrediction(codeHistory) {
 }
 
 // 월별 배당락일 예측: 같은 월(MM)의 가장 최근 연도 배당락일(YYYY-MM-DD) 선택
-function buildMonthExPrediction(codeExHistory) {
+function buildMonthExPrediction(codeExHistory, maxYear = null) {
   const pred = {};
   for (let m = 1; m <= 12; m++) {
     const mo = String(m).padStart(2, '0');
     const entries = Object.entries(codeExHistory || {})
-      .filter(([key]) => key.endsWith(`-${mo}`))
+      .filter(([key]) => key.endsWith(`-${mo}`) && (maxYear == null || Number(key.slice(0, 4)) <= maxYear))
       .sort(([a], [b]) => b.localeCompare(a));
     if (entries.length > 0) pred[m] = entries[0][1];
   }
@@ -72,7 +73,17 @@ function buildMonthExPrediction(codeExHistory) {
 // 'YYYY-MM-DD' → 'MM/DD' (없으면 '')
 const fmtMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? `${s.slice(5, 7)}/${s.slice(8, 10)}` : '';
 
-const _CY = Number(CURRENT_YEAR);
+// 지난 연도 표의 보유 종목·수량 = 그 해 말일의 자산검증 스냅샷(그 해 마지막 보유 구성).
+// 올해는 지금 포트폴리오 그대로. 스냅샷이 하나도 없으면(kind 'live') 지금 포트폴리오로 폴백한다.
+// ⚠️ 그 해가 끝난 뒤에 기록을 시작한 계좌(baselineDate > 그 해 말일)는 보유 없음 — resolveHoldings는 이때
+//    baseline 스냅샷(나중 구성)을 '추정'으로 돌려주므로, 그대로 쓰면 없던 계좌에 그 해 예상 분배금이 생긴다.
+function holdingsForYear(pf, year, isPast) {
+  if (!isPast) return pf.portfolio || [];
+  const yearEnd = `${year}-12-31`;
+  if (pf.baselineDate && yearEnd < String(pf.baselineDate)) return [];
+  const r = resolveHoldings(pf, yearEnd);
+  return r.kind === 'live' ? (pf.portfolio || []) : (r.items || []);
+}
 
 // 종목의 배당락→지급 슬롯 오프셋(개월) 추정. 월배당 T+2 관례상 직전월 배당락→익월
 // 지급이면 1, 배당락·지급이 동월(월초/월중형)이면 0. 비어있는 미래 지급월의 폴백
@@ -96,7 +107,7 @@ function slotExOffset(slots) {
 // 보장한다. 겹치면 한 셀 편집·삭제가 옆 달로 전이된다(사용자 보고 버그).
 // 반환: 슬롯별 폴백 exYm 배열(실제 소스 있는 슬롯은 null). slots가 고정이면
 // 결과도 결정적이라 입력 전후 같은 키를 가리켜 값이 같은 셀에 유지된다.
-function buildFallbackExYms(slots) {
+function buildFallbackExYms(slots, CY) {
   const off = slotExOffset(slots);
   const used = new Set();
   slots.forEach(srcs => srcs.forEach(s => used.add(s.exYm)));
@@ -106,7 +117,7 @@ function buildFallbackExYms(slots) {
     let exYm = '';
     for (let guard = 0; guard < 24; guard++) {
       const exMonthIdx = ((raw % 12) + 12) % 12;
-      const year = raw < 0 ? _CY - 1 : raw > 11 ? _CY + 1 : _CY;
+      const year = raw < 0 ? CY - 1 : raw > 11 ? CY + 1 : CY;
       exYm = `${year}-${String(exMonthIdx + 1).padStart(2, '0')}`;
       if (!used.has(exYm)) break;
       raw -= 1; // 충돌 시 한 달 앞으로 이동해 고유 키 확보
@@ -146,23 +157,29 @@ function classifyCadence(hist, exH, hol) {
   return { label: '월말', cls: 'text-rose-300 border-rose-400/50' };
 }
 
-// 한 종목의 배당락 이벤트들을 '올해 지급월' 슬롯으로 재배치한다.
+// 한 종목의 배당락 이벤트들을 'CY년 지급월' 슬롯으로 재배치한다(CY = 보고 있는 연도).
 // 저장 키는 배당락월(exYm) 그대로 유지하고 표시 위치만 지급월 기준으로 옮긴다.
 // 반환: slots[payIdx 0-11] = [{ exYm, exMonthIdx, perShare, exDateRaw, payDateRaw, exPredicted }]
 // - 배당락일 미확정 예측월: 직전연도 배당락일 + 2영업일로 추정 배치
-// - 올해 12월 배당락 → 내년 1월 지급분은 올해 표에서 제외
-// - 직전연도 12월 배당락 → 올해 1월 지급분은 1월 슬롯에 편입
-function buildPaySlots(codeHistory, codeExHistory, hol) {
-  const monthPred = buildMonthPrediction(codeHistory);
-  const exPred = buildMonthExPrediction(codeExHistory);
-  const CY = Number(CURRENT_YEAR);
+// - CY년 12월 배당락 → 이듬해 1월 지급분은 CY년 표에서 제외
+// - 직전연도 12월 배당락 → CY년 1월 지급분은 1월 슬롯에 편입
+// ⚠️ 주당분배금·예측 배당락일은 **그 배당락 해(exYear) 이하**의 값만 쓴다 — 그 해 값이 있으면 그 값,
+//    없으면 그 이전 가장 최근 해. 지난 연도 표에 그 뒤 해의 공시액이 끌려오면 같은 저장 키에 다른 주당액이
+//    붙어 수량 역산이 틀어진다(직전연도 12월 → 1월 지급분이 올해 12월 주당액을 쓰던 것도 같은 결함).
+function buildPaySlots(codeHistory, codeExHistory, hol, CY) {
+  const predByYear = {};
+  const predFor = (exYear) => predByYear[exYear] || (predByYear[exYear] = {
+    amt: buildMonthPrediction(codeHistory, exYear),
+    ex: buildMonthExPrediction(codeExHistory, exYear),
+  });
   // 캘린더 응답이 직전연도를 누락하더라도 직전연도 12월 말 배당락의 지급일(T+2)이
-  // KRX 연말 휴장(12/31)을 건너뛰어 올해 1월로 넘어가도록 방어적으로 보강한다.
+  // KRX 연말 휴장(12/31)을 건너뛰어 CY년 1월로 넘어가도록 방어적으로 보강한다.
   const holAug = [...(hol || []), `${CY - 1}-12-31`];
   const slots = Array.from({ length: 12 }, () => []);
   const consider = (exYear, mIdx, prevDecToJan = false) => {
     const m = mIdx + 1;
     const mo = String(m).padStart(2, '0');
+    const { amt: monthPred, ex: exPred } = predFor(exYear);
     const perShare = monthPred[m] || 0;
     if (!(perShare > 0)) return;
     const exYm = `${exYear}-${mo}`;
@@ -356,9 +373,44 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const krwInputRef = useRef(null);
   const afterTaxBlurTimer = useRef(null);
 
+  // ── 연도 보기(dividendYear.ts) — 제목 위 '올해', 제목 아래 지난 연도 버튼. 세션 로컬(저장 지점 0곳) ──
+  // ⚠️ 지난 연도는 기본 **읽기 전용**이다. 모든 쓰기는 whenEditable을 지나고, 잠긴 동안엔 확인 창
+  //    (열쇠 버튼과 같은 창)을 먼저 띄운다 — 승인하면 그 해만 열리고, 다른 해로 옮기면 다시 잠긴다.
+  const currentYear = new Date().getFullYear();
+  const [selectedYear, setSelectedYear] = useState(null);
+  const viewYear = resolveDividendViewYear(selectedYear, currentYear);
+  const isPastYear = viewYear < currentYear;
+  const yearChoices = dividendYearChoices(currentYear);
+  const [unlockedYear, setUnlockedYear] = useState(null);
+  const pastLocked = isPastYear && unlockedYear !== viewYear;
+  const pastLockedRef = useRef(pastLocked);
+  pastLockedRef.current = pastLocked;
+  const unlockPendingRef = useRef(null);
+  const requestPastUnlock = () => {
+    if (!pastLockedRef.current) return Promise.resolve(true);
+    if (unlockPendingRef.current) return unlockPendingRef.current;
+    if (!confirmDialog) return Promise.resolve(false);
+    const y = viewYear;
+    const p = Promise.resolve(confirmDialog(`${y}년 과거 기록을 수정할까요?\n\n수정하면 저장된 ${y}년 분배금 기록이 그대로 바뀝니다.\n다른 연도로 옮기면 다시 잠깁니다.`, '수정하기'))
+      .then(ok => {
+        unlockPendingRef.current = null;
+        if (ok) { pastLockedRef.current = false; setUnlockedYear(y); }
+        return !!ok;
+      });
+    unlockPendingRef.current = p;
+    return p;
+  };
+  const whenEditable = (fn) => (fn ? (...args) => {
+    if (!pastLockedRef.current) return fn(...args);
+    requestPastUnlock().then(ok => { if (ok) fn(...args); });
+  } : fn);
+
+  // 삭제 계좌는 분배금 현황(통합 compact)에서 제외 — 데이터는 계좌에 보존(복원 시 재노출).
+  // 단 지난 연도 보기에서는 그 해 말일 뒤에 삭제된 계좌가 그 해엔 있었으므로 포함한다.
   const nonGoldPortfolios = useMemo(() =>
-    (portfolios || []).filter(p => p.accountType !== 'gold' && !p.deletedAt), // 삭제 계좌는 분배금 현황(통합 compact)에서 제외 — 데이터는 계좌에 보존(복원 시 재노출)
-    [portfolios]
+    (portfolios || []).filter(p => p.accountType !== 'gold'
+      && (!p.deletedAt || (isPastYear && String(p.deletedAt) > `${viewYear}-12-31`))),
+    [portfolios, viewYear, isPastYear]
   );
 
   // Fix: 셀 identity(code+monthIdx+field)가 바뀔 때만 focus/select 실행
@@ -376,7 +428,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const handleRefreshAll = useCallback(async () => {
     setLoading(true);
     await Promise.all(
-      nonGoldPortfolios.map(async pf => {
+      nonGoldPortfolios.filter(pf => !pf.deletedAt).map(async pf => {
         const stocks = (pf.portfolio || []).filter(item => getCodeType(item.code, pf) !== null);
         if (!stocks.length) return;
         const mergeMap = {};
@@ -412,7 +464,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const actualDiv = pf.actualDividend || {};
       const actualDivUsd = pf.actualDividendUsd || {};
       const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
-      (pf.portfolio || []).forEach(item => {
+      holdingsForYear(pf, viewYear, isPastYear).forEach(item => {
         if (!getCodeType(item.code, pf)) return;
         const baseQty = cleanNum(item.quantity);
         if (!baseQty) return;
@@ -420,7 +472,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const exHistory = exHistoryAll[item.code] || {};
         const codeActual = isOverseas ? (actualDivUsd[item.code] || {}) : (actualDiv[item.code] || {});
         // 지급월 기준 재배치 (저장 키는 배당락월 유지)
-        const slots = buildPaySlots(divHistory[item.code], exHistory, hol);
+        const slots = buildPaySlots(divHistory[item.code], exHistory, hol, viewYear);
         const monthData = slots.map((srcs) => {
           if (!srcs.length) {
             return {
@@ -465,7 +517,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
     });
     return result;
-  }, [nonGoldPortfolios, holidays, usdkrw]);
+  }, [nonGoldPortfolios, holidays, usdkrw, viewYear, isPastYear]);
 
   // 월 입금 내역 rows — 예상값 기반 + 사용자 직접 입력 override
   const actualRows = useMemo(() => {
@@ -480,16 +532,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const exHistoryAll = pf.dividendExDate || {};
       const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
       const orphanNameMap = buildHeldNameMap(pf);
-      const orphanItems = getDividendOrphanCodes(pf).map(code => ({ code, name: orphanNameMap[code] || '', quantity: 0, __orphan: true }));
-      [...(pf.portfolio || []), ...orphanItems].forEach(item => {
+      const yearItems = holdingsForYear(pf, viewYear, isPastYear);
+      const orphanItems = getDividendOrphanCodes(pf, yearItems).map(code => ({ code, name: orphanNameMap[code] || '', quantity: 0, __orphan: true }));
+      [...yearItems, ...orphanItems].forEach(item => {
         if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);
         if (!qty && !item.__orphan) return;
         const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
         const codeQtyOv = actualDividendQty[item.code] || {};
         // 지급월 기준 재배치 (저장 키는 배당락월 유지)
-        const slots = buildPaySlots(divHistory[item.code], exHistoryAll[item.code] || {}, hol);
-        const fbExYms = buildFallbackExYms(slots);
+        const slots = buildPaySlots(divHistory[item.code], exHistoryAll[item.code] || {}, hol, viewYear);
+        const fbExYms = buildFallbackExYms(slots, viewYear);
         const monthData = slots.map((slotSrcs, payIdx) => {
           // 예상 분배금 슬롯이 없어도 사용자가 실수령액을 직접 기록할 수 있도록
           // 충돌 없는 폴백 배당락 키를 가진 합성 소스를 사용한다. 단 예측 분배금은
@@ -573,7 +626,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             //    돌아간다 — resolveAvgAdjState는 과세금이 입력된 달에서 전체 이벤트 스냅샷을
             //    만들므로, 안 쓸 결과를 위해 그 비용을 치를 이유가 없다.
             const avgAdjRaw = compact ? null : resolveAvgAdjState(pf, item.code, dom.exYm);
-            const avgAdj = (avgAdjRaw && !String(dom.exYm).startsWith(CURRENT_YEAR))
+            const avgAdj = (avgAdjRaw && !String(dom.exYm).startsWith(String(viewYear)))
               ? { ...avgAdjRaw, showSuggest: false }
               : avgAdjRaw;
             return { amount, amountUsd: 0, predicted, hasManual, yearMonth: dom.exYm, taxAmount: taxAny ? taxSum : null, perShare: dom.perShare, calcQty, qtyVal: overrideQty > 0 ? overrideQty : calcQty, qtyIsManual: overrideQty > 0, avgAdj, srcCount: parts.length };
@@ -603,7 +656,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
     });
     return result;
-  }, [nonGoldPortfolios, holidays, usdkrw]);
+  }, [nonGoldPortfolios, holidays, usdkrw, viewYear, isPastYear]);
 
   // 수동 추가 행 (포트폴리오에서 제거된 종목의 과거 배당금 기록용)
   const extraActualRows = useMemo(() => {
@@ -613,7 +666,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       (pf.extraDividendRows || []).forEach(row => {
         const monthData = Array.from({ length: 12 }, (_, i) => {
           const mo = String(i + 1).padStart(2, '0');
-          const yearMonth = `${CURRENT_YEAR}-${mo}`;
+          const yearMonth = `${viewYear}-${mo}`;
           const entry = row.monthData?.[yearMonth] || {};
           return { yearMonth, afterTaxUsd: entry.afterTaxUsd || 0, afterTaxKrw: entry.afterTaxKrw || 0, taxKrw: entry.taxKrw || 0 };
         });
@@ -632,7 +685,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
     });
     return result;
-  }, [nonGoldPortfolios]);
+  }, [nonGoldPortfolios, viewYear, isPastYear]);
 
   // compact 모드 — 계좌별 월 합계
   const compactExpectedRows = useMemo(() => {
@@ -644,12 +697,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const taxRate = pf.dividendTaxRate ?? 15.4;
       const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
       const monthData = Array.from({ length: 12 }, () => ({ amount: 0, amountUsd: 0, taxKrw: 0, hasActual: false }));
-      (pf.portfolio || []).forEach(item => {
+      holdingsForYear(pf, viewYear, isPastYear).forEach(item => {
         if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);
         if (!qty) return;
         const exH = (pf.dividendExDate || {})[item.code] || {};
-        const slots = buildPaySlots(divHistory[item.code], exH, hol);
+        const slots = buildPaySlots(divHistory[item.code], exH, hol, viewYear);
         slots.forEach((srcs, pi) => {
           srcs.forEach(s => {
             const perShareUsd = s.perShare || 0;
@@ -670,7 +723,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const annualTax = monthData.reduce((s, d) => s + d.taxKrw, 0);
       return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTax };
     }).filter(row => row.annual > 0);
-  }, [compact, nonGoldPortfolios, dividendTaxHistory, holidays, usdkrw]);
+  }, [compact, nonGoldPortfolios, dividendTaxHistory, holidays, usdkrw, viewYear, isPastYear]);
 
   const compactActualRows = useMemo(() => {
     if (!compact) return [];
@@ -683,18 +736,19 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
       // 종목별 지급월 슬롯 1회 산출 (저장 키는 배당락월 유지). 삭제된 종목의 유령 코드도 포함 —
       // 그 계좌 월별/연간 합계에 과거 실입금이 계속 반영되도록(수량 없이 절대 입력값 사용).
-      const orphanItems = getDividendOrphanCodes(pf).map(code => ({ code, quantity: 0, __orphan: true }));
-      const stockSlots = [...(pf.portfolio || []), ...orphanItems].map(item => {
+      const yearItems = holdingsForYear(pf, viewYear, isPastYear);
+      const orphanItems = getDividendOrphanCodes(pf, yearItems).map(code => ({ code, quantity: 0, __orphan: true }));
+      const stockSlots = [...yearItems, ...orphanItems].map(item => {
         if (!getCodeType(item.code, pf)) return null;
         const qty = cleanNum(item.quantity);
         if (!qty && !item.__orphan) return null;
         const exH = (pf.dividendExDate || {})[item.code] || {};
-        const slots = buildPaySlots(divHistory[item.code], exH, hol);
-        return { code: item.code, slots, fbExYms: buildFallbackExYms(slots) };
+        const slots = buildPaySlots(divHistory[item.code], exH, hol, viewYear);
+        return { code: item.code, slots, fbExYms: buildFallbackExYms(slots, viewYear) };
       }).filter(Boolean);
       const monthData = Array.from({ length: 12 }, (_, i) => {
         const mo = String(i + 1).padStart(2, '0');
-        const yearMonth = `${CURRENT_YEAR}-${mo}`;
+        const yearMonth = `${viewYear}-${mo}`;
         if (isOverseas) {
           let pfAfterUsd = 0, pfAfterKrw = 0, pfHasActual = false;
           stockSlots.forEach(({ code, slots, fbExYms }) => {
@@ -769,7 +823,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         : monthData.reduce((s, d) => s + (d.hasManual ? (d.taxKrw || 0) : 0), 0);
       return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTax };
     }).filter(row => row.annual > 0);
-  }, [compact, nonGoldPortfolios, holidays, usdkrw]);
+  }, [compact, nonGoldPortfolios, holidays, usdkrw, viewYear, isPastYear]);
 
   const commitEdit = () => {
     if (!editingCell) return;
@@ -819,7 +873,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   };
 
 
-  const handleAfterTaxCellClick = (row, monthIdx) => {
+  const handleAfterTaxCellClick = whenEditable((row, monthIdx) => {
     const d = row.monthData[monthIdx];
     setEditingCell({
       portfolioId: row.portfolioId, code: row.code, monthIdx,
@@ -828,9 +882,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       krwValue: d.hasManualAfterTax ? String(d.afterTaxKrw) : '',
       taxKrwValue: d.taxKrwManual > 0 ? String(d.taxKrwManual) : '',
     });
-  };
+  });
 
-  const handleKrwCellClick = (row, monthIdx) => {
+  const handleKrwCellClick = whenEditable((row, monthIdx) => {
     const d = row.monthData[monthIdx];
     setEditingCell({
       portfolioId: row.portfolioId, code: row.code, monthIdx,
@@ -838,18 +892,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       value: d.hasManual ? String(d.amount) : '',
       taxValue: d.taxAmount != null ? String(d.taxAmount) : '',
     });
-  };
+  });
 
-  const handleQtyDblClick = (row, monthIdx) => {
+  const handleQtyDblClick = whenEditable((row, monthIdx) => {
     const d = row.monthData[monthIdx];
     setEditingCell({
       portfolioId: row.portfolioId, code: row.code, monthIdx,
       yearMonth: d.yearMonth, isOverseas: row.isOverseas, field: 'qty',
       value: d.qtyIsManual ? String(d.qtyVal) : (d.calcQty > 0 ? String(d.calcQty) : ''),
     });
-  };
+  });
 
-  const handleExtraOverseasCellClick = (row, monthIdx) => {
+  const handleExtraOverseasCellClick = whenEditable((row, monthIdx) => {
     const d = row.monthData[monthIdx];
     setEditingCell({
       portfolioId: row.portfolioId, rowId: row.rowId, monthIdx,
@@ -857,9 +911,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       usdValue: d.afterTaxUsd > 0 ? String(Number(d.afterTaxUsd.toFixed(4))) : '',
       krwValue: d.afterTaxKrw > 0 ? String(d.afterTaxKrw) : '',
     });
-  };
+  });
 
-  const handleExtraKrwCellClick = (row, monthIdx) => {
+  const handleExtraKrwCellClick = whenEditable((row, monthIdx) => {
     const d = row.monthData[monthIdx];
     setEditingCell({
       portfolioId: row.portfolioId, rowId: row.rowId, monthIdx,
@@ -867,10 +921,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       value: d.afterTaxKrw > 0 ? String(d.afterTaxKrw) : '',
       taxValue: d.taxKrw > 0 ? String(d.taxKrw) : '',
     });
-  };
+  });
 
   const handleExtraRowCodeBlur = useCallback(async (portfolioId, rowId, code, isOverseas) => {
-    if (!code || code.trim().length < 2) return;
+    if (!code || code.trim().length < 2 || pastLockedRef.current) return;
     const info = isOverseas
       ? await fetchUsStockInfo(code.trim())
       : await fetchStockInfo(code.trim());
@@ -925,9 +979,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   // 비해외 계좌 전용 월 세금 합계 (compact 모드)
   const getPortfolioMonthTax = (pf, monthIdx) => {
     const mo = String(monthIdx + 1).padStart(2, '0');
-    const yearMonth = `${CURRENT_YEAR}-${mo}`;
+    const yearMonth = `${viewYear}-${mo}`;
     const actualDividend = pf.actualDividend || {};
-    return (pf.portfolio || []).reduce((sum, item) => {
+    return holdingsForYear(pf, viewYear, isPastYear).reduce((sum, item) => {
       if (!getCodeType(item.code, pf)) return sum;
       const qty = cleanNum(item.quantity);
       if (!qty) return sum;
@@ -962,6 +1016,78 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     if (editingCell) commitEdit();
     onToggleHiddenMonth(hiddenTab, i);
   };
+  // 연도 전환 — 편집 중이던 셀은 원래 연도 키로 먼저 커밋하고(toggleMonth와 같은 규약), 잠금은 다시 건다.
+  const selectYear = (y) => {
+    if (afterTaxBlurTimer.current) { clearTimeout(afterTaxBlurTimer.current); afterTaxBlurTimer.current = null; }
+    if (editingCell) commitEdit();
+    setSelectedYear(y != null && y < currentYear ? y : null);
+    setUnlockedYear(null);
+  };
+  const togglePastLock = () => {
+    if (!isPastYear) return;
+    if (pastLocked) requestPastUnlock();
+    else setUnlockedYear(null);
+  };
+  const yearChipCls = (on) => `px-1.5 py-px rounded text-[10px] font-semibold tabular-nums leading-4 border transition-colors ${on
+    ? 'bg-amber-500/20 text-amber-200 border-amber-500/60'
+    : 'bg-gray-700/40 text-gray-400 border-gray-600/50 hover:bg-gray-600/50 hover:text-gray-200'}`;
+  // 제목 블록: 위 = 올해(금년도) · 가운데 = 제목 · 아래 = 지난 연도 버튼(최근 5년, 그 이전은 드롭다운) + 열쇠
+  const titleWithYears = () => (
+    <div className="flex flex-col items-start gap-0.5 shrink-0 self-center">
+      {isPastYear ? (
+        <button
+          onClick={() => selectYear(null)}
+          title={`올해(${currentYear}년) 분배금 현황으로 돌아가기`}
+          className="text-[10px] leading-3 font-semibold tabular-nums text-sky-300/90 hover:text-sky-200 transition-colors"
+        >{currentYear}년 ↩</button>
+      ) : (
+        <span className="text-[10px] leading-3 font-semibold tabular-nums text-gray-400" title="금년도">{currentYear}년</span>
+      )}
+      <span className="text-white font-bold text-sm leading-5">💰 분배금 현황</span>
+      {yearChoices.chips.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap">
+          {yearChoices.older.length > 0 && (
+            <select
+              value={yearChoices.older.includes(viewYear) ? String(viewYear) : ''}
+              onChange={e => selectYear(e.target.value ? Number(e.target.value) : null)}
+              title="그 이전 연도"
+              className={`h-[18px] rounded text-[10px] font-semibold tabular-nums border outline-none cursor-pointer bg-[#1e293b] ${yearChoices.older.includes(viewYear) ? 'text-amber-200 border-amber-500/60' : 'text-gray-400 border-gray-600/50'}`}
+            >
+              <option value="">이전 연도</option>
+              {yearChoices.older.map(y => <option key={y} value={y}>{y}년</option>)}
+            </select>
+          )}
+          {yearChoices.chips.map(y => (
+            <button
+              key={y}
+              onClick={() => selectYear(viewYear === y ? null : y)}
+              title={viewYear === y ? `${y}년 보는 중 — 다시 누르면 올해로` : `${y}년 분배금 현황 보기`}
+              className={yearChipCls(viewYear === y)}
+            >{y}년</button>
+          ))}
+          {isPastYear && (
+            <button
+              onClick={togglePastLock}
+              title={pastLocked
+                ? `${viewYear}년 과거 기록은 잠겨 있습니다(읽기 전용).\n누르면 정말 수정할지 묻고 잠금을 풉니다.`
+                : `${viewYear}년 기록 수정 중 — 누르면 다시 잠급니다.`}
+              className={`inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[10px] font-semibold leading-4 border transition-colors ${pastLocked
+                ? 'text-amber-300/90 border-amber-600/50 bg-amber-900/20 hover:bg-amber-800/30'
+                : 'text-rose-300 border-rose-500/60 bg-rose-900/30 hover:bg-rose-800/40'}`}
+            >
+              <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="7.5" cy="15.5" r="4.5"/>
+                <path d="M10.7 12.3 21 2"/>
+                <path d="m16 7 3 3"/>
+                <path d="m19 4 2 2"/>
+              </svg>
+              {pastLocked ? '잠김' : '수정 중'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
   // ⚠️ z-[1] — 이 표의 첫 열(계좌/코드) sticky th는 z-10이고 월 th는 sticky가 아니다. 스트립을
   // 과표표처럼 z-10으로 두면 동률+DOM 후순위라 가로 스크롤 시 스트립이 sticky 열 위로 얹혀
   // 그 영역의 클릭을 가로챈다(과표표는 sticky th가 z-20이라 무사). 텍스트 위에만 뜨면 되므로 z-1.
@@ -1223,7 +1349,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     return (
       <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden w-full">
         <div className="p-4 bg-[#0f172a] border-b border-gray-700 flex items-center gap-2 flex-wrap">
-          <span className="text-white font-bold text-sm">💰 분배금 현황</span>
+          {titleWithYears()}
           <div className="flex rounded-lg overflow-hidden border border-gray-700 ml-2">
             <button
               onClick={() => setActiveTab('expected')}
@@ -1318,7 +1444,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           <div className="line-clamp-1" style={{ color: row.rowColor || '#93c5fd' }}>{row.portfolioTitle}</div>
                           {rowTaxRate > 0 && (
                             <button
-                              onClick={() => updatePortfolioDividendSeparateTax(row.portfolioId, !isSeparateTax(row.portfolioId))}
+                              onClick={() => whenEditable(updatePortfolioDividendSeparateTax)(row.portfolioId, !isSeparateTax(row.portfolioId))}
                               title={isSeparateTax(row.portfolioId) ? '분리과세 ON (과세합계 제외)' : '분리과세 OFF (과세합계 포함)'}
                               className={`text-[10px] font-bold tracking-wide transition-colors shrink-0 ${isSeparateTax(row.portfolioId) ? 'text-sky-300' : 'text-gray-600 hover:text-gray-400'}`}
                             >TAX</button>
@@ -1330,7 +1456,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             type="text"
                             inputMode="decimal"
                             value={rowTaxRate}
-                            onChange={e => { const v = parseFloat(e.target.value); updatePortfolioDividendTaxRate(row.portfolioId, isNaN(v) ? 0 : v); }}
+                            onChange={e => { const v = parseFloat(e.target.value); whenEditable(updatePortfolioDividendTaxRate)(row.portfolioId, isNaN(v) ? 0 : v); }}
                             onClick={e => e.stopPropagation()}
                             className="w-8 bg-transparent text-orange-300/70 text-[9px] text-center border-b border-gray-700/40 outline-none"
                           />
@@ -1522,7 +1648,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       {/* flex-wrap 필수 — 카드가 overflow-hidden이라 툴바가 넘치면 우측 그룹(행 추가·새로고침·숨긴 월 칩)이
           잘려 클릭 불가가 된다. 숨긴 월 칩은 개수가 가변이므로 shrink-0 그룹 밖에 두고 줄바꿈되게 한다. */}
       <div className="px-3 py-2.5 bg-[#0f172a] border-b border-gray-700 flex items-start gap-3 flex-wrap">
-        <span className="text-white font-bold text-sm shrink-0 self-center">💰 분배금 현황</span>
+        {titleWithYears()}
         <CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="분배금 현황" />
         <div className="flex rounded-lg overflow-hidden border border-gray-700 shrink-0 self-center">
           <button
@@ -1578,7 +1704,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 type="text"
                 inputMode="decimal"
                 value={getTaxRate(nonGoldPortfolios[0]?.id)}
-                onChange={e => { const v = parseFloat(e.target.value); updatePortfolioDividendTaxRate(nonGoldPortfolios[0]?.id, isNaN(v) ? 0 : v); }}
+                onChange={e => { const v = parseFloat(e.target.value); whenEditable(updatePortfolioDividendTaxRate)(nonGoldPortfolios[0]?.id, isNaN(v) ? 0 : v); }}
                 className="w-10 bg-transparent text-orange-300 text-[10px] text-center border-b border-gray-600/50 outline-none"
               />
               <span className="text-gray-500 text-[10px]">%</span>
@@ -1617,7 +1743,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           <span className="w-px h-5 bg-gray-700/60 mx-0.5" />
           {activeTab === 'actual' && addPortfolioExtraRow && (
             <button
-              onClick={() => addPortfolioExtraRow(nonGoldPortfolios[0]?.id)}
+              onClick={() => whenEditable(addPortfolioExtraRow)(nonGoldPortfolios[0]?.id)}
               title="과거 종목 배당금 행 추가"
               className="w-7 h-7 flex items-center justify-center rounded border border-emerald-700/50 text-emerald-400/80 hover:bg-emerald-900/30 hover:text-emerald-300 hover:border-emerald-600 active:scale-95 transition-all"
             >
@@ -1851,7 +1977,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             )}
             {!loading && expectedRows.length > 0 && (
               <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-                초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 날짜 = 배당락-지급일(~ 는 직전연도 기준 추정) &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산 &nbsp;·&nbsp; 월 상단 클릭 → 숨기기
+                초록 배경 = {viewYear}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 날짜 = 배당락-지급일(~ 는 직전연도 기준 추정) &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산 &nbsp;·&nbsp; 월 상단 클릭 → 숨기기
                 {expectedHasOverseas && <> &nbsp;·&nbsp; <span className="text-teal-400/70">분배율</span> = 종목 세후 분배금 ÷ 그 종목 투자금(달러), 괄호 = 연환산(월×12)</>}
               </div>
             )}
@@ -1905,7 +2031,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                               const ok = confirmDialog
                                 ? await confirmDialog(`'${row.name || row.code}'의 분배금 입력 기록을 영구 삭제할까요?`, '삭제')
                                 : true;
-                              if (ok) deletePortfolioDividendData(row.portfolioId, row.code);
+                              if (ok) whenEditable(deletePortfolioDividendData)(row.portfolioId, row.code);
                             }}
                             title="이 종목의 분배금 입력 기록 영구 삭제"
                             className="ml-auto shrink-0 text-gray-600 hover:text-red-400 transition-colors text-[10px]"
@@ -2164,7 +2290,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             <input
                               type="text"
                               value={row.code}
-                              onChange={e => updatePortfolioExtraRowCode(row.portfolioId, row.rowId, e.target.value)}
+                              onChange={e => whenEditable(updatePortfolioExtraRowCode)(row.portfolioId, row.rowId, e.target.value)}
                               onBlur={e => handleExtraRowCodeBlur(row.portfolioId, row.rowId, e.target.value, row.isOverseas)}
                               placeholder="코드/종목명"
                               className="w-full bg-transparent text-blue-300/80 text-[10px] border-b border-gray-700/40 outline-none placeholder-gray-700"
@@ -2172,7 +2298,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             {row.name && <div className="text-gray-400 text-[9px] mt-0.5 line-clamp-1">{row.name}</div>}
                           </div>
                           <button
-                            onClick={() => deletePortfolioExtraRow(row.portfolioId, row.rowId)}
+                            onClick={() => whenEditable(deletePortfolioExtraRow)(row.portfolioId, row.rowId)}
                             className="text-gray-600 hover:text-red-400 transition-colors text-[10px] shrink-0 mt-0.5"
                             title="행 삭제"
                           >✕</button>
@@ -2427,15 +2553,16 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         <ErrorBoundary label="과표 계산">
           <KrEtfTaxMatrix
             portfolio={nonGoldPortfolios[0]}
-            updateTaxBaseEvents={updateTaxBaseEvents}
-            updateTaxBasePurchases={updateTaxBasePurchases}
-            updateTaxBaseSales={updateTaxBaseSales}
-            updateTaxBaseExPrice={updateTaxBaseExPrice}
-            updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
-            updateTaxBaseAvgAdj={updateTaxBaseAvgAdj}
+            year={viewYear}
+            updateTaxBaseEvents={whenEditable(updateTaxBaseEvents)}
+            updateTaxBasePurchases={whenEditable(updateTaxBasePurchases)}
+            updateTaxBaseSales={whenEditable(updateTaxBaseSales)}
+            updateTaxBaseExPrice={whenEditable(updateTaxBaseExPrice)}
+            updateTaxBaseAvgPrice={whenEditable(updateTaxBaseAvgPrice)}
+            updateTaxBaseAvgAdj={whenEditable(updateTaxBaseAvgAdj)}
             onToggleTaxMonth={onToggleTaxMonth}
-            updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
-            deletePortfolioTaxData={deletePortfolioTaxData}
+            updatePortfolioDividendTaxAmount={whenEditable(updatePortfolioDividendTaxAmount)}
+            deletePortfolioTaxData={whenEditable(deletePortfolioTaxData)}
             confirmDialog={confirmDialog}
             notify={notify || (() => {})}
           />

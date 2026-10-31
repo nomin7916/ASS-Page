@@ -5509,6 +5509,7 @@ export default function App() {
             dividendTaxHistory={dividendTaxHistory}
             intHiddenDivMonths={intHiddenDivMonths}
             onToggleIntHiddenDivMonth={toggleIntHiddenDivMonth}
+            confirmDialog={confirm}
             matongClosedIds={matongClosedIds}
             setMatongClosedIds={setMatongClosedIds}
             compStocks={compStocks}

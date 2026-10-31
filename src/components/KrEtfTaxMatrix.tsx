@@ -105,6 +105,7 @@ const taxBaseHasData = (rec) => !!rec && (
 
 export default function KrEtfTaxMatrix({
   portfolio,
+  year,
   updateTaxBaseEvents,
   updateTaxBasePurchases,
   updateTaxBaseSales,
@@ -159,7 +160,9 @@ export default function KrEtfTaxMatrix({
     );
   }
 
-  const monthYms = MONTHS.map((_, i) => `${CURRENT_YEAR}-${String(i + 1).padStart(2, '0')}`);
+  // 보는 연도(분배금 현황 연도 버튼). 매매 이벤트는 날짜로 이어지므로 평균 과표는 연도와 무관하게 누적된다.
+  const gridYear = year ? String(year) : CURRENT_YEAR;
+  const monthYms = MONTHS.map((_, i) => `${gridYear}-${String(i + 1).padStart(2, '0')}`);
 
   // 월(0~11) 컬럼 숨기기 — 계좌별 hiddenTaxMonths. 표시 편의용이라 연합계·월별 합계 계산에는
   // 영향을 주지 않고(전 12개월로 계산 유지) 렌더만 숨긴다. 종목 열/연합계/평균 과표 계산기는 숨김 대상 아님.
@@ -474,7 +477,7 @@ export default function KrEtfTaxMatrix({
   return (
     <div className="overflow-x-auto" ref={setScrollRef}>
       <div className="px-3 py-2 bg-[#0f172a]/60 border-b border-gray-700/50 flex items-center gap-3 flex-wrap text-[10px]">
-        <span className="text-gray-500">{CURRENT_YEAR}년 · 과세 과표 = 배당 과표 − 평균 과표 · 예상 과세 = max(0, 과세과표) × 보유주식수</span>
+        <span className="text-gray-500">{gridYear}년 · 과세 과표 = 배당 과표 − 평균 과표 · 예상 과세 = max(0, 과세과표) × 보유주식수</span>
         <span className="text-gray-600">|</span>
         <span className="text-gray-500">연간 예상 과세 합계</span>
         <span className="text-emerald-400 font-semibold tabular-nums">{formatCurrency(grandExpected)}</span>

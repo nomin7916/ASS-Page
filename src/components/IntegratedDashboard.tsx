@@ -130,6 +130,7 @@ export default function IntegratedDashboard({
   dividendTaxHistory = {},
   intHiddenDivMonths = { expected: [], actual: [] },
   onToggleIntHiddenDivMonth,
+  confirmDialog,
   onManualBackfill,
   sec = { dividend: false, history: false, donut: false },
   setSec,
@@ -1735,7 +1736,7 @@ export default function IntegratedDashboard({
             </div>
             )}
             {userFeatures.feature3 && !sec.dividend && (
-              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate} updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax} updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount} updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd} updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd} updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw} usdkrw={usdkrw} holidays={holidays} dividendTaxHistory={dividendTaxHistory} hiddenMonths={intHiddenDivMonths} onToggleHiddenMonth={onToggleIntHiddenDivMonth} />
+              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate} updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax} updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount} updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd} updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd} updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw} usdkrw={usdkrw} holidays={holidays} dividendTaxHistory={dividendTaxHistory} hiddenMonths={intHiddenDivMonths} onToggleHiddenMonth={onToggleIntHiddenDivMonth} confirmDialog={confirmDialog} />
             )}
               </div>
               <div className="sticky top-14 self-start flex flex-col gap-px flex-shrink-0 z-10 pt-3">

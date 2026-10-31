@@ -24,6 +24,7 @@ src/
 ├── rateBacktest.ts      # 과거 신호 검증: 날짜별 재판정·신호 추출(20거래일)·3/6/12개월 성과 (⚠️ import 0)
 ├── rateGlossary.ts      # 금리 창 용어 풀이(지표 33 · 자산군 7)
 ├── brazilNotes.ts       # 브라질 정치 메모 기본값(빈 배열) + readBrazilNotes 읽기 함수
+├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
@@ -38,7 +39,7 @@ src/
 │                        # useFlowMapData
 └── components/
     ├── IntegratedDashboard.tsx   # 통합 대시보드 (멀티 계좌 합산 뷰)
-    ├── DividendSummaryTable.tsx  # 분배금 현황 테이블 (compact/개별 모드)
+    ├── DividendSummaryTable.tsx  # 분배금 현황 테이블 (compact/개별 모드) · 연도 보기(⚠️ 지난 연도는 읽기 전용 — 쓰기는 전부 whenEditable 경유, 보유 = 그 해 말일 스냅샷)
     ├── DividendVerifyModal.tsx   # 분배금 검증 모달 (올해 1월~최근월 종목×월 매트릭스)
     ├── KrEtfTaxModal.tsx         # 한국 ETF 과표 계산기 (매입/매도/배당락 과표 → 세금 산출)
     ├── PortfolioTable.tsx        # 종목 테이블

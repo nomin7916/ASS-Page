@@ -1602,7 +1602,9 @@ it('#G18 별도 창(dividendCall) 화이트리스트에 updateTaxBaseAvgAdj — 
 it('#G19 prop 체인 4-hop이 끊기지 않는다 (App → DividendSummaryTable → KrEtfTaxMatrix)', () => {
   ok(/updateTaxBaseAvgAdj=\{updateTaxBaseAvgAdj\}/.test(APP), 'App → 표');
   ok(/updateTaxBaseAvgAdj,\s*onToggleTaxMonth/.test(DST), '표 props 수신');
-  ok(/updateTaxBaseAvgAdj=\{updateTaxBaseAvgAdj\}/.test(DST), '표 → 매트릭스');
+  // 지난 연도 보기(2026-10-31)부터 표 → 매트릭스 쓰기는 잠금 가드(whenEditable)를 지난다.
+  ok(/updateTaxBaseAvgAdj=\{whenEditable\(updateTaxBaseAvgAdj\)\}/.test(DST), '표 → 매트릭스(잠금 가드 경유)');
+  ok(/const whenEditable = \(fn\) =>/.test(DST), '잠금 가드 선언');
   ok(/^\s*updateTaxBaseAvgAdj,$/m.test(MX), '매트릭스 props 수신');
 });
 
@@ -1682,8 +1684,9 @@ it('#G31 ⚠️ 적용된 조정의 해제 경로가 연도 무관하게 존재�
   //    배당락월이면 앵커는 계속 작동하는데 해제할 방법이 사라진다.
   ok(/⚑ 적용된 평균 과표 조정/.test(MX), '조정 목록 렌더');
   ok(/updateTaxBaseAvgAdj\(portfolio\.id, stock\.code, ym, null\)/.test(MX), '목록에서 해제');
-  // 전년 배당락월은 적용 UI가 없으므로 제안을 띄우지 않는다(갈 곳 없는 안내 방지).
-  ok(/!String\(dom\.exYm\)\.startsWith\(CURRENT_YEAR\)/.test(DST), '전년 ym 제안 억제');
+  // 보는 연도 밖 배당락월(전년 12월 → 1월 지급분)은 그 해 그리드에 적용 UI가 없으므로 제안을 띄우지 않는다.
+  ok(/!String\(dom\.exYm\)\.startsWith\(String\(viewYear\)\)/.test(DST), '보는 연도 밖 ym 제안 억제');
+  ok(/year=\{viewYear\}/.test(DST) && /const monthYms = MONTHS\.map\(\(_, i\) => `\$\{gridYear\}-/.test(MX), '표와 과표 그리드가 같은 연도');
 });
 
 it('#G32 ⚠️ 과세금 0이 저장된다 — 없으면 하한(비과세) 경로가 죽은 코드가 된다', () => {

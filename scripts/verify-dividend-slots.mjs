@@ -11,7 +11,11 @@
 // (예: 실제 5월말 배당락→6월 지급 + 직전연도 6월중 배당락 예측→6월 지급 합산되어
 //  셀 합계 ≠ 수량×주당분배금으로 표시됨)
 
-// ─── 참조 구현 (src 미러; CURRENT_YEAR만 CY 파라미터로 치환해 결정적 테스트) ───
+import { readFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+
+// ─── 참조 구현 (src 미러; CY = 보고 있는 연도 파라미터) ───
 
 // utils.ts addBusinessDays / dividendPayDate 미러
 function addBusinessDays(dateStr, n, holidays = []) {
@@ -29,39 +33,43 @@ function addBusinessDays(dateStr, n, holidays = []) {
 }
 const dividendPayDate = (exDate, holidays = []) => addBusinessDays(exDate, 2, holidays);
 
-function buildMonthPrediction(codeHistory) {
+function buildMonthPrediction(codeHistory, maxYear = null) {
   const pred = {};
   for (let m = 1; m <= 12; m++) {
     const mo = String(m).padStart(2, '0');
     const entries = Object.entries(codeHistory || {})
-      .filter(([key]) => key.endsWith(`-${mo}`))
+      .filter(([key]) => key.endsWith(`-${mo}`) && (maxYear == null || Number(key.slice(0, 4)) <= maxYear))
       .sort(([a], [b]) => b.localeCompare(a));
     if (entries.length > 0) pred[m] = entries[0][1];
   }
   return pred;
 }
 
-function buildMonthExPrediction(codeExHistory) {
+function buildMonthExPrediction(codeExHistory, maxYear = null) {
   const pred = {};
   for (let m = 1; m <= 12; m++) {
     const mo = String(m).padStart(2, '0');
     const entries = Object.entries(codeExHistory || {})
-      .filter(([key]) => key.endsWith(`-${mo}`))
+      .filter(([key]) => key.endsWith(`-${mo}`) && (maxYear == null || Number(key.slice(0, 4)) <= maxYear))
       .sort(([a], [b]) => b.localeCompare(a));
     if (entries.length > 0) pred[m] = entries[0][1];
   }
   return pred;
 }
 
-// src의 buildPaySlots 미러. 차이: CURRENT_YEAR → CY 파라미터(결정적 테스트용).
+// src의 buildPaySlots 미러. src도 이제 CY(보고 있는 연도)를 파라미터로 받는다(연도 보기 2026-10-31).
 function buildPaySlots(codeHistory, codeExHistory, hol, CY) {
-  const monthPred = buildMonthPrediction(codeHistory);
-  const exPred = buildMonthExPrediction(codeExHistory);
+  const predByYear = {};
+  const predFor = (exYear) => predByYear[exYear] || (predByYear[exYear] = {
+    amt: buildMonthPrediction(codeHistory, exYear),
+    ex: buildMonthExPrediction(codeExHistory, exYear),
+  });
   const holAug = [...(hol || []), `${CY - 1}-12-31`];
   const slots = Array.from({ length: 12 }, () => []);
   const consider = (exYear, mIdx, prevDecToJan = false) => {
     const m = mIdx + 1;
     const mo = String(m).padStart(2, '0');
+    const { amt: monthPred, ex: exPred } = predFor(exYear);
     const perShare = monthPred[m] || 0;
     if (!(perShare > 0)) return;
     const exYm = `${exYear}-${mo}`;
@@ -237,6 +245,97 @@ it('647,292 입력 → 647,292 표시 (1,014,024 아님), 수량 2,004 (4,008 �
   expectEq(cell.amount, 647292, '6월 입금 금액');
   expectEq(cell.calcQty, 2004, '6월 역산 수량');
 });
+
+console.log('\n[7] 지난 연도 보기 — 그 뒤 해의 공시액을 끌어오지 않는다(look-ahead 금지)');
+it('2027년에 2026년 표를 보면 8월 슬롯 주당분배금 = 2026-08 값', () => {
+  const codeHistory = { '2026-08': 151, '2027-08': 170 };
+  const codeExHistory = { '2026-08': '2026-08-13', '2027-08': '2027-08-12' };
+  const slots = buildPaySlots(codeHistory, codeExHistory, [], 2026);
+  expectEq(slots[7].length, 1, '2026년 8월 소스 개수');
+  expectEq(slots[7][0].exYm, '2026-08', '8월 소스 exYm');
+  expectEq(slots[7][0].perShare, 151, '8월 주당분배금(2027년 값 아님)');
+  expectEq(slots[7][0].exPredicted, false, '8월 소스는 확정');
+});
+it('같은 데이터로 2027년 표를 보면 8월 슬롯 = 2027-08 값', () => {
+  const codeHistory = { '2026-08': 151, '2027-08': 170 };
+  const codeExHistory = { '2026-08': '2026-08-13', '2027-08': '2027-08-12' };
+  const slots = buildPaySlots(codeHistory, codeExHistory, [], 2027);
+  expectEq(slots[7][0].exYm, '2027-08', '8월 소스 exYm');
+  expectEq(slots[7][0].perShare, 170, '8월 주당분배금');
+});
+it('직전연도 12월 → 1월 지급분 주당분배금 = 직전연도 12월 값(올해 12월 값 아님)', () => {
+  // 2026년 12월에 2026-12 공시가 들어와도 2026년 1월 칸(2025-12 배당락분)은 2025-12 값을 써야 한다.
+  const codeHistory = { '2025-12': 60, '2026-12': 66 };
+  const codeExHistory = { '2025-12': '2025-12-29', '2026-12': '2026-12-29' };
+  const slots = buildPaySlots(codeHistory, codeExHistory, ['2025-12-31'], 2026);
+  expectEq(slots[0].length, 1, '1월 소스 개수');
+  expectEq(slots[0][0].exYm, '2025-12', '1월 소스 exYm');
+  expectEq(slots[0][0].perShare, 60, '1월 주당분배금');
+});
+it('지난 연도에 없는 달은 그 이전 해 값으로만 예측(뒤 해 값 금지)', () => {
+  const codeHistory = { '2025-03': 40, '2027-03': 90 };
+  const codeExHistory = { '2025-03': '2025-03-14', '2027-03': '2027-03-15' };
+  const slots = buildPaySlots(codeHistory, codeExHistory, [], 2026);
+  expectEq(slots[2].length, 1, '2026년 3월 소스 개수');
+  expectEq(slots[2][0].perShare, 40, '예측 주당분배금(2025년 값)');
+  expectEq(slots[2][0].exPredicted, true, '예측 표시');
+});
+
+// ─── 연도 버튼(src/dividendYear.ts 직접 import) ───────────────────────────────
+console.log('\n[8] 연도 버튼 — 2026년부터 작년까지, 최근 5년은 버튼 · 그 이전은 드롭다운');
+let Y = null;
+try {
+  Y = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'dividendYear.ts')).href);
+} catch (e) {
+  const unsupported = e && (e.code === 'ERR_UNKNOWN_FILE_EXTENSION' || /Unknown file extension/.test(String(e.message)));
+  if (unsupported) console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 [8]을 건너뜁니다 (${e.code}).`);
+  else { fail++; FAILS.push({ name: 'dividendYear.ts import', msg: String(e && (e.code || e.message)) }); console.log(`  ✗ dividendYear.ts를 불러오지 못했습니다 — ${e && (e.code || e.message)}`); }
+}
+if (Y) {
+  const { dividendYearChoices, resolveDividendViewYear, DIVIDEND_YEAR_START } = Y;
+  const show = (o) => `${o.chips.join(',')}|${o.older.join(',')}`;
+  it('시작 해 = 2026', () => expectEq(DIVIDEND_YEAR_START, 2026, '시작 해'));
+  it('2026년: 지난 연도 버튼 없음', () => expectEq(show(dividendYearChoices(2026)), '|', '2026'));
+  it('2027년: 2026년 버튼 하나', () => expectEq(show(dividendYearChoices(2027)), '2026|', '2027'));
+  it('2028년: 2026·2027년 버튼', () => expectEq(show(dividendYearChoices(2028)), '2026,2027|', '2028'));
+  it('2031년: 버튼 5개(2026~2030), 드롭다운 없음', () => expectEq(show(dividendYearChoices(2031)), '2026,2027,2028,2029,2030|', '2031'));
+  it('2032년: 최근 5년 버튼 + 2026년은 드롭다운', () => expectEq(show(dividendYearChoices(2032)), '2027,2028,2029,2030,2031|2026', '2032'));
+  it('2034년: 드롭다운은 최신순', () => expectEq(show(dividendYearChoices(2034)), '2029,2030,2031,2032,2033|2028,2027,2026', '2034'));
+  it('선택 없음 → 올해', () => expectEq(resolveDividendViewYear(null, 2027), 2027, 'null'));
+  it('지난 연도 선택 유지', () => expectEq(resolveDividendViewYear(2026, 2027), 2026, '2026'));
+  it('올해·미래 선택 → 올해', () => expectEq(resolveDividendViewYear(2027, 2027) + resolveDividendViewYear(2030, 2027), 4054, '올해/미래'));
+  it('시작 해 이전 선택 → 올해', () => expectEq(resolveDividendViewYear(2025, 2027), 2027, '2025'));
+}
+
+// ─── 소스 텍스트 가드: 연도 보기 배선 ─────────────────────────────────────────
+console.log('\n[9] 소스 가드 — 연도 보기·잠금 배선');
+{
+  const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'components', 'DividendSummaryTable.tsx'), 'utf8');
+  it('dividendYear import 존재', () => expectEq(/import \{[^}]*\bdividendYearChoices\b[^}]*\bresolveDividendViewYear\b[^}]*\} from '\.\.\/dividendYear'/.test(SRC), true, 'import'));
+  it('resolveHoldings import 존재(지난 연도 보유)', () => expectEq(/import \{[^}]*\bresolveHoldings\b[^}]*\} from '\.\.\/utils'/.test(SRC), true, 'import'));
+  it('CURRENT_YEAR 고정 잔재 없음', () => expectEq(/CURRENT_YEAR/.test(SRC), false, 'CURRENT_YEAR'));
+  it('buildPaySlots 호출은 모두 연도 인자를 넘긴다', () => {
+    const calls = SRC.match(/buildPaySlots\([^)]*\)/g) || [];
+    const bad = calls.filter(c => !/,\s*viewYear\)$/.test(c) && !/^buildPaySlots\(codeHistory, codeExHistory, hol, CY\)$/.test(c));
+    expectEq(bad.length, 0, `연도 없는 호출: ${bad.join(' / ')}`);
+  });
+  it('셀 편집 진입 5곳 모두 잠금 가드', () => {
+    const n = (SRC.match(/const handle(AfterTaxCellClick|KrwCellClick|QtyDblClick|ExtraOverseasCellClick|ExtraKrwCellClick) = whenEditable\(/g) || []).length;
+    expectEq(n, 5, '가드된 편집 진입');
+  });
+  it('지난 연도 보유 = 그 해 말일 스냅샷, 그 뒤 시작한 계좌는 보유 없음', () => {
+    expectEq(/resolveHoldings\(pf, yearEnd\)/.test(SRC), true, '말일 스냅샷');
+    expectEq(/if \(pf\.baselineDate && yearEnd < String\(pf\.baselineDate\)\) return \[\];/.test(SRC), true, 'baseline 이전 연도 = 빈 보유');
+  });
+  it('지난 연도 보기: 그 해 말일 뒤 삭제 계좌 포함 · 새로고침은 삭제 계좌 제외', () => {
+    expectEq(/!p\.deletedAt \|\| \(isPastYear && String\(p\.deletedAt\) > `\$\{viewYear\}-12-31`\)/.test(SRC), true, '삭제 계좌 연도 판정');
+    expectEq(/nonGoldPortfolios\.filter\(pf => !pf\.deletedAt\)\.map\(async pf =>/.test(SRC), true, '새로고침 삭제 계좌 제외');
+  });
+  it('과표 계산 탭에 연도·가드된 쓰기 전달', () => {
+    expectEq(/year=\{viewYear\}/.test(SRC), true, 'year prop');
+    expectEq((SRC.match(/=\{whenEditable\(updateTaxBase[A-Za-z]+\)\}/g) || []).length, 6, '과표 쓰기 가드');
+  });
+}
 
 // ─── 결과 출력 ────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
