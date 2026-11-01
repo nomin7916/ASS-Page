@@ -430,47 +430,42 @@ export function normalizeHoldings(raw: any): Record<string, Holding[]> | null {
 
 /**
  * 관심종목 자동 '보유종목' 그룹의 줄 목록(사용자 요청 2026-10-30 — 전체 계좌의 보유 종목).
- * 한 줄 = (종목, 계좌) 하나 — 같은 종목을 여러 계좌에 보유하면 **계좌마다 한 줄**(그 계좌의 매입가)이고 서로 붙어 있다.
- * 순서 = 종목이 처음 나온 순서(계좌 탭 순서 → 행 순서, ord) · 같은 종목 안에서는 계좌 탭 순서.
+ * 한 줄 = 종목 하나 — 여러 계좌에 보유한 같은 종목도 **한 줄**이고(사용자 확정 2026-11-01: 관심종목은 시장과 내 자산을
+ * 한눈에 보는 곳), 그 줄에 보유 계좌 이름(accts, 계좌 탭 순서)을 싣는다. 계좌마다의 매입가는 차트 점선·툴팁이 보인다.
+ * 순서 = 종목이 처음 나온 순서(계좌 탭 순서 → 행 순서, ord — 객체 키 순서는 정수 모양 코드가 앞으로 섞여 쓰지 않는다).
+ * 같은 키라도 통화가 다르면(원화 계좌 · 달러 계좌) 시세 단위가 달라 줄을 나눈다(holdingsFor의 통화 맞춤과 같은 기준).
  * ⚠️ 저장하지 않는 가상 줄이다(정본은 앱 탭 portfolios) — 그룹 배열(watchlistGroups)에 넣지 말 것.
  * mk·code가 없는 옛 모양은 통화·키로 시장을 추정한다(USD = 해외, 6자 숫자 포함 = 국내, 그 외 = 펀드).
  */
 export function holdingWatchStocks(map: any): any[] {
   if (!map || typeof map !== 'object' || Array.isArray(map)) return [];
-  const byKey: { key: string; first: number; list: { h: any; ord: number }[] }[] = [];
+  const rows: { key: string; cur: string; first: number; list: { h: any; ord: number }[] }[] = [];
   let seq = 0;
   for (const key of Object.keys(map)) {
-    const list: { h: any; ord: number }[] = [];
+    const byCur = new Map<string, { h: any; ord: number }[]>();
     for (const h of Array.isArray(map[key]) ? map[key] : []) {
       if (!h || typeof h !== 'object' || !(h.avg > 0) || !(h.qty > 0) || (h.cur !== 'KRW' && h.cur !== 'USD')) continue;
-      list.push({ h, ord: Number.isInteger(h.ord) && h.ord >= 0 ? h.ord : 1e9 + seq });
+      const arr = byCur.get(h.cur) || [];
+      arr.push({ h, ord: Number.isInteger(h.ord) && h.ord >= 0 ? h.ord : 1e9 + seq });
+      byCur.set(h.cur, arr);
       seq++;
     }
-    if (!list.length) continue;
-    list.sort((a, b) => a.ord - b.ord);
-    byKey.push({ key, first: list[0].ord, list });
+    for (const [cur, list] of byCur) {
+      list.sort((a, b) => a.ord - b.ord);
+      rows.push({ key, cur, first: list[0].ord, list });
+    }
   }
-  byKey.sort((a, b) => a.first - b.first);
-  const out: any[] = [];
-  for (const { key, list } of byKey) {
-    list.forEach(({ h }, j) => {
-      const market = h.mk === 'kr' || h.mk === 'us' || h.mk === 'fund' ? h.mk
-        : h.cur === 'USD' ? 'us' : /^[A-Z0-9]{6}$/.test(key) && /\d/.test(key) ? 'kr' : 'fund';
-      out.push({
-        id: `hold:${key}:${j}`, code: typeof h.code === 'string' && h.code ? h.code : key, market,
-        name: typeof h.name === 'string' ? h.name : '', acct: h.acct, avg: h.avg, qty: h.qty, virtual: true,
-      });
-    });
-  }
-  return out;
-}
-
-/**
- * 보유분 h가 '보유종목' 그룹의 줄 row(그 계좌)의 것인가 — 미니차트에서 그 계좌 선과 다른 계좌 선을 가른다.
- * 계좌 이름·매입가·수량이 모두 같으면 같은 줄로 본다(이름이 같은 두 계좌라도 선이 정확히 겹쳐 화면에선 구분이 없다).
- */
-export function isRowHolding(h: any, row: any): boolean {
-  return !!h && !!row && h.acct === row.acct && h.avg === row.avg && h.qty === row.qty;
+  rows.sort((a, b) => a.first - b.first);
+  return rows.map(({ key, cur, list }) => {
+    const h = list[0].h;
+    const market = h.mk === 'kr' || h.mk === 'us' || h.mk === 'fund' ? h.mk
+      : cur === 'USD' ? 'us' : /^[A-Z0-9]{6}$/.test(key) && /\d/.test(key) ? 'kr' : 'fund';
+    const name = list.map((x) => x.h.name).find((n) => typeof n === 'string' && n) || '';
+    return {
+      id: `hold:${key}:${cur}`, code: typeof h.code === 'string' && h.code ? h.code : key, market, name,
+      accts: [...new Set(list.map((x) => x.h.acct))], virtual: true,
+    };
+  });
 }
 
 /**
