@@ -208,7 +208,7 @@ export const normalizeDividendLinks = (raw) => {
   }));
 };
 
-// 관리자가 공유한 분배금 링크(설정 시트 dividendLinks — 배열 또는 JSON 문자열) 해석.
+// 관리자가 공유한 분배금 링크(배열 또는 JSON 문자열) 해석.
 // 키가 없거나 빈 배열이면 null = '공유값 없음'(Apps Script 미갱신·관리자 미배포) — 사용자 링크를 건드리지 않는다.
 export const parseSharedDividendLinks = (raw) => {
   let arr = raw;
@@ -237,6 +237,33 @@ export const mergeSharedDividendLinks = (userRaw, shared, seenRaw) => {
     changed: links.some((s, i) => !same(s, user[i])),
     seenChanged: !seen || next.some((s, i) => !same(s, seen[i])),
   };
+};
+
+// 관리자 분배금 링크는 설정 시트 'reportLinks' 행에 함께 싣는다 — 배포된 Apps Script의 setSettings 허용 목록에
+// 새 키(dividendLinks)가 없어 재배포 전까지 거부되기 때문이다(리포트 링크가 같은 이유로 이 키를 재사용한다).
+// 행 = [리포트 항목({title,url})…, 분배금 항목({title, dividendLinks:[7칸]})]. 분배금 항목엔 url 키가 없어
+// 리포트 URL을 고르는 쪽(첫 url 항목)이 무시한다 — 분배금 항목에 url 키를 넣지 말 것.
+const DIVIDEND_LINKS_ENTRY_TITLE = '분배금 사이트 링크(관리자 공유)';
+const isDividendLinksEntry = (e) => !!e && typeof e === 'object' && Array.isArray(e.dividendLinks);
+const parseSheetRow = (row) => {
+  if (typeof row === 'string') { try { return JSON.parse(row); } catch { return null; } }
+  return row;
+};
+export const sharedDividendLinksFromReportRow = (row) => {
+  const arr = parseSheetRow(row);
+  if (!Array.isArray(arr)) return null;
+  const hit = arr.find(isDividendLinksEntry);
+  return hit ? parseSharedDividendLinks(hit.dividendLinks) : null;
+};
+// patch.report가 오면 리포트 항목만, patch.dividendLinks가 오면 분배금 항목만 바꾸고 나머지는 시트 값 그대로 둔다.
+export const patchReportRow = (row, patch) => {
+  const parsed = parseSheetRow(row);
+  const arr = Array.isArray(parsed) ? parsed : [];
+  const report = Array.isArray(patch?.report) ? patch.report : arr.filter(e => !isDividendLinksEntry(e));
+  const div = Array.isArray(patch?.dividendLinks)
+    ? { title: DIVIDEND_LINKS_ENTRY_TITLE, dividendLinks: normalizeDividendLinks(patch.dividendLinks) }
+    : arr.find(isDividendLinksEntry);
+  return div ? [...report, div] : report;
 };
 
 // YYYY-MM-DD 문자열이 **실제 달력에 존재하는 날짜**인지 검사.

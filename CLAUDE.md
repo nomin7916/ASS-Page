@@ -102,8 +102,11 @@ src/
 
 ## 분배금 사이트 링크 공유 (관리자 → 분배금 사용자, ⚠️ 회귀 주의)
 
-- 경로: 관리자 STATE `dividendLinks`(7칸, 정본) → Apps Script 설정 시트 키 `dividendLinks` → feature3 사용자 부팅 시 `getSettings`.
-  Apps Script(`_downloads/AppsScript_계정관리_*.js`)의 `setSettings` 허용 목록·`getSettings` 응답에 이 키가 있어야 한다(재배포 필요).
+- 경로: 관리자 STATE `dividendLinks`(7칸, 정본) → Apps Script 설정 시트 **`reportLinks` 행의 분배금 항목**
+  `{title, dividendLinks:[7칸]}`(`utils.patchReportRow`) → feature3 사용자 부팅 시 `getSettings` → `sharedDividendLinksFromReportRow`.
+  ⚠️ 새 키(`dividendLinks`)로 쓰지 말 것 — 배포된 Apps Script가 허용 목록에 없는 키를 거부해 공유가 늘 실패했다(2026-11, 재배포 불필요화).
+  ⚠️ 이 행은 리포트 URL과 함께 쓰므로 **읽고-고쳐-쓰기**(`patchSheetReportRow`, `sheetReportRowChainRef` 직렬화)로만 쓴다 —
+  통째로 쓰면 다른 쪽 항목이 지워진다. 분배금 항목엔 `url` 키를 넣지 않는다(리포트 URL 선택이 첫 url 항목을 고른다).
 - 병합 규칙(`utils.mergeSharedDividendLinks`, 사용자 확정 2026-10-29): 처음은 **빈 칸만** 채우고, 이후엔 관리자가 바꾼 칸만 덮는다.
   기준값 `dividendLinksSeen`은 사용자 STATE에 저장(payload·deps·구조 지문·applyStateData 네 곳). 공유값이 없으면(키 없음·빈 배열) 아무것도 안 바꾼다.
 - ⚠️ 배포·병합 모두 `divLinksBootFor`(STATE를 정상 로드한 계정) 게이트를 지난다 — 빼면 로드 전 기본값(빈 7칸)이 모든 사용자 칸을 지운다.

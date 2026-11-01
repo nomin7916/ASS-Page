@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-11-01 — [분배금 현황] 사이트 링크 공유를 Apps Script 재배포 없이 동작하게 (reportLinks 행에 싣기)
+
+**대상 파일**: `src/utils.ts` · `src/App.tsx` · `scripts/verify-div-links.mjs` · `_downloads/AppsScript_계정관리_arui114501.js`(주석) · `CLAUDE.md`
+
+> 분배금 공시를 알기 위해서 운용사 사이트 링크를 분배금 현황을 허용한 사용자에게 링크를 공유하려고 합니다. 분배금 금액
+> 자체를 허용하는 것이 아니라 사이트 링크를 관리자가 사용하고 있는 운용사 사이트 링크를 적용해주세요.
+> (스크린샷: 링크 편집창 '분배금 사용자 공유 실패 — Apps Script 최신 코드 배포가 필요할 수 있습니다')
+
+- 원인: 10-29 구현이 새 시트 키 `dividendLinks`로 썼는데, 배포된 Apps Script는 `setSettings` 허용 목록에 없는 키를 거부한다
+  (재배포 전제) → 관리자 화면은 늘 '공유 실패', 사용자에겐 아무것도 전달되지 않았다.
+- 고침: 이미 허용된 `reportLinks` 행에 분배금 항목 `{title, dividendLinks:[7칸]}`을 함께 싣는다(리포트 URL이 같은 이유로 쓰는 키).
+  분배금 항목엔 `url` 키가 없어 리포트 URL 선택(첫 url 항목)은 그대로다.
+- 이 행은 리포트·분배금 두 경로가 함께 쓰므로 `patchSheetReportRow`가 **getSettings로 현재 행을 읽고 한쪽만 바꿔** 쓴다.
+  getSettings가 error를 실으면 쓰지 않고 실패, 시트 값과 같으면 쓰지 않는다. 같은 탭에선 `sheetReportRowChainRef`로 직렬화.
+- 사용자 쪽: 부팅 때 `reportLinks` 행에서 꺼낸다(없으면 옛 `dividendLinks` 키 폴백). 병합 규칙(빈 칸만 → 이후 바뀐 칸만)은 그대로.
+- 실패 문구: '분배금 사용자 공유 실패 — 새로고침하면 다시 시도합니다'(재배포 안내 삭제).
+- 검증: `verify:div-links` 38건(시트 행 단위 9건·배선 2건 추가) · 변이 6건 전부 검출.
+
 ## 2026-11-01 — [포트폴리오 표 · 자산 비중] 사용자 구분(직접 입력) · 자산군/사용자 보기 전환
 
 **대상 파일**: `src/userCategory.ts`(신규) · `src/components/PortfolioTable.tsx` · `src/components/PortfolioSummaryPanel.tsx` ·

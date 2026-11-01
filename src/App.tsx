@@ -92,6 +92,7 @@ import {
   externalFlowInRange, accumulateDailySeries, rebaseTwr, overseasUsdEvalAt, resolveHoldings, depositRowEval, krwFlowRateOf,
   buildBookCostSeries, bookDeltaBetween, computeDailyMetricsSeries,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, parseSharedDividendLinks, mergeSharedDividendLinks, isValidIsoDate,
+  sharedDividendLinksFromReportRow, patchReportRow,
   listRebalTargetSnapshots,
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows, analyzeTransferMerge,
   depositRowOf, transferableCashOf, cashTransferBlockReason, depositKrwOf,
@@ -3691,14 +3692,33 @@ export default function App() {
     } catch { return false; }
   };
 
-  // ── 분배금 링크 공유 ① 관리자 → 설정 시트(dividendLinks) ──
+  // 설정 시트 'reportLinks' 행 = 리포트 항목 + 분배금 링크 항목(utils.patchReportRow). 한쪽만 바꾸고 다른 쪽은
+  // **시트의 현재 값**을 그대로 둔다(읽고-고쳐-쓰기). 관리자 메모리 값으로 다른 쪽을 채우면 로드 전 빈 값이
+  // 모든 사용자의 리포트 링크를 지운다. getSettings가 error를 실어 오면 빈 배열이 와도 믿지 않고 실패로 끝낸다.
+  // 시트 값과 같으면 쓰지 않는다 — 부팅 1회 배포가 다른 탭의 리포트 저장을 옛 값으로 되돌리는 창을 없앤다.
+  // ⚠️ 호출은 sheetReportRowChainRef 한 줄로 직렬화한다(같은 탭의 리포트 저장과 분배금 배포가 서로를 덮지 않게).
+  const sheetReportRowChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const patchSheetReportRow = async (patch: { report?: any[]; dividendLinks?: any[] }): Promise<boolean> => {
+    let row: any;
+    try {
+      const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
+      if (!res.ok) return false;
+      const d = await res.json();
+      if (!d || d.error) return false;
+      row = typeof d.reportLinks === 'string' ? JSON.parse(d.reportLinks) : d.reportLinks;
+    } catch { return false; }
+    const next = patchReportRow(row, patch);
+    if (JSON.stringify(next) === JSON.stringify(Array.isArray(row) ? row : [])) return true;
+    return deploySettingToSheet('reportLinks', JSON.stringify(next));
+  };
+
+  // ── 분배금 링크 공유 ① 관리자 → 설정 시트(reportLinks 행의 분배금 항목) ──
   // 관리자 본인 STATE의 7칸이 정본이다. 정상 로드 뒤 세션 첫 1회 + 바뀔 때마다(1.5초 디바운스) 시트에 쓴다.
+  // ⚠️ 키는 'reportLinks'다 — 배포된 Apps Script가 새 키 'dividendLinks'를 거부해 공유가 늘 실패했다(2026-11).
   // ⚠️ divLinksBootFor 게이트를 빼지 말 것 — 로드 전·실패·접속(impersonation) 복귀 직후의 기본값(빈 7칸)이나
   //    남의 링크가 배포되면 모든 분배금 사용자의 공유 칸이 그 값으로 덮인다.
-  // ⚠️ 배포는 한 줄로 직렬화한다(Apps Script 응답이 수 초라, 겹치면 먼저 보낸 옛 값이 나중에 기록될 수 있다).
   const divLinksLatestRef = useRef('');
   const divLinksDeployedRef = useRef('');
-  const divLinksChainRef = useRef<Promise<void>>(Promise.resolve());
   const isRealAdmin = !!authUser && !adminViewingAs && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
   useEffect(() => {
     if (!isRealAdmin || divLinksBootFor !== authUser.email.toLowerCase()) return;
@@ -3706,14 +3726,14 @@ export default function App() {
     divLinksLatestRef.current = json;
     if (json === divLinksDeployedRef.current) return;
     const t = setTimeout(() => {
-      divLinksChainRef.current = divLinksChainRef.current.then(async () => {
+      sheetReportRowChainRef.current = sheetReportRowChainRef.current.then(async () => {
         const v = divLinksLatestRef.current;
         if (v === divLinksDeployedRef.current) return;
         setDividendLinksShareStatus('saving');
-        const ok = await deploySettingToSheet('dividendLinks', v);
+        const ok = await patchSheetReportRow({ dividendLinks: JSON.parse(v) });
         if (ok) divLinksDeployedRef.current = v;
         setDividendLinksShareStatus(ok ? 'ok' : 'fail');
-      });
+      }).catch(() => setDividendLinksShareStatus('fail'));
     }, 1500);
     return () => clearTimeout(t);
   }, [isRealAdmin, divLinksBootFor, dividendLinks]);
@@ -3733,7 +3753,7 @@ export default function App() {
 
   const dividendLinksNote = isRealAdmin
     ? (dividendLinksShareStatus === 'fail'
-      ? { tone: 'error', text: '분배금 사용자 공유 실패 — Apps Script 최신 코드 배포가 필요할 수 있습니다' }
+      ? { tone: 'error', text: '분배금 사용자 공유 실패 — 새로고침하면 다시 시도합니다' }
       : dividendLinksShareStatus === 'saving'
         ? { tone: 'info', text: '분배금 사용자에게 공유하는 중…' }
         : dividendLinksShareStatus === 'ok'
@@ -3779,6 +3799,7 @@ export default function App() {
   // 시장동향 리포트 URL — 유튜브 채널 링크와 동일한 '단일 URL 바로가기'.
   // ⚠️ 저장 키는 기존 'reportLinks'를 재사용한다(Apps Script 화이트리스트 — 재배포 불필요). 상세는
   //    reportLinksFromUrl 주석 참조. 빈 문자열이면 빈 배열이 저장돼 사용자 아이콘이 비활성으로 떨어진다.
+  // ⚠️ 시트 행에는 분배금 링크 항목이 함께 있다 — 통째로 쓰지 말고 patchSheetReportRow로 리포트 항목만 바꾼다.
   const handleSetReportUrl = async (url: string) => {
     const links = reportLinksFromUrl(url);
     const next = reportUrlFromLinks(links);
@@ -3786,7 +3807,9 @@ export default function App() {
     const err = await writeAppSettings({ reportLinks: links });
     if (err) { notify(`시장동향 리포트 링크 저장 실패 — ${err}`, 'error'); return { ok: false, message: err }; }
     setReportUrl(next);
-    const deployed = await deploySettingToSheet('reportLinks', JSON.stringify(links));
+    const run = sheetReportRowChainRef.current.then(() => patchSheetReportRow({ report: links }));
+    sheetReportRowChainRef.current = run;
+    const deployed = await run;
     return { ok: true, warning: deployed ? undefined : SHEET_DEPLOY_WARN };
   };
 
@@ -4054,7 +4077,7 @@ export default function App() {
             setYoutubeUrl(yu);
             if (Array.isArray(nl)) setNotebookLinks(nl);
             if (Array.isArray(rl)) setReportUrl(ru);
-            if (!isAdmin) setSharedDividendLinks(parseSharedDividendLinks(settingsData.dividendLinks));
+            if (!isAdmin) setSharedDividendLinks(sharedDividendLinksFromReportRow(rl) ?? parseSharedDividendLinks(settingsData.dividendLinks));
             // 관리자: Drive에 저장 (이후 Drive가 정본으로 동작)
             // 일반 사용자: Drive에 캐시 저장
             // ⚠️ 읽기가 실패한 세션에서는 저장을 건너뛴다 — 파일 내용을 모르는 채로 전체 교체하면

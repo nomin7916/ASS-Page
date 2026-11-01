@@ -26,7 +26,8 @@
 //
 //  [settings 시트: A=key  B=value]
 //    youtubeUrl / notebookLinks / reportLinks / youtubeUrlHistory
-//    dividendLinks — 분배금 현황 사이트 링크 7칸(JSON) ★신규(2026-10-29) — 관리자 앱이 자동으로 쓴다
+//    reportLinks 행에는 분배금 현황 사이트 링크 7칸 항목({title, dividendLinks})도 함께 실린다 — 관리자 앱이 자동으로 쓴다(재배포 불필요)
+//    dividendLinks — (구) 2026-10-29 전용 키. 앱은 더 이상 쓰지 않고 읽기 폴백만 남았다
 //
 //  [적용 방법]
 //  1. script.google.com → 기존 프로젝트 열기
