@@ -669,6 +669,19 @@ if (C) {
       JSON.stringify([['418670', 'kr', ['퇴직연금', 'ISA']]]));
     eq('#99m2 더 칠수록 줄어든다(ㄱ → ㄱㄹ → 글로벌)', [sr('ㄱ'), sr('ㄱㄹ'), sr('글로벌')].join('|'), '418670,498410|418670|418670');
     eq('#99m3 순위 — 코드 일치 → 코드 앞부분 → 이름 첫머리 → 이름 중간', [sr('418670'), sr('4'), sr('qqq'), sr('삼'), sr('tiger')].join('|'), '418670|418670,498410|QQQM|005930|418670');
+    // ⚠️ 위 #99m3은 카탈로그 순서와 순위가 우연히 같아 정렬을 빼도 통과한다(변이 실측) — 순서를 뒤집은 카탈로그로 정렬 자체를 고정한다.
+    {
+      const R = [
+        { acct: 'A', code: '900001', name: 'ABCDEF 글로벌', mk: 'kr' },   // 이름 중간(뒤쪽)
+        { acct: 'A', code: '900002', name: 'AB 글로벌', mk: 'kr' },       // 이름 중간(앞쪽)
+        { acct: 'A', code: '900003', name: '글로벌리츠', mk: 'kr' },       // 이름 첫머리
+        { acct: 'B', code: 'QQQM', name: 'Invesco QQQM', mk: 'us' },      // 코드 앞부분
+        { acct: 'B', code: 'QQQ', name: 'Invesco QQQ', mk: 'us' },        // 코드 일치
+      ];
+      eq('#99m5 순위 정렬 — 이름 첫머리 > 앞쪽 중간 > 뒤쪽 중간 · 코드 일치 > 코드 앞부분(카탈로그 순서와 무관)',
+        [searchHoldingCatalog(R, '글로벌'), searchHoldingCatalog(R, 'qqq')].map((l) => l.map((r) => r.code).join(',')).join('|'),
+        '900003,900002,900001|QQQ,QQQM');
+    }
     ok('#99m4 코드로 맞으면 codeHit · 이름으로 맞으면 hit 구간', searchHoldingCatalog(CAT3, '4186')[0].codeHit === true && JSON.stringify(searchHoldingCatalog(CAT3, 'ㅅㅅ')[0].hit) === '[0,2]');
     S('#99n 손상 입력에도 던지지 않는다(빈 목록)',
       () => [holdingCatalog(null), holdingCatalog([]), holdingCatalog({ a: 'x' }), catalogAccounts(null), catalogAccounts([null, { acct: 'a' }]),
