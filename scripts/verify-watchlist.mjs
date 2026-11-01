@@ -937,6 +937,30 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     /const highlighted = sortedStocks\s*\n\s*\.map\(\(s, i\) => \(\{ s, i, c: watchHighlightOf\(s\.highlight\) \}\)\)/.test(P)
     && /onClick=\{\(\) => scrollToStock\(s\.id\)\}/.test(P)
     && /querySelectorAll\('\[data-watch-id\]'\)/.test(P));
+  // 칩 목록은 기본 숨김(사용자 요청 2026-11) — 평소엔 '하이라이트 · 모두 해제'만, 글자를 눌러야 칩이 나온다(세 곳 같은 규약).
+  // ⚠️ PortfolioTable은 `if (!totals) return null;` 뒤에 훅을 두면 조건부 훅으로 화면이 죽는다 — 위치까지 잰다.
+  {
+    const PT = stripComments(src('src/components/PortfolioTable.tsx'));
+    const RB = stripComments(src('src/components/RebalancingPanel.tsx'));
+    ok('#G70b 관심종목 칩 목록 기본 숨김 + 글자로 펼침',
+      /const \[hlListOpen, setHlListOpen\] = useState\(false\);/.test(P)
+      && /onClick=\{\(\) => setHlListOpen\(\(o\) => !o\)\}/.test(P)
+      && /\{hlListOpen && highlighted\.map\(/.test(P));
+    ok('#G70c 포트폴리오 표 칩 목록 기본 숨김 + 글자로 펼침 + 훅은 조기 return 위',
+      /const \[hlListOpen, setHlListOpen\] = useState\(false\);/.test(PT)
+      && /onClick=\{\(\) => setHlListOpen\(o => !o\)\}/.test(PT)
+      && /\{hlListOpen && hlRows\.map\(/.test(PT)
+      && PT.indexOf('useState(false);', PT.indexOf('[hlListOpen')) < PT.indexOf('if (!totals) return null;')
+      && PT.indexOf('[hlListOpen') > 0);
+    ok('#G70d 리밸런싱 표 칩 목록 기본 숨김 + 글자로 펼침',
+      /const \[rbHlListOpen, setRbHlListOpen\] = useState\(false\);/.test(RB)
+      && /onClick=\{\(\) => setRbHlListOpen\(o => !o\)\}/.test(RB)
+      && /\{rbHlListOpen && rbHlRows\.map\(/.test(RB));
+    ok('#G70e 모두 해제 버튼은 접혀 있어도 보인다(칩 목록 조건 밖)',
+      /\}\)\}\s*<button onClick=\{\(\) => onResetAllMarkedPortfolioRows\(\)\}/.test(PT)
+      && /\}\)\}\s*<button type="button" onClick=\{\(\) => onResetAllMarkedRebalRows\(\)\}/.test(RB)
+      && /\}\)\}\s*\{!readOnly && \(\s*<button onClick=\{clearHighlights\}/.test(P));
+  }
   ok('#G71 다음 색 = 활성 그룹 기준', /const nextHl = watchHighlightOf\(nextWatchHighlight\(activeStocks\)\);/.test(P));
   // 최근조회는 다시 본 종목을 새 항목으로 맨 앞에 붙인다 — 칠한 색을 옮기지 않으면 등락율 한 번에 사라진다.
   ok('#G72 recordRecent 가 하이라이트를 함께 옮긴다',
@@ -1183,7 +1207,7 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   const CW = stripComments(CHART);
   const SDc = stripComments(SD);
   ok('#G100 관심종목: 조회 실패 시 krCodeWithZeros 후보를 국내로 다시 묻고 맞으면 행을 고친다(해외 판정은 후보 먼저)',
-    /krCodeWithZeros, holdingWatchStocks,\n\} from '\.\.\/watchlistChart';/.test(POPUP)
+    /krCodeWithZeros, holdingWatchStocks,\r?\n\} from '\.\.\/watchlistChart';/.test(POPUP)
     && /const zero = readOnly \|\| stock\.virtual \? '' : krCodeWithZeros\(stock\.code\);/.test(P)
     && /if \(zero && stock\.market === 'us'\) \{\s*\n\s*const dz = await fetchWatchQuote\('kr', zero\);\s*\n\s*if \(dz\) \{ repairStockCode\(stock, zero, dz\); return; \}/.test(P)
     && /if \(!d && zero && stock\.market !== 'us'\) \{\s*\n\s*const dz = await fetchWatchQuote\('kr', zero\);\s*\n\s*if \(dz\) \{ repairStockCode\(stock, zero, dz\); return; \}/.test(P));
@@ -1194,7 +1218,7 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     /const code = detectMarket\(raw\) === 'kr' \? raw\.toUpperCase\(\) : raw;/.test(P)
     && /const c = detectMarket\(c0\) === 'kr' \? c0\.toUpperCase\(\) : c0;/.test(CW));
   ok('#G101 종목 차트 창: 종가 이력 조회 실패 시 국내 6자리로 다시 받고 맞으면 종목 코드를 고친다(겹치면 비교 종목을 뺀다)',
-    /krCodeWithZeros,\n\} from '\.\.\/watchlistChart';/.test(CHART)
+    /krCodeWithZeros,\r?\n\} from '\.\.\/watchlistChart';/.test(CHART)
     && /const zero = krCodeWithZeros\(s\.code\);/.test(CW) && /const p2 = await fetchWatchDaily\('kr', zero, from \|\| undefined\);/.test(CW)
     && /if \(isMain\) setMain\(\(m\) => \(m\.code === s\.code \? \{ \.\.\.m, code: zero, market: 'kr' \} : m\)\);/.test(CW)
     && /setComps\(\(p\) => p\.filter\(\(c\) => c\.code !== s\.code\)\);/.test(CW));

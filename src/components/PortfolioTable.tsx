@@ -389,6 +389,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const [excelFlash, setExcelFlash] = useState('idle');
   const excelTimerRef = useRef(null);
   const tableWrapRef = useRef(null);
+  const [hlListOpen, setHlListOpen] = useState(false);
   // 코드 칸에 들어갈 때의 코드 — 나갈 때 바뀌었으면 다른 계좌의 같은 종목 구분을 이어받는다(onCodeChanged).
   const codeFocusRef = useRef(null);
   useEffect(() => () => { if (excelTimerRef.current) clearTimeout(excelTimerRef.current); }, []);
@@ -764,11 +765,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
           ))}
         </div>
       )}
-      {/* 하이라이트 위치 요약 — 칩 순서 = 표 안 순서. 누르면 그 행으로 이동(관심종목과 같은 규약) */}
+      {/* 하이라이트 위치 요약 — 칩 순서 = 표 안 순서. 누르면 그 행으로 이동(관심종목과 같은 규약). 칩 목록은 기본 숨김 — '하이라이트' 글자를 누르면 펼친다 */}
       {hlRows.length > 0 && (
         <div className="flex flex-wrap items-center gap-1 px-3 py-1.5 text-[11px] border-b border-gray-700/60">
-          <span className="text-gray-500 mr-0.5">하이라이트</span>
-          {hlRows.map(({ item, i, c }) => {
+          <button type="button" onClick={() => setHlListOpen(o => !o)} aria-expanded={hlListOpen} title={hlListOpen ? '하이라이트 목록 접기' : '하이라이트 목록 펼치기'} className="text-gray-500 hover:text-gray-300 mr-0.5 transition-colors">하이라이트</button>
+          {hlListOpen && hlRows.map(({ item, i, c }) => {
             const r = item.changeRate;
             const nm = item.name || item.code || '(이름 없음)';
             return (

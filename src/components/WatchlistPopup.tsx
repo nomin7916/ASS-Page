@@ -174,6 +174,7 @@ export default function WatchlistPopup({
   // 그룹 관리 로컬 상태
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [hlListOpen, setHlListOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
@@ -1278,11 +1279,11 @@ export default function WatchlistPopup({
               </div>
             )}
 
-            {/* 하이라이트 위치 요약 — 칩 순서 = 리스트 안 순서. 등락율로 정렬 중이면 순위(N/M)도 함께 */}
+            {/* 하이라이트 위치 요약 — 칩 순서 = 리스트 안 순서. 등락율로 정렬 중이면 순위(N/M)도 함께. 칩 목록은 기본 숨김 — '하이라이트' 글자를 누르면 펼친다 */}
             {highlighted.length > 0 && (
               <div className="flex flex-wrap items-center gap-1 mb-2 text-[11px]">
-                <span className="text-gray-500 mr-0.5">하이라이트</span>
-                {highlighted.map(({ s, i, c }) => {
+                <button type="button" onClick={() => setHlListOpen((o) => !o)} aria-expanded={hlListOpen} title={hlListOpen ? '하이라이트 목록 접기' : '하이라이트 목록 펼치기'} className="text-gray-500 hover:text-gray-300 mr-0.5 transition-colors">하이라이트</button>
+                {hlListOpen && highlighted.map(({ s, i, c }) => {
                   const r = viewByCode[s.code]?.rate;
                   const nm = quotes[s.code]?.name || s.name || s.code;
                   return (

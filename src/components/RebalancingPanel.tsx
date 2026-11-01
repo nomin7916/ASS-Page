@@ -316,6 +316,7 @@ export default function RebalancingPanel({
   })();
   const rbHlRows = rbDisplayRows.map((item, i) => ({ item, i, c: rowHighlightOf(markedRebalRows[item.id]) })).filter(x => x.c);
   const rbTableRef = useRef(null);
+  const [rbHlListOpen, setRbHlListOpen] = useState(false);
   const scrollToRbRow = (id) => {
     const rows = rbTableRef.current?.querySelectorAll('[data-rb-row]') || [];
     for (const el of rows) {
@@ -1073,11 +1074,11 @@ export default function RebalancingPanel({
               ⚠️ 개별 th의 z를 낮추는 방식으로 되돌리지 말 것 — 고정 헤더를 z-20으로 내리면
               가로 스크롤 시 DOM 뒤쪽의 일반 헤더(z-20)와 동률이 되어 종목명 헤더가 가려진다.
               ⚠️ isolate는 이 표 래퍼에만 — 카드 div에 걸면 그 안의 요소까지 갇힌다(모달들은 이 래퍼 밖). */}
-          {/* 하이라이트 위치 요약 — 칩 순서 = 표 안 순서. 누르면 그 행으로 이동(관심종목과 같은 규약) */}
+          {/* 하이라이트 위치 요약 — 칩 순서 = 표 안 순서. 누르면 그 행으로 이동(관심종목과 같은 규약). 칩 목록은 기본 숨김 — '하이라이트' 글자를 누르면 펼친다 */}
           {rbHlRows.length > 0 && (
             <div className="flex flex-wrap items-center gap-1 px-3 py-1.5 text-[11px] border-b border-gray-700/60 bg-[#0f172a]">
-              <span className="text-gray-500 mr-0.5">하이라이트</span>
-              {rbHlRows.map(({ item, i, c }) => {
+              <button type="button" onClick={() => setRbHlListOpen(o => !o)} aria-expanded={rbHlListOpen} title={rbHlListOpen ? '하이라이트 목록 접기' : '하이라이트 목록 펼치기'} className="text-gray-500 hover:text-gray-300 mr-0.5 transition-colors">하이라이트</button>
+              {rbHlListOpen && rbHlRows.map(({ item, i, c }) => {
                 const r = item.changeRate;
                 const nm = item.name || item.code || '(이름 없음)';
                 return (
