@@ -2,6 +2,7 @@
 import { useMemo } from 'react';
 import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, depositKrwTotalOf, ledgerRowsWithRunningSum, sortLedgerRows, isManualCashRow, manualCashEval, MANUAL_CASH_CATEGORY } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
+import { groupCategoryOf, userCategoryList } from '../userCategory';
 
 export function usePortfolioData({
   portfolio,
@@ -25,7 +26,7 @@ export function usePortfolioData({
   const totals = useMemo(() => {
     const isOverseasAcc = activePortfolioAccountType === 'overseas';
     const fxRate = isOverseasAcc ? (marketIndicators.usdkrw || 1) : 1;
-    let tInv = 0, tEvl = 0, tPrf = 0, cats = {}, stks = [];
+    let tInv = 0, tEvl = 0, tPrf = 0, cats = {}, userCats = {}, stks = [];
     const calc = portfolio.map(item => {
       let inv = 0, evl = 0;
       // ⚠️ 예수금 행은 inv·evl이 **같은 값**이어야 한다 — 원화 예수금을 evl에만 더하면 그 행의
@@ -47,9 +48,13 @@ export function usePortfolioData({
       }
       else { const _qty = cleanNum(item.quantity); inv = (activePortfolioAccountType === 'overseas' || activePortfolioAccountType === 'gold') ? cleanNum(item.purchasePrice) * _qty * fxRate : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * _qty); evl = cleanNum(item.currentPrice) * _qty * fxRate; }
       const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;
-      const c = item.type === 'deposit' ? '예수금' : (item.category || '미지정');
+      // 자산군(cats)과 사용자 구분(userCats) 두 묶음을 함께 쌓는다 — 자산 비중 카드가 계좌별 보기로 고른다.
+      const c = groupCategoryOf(item, 'asset');
       if (!cats[c]) cats[c] = { invest: 0, eval: 0, profit: 0 };
       cats[c].invest += inv; cats[c].eval += evl; cats[c].profit += prf;
+      const uc = groupCategoryOf(item, 'user');
+      if (!userCats[uc]) userCats[uc] = { invest: 0, eval: 0, profit: 0 };
+      userCats[uc].invest += inv; userCats[uc].eval += evl; userCats[uc].profit += prf;
       const isCash = isManualCashRow(item, activePortfolioAccountType);
       if (item.type === 'stock') stks.push({ name: item.name || (isCash ? MANUAL_CASH_CATEGORY : item.name), eval: evl });
       return { ...item, investAmount: inv, evalAmount: evl, profit: prf, ...(isCash ? { isManualCash: true } : {}) };
@@ -63,7 +68,7 @@ export function usePortfolioData({
     // 포함한다 — 달러로 표기하는 화면은 반드시 usdOfKrwFrame(값, krwCash, 환율)로 원화를 빼고
     // 되돌릴 것(`÷ 환율`만 하면 원화가 달러로 환산돼 섞인다 — utils '통화 분리 원칙').
     const krwCash = depositKrwTotalOf(portfolio, isOverseasAcc);
-    return { calcPortfolio: calc, totalInvest: tInv, totalEval: tEvl, totalProfit: tPrf, cats, stks, krwCash };
+    return { calcPortfolio: calc, totalInvest: tInv, totalEval: tEvl, totalProfit: tPrf, cats, userCats, userCategories: userCategoryList(portfolio), stks, krwCash };
   }, [portfolio, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const cagr = useMemo(() => {

@@ -106,6 +106,7 @@ import {
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
 import { DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize } from './watchlistGroups';
 import { buildHoldings } from './watchlistChart';
+import { groupCategoryOf } from './userCategory';
 
 // 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
@@ -925,6 +926,7 @@ export default function App() {
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
     markedRebalRows, toggleMarkedRebalRow, resetAllMarkedRebalRows,
     markedPortfolioRows, toggleMarkedPortfolioRow, resetAllMarkedPortfolioRows,
+    categoryViewTable, categoryViewSummary, setCategoryViewTable, setCategoryViewSummary,
     adminAccessAllowed, setAdminAccessAllowed,
     activePortfolioAccountType,
     buildPortfoliosState,
@@ -985,7 +987,7 @@ export default function App() {
     handleUpdateFor, applyItemPatchesFor, applyCardWriteFor, patchSettingsForTypeOf,
     toggleHiddenColumnPortfolioFor, toggleHiddenColumnRebalancingFor,
     toggleMarkedRebalRowFor, toggleMarkedPortfolioRowFor,
-    resetAllMarkedRebalRowsFor, resetAllMarkedPortfolioRowsFor,
+    resetAllMarkedRebalRowsFor, resetAllMarkedPortfolioRowsFor, setCategoryViewFor,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
 
@@ -2177,6 +2179,7 @@ export default function App() {
           if (k === 'returnRate') return (pP * qty) > 0 ? ((cP - pP) * qty) / (pP * qty) : 0;
           if (k === 'investRatio') return tInv > 0 ? (pP * qty) / tInv : 0;
           if (k === 'evalRatio') return tEvl > 0 ? (cP * qty) / tEvl : 0;
+          if (k === 'userCategory') return groupCategoryOf(item, 'user');
           return item[k] || 0;
         };
         let vA = getVal(a, key), vB = getVal(b, key);
@@ -2897,6 +2900,10 @@ export default function App() {
       case 'resetMarkedRows':
         if (a.table === 'rebalancing') resetAllMarkedRebalRowsFor(a.pid);
         else resetAllMarkedPortfolioRowsFor(a.pid);
+        return { ok: true };
+      case 'setCategoryView':
+        if (a.target !== 'table' && a.target !== 'summary') return { ok: false, reason: '알 수 없는 구분 보기입니다.' };
+        setCategoryViewFor(a.pid, a.target, a.mode);
         return { ok: true };
       case 'updateInvestmentNotes': {
         if (!Array.isArray(a.notes)) return { ok: false, reason: '투자 기록 형식이 올바르지 않습니다.' };
@@ -4221,7 +4228,7 @@ export default function App() {
         //    나면 예적금 지문이 조용히 깨진다 — @ts-nocheck+esbuild라 컴파일러가 못 잡는다).
         //    ⚠️ investAmountUsd(해외 투자금액 사용자 입력)도 필수 — 수량 0인 행에서는 미러
         //    purchasePrice를 쓰지 않으므로 이 필드만 바뀌고, 빠지면 그 편집이 조용히 유실된다.
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, investAmountUsd: item.investAmountUsd, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, depositAmountKrw: item.depositAmountKrw, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, investAmountUsd: item.investAmountUsd, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, depositAmountKrw: item.depositAmountKrw, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, userCategory: item.userCategory || '', assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         // ⚠️ 직접입력(simple) 계좌의 평가액·원금수동 플래그 — 이 둘만 바뀌는 경로가 실재한다
         //    (principalManual이 서 있는 계좌의 평가액 편집, 현금 이관의 simple 대상). 빠지면
@@ -4271,6 +4278,9 @@ export default function App() {
         // 없으면 다른 구조 변경에 편승할 때만 저장돼, 열만 숨기고 새로고침한 세션에서 조용히 되돌아간다.
         hiddenColumnsPortfolio: (Array.isArray(p.hiddenColumnsPortfolio) ? [...p.hiddenColumnsPortfolio] : []).slice().sort(),
         hiddenColumnsRebalancing: (Array.isArray(p.hiddenColumnsRebalancing) ? [...p.hiddenColumnsRebalancing] : []).slice().sort(),
+        // 구분 보기(포트폴리오 표·자산 비중 카드) — 단독 전환도 Drive STATE 저장을 트리거하도록 지문에 포함.
+        categoryViewTable: p.categoryViewTable || '',
+        categoryViewSummary: p.categoryViewSummary || '',
         // 행 색상 마킹(포트폴리오 표·리밸런싱 표) — 단독 토글도 저장 트리거되도록 지문에 포함.
         // 두 필드는 별개다(한쪽만 넣으면 다른 표의 마킹이 계속 유실) — markedRowsKey 주석 참조.
         markedPortfolioRowsKey: markedRowsKey(p.markedPortfolioRows),
@@ -5109,6 +5119,8 @@ export default function App() {
             onToggleMarkedPortfolioRow={toggleMarkedPortfolioRow}
             onResetAllMarkedPortfolioRows={resetAllMarkedPortfolioRows}
             accountName={title}
+            categoryView={categoryViewTable}
+            onCategoryViewChange={setCategoryViewTable}
           />
         )}
 
@@ -5120,6 +5132,8 @@ export default function App() {
             hoveredPortStkSlice={hoveredPortStkSlice}
             setHoveredPortStkSlice={setHoveredPortStkSlice}
             hideAmounts={hideAmounts}
+            categoryView={categoryViewSummary}
+            onCategoryViewChange={setCategoryViewSummary}
             onExpand={() => openCardWindow('summary', activePortfolioId)}
             cardWindowOpen={cardWinOpenSet.has(`summary:${activePortfolioId}`)}
           />

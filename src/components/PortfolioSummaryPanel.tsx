@@ -5,6 +5,10 @@ import { UI_CONFIG } from '../config';
 import { formatPercent, formatCurrency } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import CardExpandButton from './CardExpandButton';
+import { normalizeCategoryView, userCategoryColor } from '../userCategory';
+
+// '자산군 | 사용자 구분' 전환 — 계좌별 저장(categoryViewSummary). 포트폴리오 표 구분 열의 보기와는 따로다.
+const VIEW_OPTIONS = [['asset', '자산군'], ['user', '사용자 구분']];
 
 export default function PortfolioSummaryPanel({
   totals,
@@ -15,12 +19,51 @@ export default function PortfolioSummaryPanel({
   hideAmounts,
   onExpand,          // 별도 창으로 열기(별도 창 자신에는 미전달 → 버튼 미렌더)
   cardWindowOpen,
+  categoryView = 'asset',
+  onCategoryViewChange = null,
 }) {
+  const isUserView = normalizeCategoryView(categoryView) === 'user';
+  const cats = (isUserView ? totals.userCats : totals.cats) || {};
+  const userCategories = totals.userCategories || [];
+  // 사용자 구분 이름 색 — 자산군과 같은 이름이면 그 색, 아니면 포트폴리오 표 칸과 같은 팔레트 순번 색.
+  const labelProps = (c) => {
+    const cls = UI_CONFIG.COLORS.CATEGORIES[c];
+    if (!isUserView || cls) return { className: cls || '', style: undefined };
+    const hex = userCategoryColor(c, userCategories, UI_CONFIG.COLORS.CHART_PALETTE);
+    return { className: '', style: hex ? { color: hex } : undefined };
+  };
+  const changeView = (m) => {
+    if (!onCategoryViewChange || normalizeCategoryView(m) === normalizeCategoryView(categoryView)) return;
+    setHoveredPortCatSlice(null);
+    onCategoryViewChange(m);
+  };
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-6 w-full items-stretch">
       {/* 자산 비중 테이블 */}
       <div className="xl:col-span-4 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full">
-        <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 flex items-center gap-2"><span>📊 자산 비중</span><span className="ml-auto"><CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="포트폴리오 요약" /></span></div>
+        <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 flex items-center gap-2 flex-wrap">
+          <span>📊 자산 비중</span>
+          {onCategoryViewChange && (
+            <div className="inline-flex rounded-md border border-gray-600 overflow-hidden text-[11px] font-bold">
+              {VIEW_OPTIONS.map(([m, label]) => (
+                <button
+                  key={m}
+                  onClick={() => changeView(m)}
+                  className={`px-2 py-0.5 transition-colors ${(isUserView ? 'user' : 'asset') === m ? 'bg-blue-600/70 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200'}`}
+                  title={m === 'asset' ? '자산군(구분)별 비중을 봅니다' : '사용자 구분별 비중을 봅니다 — 사용자 구분이 빈 종목은 자산군으로 묶입니다'}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <span className="ml-auto"><CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="포트폴리오 요약" /></span>
+        </div>
+        {isUserView && userCategories.length === 0 && (
+          <div className="px-3 py-2 text-[11px] text-gray-400 border-b border-gray-700 bg-gray-900/40">
+            입력한 사용자 구분이 없어 자산군과 같게 보입니다. 포트폴리오 표 구분 열에서 '사용자'를 눌러 입력하세요.
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-right text-sm">
             <thead className="bg-gray-800 text-gray-400 font-bold border-b border-gray-700">
@@ -32,9 +75,11 @@ export default function PortfolioSummaryPanel({
               </tr>
             </thead>
             <tbody>
-              {Object.entries(totals.cats).map(([c, d]) => (
+              {Object.entries(cats).map(([c, d]) => {
+                const lp = labelProps(c);
+                return (
                 <tr key={c} className="border-b border-gray-700 hover:bg-gray-800 transition-colors">
-                  <td className={`p-3 text-center align-middle font-bold border-r border-gray-700 ${UI_CONFIG.COLORS.CATEGORIES[c]}`}>{c}</td>
+                  <td className={`p-3 text-center align-middle font-bold border-r border-gray-700 ${lp.className}`} style={lp.style}>{c}</td>
                   <td className="py-2 px-3 border-r border-gray-700 align-middle">
                     <div className="flex flex-col items-end justify-center">
                       <span className="whitespace-nowrap">{formatPercent(totals.totalInvest > 0 ? (d.invest / totals.totalInvest) * 100 : 0)}</span>
@@ -51,7 +96,8 @@ export default function PortfolioSummaryPanel({
                     {formatPercent(d.invest > 0 ? d.profit / d.invest * 100 : 0)}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -60,7 +106,7 @@ export default function PortfolioSummaryPanel({
       {/* 도넛 차트 (카테고리 + 종목별) */}
       <div className="xl:col-span-8 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full min-h-[400px]">
         <div className="flex bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 divide-x divide-gray-700">
-          <div className="p-3 flex-1 text-center">📊 자산 비중</div>
+          <div className="p-3 flex-1 text-center">📊 {isUserView ? '사용자 구분 비중' : '자산 비중'}</div>
           <div className="p-3 flex-1 text-center text-blue-400">📈 종목별 비중</div>
         </div>
         <div className="p-4 flex-1 flex flex-col sm:flex-row items-stretch gap-4">
@@ -83,13 +129,13 @@ export default function PortfolioSummaryPanel({
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={Object.entries(totals.cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)}
+                    data={Object.entries(cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)}
                     innerRadius="40%" outerRadius="70%" dataKey="value"
                     label={PieLabelOutside}
                     onMouseEnter={(data) => setHoveredPortCatSlice(data)}
                     onMouseLeave={() => setHoveredPortCatSlice(null)}
                   >
-                    {Object.entries(totals.cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                    {Object.entries(cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                   </Pie>
                 </PieChart>
               </ResponsiveContainer>

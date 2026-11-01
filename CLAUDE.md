@@ -25,6 +25,7 @@ src/
 ├── rateGlossary.ts      # 금리 창 용어 풀이(지표 33 · 자산군 7)
 ├── brazilNotes.ts       # 브라질 정치 메모 기본값(빈 배열) + readBrazilNotes 읽기 함수
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
+├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
@@ -92,6 +93,12 @@ src/
 - **벨 알림 금지**: 상태 변화는 `notify()`가 아니라 ③ 아래 '상태 변경 기록'(history)에 남긴다 — 알림 최소화 정책상 시세·판정 계층은
   벨에 남기지 않는다(창을 열 때마다 알림이 쌓이면 진짜 오류가 묻힌다). 저장 실패만 설정 패널 안 빨간 글씨.
 - 검증: `verify:rate-metrics`·`verify:rate-signals`·`verify:rate-assets`·`verify:rate-settings`(전부 src 직접 import).
+
+## 사용자 구분 (계좌별, ⚠️ 회귀 주의)
+
+- 항목 `userCategory`(직접 입력) ≠ `category`(자산군, 그대로). 계좌 필드 `categoryViewTable`(표 구분 열)·`categoryViewSummary`
+  (자산 비중 카드)가 각각 `'asset'|'user'`, 기본 자산군. 묶음은 `groupCategoryOf` 한 곳 — 빈 사용자 구분은 자산군, 예수금은 늘 '예수금'.
+- ⚠️ `handleUpdateFor` 문자열 필드 목록·Drive 구조 지문(항목·계좌 두 필드)·`CARD_OPS`의 `setCategoryView`가 빠지면 조용히 유실된다.
 
 ## 분배금 사이트 링크 공유 (관리자 → 분배금 사용자, ⚠️ 회귀 주의)
 

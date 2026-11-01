@@ -15,6 +15,7 @@ import { downloadPortfolioXlsx, portfolioExcelFileName } from '../portfolioExcel
 //    `new Date().toISOString()`(UTC) 파생이라 KST 00:00~09:00에 하루 밀린다.
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import CustomDatePicker from './CustomDatePicker';
+import { normalizeUserCategory, userCategoryList, userCategoryColor, normalizeCategoryView, USER_CATEGORY_MAX } from '../userCategory';
 
 const formatUSD = (n) => {
   const v = cleanNum(n);
@@ -191,10 +192,175 @@ const CategoryCell = ({ item, portfolio, showAssetClass, onUpdate }) => {
   );
 };
 
+// 사용자 구분 이름의 색 — 자산군과 같은 이름이면 그 색, 아니면 계좌 목록 순번의 팔레트 색.
+const userCatStyle = (name, list) => {
+  const cls = UI_CONFIG.COLORS.CATEGORIES[name];
+  if (cls) return { className: cls, style: undefined };
+  const hex = userCategoryColor(name, list, UI_CONFIG.COLORS.CHART_PALETTE);
+  return { className: hex ? '' : 'text-white', style: hex ? { color: hex } : undefined };
+};
+
+// 사용자 구분 칸(구분 열 '사용자' 보기). 비어 있으면 자산군 이름(fallback)을 흐리게 보여 준다 —
+// 자산 비중의 사용자 보기도 빈 행을 그 자산군으로 묶는다(userCategory.groupCategoryOf).
+// 클릭 = 입력 상자(직접 입력 · 이 계좌에서 쓴 구분 고르기 · 지우기), Delete = 지우기,
+// 여러 줄 붙여넣기 = 이 행부터 아래로 채우기(rowIds = 표에 보이는 종목·펀드·예적금 순서).
+const UserCategoryCell = ({ item, fallback, list, rowIds, onUpdate }) => {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0 });
+  const wrapRef = useRef(null);
+  const dropRef = useRef(null);
+  const inputRef = useRef(null);
+  const draftRef = useRef('');
+  draftRef.current = draft;
+  const cur = normalizeUserCategory(item.userCategory);
+
+  const commit = (v) => {
+    const next = normalizeUserCategory(v);
+    if (next !== cur) onUpdate(item.id, 'userCategory', next);
+    setOpen(false);
+  };
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+
+  useEffect(() => {
+    if (!open) return;
+    const close = e => {
+      if (!wrapRef.current?.contains(e.target) && !dropRef.current?.contains(e.target))
+        commitRef.current(draftRef.current);
+    };
+    const closeOnScroll = e => {
+      if (!dropRef.current?.contains(e.target)) commitRef.current(draftRef.current);
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('scroll', closeOnScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('scroll', closeOnScroll, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && inputRef.current) { inputRef.current.focus(); inputRef.current.select(); }
+  }, [open]);
+
+  const openBox = () => {
+    if (wrapRef.current) {
+      const rect = wrapRef.current.getBoundingClientRect();
+      setDropPos({ top: rect.bottom + 2, left: rect.left });
+    }
+    setDraft(cur);
+    setOpen(true);
+  };
+
+  const handlePaste = e => {
+    e.preventDefault();
+    const lines = e.clipboardData.getData('text').split(/\r?\n/).map(l => l.trim());
+    while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    if (lines.length <= 1) { commit(lines[0] || ''); return; }
+    const startIdx = rowIds.indexOf(item.id);
+    if (startIdx < 0) return;
+    lines.forEach((line, i) => {
+      const id = rowIds[startIdx + i];
+      if (id) onUpdate(id, 'userCategory', normalizeUserCategory(line));
+    });
+    setOpen(false);
+  };
+
+  const shown = cur ? userCatStyle(cur, list) : null;
+  const q = normalizeUserCategory(draft);
+  const picks = list.filter(c => !q || c === cur || c.includes(q));
+
+  return (
+    <div ref={wrapRef} className="flex-1 min-w-0">
+      <div
+        tabIndex={0}
+        className={`w-full text-center text-xs font-bold cursor-pointer px-1 py-3 outline-none select-none truncate ${open ? 'bg-blue-900/30' : ''} ${shown ? shown.className : 'text-gray-600'}`}
+        style={shown?.style}
+        title={cur ? `사용자 구분: ${cur} — 클릭하여 바꾸기` : `사용자 구분 없음 — 자산군(${fallback})으로 묶입니다. 클릭하여 입력`}
+        onClick={() => (open ? commit(draft) : openBox())}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); openBox(); }
+          else if ((e.key === 'Delete' || e.key === 'Backspace') && cur) { e.preventDefault(); onUpdate(item.id, 'userCategory', ''); }
+          else handleRowArrowNav(e);
+        }}
+        onPaste={handlePaste}
+      >
+        {cur || fallback}
+      </div>
+      {open && (
+        <div
+          ref={dropRef}
+          className="fixed z-[100] bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl overflow-hidden py-1"
+          style={{ top: dropPos.top, left: dropPos.left, minWidth: 150 }}
+        >
+          <div className="px-2 pt-1 pb-1.5">
+            <input
+              ref={inputRef}
+              className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs text-white outline-none focus:border-blue-500"
+              value={draft}
+              maxLength={USER_CATEGORY_MAX}
+              placeholder="직접 입력 후 Enter"
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); commit(draft); }
+                else if (e.key === 'Escape') { e.preventDefault(); setOpen(false); }
+              }}
+              onPaste={e => { if (/\r?\n/.test(e.clipboardData.getData('text').trim())) handlePaste(e); }}
+            />
+            <div className="text-[10px] text-gray-500 mt-1 text-left">비우면 자산군({fallback})으로 묶입니다</div>
+          </div>
+          {picks.length > 0 && (
+            <div className="max-h-[220px] overflow-y-auto border-t border-gray-700/60 pt-1">
+              {picks.map(c => {
+                const st = userCatStyle(c, list);
+                return (
+                  <button
+                    key={c}
+                    className={`block w-full text-center px-4 py-1.5 text-xs font-bold hover:bg-gray-700/60 transition-colors ${st.className} ${c === cur ? 'bg-gray-700/40' : ''}`}
+                    style={st.style}
+                    onMouseDown={e => { e.preventDefault(); commit(c); }}
+                  >
+                    {c}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {cur && (
+            <button
+              className="block w-full text-center px-4 py-1.5 text-[11px] text-gray-400 hover:text-red-300 hover:bg-gray-700/60 border-t border-gray-700/60 transition-colors"
+              onMouseDown={e => { e.preventDefault(); commit(''); }}
+            >
+              지우기 (자산군 따름)
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// 구분 열 머리의 '자산군 | 사용자' 전환 — 머리 클릭(정렬)과 겹치지 않도록 전파를 막는다.
+const CategoryViewSwitch = ({ view, onChange }) => (
+  <div className="mt-1 inline-flex rounded border border-gray-600 overflow-hidden text-[9px] font-bold leading-none" onClick={e => e.stopPropagation()}>
+    {[['asset', '자산군'], ['user', '사용자']].map(([m, label]) => (
+      <button
+        key={m}
+        onClick={() => onChange(m)}
+        className={`px-1.5 py-1 transition-colors ${view === m ? 'bg-blue-600/70 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200'}`}
+        title={m === 'asset' ? '구분 열에 자산군을 표시합니다' : '구분 열에 사용자 구분(직접 입력)을 표시합니다'}
+      >
+        {label}
+      </button>
+    ))}
+  </div>
+);
+
 // 계좌 타입별 기능 게이팅 (혼동/회귀 방지 — CLAUDE.md "계좌 타입별 D/S·펀드 게이팅" 참조)
 //  · isRetirement   : 펀드 행 + "펀드 추가" 버튼 — 퇴직연금(DC/IRP) + 개인연금(pension)
 //  · showAssetClass : 위험/안전(D/S) 자산 구분 배지 — 퇴직연금(DC/IRP) 전용 (개인연금 제외)
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onTransferCash = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {}, accountName = '' }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onTransferCash = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {}, accountName = '', categoryView = 'asset', onCategoryViewChange = null }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -293,6 +459,10 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const savingsItems = portfolio.filter(p => p.type === 'savings');
   // 화면 순서(주식 → 펀드 → 예적금) — 위치 요약 칩이 이 순서를 그대로 쓴다.
   const displayRows = [...stockItems, ...(isRetirement ? fundItems : []), ...(showSavings ? savingsItems : [])];
+  // 구분 열 보기 — 'user'면 종목·펀드·예적금 행의 구분 칸이 사용자 구분 입력 칸이 된다(예수금 행은 그대로).
+  const isUserCatView = normalizeCategoryView(categoryView) === 'user';
+  const userCats = userCategoryList(portfolio);
+  const userCatRowIds = displayRows.map(r => r.id);
   const hlRows = displayRows.map((item, i) => ({ item, i, c: rowHighlightOf(markedPortfolioRows[item.id]) })).filter(x => x.c);
   const scrollToRow = (id) => {
     const rows = tableWrapRef.current?.querySelectorAll('[data-pt-row]') || [];
@@ -637,9 +807,14 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             <tr className="text-center">
               <th className="p-0 border-r border-gray-600 cursor-pointer hover:bg-red-400/15 transition-colors" style={{width:'10px',minWidth:'10px'}} onClick={() => onResetAllMarkedPortfolioRows()} title="클릭하여 하이라이트 모두 해제"></th>
               {!H('category') && (
-                <th className="py-2 min-w-[60px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort(null)} title="클릭하여 자산군 순서로 정렬 (주식→주식-a→채권→금→배당주식→리츠→현금→예수금→FUND)">
+                <th
+                  className={`py-2 cursor-pointer hover:bg-gray-700 relative ${onCategoryViewChange ? 'min-w-[84px]' : 'min-w-[60px]'}`}
+                  onClick={() => (isUserCatView ? onSort('userCategory') : onSort(null))}
+                  title={isUserCatView ? '클릭하여 사용자 구분 이름순으로 정렬 (비어 있으면 자산군 이름)' : '클릭하여 자산군 순서로 정렬 (주식→주식-a→채권→금→배당주식→리츠→현금→예수금→FUND)'}
+                >
                   {hideStrip('category')}
-                  구분
+                  <div>구분</div>
+                  {onCategoryViewChange && <CategoryViewSwitch view={isUserCatView ? 'user' : 'asset'} onChange={onCategoryViewChange} />}
                 </th>
               )}
               {!H('name') && (
@@ -750,7 +925,9 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('category') && (
                     <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                       <div className="flex flex-row h-full">
-                        <CategoryCell item={item} portfolio={portfolio} showAssetClass={showAssetClass} onUpdate={onUpdate} />
+                        {isUserCatView
+                          ? <UserCategoryCell item={item} fallback={item.category || '미지정'} list={userCats} rowIds={userCatRowIds} onUpdate={onUpdate} />
+                          : <CategoryCell item={item} portfolio={portfolio} showAssetClass={showAssetClass} onUpdate={onUpdate} />}
                         {showAssetClass && (
                           <>
                             <div className="w-px bg-gray-600/60 self-stretch" />
@@ -1019,11 +1196,15 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('category') && (
                     <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                       <div className="flex flex-row h-full items-stretch">
+                        {isUserCatView ? (
+                          <UserCategoryCell item={item} fallback={item.category || 'FUND'} list={userCats} rowIds={userCatRowIds} onUpdate={onUpdate} />
+                        ) : (
                         <a href={item.code?.startsWith('MA:') ? 'https://investments.miraeasset.com' : 'https://www.funetf.co.kr/'} target="_blank" rel="noopener noreferrer"
                            className="flex-1 py-3 px-1 text-center text-xs font-bold text-indigo-300 hover:text-indigo-100 hover:underline transition-colors"
                            title={item.code?.startsWith('MA:') ? '미래에셋자산운용' : 'funetf'}>
                           {item.code?.startsWith('MA:') ? 'MIRAE' : 'FUND'}
                         </a>
+                        )}
                         {showAssetClass && (
                           <>
                             <div className="w-px bg-gray-600/60 self-stretch" />
@@ -1172,7 +1353,9 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('category') && (
                     <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                       <div className="flex flex-row h-full items-stretch">
-                        <span className="flex-1 py-3 px-1 text-center text-xs font-bold text-emerald-300">예적금</span>
+                        {isUserCatView
+                          ? <UserCategoryCell item={item} fallback={item.category || '예적금'} list={userCats} rowIds={userCatRowIds} onUpdate={onUpdate} />
+                          : <span className="flex-1 py-3 px-1 text-center text-xs font-bold text-emerald-300">예적금</span>}
                         {showAssetClass && (
                           <>
                             <div className="w-px bg-gray-600/60 self-stretch" />

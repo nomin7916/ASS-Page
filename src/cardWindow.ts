@@ -133,6 +133,8 @@ export const CARD_OPS = [
   // 항목·설정·계좌 필드 — cardWrite는 셋을 한 번에 쓰는 원자적 복합 커맨드다
   'updateItem', 'patchItems', 'patchSettings', 'cardWrite',
   'toggleColumn', 'toggleMarkedRow', 'resetMarkedRows',
+  // 구분 보기(자산군 | 사용자 구분) — 계좌 필드 categoryViewTable/categoryViewSummary
+  'setCategoryView',
   // 리밸런싱
   'refreshPrice', 'saveTargetSnapshot', 'updateInvestmentNotes', 'verifyPin',
   // 관리자 접속 중 목표 변경 공지 — 인앱과 같은 등급으로 알린다(세션당 1회 래치는 앱 탭 담당)

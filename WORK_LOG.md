@@ -1,10 +1,31 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-10-31  
+> 마지막 작업일: 2026-11-01  
 > 브랜치: main  
 > 작업 PC: 클라우드 세션(node 있음 · node_modules 없음 — build 실행 불가)
 
 ---
+
+## 2026-11-01 — [포트폴리오 표 · 자산 비중] 사용자 구분(직접 입력) · 자산군/사용자 보기 전환
+
+**대상 파일**: `src/userCategory.ts`(신규) · `src/components/PortfolioTable.tsx` · `src/components/PortfolioSummaryPanel.tsx` ·
+`src/hooks/usePortfolioData.ts` · `src/hooks/usePortfolioState.ts` · `src/App.tsx` · `src/cardWindow.ts` · `src/components/CardWindow.tsx` ·
+`scripts/verify-user-category.mjs`(신규) · `package.json` · `CLAUDE.md`
+
+> 각 계좌에서 구분을 … 사용자 지정을 만듭니다 … 현재 구분과 사용자 구분을 두어서 사용자 구분에 입력되어 있으면 자산비중에 반영 …
+> 포트폴리오 테이블의 구분 표시는 자산군별 표시를 기본으로 하지만 … 사용자가 구분을 선택해서 볼 수 있어야 … 자산 비중에도 … 선택해서 볼 수 있어야
+
+- 기존 구분(자산군 8종)은 그대로 두고 항목에 `userCategory`(자유 입력, 최대 20자)를 따로 둔다.
+- 포트폴리오 표 구분 머리에 '자산군 | 사용자' 전환. 사용자 보기에선 종목·펀드·예적금 칸이 입력 칸 — 클릭하면 입력 상자(직접 입력 ·
+  이 계좌에서 쓴 구분 고르기 · 지우기), Enter/바깥 클릭 저장, Esc 취소, Delete 지우기, 여러 줄 붙여넣기 = 아래로 채우기.
+  빈 칸은 자산군 이름을 흐리게 보여 준다. 머리 클릭 = 사용자 구분 이름순 정렬. 예수금 행은 그대로.
+- 자산 비중 카드 머리에 '자산군 | 사용자 구분' 전환(표·도넛 함께). 사용자 보기 = 입력한 행만 그 이름으로 옮기고 빈 행은 자산군으로 묶음.
+  표 보기와 카드 보기는 계좌마다 따로 저장(`categoryViewTable`·`categoryViewSummary`). 카드 별도 창도 같은 전환(`setCategoryView` 커맨드).
+- 저장: 항목·계좌 필드라 Drive STATE에 그대로 실린다 — 구조 지문에 세 필드 추가, `handleUpdateFor` 문자열 필드에 추가(없으면 0으로 저장됨).
+- 검증: gate 전체 통과(build는 저장소에서 실행 불가 — 스크래치 복사본 `vite build` 통과) · verify:user-category 35건(변이 6종 전부 검출) ·
+  verify:card-window #G3g(커맨드 1:1) 통과 · Chromium 시험(표·카드 단독 하네스) 20/21 — 입력·고르기·바깥 클릭 저장·Esc·Delete·
+  정렬·묶음 금액(성장 150,000 = 65.22%)·페이지 오류 0. 실패 1건은 휴대폰 폭 가로 넘침인데 자산군 보기(변경 전 화면)도 같아 이번 변경과 무관.
+  실제 사이트 화면은 아직 못 봄. 통합 대시보드·리밸런싱 도넛·엑셀 내보내기는 이번 범위 밖(자산군 그대로).
 
 ## 2026-10-31 — [분배금 현황 · 총 자산 현황] 연도 보기(지난 연도 버튼 · 과거 기록 잠금)
 

@@ -401,6 +401,8 @@ export default function CardWindow() {
           hoveredPortStkSlice={hoveredPortStkSlice}
           setHoveredPortStkSlice={setHoveredPortStkSlice}
           hideAmounts={hideAmounts}
+          categoryView={acct.categoryViewSummary}
+          onCategoryViewChange={writable ? (mode) => fire('setCategoryView', { pid: PID, target: 'summary', mode }) : null}
         />
       );
     }

@@ -8,6 +8,7 @@ import {
 } from '../utils';
 import { getTodayKST, getBackfillBoundaryForAccount } from './useMarketCalendar';
 import { toggleRowHighlight } from '../watchlistGroups';
+import { normalizeCategoryView } from '../userCategory';
 
 // 행 하이라이트 — 관심종목과 같은 팔레트·규칙(칠할 때마다 다른 색, 다시 누르면 해제).
 // 활성 계좌 경로와 by-id(카드 별도 창) 경로가 **같은 함수**를 써야 두 화면의 색이 갈리지 않는다.
@@ -88,6 +89,15 @@ export function usePortfolioState({
   const toggleMarkedPortfolioRow = (itemId) => toggleMarkedPortfolioRowFor(activePortfolioId, itemId);
   const resetAllMarkedRebalRows = () => resetAllMarkedRebalRowsFor(activePortfolioId);
   const resetAllMarkedPortfolioRows = () => resetAllMarkedPortfolioRowsFor(activePortfolioId);
+  // 구분 보기('asset' 자산군 | 'user' 사용자 구분) — 포트폴리오 표(table)·자산 비중 카드(summary) 각각 계좌별 저장.
+  const categoryViewTable = normalizeCategoryView(activePortfolio?.categoryViewTable);
+  const categoryViewSummary = normalizeCategoryView(activePortfolio?.categoryViewSummary);
+  const setCategoryViewFor = (pid, target, mode) => {
+    const field = target === 'table' ? 'categoryViewTable' : target === 'summary' ? 'categoryViewSummary' : null;
+    if (field) patchById(pid, { [field]: normalizeCategoryView(mode) });
+  };
+  const setCategoryViewTable = (mode) => setCategoryViewFor(activePortfolioId, 'table', mode);
+  const setCategoryViewSummary = (mode) => setCategoryViewFor(activePortfolioId, 'summary', mode);
 
   // ── 지정 계좌만 갱신하는 헬퍼(by-id) ──
   // ⚠️ 카드 별도 창(`/?cardWindow=1`)은 **앱 탭의 활성 계좌가 아닌** 계좌를 편집한다. 그래서
@@ -752,7 +762,7 @@ export function usePortfolioState({
   const handleUpdateFor = (pid, id, field, value) =>
     patchById(pid, pf => ({ portfolio: (pf.portfolio ?? []).map(p => {
       if (p.id !== id) return p;
-      if (['category', 'name', 'code', 'assetClass'].includes(field)) return { ...p, [field]: value };
+      if (['category', 'name', 'code', 'assetClass', 'userCategory'].includes(field)) return { ...p, [field]: value };
       const num = cleanNum(value);
       const acctType = pf.accountType || 'portfolio';
       if (acctType === 'overseas' && p.type === 'stock'
@@ -1143,6 +1153,7 @@ export function usePortfolioState({
     toggleMarkedPortfolioRowFor,
     resetAllMarkedRebalRowsFor,
     resetAllMarkedPortfolioRowsFor,
+    setCategoryViewFor,
     portfolio,
     principal,
     avgExchangeRate,
@@ -1176,6 +1187,7 @@ export function usePortfolioState({
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
     markedRebalRows, toggleMarkedRebalRow, resetAllMarkedRebalRows,
     markedPortfolioRows, toggleMarkedPortfolioRow, resetAllMarkedPortfolioRows,
+    categoryViewTable, categoryViewSummary, setCategoryViewTable, setCategoryViewSummary,
     adminAccessAllowed, setAdminAccessAllowed,
     // 파생 상태
     activePortfolioAccountType,
