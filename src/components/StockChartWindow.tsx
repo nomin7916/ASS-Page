@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Line, ReferenceArea, ReferenceLine, ReferenceDot, Tooltip as RechartsTooltip } from 'recharts';
-import { X, Plus, RefreshCw, ExternalLink, Calendar, Percent, TrendingUp, Wallet } from 'lucide-react';
+import { X, Plus, RefreshCw, ExternalLink, Calendar, Percent, TrendingUp, Wallet, Search, List, ChevronRight } from 'lucide-react';
 import ErrorBoundary from './ErrorBoundary';
 import CustomDatePicker from './CustomDatePicker';
 import { formatChangeRate, selectionDimBands } from '../utils';
@@ -12,7 +12,8 @@ import {
   periodCutoff, watchPeriodWindow, windowRate, buildChartRows, closeOnOrBefore, rangeRate, chartDateLabel,
   normalizeChartCode, normalizeChartComps, normalizeChartView, stockDetailUrl, stockChartUrl,
   EMPTY_CHART_SEL, chartSelStep,
-  holdingsFor, holdingAvg, holdingPct, holdingLayout, normalizeHoldings, krCodeWithZeros,
+  holdingsFor, holdingAvg, holdingPct, holdingLayout, normalizeHoldings,
+  holdingKey, normalizeHoldingCatalog, searchHoldingCatalog, catalogAccounts, krCodeWithZeros,
 } from '../watchlistChart';
 
 /**
@@ -24,8 +25,9 @@ import {
  *    비교 종목·기간은 이 창의 주소(URL)에만 남긴다(새로고침해도 유지 — localStorage·Drive 금지).
  * ⚠️ opener와는 **읽기 전용 물음 하나**만 주고받는다(사용자 요청 2026-10-30 — 보유 종목 매입가 가로선):
  *    창 → opener `stockchart:ping { codes }` / opener(관심종목 팝업 — 앱 탭 또는 관심종목 창) →
- *    `stockchart:holdings { holdings }`. 받은 값은 이 창 메모리에만 두고, 이 창이 보내는 메시지는 ping 하나뿐이다
+ *    `stockchart:holdings { holdings, catalog }`. 받은 값은 이 창 메모리에만 두고, 이 창이 보내는 메시지는 ping 하나뿐이다
  *    (쓰기 메시지를 늘리면 '두 번째 writer'가 된다). 매입가를 주소에 싣지 말 것 — 주소창·방문 기록에 남는다.
+ *    catalog = 비교 종목 찾기용 보유 종목 목록(계좌·코드·종목명뿐 — 사용자 요청 2026-11-01, 아래 CompPicker).
  * ⚠️ 구간 자르기·기간 수익률은 관심종목 팝업과 **같은 함수**(watchlistChart.watchPeriodWindow·windowRate)를
  *    쓰고 종가도 같은 소스(fetchWatchDaily)라, 같은 기간이면 팝업 등락율과 차트 끝점이 한 글자도 다르지 않다.
  * ⚠️ 조회 결과를 공유 stockHistoryMap에 병합하지 말 것 — 이 창은 그 맵에 닿을 수조차 없고(App 미마운트),
@@ -95,6 +97,198 @@ function stackAvgTags(root) {
   });
 }
 
+// 매입가 보기(사용자 요청 2026-11-01) — 'acct' = 계좌마다 한 줄(기본) · 'sum' = 통합 한 줄(전 계좌 평균 매입가 =
+// 총 투자금액 ÷ 총 수량, holdingAvg). 계좌가 하나뿐이면 두 보기가 같다(그대로 둔다).
+function holdLines(hold, avgMode) {
+  if (avgMode !== 'sum' || hold.length < 2) return hold;
+  const a = holdingAvg(hold);
+  return a ? [{ acct: `${a.n}계좌 통합`, avg: a.avg, qty: a.qty, cur: hold[0].cur, sum: true, n: a.n }] : hold;
+}
+
+const markHit = (str, hit) => (!hit ? str : (
+  <>{str.slice(0, hit[0])}<span className="text-amber-300 font-bold">{str.slice(hit[0], hit[1])}</span>{str.slice(hit[1])}</>
+));
+
+/**
+ * 비교 종목 찾기(사용자 요청 2026-11-01) — 한 칸에서 세 가지로 고른다.
+ *   ① 이름 일부 · 초성 · 코드 입력 → 맞는 **보유 종목**이 칸 아래에 뜨고, 더 칠수록 줄어든다(searchHoldingCatalog).
+ *   ② [계좌] → 계좌 고르기 → 그 계좌의 보유 종목 고르기(계층 선택 — catalogAccounts).
+ *   ③ 보유하지 않은 종목은 코드를 그대로 입력해 추가(목록 맨 끝 '코드로 추가' 줄 · Enter).
+ * catalog = opener가 답해 준 보유 종목 목록(매입가 없음 · 메모리 전용) · null = 아직 모름(앱 창이 없으면 코드로만 추가).
+ * ⚠️ 한글 조합 중 Enter(isComposing)는 무시한다 — 브라우저에 따라 조합 끝 Enter가 한 번 더 와서 두 번 추가된다.
+ */
+function CompPicker({ catalog, has, onPick, onCode, onMsg }) {
+  const [text, setText] = useState('');
+  const [open, setOpen] = useState(false);
+  const [browse, setBrowse] = useState(false);   // true = 계좌 → 종목 계층 보기
+  const [hi, setHi] = useState(0);               // 키보드로 가리킨 줄
+  const [acctSel, setAcctSel] = useState('');
+  const [alignRight, setAlignRight] = useState(false);   // 칸이 창 오른쪽에 붙어 있으면 목록을 오른쪽 끝에 맞춘다
+  const boxRef = useRef(null);
+  const listRef = useRef(null);
+  const q = text.trim();
+  const results = useMemo(() => (q ? searchHoldingCatalog(catalog || [], q, 40) : []), [catalog, q]);
+  const accts = useMemo(() => catalogAccounts(catalog || []), [catalog]);
+  const code = normalizeChartCode(q);
+  // 코드처럼 보이는 입력은 맨 끝에 '코드로 추가' 줄 — 보유 종목에 같은 코드가 있으면 그 종목 줄이 대신한다.
+  const options = !q ? [] : [
+    ...results.map((r) => ({ kind: 'hold', r })),
+    ...(code && !results.some((r) => holdingKey(r.code) === holdingKey(code)) ? [{ kind: 'code', code }] : []),
+  ];
+  const hiIdx = Math.max(0, Math.min(hi, options.length - 1));
+  const showBrowse = browse || !q;
+  const curAcct = accts.find((a) => a.acct === acctSel) || accts[0] || null;
+
+  const close = () => { setOpen(false); setBrowse(false); setHi(0); };
+  useEffect(() => {
+    if (!open) return;
+    const r = boxRef.current ? boxRef.current.getBoundingClientRect() : null;
+    setAlignRight(!!r && r.left + 470 > window.innerWidth && r.right > 470);
+    const down = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) close(); };
+    document.addEventListener('mousedown', down);
+    return () => document.removeEventListener('mousedown', down);
+  }, [open]);
+  useEffect(() => {
+    const el = listRef.current && listRef.current.querySelector('[data-hi="1"]');
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+  }, [hiIdx, open, showBrowse]);
+
+  const choose = (opt) => {
+    if (!opt) {
+      onMsg(q ? '보유 종목에 맞는 이름이 없습니다 — 종목 코드를 입력하세요.' : '종목명·초성·코드를 입력하거나 [계좌]에서 고르세요.');
+      return;
+    }
+    const ok = opt.kind === 'code' ? onCode(opt.code) : onPick(opt.r);
+    if (ok) { setText(''); close(); }
+  };
+
+  const itemRow = (it, i, withAccts) => {
+    const inChart = has(it.code);
+    return (
+      <button
+        key={`${it.code}:${it.mk}`}
+        data-hi={i === hiIdx && !showBrowse ? '1' : undefined}
+        onMouseEnter={() => { if (!showBrowse) setHi(i); }}
+        onClick={() => choose({ kind: 'hold', r: it })}
+        disabled={inChart}
+        title={inChart ? '이미 차트에 있는 종목입니다' : `${it.name || it.code} — 비교 종목으로 추가`}
+        className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${
+          inChart ? 'opacity-45 cursor-default' : i === hiIdx && !showBrowse ? 'bg-green-900/30' : 'hover:bg-gray-800'
+        }`}
+      >
+        <span className={`font-mono w-[4.5rem] shrink-0 truncate ${it.codeHit ? 'text-amber-300' : 'text-gray-500'}`}>{it.code}</span>
+        <span className="flex-1 min-w-0 truncate text-gray-200">{it.name ? markHit(it.name, it.hit) : it.code}</span>
+        {it.mk !== 'kr' && <span className="shrink-0 text-[10px] text-gray-500">{MARKET_LABEL[it.mk]}</span>}
+        {inChart
+          ? <span className="shrink-0 text-[10px] text-gray-500">차트에 있음</span>
+          : withAccts && it.accts && it.accts.length > 0 && (
+            <span className="shrink-0 max-w-[9rem] truncate text-[10px] text-sky-300/70" title={it.accts.join(' · ')}>{it.accts.join(' · ')}</span>
+          )}
+      </button>
+    );
+  };
+
+  return (
+    <span ref={boxRef} className="relative flex items-center gap-1">
+      <span className="relative">
+        <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
+        <input
+          value={text}
+          onChange={(e) => { setText(e.target.value); setBrowse(false); setOpen(true); setHi(0); onMsg(''); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent && e.nativeEvent.isComposing) return;
+            if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setBrowse(false); setHi(Math.min(hiIdx + 1, options.length - 1)); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(Math.max(hiIdx - 1, 0)); }
+            else if (e.key === 'Enter') { e.preventDefault(); choose(showBrowse && !q ? null : options[hiIdx]); }
+            else if (e.key === 'Escape') close();
+          }}
+          placeholder="비교 종목: 이름·초성·코드"
+          className="w-52 bg-gray-900 border border-gray-700 rounded pl-6 pr-2 py-1 text-[11px] text-white outline-none focus:border-green-600/60 placeholder:text-gray-600"
+        />
+      </span>
+      <button
+        onClick={() => { if (open && browse) close(); else { setBrowse(true); setOpen(true); } }}
+        title="보유 계좌에서 고르기 — 계좌 → 종목"
+        className={`flex items-center gap-0.5 px-2 py-1 rounded text-[11px] font-bold border transition-colors ${
+          open && showBrowse ? 'text-amber-300 border-amber-500/50 bg-amber-500/10' : 'text-gray-500 border-gray-700 hover:text-amber-300 hover:border-amber-700/50'
+        }`}
+      >
+        <List size={11} /> 계좌
+      </button>
+      <button
+        onClick={() => choose(showBrowse && !q ? null : options[hiIdx])}
+        title="비교 종목 추가(목록에서 가리킨 종목 · 없으면 입력한 코드)"
+        className="flex items-center gap-0.5 px-2 py-1 rounded text-[11px] font-bold text-gray-500 hover:text-green-400 border border-gray-700 hover:border-green-700/50 transition-colors"
+      >
+        <Plus size={11} /> 추가
+      </button>
+      {open && (
+        <div className={`absolute ${alignRight ? 'right-0' : 'left-0'} top-full mt-1 z-50 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-md border border-gray-700 bg-[#0f1623] shadow-2xl shadow-black/60 text-[11px] font-normal`}>
+          {showBrowse ? (
+            catalog == null ? (
+              <div className="w-80 px-3 py-2.5 text-gray-500 leading-relaxed">
+                보유 종목 목록을 아직 받지 못했습니다 — 이 창을 연 앱(또는 관심종목) 창이 열려 있어야 계좌에서 고를 수 있습니다.
+                보유하지 않은 종목은 코드를 입력하면 됩니다.
+              </div>
+            ) : !curAcct ? (
+              <div className="w-72 px-3 py-2.5 text-gray-500">보유 종목이 없습니다 — 종목 코드를 입력하세요.</div>
+            ) : (
+              <div className="flex max-h-[min(360px,60vh)]">
+                <div className="w-40 shrink-0 overflow-y-auto border-r border-gray-700/60 py-1">
+                  <div className="px-2.5 pb-1 text-[10px] text-gray-500">계좌</div>
+                  {accts.map((a) => (
+                    <button
+                      key={a.acct}
+                      onClick={() => setAcctSel(a.acct)}
+                      className={`w-full flex items-center gap-1 px-2.5 py-1.5 text-left transition-colors ${
+                        curAcct === a ? 'bg-amber-500/10 text-amber-300' : 'text-gray-300 hover:bg-gray-800'
+                      }`}
+                    >
+                      <span className="flex-1 min-w-0 truncate">{a.acct}</span>
+                      <span className="text-[10px] text-gray-500 tabular-nums">{a.items.length}</span>
+                      <ChevronRight size={11} className="shrink-0 text-gray-500" />
+                    </button>
+                  ))}
+                </div>
+                <div ref={listRef} className="w-72 min-w-0 overflow-y-auto py-1">
+                  <div className="px-2.5 pb-1 text-[10px] text-gray-500 truncate">{curAcct.acct} · 보유 종목 {curAcct.items.length}개</div>
+                  {curAcct.items.map((it, i) => itemRow(it, i, false))}
+                </div>
+              </div>
+            )
+          ) : (
+            <div ref={listRef} className="w-[23rem] max-w-full max-h-[min(360px,60vh)] overflow-y-auto py-1">
+              {options.length === 0 ? (
+                <div className="px-3 py-2 text-gray-500 leading-relaxed">
+                  {catalog == null
+                    ? '보유 종목 목록을 받지 못했습니다 — 종목 코드(예: 005930 · AAPL)를 입력하세요.'
+                    : '보유 종목에 맞는 이름이 없습니다 — 종목 코드(예: 005930 · AAPL)를 입력하세요.'}
+                </div>
+              ) : options.map((o, i) => (o.kind === 'code' ? (
+                <button
+                  key="code"
+                  data-hi={i === hiIdx ? '1' : undefined}
+                  onMouseEnter={() => setHi(i)}
+                  onClick={() => choose(o)}
+                  className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${i === hiIdx ? 'bg-green-900/30' : 'hover:bg-gray-800'}`}
+                >
+                  <Plus size={11} className="shrink-0 text-green-400" />
+                  <span className="flex-1 min-w-0 truncate text-gray-300">코드 <span className="font-mono font-bold text-gray-100">{o.code}</span> 그대로 추가</span>
+                  <span className="shrink-0 text-[10px] text-gray-500">{MARKET_LABEL[detectMarket(o.code)]}</span>
+                </button>
+              ) : itemRow(o.r, i, true)))}
+              <div className="mt-1 px-2.5 pt-1 border-t border-gray-800 text-[10px] text-gray-600">
+                ↑↓ 고르기 · Enter 추가 · 초성만 입력해도 됩니다(예: ㄱㄹㅂ → 글로벌)
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function readInitial() {
   const p = new URLSearchParams(window.location.search);
   const code0 = normalizeChartCode(p.get('code') || '');
@@ -115,14 +309,16 @@ function StockChartPage() {
   const [quotes, setQuotes] = useState({});            // { [code]: { name, price, changeRate } }
   const [dailyMap, setDailyMap] = useState({});        // { [code]: [date, close][] | null(실패) }
   const [status, setStatus] = useState({});            // { [code]: 'loading' | 'ok' | 'fail' }
-  const [input, setInput] = useState('');
   const [inputMsg, setInputMsg] = useState('');
   const [hover, setHover] = useState('');
   const [sel, setSel] = useState(EMPTY_CHART_SEL);
   const selRef = useRef(EMPTY_CHART_SEL);
   // 보유 종목 매입가 `{ [holdingKey]: [{ acct, avg, qty, cur }] }` — opener가 답해 준 값(메모리 전용).
   const [holdings, setHoldings] = useState({});
+  // 비교 종목 찾기용 보유 종목 목록 `[{ acct, code, name, mk }]` — opener가 답해 준 값(메모리 전용) · null = 아직 모름.
+  const [catalog, setCatalog] = useState(null);
   const [showAvg, setShowAvg] = useState(true);       // 매입가 선 보이기(이 창 안에서만 — 저장하지 않는다)
+  const [avgMode, setAvgMode] = useState('acct');     // 매입가 보기 'acct' = 계좌별 · 'sum' = 통합(평균) — 저장하지 않는다
   const dailyFromRef = useRef({});                     // code:market → 받은 이력의 시작일
   const dailySeqRef = useRef({});                      // code:market → 조회 세대(늦게 온 응답 폐기)
   const today = todayKST();
@@ -212,6 +408,8 @@ function StockChartPage() {
       const h = normalizeHoldings(d.holdings);
       if (!h) return;   // null = opener가 아직 계좌를 다 읽지 못했다 → 기존 선을 지우지 않는다
       setHoldings((prev) => (JSON.stringify(prev) === JSON.stringify(h) ? prev : h));
+      const cat = normalizeHoldingCatalog(d.catalog);
+      if (cat) setCatalog((prev) => (JSON.stringify(prev) === JSON.stringify(cat) ? prev : cat));
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
@@ -247,7 +445,7 @@ function StockChartPage() {
       stat: windowRate(win),
       hold: holdingsFor(holdings, s.code, s.market),   // 포트폴리오 테이블에 있는 종목이면 계좌별 매입가
     };
-  }), [all, quotes, dailyMap, view, cutoff, today, holdings]);
+  }).map((s) => ({ ...s, holdShown: holdLines(s.hold, avgMode) })), [all, quotes, dailyMap, view, cutoff, today, holdings, avgMode]);
 
   const rows = useMemo(() => buildChartRows(series.map((s) => ({ key: s.key, win: s.win }))), [series]);
   // 종가 보기도 모든 종목을 겹쳐 그린다 — 통화가 같은 종목끼리 한 눈금(실제 가격 그대로 비교),
@@ -262,21 +460,21 @@ function StockChartPage() {
     const v = row ? row[mode === 'pct' ? s.key : `px:${s.key}`] : null;
     return v == null || !Number.isFinite(v) ? [] : [{ key: s.key, axisId: s.axisId, color: s.color, v, text: mode === 'pct' ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : fmtWatchPrice(s.market, v) }];
   });
-  // ── 보유 매입가 가로선(계좌마다 한 줄, 그 종목 선 색 점선) ──
+  // ── 보유 매입가 가로선(계좌별 = 계좌마다 한 줄 · 통합 = 평균 매입가 한 줄, 그 종목 선 색 점선) ──
   // 수익률 보기: 그 종목 구간 첫 종가(= buildChartRows의 0% 기준)로 환산한 높이 · 종가 보기: 매입가 그대로.
   // 매입가가 시세와 멀어 눈금을 넓히면 시세 선이 높이의 40% 미만으로 눌리는 경우엔 넓히지 않고
   // 차트 위·아래 가장자리에 '범위 밖' 표시만 한다(holdingLayout — 미니차트와 같은 규칙).
   const avgLines = !showAvg ? [] : shown.flatMap((s) => {
     const base = s.stat.first ? s.stat.first[1] : 0;
     const px = Number(quotes[s.code]?.price) > 0 ? Number(quotes[s.code].price) : (s.stat.last ? s.stat.last[1] : 0);
-    return s.hold.map((h, j) => {
+    return s.holdShown.map((h, j) => {
       const v = mode === 'pct' ? holdingPct(h.avg, base) : h.avg;
       const ret = px > 0 ? (px / h.avg - 1) * 100 : null;
       return { key: `avg-${s.key}-${j}`, s, h, v, ret, dash: AVG_DASHES[j % AVG_DASHES.length] };
     }).filter((l) => l.v != null && Number.isFinite(l.v));
   });
   const avgMulti = avgLines.length > 1;
-  const avgText = (l) => `매입가 ${fmtAvg(l.s.market, l.h.avg)}${l.ret != null ? ` · ${fmtPct(l.ret)}` : ''}${avgMulti ? ` · ${l.h.acct}` : ''}`;
+  const avgText = (l) => `${l.h.sum ? '평균 매입가' : '매입가'} ${fmtAvg(l.s.market, l.h.avg)}${l.ret != null ? ` · ${fmtPct(l.ret)}` : ''}${l.h.sum || avgMulti ? ` · ${l.h.acct}` : ''}`;
   // 눈금마다 따로 잰다(원화·달러 눈금은 서로를 넓히지 않는다) — 다른 눈금의 매입가는 NaN으로 넘겨 이번 판정에서 뺀다.
   const avgLayout = (() => {
     const pins = avgLines.map(() => '');
@@ -294,6 +492,7 @@ function StockChartPage() {
     return { pins };
   })();
   const holdAny = series.some((s) => s.hold.length > 0);
+  const holdMulti = series.some((s) => s.hold.length > 1);   // 여러 계좌에 보유한 종목이 있을 때만 계좌별/통합 전환
   const chartBoxRef = useRef(null);
   useEffect(() => {
     const box = chartBoxRef.current;
@@ -343,15 +542,25 @@ function StockChartPage() {
   };
 
   // ── 종목 추가·삭제·시장 보정 ──
-  const addComp = () => {
-    const c0 = normalizeChartCode(input);
+  // 반환 true = 처리 끝(입력 칸을 비운다) · false = 그대로 두고 안내만.
+  const addCode = (raw) => {
+    const c0 = normalizeChartCode(raw);
     const c = detectMarket(c0) === 'kr' ? c0.toUpperCase() : c0;   // 국내 코드는 대문자가 정본(관심종목 추가와 같은 규칙)
-    if (!c) { setInputMsg('종목 코드를 입력하세요.'); return; }
-    if (all.some((s) => s.code.toLowerCase() === c.toLowerCase())) { setInputMsg('이미 차트에 있는 종목입니다.'); setInput(''); return; }
-    if (comps.length >= MAX_CHART_COMPS) { setInputMsg(`비교 종목은 ${MAX_CHART_COMPS}개까지입니다.`); return; }
+    if (!c) { setInputMsg('종목 코드를 입력하세요.'); return false; }
+    if (all.some((s) => s.code.toLowerCase() === c.toLowerCase())) { setInputMsg('이미 차트에 있는 종목입니다.'); return true; }
+    if (comps.length >= MAX_CHART_COMPS) { setInputMsg(`비교 종목은 ${MAX_CHART_COMPS}개까지입니다.`); return false; }
     setComps((p) => [...p, { code: c, market: detectMarket(c) }]);
-    setInput('');
     setInputMsg('');
+    return true;
+  };
+  // 보유 종목에서 고른 비교 종목 — 시장·종목명은 포트폴리오 행 그대로(코드로 시장을 추정하지 않는다).
+  const inChart = (code) => { const k = holdingKey(code); return !!k && all.some((s) => holdingKey(s.code) === k); };
+  const pickComp = (it) => {
+    if (inChart(it.code)) { setInputMsg('이미 차트에 있는 종목입니다.'); return false; }
+    if (comps.length >= MAX_CHART_COMPS) { setInputMsg(`비교 종목은 ${MAX_CHART_COMPS}개까지입니다.`); return false; }
+    setComps((p) => [...p, { code: it.code, market: it.mk, name: it.name || '' }]);
+    setInputMsg('');
+    return true;
   };
   const removeComp = (code) => setComps((p) => p.filter((c) => c.code !== code));
   const fixMarket = (s, market) => {
@@ -375,15 +584,18 @@ function StockChartPage() {
 
   const mainQ = quotes[main.code];
   const mainS = series[0];
-  // 보유 매입가는 **계좌마다 따로** 보인다(사용자 요청 2026-10-30 — 같은 종목을 여러 계좌에 보유하면 계좌별 평균단가).
-  // 합산 값은 툴팁의 참고 한 줄뿐이다(선·머리글·칩에 합산을 쓰지 않는다).
+  // 보유 매입가는 기본 **계좌마다 따로**(사용자 요청 2026-10-30 — 같은 종목을 여러 계좌에 보유하면 계좌별 평균단가),
+  // [통합]을 누르면 전 계좌 평균 매입가 한 줄(사용자 요청 2026-11-01). 선·머리글·칩이 모두 같은 보기(holdShown)를 따른다.
   const mainPx = mainQ && Number(mainQ.price) > 0 ? Number(mainQ.price) : 0;
   const fmtQty = (n) => new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 }).format(n);
   const holdTitle = (s) => {
     const px = Number(quotes[s.code]?.price) > 0 ? Number(quotes[s.code].price) : 0;
     const sum = s.hold.length > 1 ? holdingAvg(s.hold) : null;
-    const lines = s.hold.map((h) => `${h.acct} · ${fmtQty(h.qty)}${s.market === 'fund' ? '좌' : '주'} · 매입가 ${fmtAvg(s.market, h.avg)}${px > 0 ? ` · 현재가 대비 ${fmtPct((px / h.avg - 1) * 100)}` : ''}`);
-    return `보유 종목(포트폴리오 테이블 구매단가 — 계좌마다)\n${lines.join('\n')}${sum ? `\n(참고) 전체 합산 매입가 ${fmtAvg(s.market, sum.avg)}` : ''}\n차트의 점선 = 계좌마다의 매입가${s.hold.length > 1 ? '(점선 무늬로 계좌 구분)' : ''}`;
+    const unit = s.market === 'fund' ? '좌' : '주';
+    const lines = s.hold.map((h) => `${h.acct} · ${fmtQty(h.qty)}${unit} · 매입가 ${fmtAvg(s.market, h.avg)}${px > 0 ? ` · 현재가 대비 ${fmtPct((px / h.avg - 1) * 100)}` : ''}`);
+    const sumLine = sum ? `\n통합 ${fmtQty(sum.qty)}${unit} · 평균 매입가 ${fmtAvg(s.market, sum.avg)}${px > 0 ? ` · 현재가 대비 ${fmtPct((px / sum.avg - 1) * 100)}` : ''}(총 투자금액 ÷ 총 수량)` : '';
+    const how = s.holdShown[0]?.sum ? '통합 평균 매입가' : `계좌마다의 매입가${s.hold.length > 1 ? '(점선 무늬로 계좌 구분)' : ''}`;
+    return `보유 종목(포트폴리오 테이블 구매단가 — 계좌마다)\n${lines.join('\n')}${sumLine}\n차트의 점선 = ${how}`;
   };
   const periodLabel = view.period === CHART_CUSTOM_PERIOD
     ? `${fmtShort(view.customStart)}~${view.customEnd ? fmtShort(view.customEnd) : '현재'}`
@@ -413,17 +625,17 @@ function StockChartPage() {
         )}
         {mainS?.hold.length > 0 && (
           <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs tabular-nums cursor-help" title={holdTitle(mainS)}>
-            {mainS.hold.length > 1 && <span className="text-gray-500">보유</span>}
-            {mainS.hold.map((h, j) => {
+            {mainS.holdShown.length > 1 && <span className="text-gray-500">보유</span>}
+            {mainS.holdShown.map((h, j) => {
               const r = mainPx > 0 ? (mainPx / h.avg - 1) * 100 : null;
               return (
                 <span key={j} className="flex items-center whitespace-nowrap">
                   {/* 여러 계좌면 그 계좌 점선 무늬 견본 — 차트의 어느 선이 어느 계좌인지 머리글에서 바로 짝짓는다 */}
-                  {mainS.hold.length > 1 && (
+                  {mainS.holdShown.length > 1 && (
                     <svg width={18} height={6} className="mr-1 shrink-0"><line x1={0} x2={18} y1={3} y2={3} stroke={CHART_SERIES_COLORS[0]} strokeWidth={1.5} strokeDasharray={AVG_DASHES[j % AVG_DASHES.length]} /></svg>
                   )}
                   <span className="font-semibold" style={{ color: CHART_SERIES_COLORS[0] }}>
-                    {mainS.hold.length > 1 ? h.acct : '보유'} {fmtQty(h.qty)}{main.market === 'fund' ? '좌' : '주'} · 매입가 {fmtAvg(main.market, h.avg)}
+                    {h.sum ? `통합(${h.n}계좌)` : mainS.holdShown.length > 1 ? h.acct : '보유'} {fmtQty(h.qty)}{main.market === 'fund' ? '좌' : '주'} · {h.sum ? '평균 매입가' : '매입가'} {fmtAvg(main.market, h.avg)}
                   </span>
                   {r != null && <span className={`ml-1.5 font-bold ${rateCls(r)}`}>{fmtPct(r)}</span>}
                 </span>
@@ -463,7 +675,7 @@ function StockChartPage() {
               <span className={`tabular-nums font-semibold ${rateCls(s.stat.rate)}`}>{fmtPct(s.stat.rate)}</span>
               {s.hold.length > 0 && (
                 <span className="tabular-nums text-gray-400 cursor-help" title={holdTitle(s)}>
-                  매입 {s.hold.slice(0, 3).map((h) => fmtAvg(s.market, h.avg)).join(' / ')}{s.hold.length > 3 ? ` 외 ${s.hold.length - 3}계좌` : ''}
+                  {s.holdShown[0]?.sum ? '평균 매입' : '매입'} {s.holdShown.slice(0, 3).map((h) => fmtAvg(s.market, h.avg)).join(' / ')}{s.holdShown.length > 3 ? ` 외 ${s.holdShown.length - 3}계좌` : ''}
                 </span>
               )}
               {st === 'loading' && <RefreshCw size={10} className="animate-spin text-gray-500" />}
@@ -488,22 +700,7 @@ function StockChartPage() {
           );
         })}
         {comps.length < MAX_CHART_COMPS && (
-          <span className="flex items-center gap-1">
-            <input
-              value={input}
-              onChange={(e) => { setInput(e.target.value); if (inputMsg) setInputMsg(''); }}
-              onKeyDown={(e) => { if (e.key === 'Enter') addComp(); }}
-              placeholder="비교 종목 코드"
-              className="w-32 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[11px] text-white outline-none focus:border-green-600/60 placeholder:text-gray-600"
-            />
-            <button
-              onClick={addComp}
-              title="비교 종목 추가"
-              className="flex items-center gap-0.5 px-2 py-1 rounded text-[11px] font-bold text-gray-500 hover:text-green-400 border border-gray-700 hover:border-green-700/50 transition-colors"
-            >
-              <Plus size={11} /> 추가
-            </button>
-          </span>
+          <CompPicker catalog={catalog} has={inChart} onPick={pickComp} onCode={addCode} onMsg={setInputMsg} />
         )}
         {inputMsg && <span className="text-[11px] text-amber-300">{inputMsg}</span>}
       </div>
@@ -544,13 +741,26 @@ function StockChartPage() {
         )}
         <span className="flex-1" />
         {holdAny && (
-          <button
-            onClick={() => setShowAvg((v) => !v)}
-            title={showAvg ? '보유 종목 매입가 점선 숨기기' : '보유 종목 매입가 점선 보이기(포트폴리오 테이블의 구매단가)'}
-            className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] border transition-colors ${
-              showAvg ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-gray-700 text-gray-500 hover:text-amber-300'
-            }`}
-          ><Wallet size={11} /> 매입가</button>
+          <span className={`flex items-center rounded border overflow-hidden text-[11px] ${showAvg ? 'border-amber-500/40' : 'border-gray-700'}`}>
+            <button
+              onClick={() => setShowAvg((v) => !v)}
+              title={showAvg ? '보유 종목 매입가 점선 숨기기' : '보유 종목 매입가 점선 보이기(포트폴리오 테이블의 구매단가)'}
+              className={`flex items-center gap-1 px-2 py-1 transition-colors ${
+                showAvg ? 'bg-amber-500/10 text-amber-300' : 'text-gray-500 hover:text-amber-300'
+              }`}
+            ><Wallet size={11} /> 매입가</button>
+            {/* 같은 종목을 여러 계좌에 보유했을 때만 — 계좌별(계좌마다 한 줄) ↔ 통합(전 계좌 평균 매입가 한 줄) */}
+            {holdMulti && [['acct', '계좌별', '계좌마다 매입가 한 줄씩(점선 무늬로 계좌 구분)'], ['sum', '통합', '전 계좌 평균 매입가 한 줄(총 투자금액 ÷ 총 수량)']].map(([m, label, tip]) => (
+              <button
+                key={m}
+                onClick={() => setAvgMode(m)}
+                title={tip}
+                className={`px-2 py-1 border-l transition-colors ${showAvg ? 'border-amber-500/30' : 'border-gray-700'} ${
+                  avgMode === m ? 'bg-amber-500/20 text-amber-200 font-semibold' : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >{label}</button>
+            ))}
+          </span>
         )}
         <span className="flex items-center rounded border border-gray-700 overflow-hidden text-[11px]">
           <button
@@ -697,7 +907,7 @@ function StockChartPage() {
         수익률 = 각 종목의 조회 시작 후 첫 종가를 0%로 둔 등락(관심종목 등락율과 같은 계산) · 종가는 관심종목 미니차트와 같은 소스
         (종가 보기: 같은 통화는 한 눈금, 원화·달러가 섞이면 기준 종목과 다른 통화는 오른쪽 눈금) ·
         직접 선택 기간에서 종료일을 비우면 마지막 값은 실시간 현재가입니다. 이 창은 아무것도 저장하지 않습니다(비교 종목·기간은 주소에만 남습니다).
-        {holdAny && ' · 점선 = 포트폴리오 테이블에 있는 종목의 매입가(구매단가, 계좌마다 한 줄 · 무늬로 계좌 구분 — 앱 창에서 읽어 옵니다).'}
+        {holdAny && ' · 점선 = 포트폴리오 테이블에 있는 종목의 매입가(구매단가 — 앱 창에서 읽어 옵니다). 계좌별: 계좌마다 한 줄(무늬로 구분) · 통합: 전 계좌 평균 매입가 한 줄(총 투자금액 ÷ 총 수량).'}
       </div>
     </div>
   );

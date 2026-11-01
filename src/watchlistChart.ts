@@ -519,6 +519,181 @@ export function holdingLayout(dataMin: any, dataMax: any, levels: any, minShare:
   return { pins, lo, hi };
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// 종목 차트 창 '비교 종목' 찾기(사용자 요청 2026-11-01) — 보유 종목을 **이름 일부 · 초성 · 코드**로 찾고,
+// **계좌 → 종목** 계층으로도 고른다.
+// 카탈로그 = 보유분에서 매입가·수량을 뺀 `{ acct, code, name, mk }` 줄(계좌 탭 → 행 순서). 차트 창은 찾기용으로
+// 이것만 받고, 매입가는 여전히 물어본 종목 몫만 받는다(pickHoldings).
+
+type CatalogItem = { acct: string; code: string; name: string; mk: 'kr' | 'us' | 'fund' };
+const MAX_CATALOG = 1000;
+
+// 보유분 한 줄의 시장 — mk가 없는 옛 모양은 통화·키로 추정(USD = 해외, 6자 숫자 포함 = 국내, 그 외 = 펀드).
+const holdMarket = (h: any, key: string): 'kr' | 'us' | 'fund' =>
+  h.mk === 'kr' || h.mk === 'us' || h.mk === 'fund' ? h.mk
+    : h.cur === 'USD' ? 'us' : /^[A-Z0-9]{6}$/.test(key) && /\d/.test(key) ? 'kr' : 'fund';
+
+/** 보유분 → 찾기용 카탈로그(계좌 탭 → 행 순서). 매입가·수량은 싣지 않는다. */
+export function holdingCatalog(map: any): CatalogItem[] {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return [];
+  const rows: { it: CatalogItem; ord: number }[] = [];
+  let seq = 0;
+  for (const raw of Object.keys(map)) {
+    const key = holdingKey(raw);
+    if (!key) continue;
+    for (const h of Array.isArray(map[raw]) ? map[raw] : []) {
+      if (!h || typeof h !== 'object' || !(h.avg > 0) || !(h.qty > 0) || (h.cur !== 'KRW' && h.cur !== 'USD')) continue;
+      const acct = typeof h.acct === 'string' && h.acct.trim() ? h.acct.trim().slice(0, 40) : '계좌';
+      const code = typeof h.code === 'string' && holdingKey(h.code) === key ? h.code.trim() : key;
+      const name = typeof h.name === 'string' ? h.name.trim().slice(0, 80) : '';
+      rows.push({ it: { acct, code, name, mk: holdMarket(h, key) }, ord: Number.isInteger(h.ord) && h.ord >= 0 ? h.ord : 1e9 + seq });
+      seq++;
+    }
+  }
+  rows.sort((a, b) => a.ord - b.ord);
+  return rows.slice(0, MAX_CATALOG).map((r) => r.it);
+}
+
+/** 창 사이 메시지로 받은 카탈로그 정리 — 배열이 아니면 null(모름 — 받는 쪽은 기존 목록을 지킨다), 틀린 줄은 버린다. */
+export function normalizeHoldingCatalog(raw: any): CatalogItem[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: CatalogItem[] = [];
+  for (const r of raw) {
+    if (out.length >= MAX_CATALOG) break;
+    if (!r || typeof r !== 'object') continue;
+    const code = normalizeChartCode(r.code);
+    if (!code || !holdingKey(code) || (r.mk !== 'kr' && r.mk !== 'us' && r.mk !== 'fund')) continue;
+    const acct = typeof r.acct === 'string' && r.acct.trim() ? r.acct.trim().slice(0, 40) : '계좌';
+    const name = typeof r.name === 'string' ? r.name.trim().slice(0, 80) : '';
+    out.push({ acct, code, name, mk: r.mk });
+  }
+  return out;
+}
+
+/** 카탈로그 → 계좌 목록(처음 나온 순서 = 계좌 탭 순서) · 계좌마다 종목(같은 종목은 한 번) — 계층 선택의 두 단. */
+export function catalogAccounts(catalog: any): { acct: string; items: CatalogItem[] }[] {
+  const out: { acct: string; items: CatalogItem[]; seen: Set<string> }[] = [];
+  const byAcct = new Map<string, { acct: string; items: CatalogItem[]; seen: Set<string> }>();
+  for (const it of Array.isArray(catalog) ? catalog : []) {
+    if (!it || typeof it !== 'object' || typeof it.acct !== 'string' || !holdingKey(it.code)) continue;
+    let g = byAcct.get(it.acct);
+    if (!g) { g = { acct: it.acct, items: [], seen: new Set() }; byAcct.set(it.acct, g); out.push(g); }
+    const k = holdingKey(it.code) + ':' + it.mk;
+    if (g.seen.has(k)) continue;
+    g.seen.add(k);
+    g.items.push(it);
+  }
+  return out.map(({ acct, items }) => ({ acct, items }));
+}
+
+// ── 한글 초성·부분 입력 맞춤 ──
+const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+const JONG = ' ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ';   // 0번 = 받침 없음
+// 겹받침 → [남는 받침, 다음 글자로 넘어가는 자음]('닭' + 모음 → '달기')
+const JONG_SPLIT: Record<number, [number, string]> = {
+  3: [1, 'ㅅ'], 5: [4, 'ㅈ'], 6: [4, 'ㅎ'], 9: [8, 'ㄱ'], 10: [8, 'ㅁ'], 11: [8, 'ㅂ'],
+  12: [8, 'ㅅ'], 13: [8, 'ㅌ'], 14: [8, 'ㅍ'], 15: [8, 'ㅎ'], 18: [17, 'ㅅ'],
+};
+// 겹모음 → 먼저 치는 모음('고' + ㅏ → '과')
+const JUNG_HEAD: Record<number, number> = { 9: 8, 10: 8, 11: 8, 14: 13, 15: 13, 16: 13, 19: 18 };
+
+const syl = (ch: string): { cho: number; jung: number; jong: number } | null => {
+  if (typeof ch !== 'string' || ch.length !== 1) return null;
+  const c = ch.charCodeAt(0) - 0xac00;
+  if (!(c >= 0 && c <= 11171)) return null;
+  return { cho: Math.floor(c / 588), jung: Math.floor((c % 588) / 28), jong: c % 28 };
+};
+
+// 한 글자 — 같은 글자이거나, 입력이 초성(ㄱ…ㅎ)이고 이름 글자의 초성이 그것이면 맞다.
+const chEq = (n: string, q: string): boolean => {
+  if (n === q) return true;
+  const ci = CHO.indexOf(q);
+  if (ci < 0) return false;
+  const s = syl(n);
+  return !!s && s.cho === ci;
+};
+
+// 입력의 **마지막 글자**는 아직 조합 중일 수 있다 — '삼서'(→ 삼성) · '고'(→ 과) · '달'(→ 닭) · '탕'(→ 타이).
+// 반환 = 이름에서 쓴 글자 수(0 = 안 맞음 · 2 = 받침이 다음 글자 초성으로 넘어간 경우).
+const lastEq = (name: string[], i: number, q: string): number => {
+  if (chEq(name[i], q)) return 1;
+  const a = syl(q), b = syl(name[i]);
+  if (!a || !b || a.cho !== b.cho) return 0;
+  if (a.jong === 0) return a.jung === b.jung || JUNG_HEAD[b.jung] === a.jung ? 1 : 0;
+  if (a.jung !== b.jung) return 0;
+  if (JONG_SPLIT[b.jong] && JONG_SPLIT[b.jong][0] === a.jong) return 1;
+  const sp = JONG_SPLIT[a.jong];
+  const rest = sp ? sp[0] : 0;
+  const next = sp ? sp[1] : JONG[a.jong];
+  if (b.jong !== rest || i + 1 >= name.length) return 0;
+  const ni = CHO.indexOf(next);
+  const c = syl(name[i + 1]);
+  return ni >= 0 && ((c && c.cho === ni) || name[i + 1] === next) ? 2 : 0;
+};
+
+/**
+ * 이름에서 입력과 맞는 첫 구간 [시작, 끝)(원래 문자열 위치) — 없으면 null.
+ * 대소문자·공백 무시 · 초성만('ㅅㅅㅈㅈ' → 삼성전자) · 섞어서('삼ㅅ') · 조합 중인 마지막 글자.
+ */
+export function hangulMatch(text: any, query: any): [number, number] | null {
+  if (typeof text !== 'string' || typeof query !== 'string') return null;
+  const qs = [...query.toLowerCase()].filter((ch) => !/\s/.test(ch));
+  if (!qs.length) return null;
+  const chars: string[] = [], starts: number[] = [], ends: number[] = [];
+  let p = 0;
+  for (const ch of text) {
+    if (!/\s/.test(ch)) { chars.push(ch.toLowerCase()); starts.push(p); ends.push(p + ch.length); }
+    p += ch.length;
+  }
+  const last = qs.length - 1;
+  for (let s = 0; s + last < chars.length; s++) {
+    let k = 0;
+    while (k < last && chEq(chars[s + k], qs[k])) k++;
+    if (k < last) continue;
+    const used = lastEq(chars, s + last, qs[last]);
+    if (used) return [starts[s], ends[s + last + used - 1]];
+  }
+  return null;
+}
+
+/**
+ * 보유 종목 찾기 — 같은 종목(키·시장)은 한 줄로 모으고 보유 계좌를 함께 싣는다.
+ * 순위: 코드 일치 → 코드 앞부분 → 이름 첫머리 → 이름 중간(앞에서 맞을수록 위) → 코드 중간 · 같으면 카탈로그 순서.
+ * 입력이 길어질수록 맞는 종목이 줄어든다(사용자 요청 — 다 치지 않아도 고를 수 있게).
+ */
+export function searchHoldingCatalog(catalog: any, query: any, limit: any = 30): {
+  code: string; mk: 'kr' | 'us' | 'fund'; name: string; accts: string[]; hit: [number, number] | null; codeHit: boolean;
+}[] {
+  const q = typeof query === 'string' ? query.trim() : '';
+  if (!q) return [];
+  const qCode = q.replace(/\s+/g, '').toUpperCase().replace(/^MA:/, '');
+  const order: { key: string; code: string; mk: 'kr' | 'us' | 'fund'; name: string; accts: string[] }[] = [];
+  const byKey = new Map<string, any>();
+  for (const it of Array.isArray(catalog) ? catalog : []) {
+    if (!it || typeof it !== 'object') continue;
+    const key = holdingKey(it.code);
+    if (!key || (it.mk !== 'kr' && it.mk !== 'us' && it.mk !== 'fund')) continue;
+    let g = byKey.get(key + ':' + it.mk);
+    if (!g) {
+      g = { key, code: it.code.trim(), mk: it.mk, name: '', accts: [] };
+      byKey.set(key + ':' + it.mk, g);
+      order.push(g);
+    }
+    if (!g.name && typeof it.name === 'string' && it.name.trim()) g.name = it.name.trim();
+    if (typeof it.acct === 'string' && it.acct && !g.accts.includes(it.acct)) g.accts.push(it.acct);
+  }
+  const found: { g: any; hit: [number, number] | null; ci: number; rank: number; at: number; i: number }[] = [];
+  order.forEach((g, i) => {
+    const hit = g.name ? hangulMatch(g.name, q) : null;
+    const ci = qCode ? g.key.indexOf(qCode) : -1;
+    const rank = g.key === qCode ? 0 : ci === 0 ? 1 : hit && hit[0] === 0 ? 2 : hit ? 3 : ci > 0 ? 4 : -1;
+    if (rank >= 0) found.push({ g, hit, ci, rank, at: hit ? hit[0] : 0, i });
+  });
+  found.sort((a, b) => a.rank - b.rank || a.at - b.at || a.i - b.i);
+  const n = Number.isInteger(limit) && limit > 0 ? limit : 30;
+  return found.slice(0, n).map(({ g, hit, ci }) => ({ code: g.code, mk: g.mk, name: g.name, accts: g.accts, hit, codeHit: ci >= 0 }));
+}
+
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
 /** 'YYYY-MM-DD' → 'YY/MM/DD (요일)'. ⚠️ 요일은 UTC로 잰다(`new Date('YYYY-MM-DD')`는 뷰어 타임존에 따라 하루 밀린다). */
 export function chartDateLabel(d: any): string {

@@ -6,7 +6,7 @@ import { generateId, formatNumber, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday, fetchWatchDividend, fmtWatchPrice } from '../watchlistQuote';
 import {
   periodCutoff, watchPeriodWindow, windowRate, stockDetailUrl, stockChartUrl, stockChartWindowName, chartPeriodFromWatch,
-  holdingsFor, holdingAvg, holdingLayout, pickHoldings, krCodeWithZeros, holdingWatchStocks,
+  holdingsFor, holdingAvg, holdingLayout, pickHoldings, holdingCatalog, krCodeWithZeros, holdingWatchStocks,
 } from '../watchlistChart';
 import { WATCH_RECENT_ID, WATCH_HOLD_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups, WATCH_CUSTOM_PERIOD, DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize, resizeWatchRect, watchSizeAfterResize, watchHighlightOf, nextWatchHighlight, toggleWatchHighlight, clearWatchHighlights } from '../watchlistGroups';
 
@@ -200,7 +200,8 @@ export default function WatchlistPopup({
   const [chartBlocked, setChartBlocked] = useState(false);
   // 종목 차트 창의 보유 매입가 물음에 답한다 — 이 팝업이 사는 창(앱 탭 · 관심종목 창)이 그 창의 opener다.
   // ⚠️ 답만 보낸다(읽기 전용). 차트 창은 쓰기 0 — 받은 값을 어디에도 저장하지 않는다.
-  // ⚠️ 계좌 전체가 아니라 **물어본 종목 몫만**(pickHoldings). 아직 모르면(null) null로 답해 창이 기존 선을 지우지 않게 한다.
+  // ⚠️ 매입가는 계좌 전체가 아니라 **물어본 종목 몫만**(pickHoldings). 아직 모르면(null) null로 답해 창이 기존 선을 지우지 않게 한다.
+  //    비교 종목 찾기용 카탈로그(holdingCatalog — 계좌·코드·종목명뿐, 매입가·수량 없음)는 함께 싣는다(사용자 요청 2026-11-01).
   // ⚠️ 팝업이 닫혀 있어도(open=false) 이 effect는 살아 있다 — 팝업을 닫은 뒤에도 열어 둔 차트 창에 선이 남는다.
   const holdingsRef = useRef(holdings);
   holdingsRef.current = holdings;
@@ -211,7 +212,7 @@ export default function WatchlistPopup({
       if (!d || typeof d !== 'object' || d.type !== 'stockchart:ping' || !e.source) return;
       const h = holdingsRef.current;
       try {
-        e.source.postMessage({ type: 'stockchart:holdings', holdings: h ? pickHoldings(h, d.codes) : null }, window.location.origin);
+        e.source.postMessage({ type: 'stockchart:holdings', holdings: h ? pickHoldings(h, d.codes) : null, catalog: h ? holdingCatalog(h) : null }, window.location.origin);
       } catch { /* 창이 닫히는 중이면 무시 */ }
     };
     window.addEventListener('message', onMsg);

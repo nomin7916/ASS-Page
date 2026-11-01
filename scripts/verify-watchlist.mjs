@@ -19,7 +19,8 @@
 //     #97a~#97o 보유 종목 매입가 — 표의 구매단가와 같은 식 · 계좌별 · 통화 맞춤 · 눈금 넓히기/가장자리 판정
 //     #98a~#98b 앞자리 0이 빠진 국내 코드 복원 후보(241D0 → 0241D0)
 //     #99a~#99i 자동 '보유종목' 그룹 — 전체 계좌 종목 · 같은 종목은 한 줄(보유 계좌 목록) · 통화가 다르면 따로
-//   파트② 소스 텍스트 가드 (#G1~#G107)
+//     #99j~#99n 차트 창 비교 종목 찾기 — 보유 카탈로그(매입가 없음) · 계좌 → 종목 · 이름 일부·초성·조합 중 글자 · 순위
+//   파트② 소스 텍스트 가드 (#G1~#G108c)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다.
@@ -627,6 +628,52 @@ if (C) {
     S('#99i 손상 입력에도 던지지 않는다(빈 목록)',
       () => [holdingWatchStocks(null), holdingWatchStocks([]), holdingWatchStocks('x'), holdingWatchStocks({ a: 'no' }), holdingWatchStocks({ a: [null, { avg: -1, qty: 1, cur: 'KRW' }, { avg: 1, qty: 1, cur: 'EUR' }] })],
       (v) => v.every((x) => Array.isArray(x) && x.length === 0));
+    // ── 종목 차트 창 비교 종목 찾기(사용자 요청 2026-11-01) — 보유 종목을 이름 일부·초성·코드 · 계좌 → 종목으로 ──
+    const { holdingCatalog, normalizeHoldingCatalog, catalogAccounts, hangulMatch, searchHoldingCatalog } = C;
+    const CAT = holdingCatalog(H2);
+    eq('#99j holdingCatalog — 계좌 탭 → 행 순서 · 계좌마다 한 줄(같은 종목도 계좌가 다르면 따로)',
+      CAT.map((r) => `${r.acct}:${r.code}:${r.mk}`).join(','), 'A:QQQM:us,B:498410:kr,B:005930:kr,C:005930:kr,C:498410:kr');
+    // ⚠️ 카탈로그는 계좌 전체를 차트 창에 보낸다 — 매입가·수량이 섞이면 '물어본 종목 몫만'(pickHoldings) 원칙이 깨진다.
+    ok('#99j2 카탈로그 줄에는 계좌·코드·종목명·시장만(매입가·수량 없음)', CAT.every((r) => JSON.stringify(Object.keys(r)) === JSON.stringify(['acct', 'code', 'name', 'mk'])));
+    eq('#99j3 창 사이 왕복(JSON → normalizeHoldingCatalog) 뒤에도 같다', JSON.stringify(normalizeHoldingCatalog(JSON.parse(JSON.stringify(CAT)))), JSON.stringify(CAT));
+    ok('#99j4 normalizeHoldingCatalog — 배열이 아니면 null(모름) · 틀린 줄은 버린다',
+      normalizeHoldingCatalog(null) === null && normalizeHoldingCatalog({}) === null
+      && JSON.stringify(normalizeHoldingCatalog([null, 'x', { code: 'a b', mk: 'kr' }, { code: 'A', mk: 'jp' }, { code: ' 005930 ', mk: 'kr', acct: 5, name: 3 }]))
+        === JSON.stringify([{ acct: '계좌', code: '005930', name: '', mk: 'kr' }]));
+    eq('#99k catalogAccounts — 계좌(탭 순서) → 그 계좌 종목(행 순서)',
+      catalogAccounts(CAT).map((a) => `${a.acct}[${a.items.map((i) => i.code).join('/')}]`).join(','), 'A[QQQM],B[498410/005930],C[005930/498410]');
+    eq('#99k2 catalogAccounts — 같은 이름 계좌의 같은 종목은 한 번',
+      catalogAccounts([{ acct: 'X', code: 'A', mk: 'us' }, { acct: 'X', code: 'a', mk: 'us' }, { acct: 'X', code: 'B', mk: 'us' }]).map((a) => a.items.length).join(), '2');
+    const NM = 'TIGER 글로벌AI사이버보안';
+    const hm = (q) => { const r = hangulMatch(NM, q); return r ? NM.slice(r[0], r[1]) : null; };
+    eq('#99l hangulMatch — 이름 일부 · 초성만 · 섞어서 · 대소문자·공백 무시',
+      ['글로벌', 'ㄱㄹㅂ', '글ㄹ', 'ai', 'tiger글로', 'ㅅㅇㅂ', 'AI 사이'].map(hm).join('|'), '글로벌|글로벌|글로|AI|TIGER 글로|사이버|AI사이');
+    eq('#99l2 hangulMatch — 조합 중인 마지막 글자(삼서→삼성 · 고→과 · 달→닭 · 탕→타이 · 닭→달기)',
+      [['삼성전자', '삼서'], ['과자', '고'], ['닭강정', '달'], ['타이거', '탕'], ['달기', '닭']].map(([t, q]) => JSON.stringify(hangulMatch(t, q))).join(''),
+      '[0,2][0,1][0,1][0,2][0,2]');
+    ok('#99l3 hangulMatch — 안 맞으면 null(받침이 다른 글자 · 빈 입력 · 비문자열)',
+      hangulMatch(NM, '보앙') === null && hangulMatch('삼성', '삼선') === null && hangulMatch(NM, '  ') === null
+      && hangulMatch(null, 'a') === null && hangulMatch('a', 5) === null);
+    const PF3 = [
+      { name: '퇴직연금', accountType: 'dc-irp', portfolio: [
+        { type: 'stock', code: '418670', name: NM, quantity: 166, investAmount: 166 * 19504 },
+        { type: 'stock', code: '005930', name: '삼성전자', quantity: 1, investAmount: 70000 }] },
+      { name: 'ISA', accountType: 'isa', portfolio: [
+        { type: 'stock', code: '418670', name: NM, quantity: 559, investAmount: 559 * 20064 },
+        { type: 'stock', code: '498410', name: 'KODEX 금융고배당', quantity: 1, investAmount: 10000 }] },
+      { name: '해외', accountType: 'overseas', portfolio: [{ type: 'stock', code: 'qqqm', name: 'Invesco QQQM', quantity: 1, investAmountUsd: 100 }] },
+    ];
+    const CAT3 = holdingCatalog(buildHoldings(PF3));
+    const sr = (q) => searchHoldingCatalog(CAT3, q).map((r) => r.code).join(',');
+    eq('#99m searchHoldingCatalog — 같은 종목은 한 줄 + 보유 계좌 목록', JSON.stringify(searchHoldingCatalog(CAT3, '사이버').map((r) => [r.code, r.mk, r.accts])),
+      JSON.stringify([['418670', 'kr', ['퇴직연금', 'ISA']]]));
+    eq('#99m2 더 칠수록 줄어든다(ㄱ → ㄱㄹ → 글로벌)', [sr('ㄱ'), sr('ㄱㄹ'), sr('글로벌')].join('|'), '418670,498410|418670|418670');
+    eq('#99m3 순위 — 코드 일치 → 코드 앞부분 → 이름 첫머리 → 이름 중간', [sr('418670'), sr('4'), sr('qqq'), sr('삼'), sr('tiger')].join('|'), '418670|418670,498410|QQQM|005930|418670');
+    ok('#99m4 코드로 맞으면 codeHit · 이름으로 맞으면 hit 구간', searchHoldingCatalog(CAT3, '4186')[0].codeHit === true && JSON.stringify(searchHoldingCatalog(CAT3, 'ㅅㅅ')[0].hit) === '[0,2]');
+    S('#99n 손상 입력에도 던지지 않는다(빈 목록)',
+      () => [holdingCatalog(null), holdingCatalog([]), holdingCatalog({ a: 'x' }), catalogAccounts(null), catalogAccounts([null, { acct: 'a' }]),
+        searchHoldingCatalog(null, 'a'), searchHoldingCatalog(CAT3, ''), searchHoldingCatalog(CAT3, null), searchHoldingCatalog([{ code: 5 }, null], 'a')],
+      (v) => v.every((x) => Array.isArray(x) && x.length === 0));
     S('#97o 손상 입력에도 던지지 않는다(시세 범위가 없으면 lo·hi = NaN, 잘못된 매입가 = none)',
       () => [holdingLayout(NaN, 1, [1]), holdingLayout(5, 1, [1]), holdingLayout(1, 2, [NaN, 'x', 1.5]), holdingLayout(1, 2, null), buildHoldings(null), buildHoldings([{ portfolio: 'x' }])],
       (v) => Number.isNaN(v[0].lo) && Number.isNaN(v[1].hi) && v[2].pins.join(',') === 'none,none,' && v[3].pins.length === 0
@@ -1037,9 +1084,10 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   {
     const iResp = P.indexOf("d.type !== 'stockchart:ping'");
     const iNull = P.indexOf('if (!open) return null;');
-    ok('#G97 팝업이 stockchart:ping 에 같은 출처 검사 후 물어본 종목 몫만(pickHoldings) 답한다 · 모르면 null',
+    // 찾기용 카탈로그(holdingCatalog — 매입가·수량 없음, 2026-11-01)는 함께 싣되, 매입가는 여전히 물어본 종목 몫만.
+    ok('#G97 팝업이 stockchart:ping 에 같은 출처 검사 후 물어본 종목 몫만(pickHoldings) + 찾기용 카탈로그로 답한다 · 모르면 null',
       iResp > 0 && iNull > iResp
-      && /e\.source\.postMessage\(\{ type: 'stockchart:holdings', holdings: h \? pickHoldings\(h, d\.codes\) : null \}, window\.location\.origin\);/.test(P)
+      && /e\.source\.postMessage\(\{ type: 'stockchart:holdings', holdings: h \? pickHoldings\(h, d\.codes\) : null, catalog: h \? holdingCatalog\(h\) : null \}, window\.location\.origin\);/.test(P)
       && /const onMsg = \(e\) => \{\s*\n\s*if \(e\.origin !== window\.location\.origin\) return;\s*\n\s*const d = e\.data;\s*\n\s*if \(!d \|\| typeof d !== 'object' \|\| d\.type !== 'stockchart:ping'/.test(P));
   }
   // ⚠️ 계좌마다 한 선(사용자 요청 2026-10-30) — 합산 매입가 하나로 긋던 옛 방식(avg=)으로 되돌리지 말 것.
@@ -1084,10 +1132,32 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     /\{!readOnly && !s\.virtual && \(\s*\n\s*<button\s*\n\s*onClick=\{\(\) => removeStock\(s\.id\)\}/.test(P)
     && /\{!readOnly && !s\.virtual && \(\['kr', 'us', 'fund'\]\)\.map/.test(P)
     && /if \(d\.name && d\.name !== stock\.name && !stock\.virtual\) \{/.test(P));
-  ok('#G107 차트 창 — 머리글·칩은 계좌마다 매입가(합산 표기 없음) · 점선 무늬가 계좌마다 다르다',
-    !/개 계좌 합산/.test(CW) && /\{mainS\.hold\.map\(\(h, j\) => \{/.test(CW)
-    && /s\.hold\.slice\(0, 3\)\.map\(\(h\) => fmtAvg\(s\.market, h\.avg\)\)\.join\(' \/ '\)/.test(CW)
-    && /dash: AVG_DASHES\[j % AVG_DASHES\.length\]/.test(CW) && /strokeDasharray=\{l\.dash\}/.test(CW));
+  // ⚠️ 매입가 보기(사용자 요청 2026-11-01): 기본 = 계좌마다 한 줄(2026-10-30 요청 그대로) · [통합] = 전 계좌 평균(holdingAvg) 한 줄.
+  //    선·머리글·칩이 **같은 보기(holdShown)**를 따라야 한다 — 한 곳만 s.hold로 남으면 선은 통합인데 머리글은 계좌별로 갈린다.
+  ok('#G107 차트 창 — 매입가 기본은 계좌마다(무늬 다름) · [통합]은 holdingAvg 한 줄 · 선·머리글·칩이 모두 holdShown',
+    /const \[avgMode, setAvgMode\] = useState\('acct'\);/.test(CW)
+    && /if \(avgMode !== 'sum' \|\| hold\.length < 2\) return hold;\s*\n\s*const a = holdingAvg\(hold\);/.test(CW)
+    && /\.map\(\(s\) => \(\{ \.\.\.s, holdShown: holdLines\(s\.hold, avgMode\) \}\)\), \[[^\]]*\bavgMode\]\);/.test(CW)
+    && /return s\.holdShown\.map\(\(h, j\) => \{/.test(CW) && !/return s\.hold\.map\(/.test(CW)
+    && /\{mainS\.holdShown\.map\(\(h, j\) => \{/.test(CW) && !/\{mainS\.hold\.map\(/.test(CW)
+    && /s\.holdShown\.slice\(0, 3\)\.map\(\(h\) => fmtAvg\(s\.market, h\.avg\)\)\.join\(' \/ '\)/.test(CW)
+    && /dash: AVG_DASHES\[j % AVG_DASHES\.length\]/.test(CW) && /strokeDasharray=\{l\.dash\}/.test(CW)
+    && /\{holdMulti && \[\['acct', '계좌별'/.test(CW) && /onClick=\{\(\) => setAvgMode\(m\)\}/.test(CW));
+  // ── 비교 종목 찾기(사용자 요청 2026-11-01) — 이름 일부·초성·코드 · 계좌 → 종목 계층 · 코드 직접 입력 ──
+  ok('#G108 차트 창은 답의 catalog 를 정규화해 메모리에만 둔다(holdings 가 null 이면 둘 다 지킨다)',
+    /const h = normalizeHoldings\(d\.holdings\);\s*\n\s*if \(!h\) return;[^\n]*\n[^\n]*\n\s*const cat = normalizeHoldingCatalog\(d\.catalog\);\s*\n\s*if \(cat\) setCatalog\(/.test(CW)
+    && /const \[catalog, setCatalog\] = useState\(null\);/.test(CW));
+  ok('#G108b 찾기 칸 = CompPicker(카탈로그 검색 searchHoldingCatalog · 계좌 계층 catalogAccounts) · 코드 입력은 addCode',
+    /<CompPicker catalog=\{catalog\} has=\{inChart\} onPick=\{pickComp\} onCode=\{addCode\} onMsg=\{setInputMsg\} \/>/.test(CW)
+    && /searchHoldingCatalog\(catalog \|\| \[\], q, 40\)/.test(CW) && /catalogAccounts\(catalog \|\| \[\]\)/.test(CW)
+    && /\{curAcct\.items\.map\(\(it, i\) => itemRow\(it, i, false\)\)\}/.test(CW)
+    && /import \{[^}]*\bList\b[^}]*\bChevronRight\b[^}]*\} from 'lucide-react';/.test(CHART)
+    && /holdingKey, normalizeHoldingCatalog, searchHoldingCatalog, catalogAccounts, krCodeWithZeros,/.test(CHART));
+  // ⚠️ 한글 조합 중 Enter는 조합 끝 Enter가 한 번 더 온다(브라우저마다) — 무시하지 않으면 같은 종목이 두 번 들어가려 한다.
+  ok('#G108c 한글 조합 중 Enter 무시 · 보유 종목은 포트폴리오 행의 시장으로 추가(코드로 추정하지 않는다)',
+    /if \(e\.nativeEvent && e\.nativeEvent\.isComposing\) return;/.test(CW)
+    && /setComps\(\(p\) => \[\.\.\.p, \{ code: it\.code, market: it\.mk, name: it\.name \|\| '' \}\]\);/.test(CW)
+    && /const inChart = \(code\) => \{ const k = holdingKey\(code\); return !!k && all\.some\(\(s\) => holdingKey\(s\.code\) === k\); \};/.test(CW));
 }
 
 // ── 앞자리 0이 빠진 국내 코드 복원(사용자 신고 2026-10-30 — 0241D0 이 241D0 으로 들어가 조회 실패) ──
