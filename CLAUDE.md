@@ -94,11 +94,11 @@ src/
   벨에 남기지 않는다(창을 열 때마다 알림이 쌓이면 진짜 오류가 묻힌다). 저장 실패만 설정 패널 안 빨간 글씨.
 - 검증: `verify:rate-metrics`·`verify:rate-signals`·`verify:rate-assets`·`verify:rate-settings`(전부 src 직접 import).
 
-## 사용자 구분 (계좌별, ⚠️ 회귀 주의)
+## 사용자 구분 (종목마다 하나, ⚠️ 회귀 주의)
 
-- 항목 `userCategory`(직접 입력) ≠ `category`(자산군, 그대로). 계좌 필드 `categoryViewTable`(표 구분 열)·`categoryViewSummary`
-  (자산 비중 카드)가 각각 `'asset'|'user'`, 기본 자산군. 묶음은 `groupCategoryOf` 한 곳 — 빈 사용자 구분은 자산군, 예수금은 늘 '예수금'.
-- ⚠️ `handleUpdateFor` 문자열 필드 목록·Drive 구조 지문(항목·계좌 두 필드)·`CARD_OPS`의 `setCategoryView`가 빠지면 조용히 유실된다.
+- 항목 `userCategory` ≠ `category`(자산군). 보기 = 계좌 필드 `categoryView{Table,Summary,Rebal}`(기본 자산군). 묶음은 `groupCategoryOf`.
+- 쓰기는 `handleUpdateFor` → `applySharedCategory`로 전 계좌의 같은 종목에 함께. 빈 값은 `sharedUserCategoryMap`을 따른다(카드 창은 피더가 전달).
+- ⚠️ 이 분기·Drive 구조 지문(항목 1·계좌 3)·`CARD_OPS` `setCategoryView`가 빠지면 조용히 유실된다. 검증: `verify:user-category`.
 
 ## 분배금 사이트 링크 공유 (관리자 → 분배금 사용자, ⚠️ 회귀 주의)
 

@@ -6,6 +6,26 @@
 
 ---
 
+## 2026-11-01 (2) — [구분] 종목마다 하나(다른 계좌 같은 종목 공유) · 리밸런싱 표 사용자 구분 보기·정렬
+
+**대상 파일**: `src/userCategory.ts` · `src/hooks/usePortfolioState.ts` · `src/hooks/usePortfolioData.ts` · `src/App.tsx` ·
+`src/components/{PortfolioTable,PortfolioSummaryPanel,RebalancingPanel,CategoryViewSwitch(신규),PasteModal,CardWinFeed,CardWindow}.tsx` ·
+`scripts/verify-user-category.mjs` · `CLAUDE.md`
+
+> 사용자가 종목에 대한 구분을 정의하면 다른 계좌에 같은 종목이 있으면 적용되어야 합니다 … 퇴직계좌 TIGER 머니마켓액티브가 isa계좌에도 있으면
+> 구분에 현금으로 해놓으면 자산군별 구분과 사용자별 구분이 적용 … / 리밸런싱 테이블에서 사용자 지정 구분이 선택하고 그것으로 정렬 할 수 있어야 합니다.
+
+- 구분(자산군)·사용자 구분 쓰기 = 원래 행 + 살아 있는 모든 계좌의 같은 종목(종류 + 대문자 코드, 앞자리 0 무시). 퇴직(dc-irp) 대상 행은
+  D/S도 구분 칸 규칙(채권·현금·예수금 = S)대로 맞춘다. 코드 없는 행(예적금·수동 현금·금현물)은 그 행에만. 삭제(휴지통) 계좌는 건드리지 않는다.
+- 사용자 구분이 빈 종목은 다른 계좌의 같은 종목 값을 따른다(읽기 공유) — 이미 구분한 종목은 다시 넣을 필요 없음. 카드 별도 창은
+  계좌 하나만 받으므로 앱이 '종목 → 사용자 구분' 맵을 실어 보낸다.
+- 새 종목: 코드 칸에 새 코드를 넣고 나가면(바뀐 경우만) 다른 계좌의 같은 종목 구분을 이어받는다. 엑셀 붙여넣기 추가도 같다.
+- 리밸런싱 표 구분 머리에 '자산군 | 사용자' 전환(계좌별 저장 `categoryViewRebal`). 고르면 정렬을 풀고 그 구분으로 묶는다 — 사용자 보기는
+  묶음을 이름순(숫자 인식)으로 정렬하고, 묶음 칸에 합계·비중을 보여 준다. 구분 머리 클릭 = 다시 묶음 정렬. 위쪽 원 그래프 3개는 자산군 그대로.
+- 검증: gate 전체 통과(build는 저장소에서 실행 불가 — 스크래치 복사본 `vite build` 통과) · verify:user-category 74건(신규 39건, 변이 13종 전부 검출) ·
+  verify:card-window·overseas 통과(기존 가드 형태 유지) · Chromium 두 계좌 하네스 14/14 — 퇴직 구분 현금 → ISA 같은 종목 현금(D/S → S),
+  사용자 구분 공유, 계좌별 보기, 새 종목 코드 '66W0' → 금 상속, 붙여넣기 상속, 리밸런싱 이름순 묶음(금 → 성장 → 현금성), 페이지 오류 0. 실제 사이트 화면은 아직 못 봄.
+
 ## 2026-11-01 — [분배금 현황] 사이트 링크 공유를 Apps Script 재배포 없이 동작하게 (reportLinks 행에 싣기)
 
 **대상 파일**: `src/utils.ts` · `src/App.tsx` · `scripts/verify-div-links.mjs` · `_downloads/AppsScript_계정관리_arui114501.js`(주석) · `CLAUDE.md`

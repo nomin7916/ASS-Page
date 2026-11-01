@@ -9,6 +9,8 @@ import { PieLabelOutside } from '../chartUtils';
 import { ladderWinId } from '../cardWindow';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import CardExpandButton from './CardExpandButton';
+import CategoryViewSwitch from './CategoryViewSwitch';
+import { normalizeCategoryView, effectiveUserCategory, userCategoryColor } from '../userCategory';
 import RebalanceTargetRestoreModal from './RebalanceTargetRestoreModal';
 import LadderTradeModal from './LadderTradeModal';
 import InvestmentNotesPanel, { formatNoteDate, sortNotesDesc } from './InvestmentNotesPanel';
@@ -158,6 +160,9 @@ export default function RebalancingPanel({
   onExpandDonut = null,
   tableWindowOpen = false,
   donutWindowOpen = false,
+  // 구분 열 보기('asset' 자산군 | 'user' 사용자 구분) — 계좌별 저장(categoryViewRebal). 미전달이면 전환 버튼 없음.
+  categoryView = 'asset',
+  onCategoryViewChange = null,
 }) {
   const [editingRatio, setEditingRatio] = useState({});
   // 목표금액 입력 초안 — 목표비중(editingRatio)과 같은 패턴. onChange마다 setPortfolio를 부르면
@@ -288,12 +293,25 @@ export default function RebalancingPanel({
       style={{ backgroundColor: hl ? hl.hex : nextHl?.hex }}
     />
   );
+  // 구분 열 — 자산군 보기는 종전 그대로(빈 구분 '기타'), 사용자 보기는 사용자 구분(빈 종목은 다른 계좌의 같은 종목 값,
+  // 그것도 없으면 자산군). 정렬을 풀면(구분 머리 클릭) 이 이름으로 묶는다 — 사용자 보기는 묶음을 이름순으로 정렬한다.
+  const isUserCatView = normalizeCategoryView(categoryView) === 'user';
+  const rbSharedUserCats = totals?.sharedUserCats || null;
+  const rbUserCatNames = totals?.userCategoryNames || [];
+  const rbCatOf = (item) => (isUserCatView ? effectiveUserCategory(item, rbSharedUserCats) : '') || item.category || '기타';
+  const rbCatHex = (cat) => UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat]
+    || (isUserCatView ? userCategoryColor(cat, rbUserCatNames, UI_CONFIG.COLORS.CHART_PALETTE) : '') || '#64748B';
+  const rbGroupBy = (data) => {
+    const order = []; const g = {};
+    data.forEach(it => { const c = rbCatOf(it); if (!g[c]) { g[c] = []; order.push(c); } g[c].push(it); });
+    if (isUserCatView) order.sort((a, b) => a.localeCompare(b, 'ko', { numeric: true }));
+    return { order, g };
+  };
   // 위치 요약 칩 — 표에 그려지는 순서(정렬 중이면 정렬 순서, 아니면 구분별 묶음 순서) 그대로.
   const rbDisplayRows = (() => {
     const data = Array.isArray(rebalanceData) ? rebalanceData : [];
     if (rebalanceSortConfig?.key != null) return data;
-    const order = []; const g = {};
-    data.forEach(it => { const c = it.category || '기타'; if (!g[c]) { g[c] = []; order.push(c); } g[c].push(it); });
+    const { order, g } = rbGroupBy(data);
     return order.flatMap(c => g[c]);
   })();
   const rbHlRows = rbDisplayRows.map((item, i) => ({ item, i, c: rowHighlightOf(markedRebalRows[item.id]) })).filter(x => x.c);
@@ -1101,11 +1119,22 @@ export default function RebalancingPanel({
                               title="하이라이트 모두 해제"
                             />
                             <div
-                              className="flex-1 py-3 px-2 text-center cursor-pointer hover:bg-gray-700 transition-colors"
+                              className={`flex-1 px-2 text-center cursor-pointer hover:bg-gray-700 transition-colors ${onCategoryViewChange ? 'py-2' : 'py-3'}`}
                               onClick={() => handleRebalanceSort(null)}
-                              title="클릭하여 정렬 초기화"
+                              title={isUserCatView ? '클릭하면 사용자 구분별로 묶어 이름순으로 정렬합니다' : '클릭하여 정렬 초기화(자산군별로 묶기)'}
                             >
-                              구분
+                              <div>구분</div>
+                              {onCategoryViewChange && (
+                                <CategoryViewSwitch
+                                  view={isUserCatView ? 'user' : 'asset'}
+                                  onChange={(m) => {
+                                    if (normalizeCategoryView(m) === normalizeCategoryView(categoryView)) return;
+                                    onCategoryViewChange(m);
+                                    // 고르면 바로 그 구분으로 묶어 정렬한다(사용자 요청 2026-11-01).
+                                    if (rebalanceSortConfig?.key != null) handleRebalanceSort(null);
+                                  }}
+                                />
+                              )}
                             </div>
                           </div>
                         </th>
@@ -1411,13 +1440,7 @@ export default function RebalancingPanel({
                   const isOverseas = activePortfolioAccountType === 'overseas';
                   const usdkrw = marketIndicators.usdkrw || 1;
                   const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
-                  const catOrder = [];
-                  const grouped = {};
-                  rebalanceData.forEach(item => {
-                    const cat = item.category || '기타';
-                    if (!grouped[cat]) { grouped[cat] = []; catOrder.push(cat); }
-                    grouped[cat].push(item);
-                  });
+                  const { order: catOrder, g: grouped } = rbGroupBy(rebalanceData);
                   const parseHex = (hex) => {
                     const m = hex.replace('#', '').match(/.{2}/g);
                     if (!m) return null;
@@ -1445,7 +1468,7 @@ export default function RebalancingPanel({
                   };
                   const itemColorMap = {};
                   catOrder.forEach(cat => {
-                    const baseHex = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                    const baseHex = rbCatHex(cat);
                     const shades = genShades(baseHex, grouped[cat].length);
                     grouped[cat].forEach((item, j) => { itemColorMap[`${cat}::${item.id}`] = shades[j]; });
                   });
@@ -1455,8 +1478,8 @@ export default function RebalancingPanel({
                     const num = rowNum;
                     // 수동 현금 행(구분 현금·코드 없음·수량 1)도 예적금처럼 매매 대상이 아닌 고정 참고 행이다.
                     const isSavings = item.type === 'savings' || !!item.isManualCash;
-                    const cat = item.category || '기타';
-                    const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                    const cat = rbCatOf(item);
+                    const catColor = rbCatHex(cat);
                     const itemColor = itemColorMap[`${cat}::${item.id}`] || catColor;
                     const extraQty = rebalExtraQty[item.id] || 0;
                     const totalAction = item.action + extraQty;
@@ -1865,8 +1888,8 @@ export default function RebalancingPanel({
                   };
                   if (rebalanceSortConfig.key !== null) {
                     return rebalanceData.map(item => {
-                      const cat = item.category || '기타';
-                      const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                      const cat = rbCatOf(item);
+                      const catColor = rbCatHex(cat);
                       const mhl = rowHighlightOf(markedRebalRows[item.id]);
                       const bgClass = mhl ? '' : 'bg-[#0f172a] group-hover:bg-gray-800';
                       const catTd = H('category') ? null : (
@@ -1883,7 +1906,7 @@ export default function RebalancingPanel({
                   }
                   return catOrder.flatMap(cat => {
                     const items = grouped[cat];
-                    const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                    const catColor = rbCatHex(cat);
                     const catTotalEval = items.reduce((sum, item) => sum + item.curEval, 0);
                     const catRatio = totals.totalEval > 0 ? catTotalEval / totals.totalEval * 100 : 0;
                     return items.map((item, j) => {

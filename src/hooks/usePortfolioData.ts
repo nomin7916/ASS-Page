@@ -2,7 +2,7 @@
 import { useMemo } from 'react';
 import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, depositKrwTotalOf, ledgerRowsWithRunningSum, sortLedgerRows, isManualCashRow, manualCashEval, MANUAL_CASH_CATEGORY } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
-import { groupCategoryOf, userCategoryList } from '../userCategory';
+import { groupCategoryOf, userCategoryList, userCategoryNames, sharedUserCategoryMap } from '../userCategory';
 
 export function usePortfolioData({
   portfolio,
@@ -22,7 +22,15 @@ export function usePortfolioData({
   depositSortConfig,
   depositSortConfig2,
   rebalExtraQty = {},
+  // 전 계좌 '종목 → 사용자 구분' 맵. 카드 별도 창은 계좌 하나만 받으므로 앱이 계산해 보낸 맵을 넘긴다.
+  sharedUserCats = null,
 }) {
+  // ⚠️ 문자열 키로 고정한다 — portfolios는 시세마다 새 배열이라 맵 객체를 그대로 deps에 두면 totals가 매번 다시 계산된다.
+  const sharedUserCatsKey = useMemo(
+    () => JSON.stringify(sharedUserCats && typeof sharedUserCats === 'object' ? sharedUserCats : sharedUserCategoryMap(portfolios)),
+    [sharedUserCats, portfolios]
+  );
+  const sharedCats = useMemo(() => JSON.parse(sharedUserCatsKey), [sharedUserCatsKey]);
   const totals = useMemo(() => {
     const isOverseasAcc = activePortfolioAccountType === 'overseas';
     const fxRate = isOverseasAcc ? (marketIndicators.usdkrw || 1) : 1;
@@ -52,7 +60,7 @@ export function usePortfolioData({
       const c = groupCategoryOf(item, 'asset');
       if (!cats[c]) cats[c] = { invest: 0, eval: 0, profit: 0 };
       cats[c].invest += inv; cats[c].eval += evl; cats[c].profit += prf;
-      const uc = groupCategoryOf(item, 'user');
+      const uc = groupCategoryOf(item, 'user', sharedCats);
       if (!userCats[uc]) userCats[uc] = { invest: 0, eval: 0, profit: 0 };
       userCats[uc].invest += inv; userCats[uc].eval += evl; userCats[uc].profit += prf;
       const isCash = isManualCashRow(item, activePortfolioAccountType);
@@ -68,8 +76,8 @@ export function usePortfolioData({
     // 포함한다 — 달러로 표기하는 화면은 반드시 usdOfKrwFrame(값, krwCash, 환율)로 원화를 빼고
     // 되돌릴 것(`÷ 환율`만 하면 원화가 달러로 환산돼 섞인다 — utils '통화 분리 원칙').
     const krwCash = depositKrwTotalOf(portfolio, isOverseasAcc);
-    return { calcPortfolio: calc, totalInvest: tInv, totalEval: tEvl, totalProfit: tPrf, cats, userCats, userCategories: userCategoryList(portfolio), stks, krwCash };
-  }, [portfolio, activePortfolioAccountType, marketIndicators.usdkrw]);
+    return { calcPortfolio: calc, totalInvest: tInv, totalEval: tEvl, totalProfit: tPrf, cats, userCats, sharedUserCats: sharedCats, userCategories: userCategoryList(portfolio, sharedCats), userCategoryNames: userCategoryNames(portfolio, sharedCats), stks, krwCash };
+  }, [portfolio, activePortfolioAccountType, marketIndicators.usdkrw, sharedCats]);
 
   const cagr = useMemo(() => {
     const effectiveFx = activePortfolioAccountType === 'overseas'

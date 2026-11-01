@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useEffect, useMemo } from 'react';
 import { CARD_NEEDS, historicalCodesOf, pickStockHistorySubset } from '../cardWindow';
+import { sharedUserCategoryMap } from '../userCategory';
 
 /**
  * 카드 별도 창 한 개당 하나씩 마운트되는 **피더**(렌더 출력 없음).
@@ -21,6 +22,9 @@ export default function CardWinFeed({
   effectiveDateKey, histPeriod,
 }) {
   const needs = CARD_NEEDS[entry.card] || {};
+  // 전 계좌 '종목 → 사용자 구분' — 창은 계좌 하나만 받으므로 다른 계좌의 같은 종목 구분을 따로 싣는다.
+  // ⚠️ 문자열로 게이팅한다 — portfolios는 시세마다 새 배열이라 객체를 deps에 두면 전송이 폭주한다.
+  const sharedUserCatsKey = useMemo(() => JSON.stringify(sharedUserCategoryMap(portfolios)), [portfolios]);
 
   const account = useMemo(
     () => (portfolios || []).find(p => p && p.id === entry.pid) || null,
@@ -46,6 +50,7 @@ export default function CardWinFeed({
       marketIndicators,
       hideAmounts,
       isAdmin,
+      sharedUserCats: JSON.parse(sharedUserCatsKey),
     };
     if (needs.dividend) {
       payload.marketHolidays = marketHolidays;
@@ -68,7 +73,7 @@ export default function CardWinFeed({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry, account, marketIndicators, hideAmounts, isAdmin, authEpoch, nonce,
       marketHolidays, dividendTaxHistory, dividendLinks, priceSubset, indicatorHistoryMap, stockFetchStatus,
-      effectiveDateKey, histPeriod]);
+      effectiveDateKey, histPeriod, sharedUserCatsKey]);
 
   return null;
 }

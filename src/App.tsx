@@ -107,7 +107,7 @@ import {
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
 import { DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize } from './watchlistGroups';
 import { buildHoldings } from './watchlistChart';
-import { groupCategoryOf } from './userCategory';
+import { groupCategoryOf, sharedCategoryOf } from './userCategory';
 
 // 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
@@ -928,6 +928,7 @@ export default function App() {
     markedRebalRows, toggleMarkedRebalRow, resetAllMarkedRebalRows,
     markedPortfolioRows, toggleMarkedPortfolioRow, resetAllMarkedPortfolioRows,
     categoryViewTable, categoryViewSummary, setCategoryViewTable, setCategoryViewSummary,
+    categoryViewRebal, setCategoryViewRebal,
     adminAccessAllowed, setAdminAccessAllowed,
     activePortfolioAccountType,
     buildPortfoliosState,
@@ -988,7 +989,7 @@ export default function App() {
     handleUpdateFor, applyItemPatchesFor, applyCardWriteFor, patchSettingsForTypeOf,
     toggleHiddenColumnPortfolioFor, toggleHiddenColumnRebalancingFor,
     toggleMarkedRebalRowFor, toggleMarkedPortfolioRowFor,
-    resetAllMarkedRebalRowsFor, resetAllMarkedPortfolioRowsFor, setCategoryViewFor,
+    resetAllMarkedRebalRowsFor, resetAllMarkedPortfolioRowsFor, setCategoryViewFor, inheritSharedCategoryFor,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
 
@@ -2180,7 +2181,7 @@ export default function App() {
           if (k === 'returnRate') return (pP * qty) > 0 ? ((cP - pP) * qty) / (pP * qty) : 0;
           if (k === 'investRatio') return tInv > 0 ? (pP * qty) / tInv : 0;
           if (k === 'evalRatio') return tEvl > 0 ? (cP * qty) / tEvl : 0;
-          if (k === 'userCategory') return groupCategoryOf(item, 'user');
+          if (k === 'userCategory') return groupCategoryOf(item, 'user', totals.sharedUserCats);
           return item[k] || 0;
         };
         let vA = getVal(a, key), vB = getVal(b, key);
@@ -2903,7 +2904,7 @@ export default function App() {
         else resetAllMarkedPortfolioRowsFor(a.pid);
         return { ok: true };
       case 'setCategoryView':
-        if (a.target !== 'table' && a.target !== 'summary') return { ok: false, reason: '알 수 없는 구분 보기입니다.' };
+        if (a.target !== 'table' && a.target !== 'summary' && a.target !== 'rebal') return { ok: false, reason: '알 수 없는 구분 보기입니다.' };
         setCategoryViewFor(a.pid, a.target, a.mode);
         return { ok: true };
       case 'updateInvestmentNotes': {
@@ -4304,6 +4305,7 @@ export default function App() {
         // 구분 보기(포트폴리오 표·자산 비중 카드) — 단독 전환도 Drive STATE 저장을 트리거하도록 지문에 포함.
         categoryViewTable: p.categoryViewTable || '',
         categoryViewSummary: p.categoryViewSummary || '',
+        categoryViewRebal: p.categoryViewRebal || '',
         // 행 색상 마킹(포트폴리오 표·리밸런싱 표) — 단독 토글도 저장 트리거되도록 지문에 포함.
         // 두 필드는 별개다(한쪽만 넣으면 다른 표의 마킹이 계속 유실) — markedRowsKey 주석 참조.
         markedPortfolioRowsKey: markedRowsKey(p.markedPortfolioRows),
@@ -5144,6 +5146,7 @@ export default function App() {
             accountName={title}
             categoryView={categoryViewTable}
             onCategoryViewChange={setCategoryViewTable}
+            onCodeChanged={(id) => inheritSharedCategoryFor(activePortfolioId, id)}
           />
         )}
 
@@ -5390,6 +5393,8 @@ export default function App() {
             handleRebalanceSort={handleRebalanceSort}
             rebalExtraQty={rebalExtraQty}
             setRebalExtraQty={setRebalExtraQty}
+            categoryView={categoryViewRebal}
+            onCategoryViewChange={setCategoryViewRebal}
             maxAddLink={rebalMaxAddLink}
             setMaxAddLink={setRebalMaxAddLink}
             rebalCatDonutData={rebalCatDonutData}
@@ -5580,6 +5585,7 @@ export default function App() {
         setIsPasteModalOpen={setIsPasteModalOpen}
         portfolio={portfolio}
         setPortfolio={setPortfolio}
+        categoryForCode={(code) => sharedCategoryOf(portfolios, { type: 'stock', code })}
       />
       {/* 계산기는 App 최상위 형제라 렌더 예외가 루트 ErrorBoundary까지 올라가면 앱 화면 전체가
           오류 페이지로 대체된다 → label 지정으로 섹션 모드 격리(2차 방어). */}

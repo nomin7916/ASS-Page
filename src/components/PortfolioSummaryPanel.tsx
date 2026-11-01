@@ -25,11 +25,12 @@ export default function PortfolioSummaryPanel({
   const isUserView = normalizeCategoryView(categoryView) === 'user';
   const cats = (isUserView ? totals.userCats : totals.cats) || {};
   const userCategories = totals.userCategories || [];
+  const userCategoryNames = totals.userCategoryNames || userCategories;
   // 사용자 구분 이름 색 — 자산군과 같은 이름이면 그 색, 아니면 포트폴리오 표 칸과 같은 팔레트 순번 색.
   const labelProps = (c) => {
     const cls = UI_CONFIG.COLORS.CATEGORIES[c];
     if (!isUserView || cls) return { className: cls || '', style: undefined };
-    const hex = userCategoryColor(c, userCategories, UI_CONFIG.COLORS.CHART_PALETTE);
+    const hex = userCategoryColor(c, userCategoryNames, UI_CONFIG.COLORS.CHART_PALETTE);
     return { className: '', style: hex ? { color: hex } : undefined };
   };
   const changeView = (m) => {

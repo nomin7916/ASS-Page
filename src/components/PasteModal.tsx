@@ -7,6 +7,7 @@ export default function PasteModal({
   setIsPasteModalOpen,
   portfolio,
   setPortfolio,
+  categoryForCode = null,   // 다른 계좌에 같은 종목이 있으면 그 구분을 이어받는다(userCategory.sharedCategoryOf)
 }) {
   if (!isPasteModalOpen) return null;
 
@@ -16,7 +17,7 @@ export default function PasteModal({
     const newItems = text.trim().split('\n').map(line => {
       const cols = line.split('\t');
       if (cols.length >= 5) return {
-        id: generateId(), type: 'stock', category: '주식',
+        id: generateId(), type: 'stock', category: (categoryForCode && categoryForCode(cols[0].trim())) || '주식',
         code: cols[0].trim(), name: '',
         currentPrice: cleanNum(cols[1]), purchasePrice: cleanNum(cols[2]),
         quantity: cleanNum(cols[4]), targetRatio: 0, isManual: true,

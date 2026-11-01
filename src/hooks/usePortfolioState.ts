@@ -8,7 +8,7 @@ import {
 } from '../utils';
 import { getTodayKST, getBackfillBoundaryForAccount } from './useMarketCalendar';
 import { toggleRowHighlight } from '../watchlistGroups';
-import { normalizeCategoryView } from '../userCategory';
+import { normalizeCategoryView, SHARED_CATEGORY_FIELDS, applySharedCategory, inheritSharedCategory } from '../userCategory';
 
 // 행 하이라이트 — 관심종목과 같은 팔레트·규칙(칠할 때마다 다른 색, 다시 누르면 해제).
 // 활성 계좌 경로와 by-id(카드 별도 창) 경로가 **같은 함수**를 써야 두 화면의 색이 갈리지 않는다.
@@ -89,15 +89,17 @@ export function usePortfolioState({
   const toggleMarkedPortfolioRow = (itemId) => toggleMarkedPortfolioRowFor(activePortfolioId, itemId);
   const resetAllMarkedRebalRows = () => resetAllMarkedRebalRowsFor(activePortfolioId);
   const resetAllMarkedPortfolioRows = () => resetAllMarkedPortfolioRowsFor(activePortfolioId);
-  // 구분 보기('asset' 자산군 | 'user' 사용자 구분) — 포트폴리오 표(table)·자산 비중 카드(summary) 각각 계좌별 저장.
+  // 구분 보기('asset' 자산군 | 'user' 사용자 구분) — 포트폴리오 표(table)·자산 비중 카드(summary)·리밸런싱 표(rebal) 각각 계좌별 저장.
   const categoryViewTable = normalizeCategoryView(activePortfolio?.categoryViewTable);
   const categoryViewSummary = normalizeCategoryView(activePortfolio?.categoryViewSummary);
+  const categoryViewRebal = normalizeCategoryView(activePortfolio?.categoryViewRebal);
   const setCategoryViewFor = (pid, target, mode) => {
-    const field = target === 'table' ? 'categoryViewTable' : target === 'summary' ? 'categoryViewSummary' : null;
+    const field = target === 'table' ? 'categoryViewTable' : target === 'summary' ? 'categoryViewSummary' : target === 'rebal' ? 'categoryViewRebal' : null;
     if (field) patchById(pid, { [field]: normalizeCategoryView(mode) });
   };
   const setCategoryViewTable = (mode) => setCategoryViewFor(activePortfolioId, 'table', mode);
   const setCategoryViewSummary = (mode) => setCategoryViewFor(activePortfolioId, 'summary', mode);
+  const setCategoryViewRebal = (mode) => setCategoryViewFor(activePortfolioId, 'rebal', mode);
 
   // ── 지정 계좌만 갱신하는 헬퍼(by-id) ──
   // ⚠️ 카드 별도 창(`/?cardWindow=1`)은 **앱 탭의 활성 계좌가 아닌** 계좌를 편집한다. 그래서
@@ -759,10 +761,12 @@ export function usePortfolioState({
   //    그 반대). `verify:overseas` #15~#18이 이 함수 본문을 슬라이스해 단언하므로, 이름이나
   //    accountType 표현식(`acctType`)을 바꾸면 scripts/verify-overseas-invest.mjs의 앵커·정규식도
   //    반드시 같이 고칠 것.
-  const handleUpdateFor = (pid, id, field, value) =>
+  const handleUpdateFor = (pid, id, field, value) => {
+    // 구분(자산군)·사용자 구분은 종목마다 하나 — 다른 계좌의 같은 종목에도 함께 쓴다(userCategory.applySharedCategory).
+    if (SHARED_CATEGORY_FIELDS.includes(field)) { setPortfolios(prev => applySharedCategory(prev, pid, id, field, value)); return; }
     patchById(pid, pf => ({ portfolio: (pf.portfolio ?? []).map(p => {
       if (p.id !== id) return p;
-      if (['category', 'name', 'code', 'assetClass', 'userCategory'].includes(field)) return { ...p, [field]: value };
+      if (['category', 'name', 'code', 'assetClass'].includes(field)) return { ...p, [field]: value };
       const num = cleanNum(value);
       const acctType = pf.accountType || 'portfolio';
       if (acctType === 'overseas' && p.type === 'stock'
@@ -777,7 +781,10 @@ export function usePortfolioState({
       }
       return { ...p, [field]: num };
     }) }));
+  };
   const handleUpdate = (id, field, value) => handleUpdateFor(activePortfolioId, id, field, value);
+  // 코드를 새로 넣거나 바꾼 종목 행 — 다른 계좌에 같은 종목이 있으면 그 구분을 이어받는다.
+  const inheritSharedCategoryFor = (pid, id) => setPortfolios(prev => inheritSharedCategory(prev, pid, id));
 
   // 삭제는 되돌릴 수 없고(보유 수량·매입금액 소실) 이관 버튼 바로 옆이라 오클릭이 쉽다 → 확인 필수.
   // 주식·펀드·예적금 행이 전부 이 한 핸들러(onDelete)를 쓰므로 여기 한 곳이면 셋 다 보호된다.
@@ -1154,6 +1161,7 @@ export function usePortfolioState({
     resetAllMarkedRebalRowsFor,
     resetAllMarkedPortfolioRowsFor,
     setCategoryViewFor,
+    inheritSharedCategoryFor,
     portfolio,
     principal,
     avgExchangeRate,
@@ -1188,6 +1196,7 @@ export function usePortfolioState({
     markedRebalRows, toggleMarkedRebalRow, resetAllMarkedRebalRows,
     markedPortfolioRows, toggleMarkedPortfolioRow, resetAllMarkedPortfolioRows,
     categoryViewTable, categoryViewSummary, setCategoryViewTable, setCategoryViewSummary,
+    categoryViewRebal, setCategoryViewRebal,
     adminAccessAllowed, setAdminAccessAllowed,
     // 파생 상태
     activePortfolioAccountType,

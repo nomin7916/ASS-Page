@@ -67,6 +67,8 @@ export default function CardWindow() {
   const [stockFetchStatus, setStockFetchStatus] = useState({});
   const [stockHistoryMap, setStockHistoryMap] = useState({});
   const [indicatorHistoryMap, setIndicatorHistoryMap] = useState({});
+  // 전 계좌 '종목 → 사용자 구분'(앱이 계산해 보낸다) — 사용자 구분이 빈 종목이 다른 계좌 값을 따른다.
+  const [sharedUserCats, setSharedUserCats] = useState(null);
   // ⚠️ 기록 확정일은 앱 탭이 계산해 보낸다 — 계좌 타입별(KR 21:00 / 글로벌 07:30) 경계를 창에서
   //    다시 계산하면 타이머·자정 경계에서 두 화면이 갈린다.
   const [effectiveDateKey, setEffectiveDateKey] = useState('');
@@ -176,7 +178,7 @@ export default function CardWindow() {
         // 로그아웃·세션 충돌 — 이전 사용자의 금융 데이터를 화면에 남기지 않는다.
         pendingRef.current.forEach(fn => { try { fn({ ok: false, reason: '세션이 종료되었습니다.' }); } catch {} });
         pendingRef.current.clear();
-        setAccount(null); setTornDown(true); setGotData(false); gotDataRef.current = false;
+        setSharedUserCats(null); setAccount(null); setTornDown(true); setGotData(false); gotDataRef.current = false;
         try { window.close(); } catch { /* 브라우저가 막으면 안내만 남는다 */ }
         return;
       }
@@ -188,10 +190,11 @@ export default function CardWindow() {
       if (d.type === 'card:data') {
         // ⚠️ authEpoch 불일치 = 다른 로그인 세션. 화면을 비운다(단순 readOnly로는 데이터가 남는다).
         if (authEpochRef.current != null && d.authEpoch != null && d.authEpoch !== authEpochRef.current) {
-          setAccount(null); setTornDown(true); return;
+          setSharedUserCats(null); setAccount(null); setTornDown(true); return;
         }
         if (d.authEpoch != null) { authEpochRef.current = d.authEpoch; setAuthEpoch(d.authEpoch); }
         if (d.account !== undefined) setAccount(d.account);
+        if (d.sharedUserCats && typeof d.sharedUserCats === 'object') setSharedUserCats(d.sharedUserCats);
         if (d.marketIndicators) setMarketIndicators(d.marketIndicators);
         if (d.marketHolidays) setMarketHolidays(d.marketHolidays);
         if (d.dividendTaxHistory) setDividendTaxHistory(d.dividendTaxHistory);
@@ -277,6 +280,7 @@ export default function CardWindow() {
     depositSortConfig,
     depositSortConfig2,
     rebalExtraQty,
+    sharedUserCats,
   });
 
   // ⚠️ 패널은 `updateSettingsForType({ ...settings, x })`(통째 교체)로 부른다. 그대로 보내면
@@ -553,6 +557,8 @@ export default function CardWindow() {
           showRetirementStats={accountType === 'dc-irp'}
           hiddenColumns={acct.hiddenColumnsRebalancing || []}
           onToggleColumn={(key) => fire('toggleColumn', { pid: PID, table: 'rebalancing', key })}
+          categoryView={acct.categoryViewRebal}
+          onCategoryViewChange={writable ? (mode) => fire('setCategoryView', { pid: PID, target: 'rebal', mode }) : null}
           markedRebalRows={acct.markedRebalRows || {}}
           onToggleMarkedRebalRow={(itemId) => fire('toggleMarkedRow', { pid: PID, table: 'rebalancing', itemId })}
           onResetAllMarkedRebalRows={() => fire('resetMarkedRows', { pid: PID, table: 'rebalancing' })}
