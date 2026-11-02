@@ -47,6 +47,7 @@ import DividendSummaryTable from './components/DividendSummaryTable';
 import DividendTaxPage from './components/DividendTaxPage';
 import ConfirmDialog from './components/ConfirmDialog';
 import LoadingOverlay from './components/LoadingOverlay';
+import IntroVideoOverlay from './components/IntroVideoOverlay';
 import StudyMaterialViewer from './components/StudyMaterialViewer';
 import InactivityModal from './components/InactivityModal';
 import FloatingCalculator from './components/FloatingCalculator';
@@ -257,6 +258,17 @@ export default function App() {
 
   // ── 초기 로딩 오버레이 ──
   const [isInitialLoading, setIsInitialLoading] = useState(false);
+  // ── 인트로 영상(IntroVideoOverlay) — 로그인 뒤 부팅마다 페이지당 한 번, 관리자 접속(impersonation)에서는 틀지 않는다.
+  //    재생 중에는 가운데 로딩 팝업을 숨기고(진행은 영상 위 막대), 영상이 닫힐 때 로딩이 남았으면 팝업이 이어받는다.
+  //    ⚠️ isInitialLoading을 켜는 곳과 같은 배치에서 켠다 — effect에서만 켜면 팝업이 한 프레임 번쩍인다.
+  const [introPlaying, setIntroPlaying] = useState(false);
+  const introShownRef = useRef(false);
+  const introToDashRef = useRef(false);
+  const startIntroOnce = () => {
+    if (introShownRef.current || adminViewingAsRef.current) return;
+    introShownRef.current = true;
+    setIntroPlaying(true);
+  };
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
@@ -373,6 +385,7 @@ export default function App() {
       }
     } else {
       setIsInitialLoading(true);
+      startIntroOnce();
       setDriveLoadReady(true);
     }
   };
@@ -2118,6 +2131,19 @@ export default function App() {
     if (histPhase !== 'settled') return;
     awaitingSettleRef.current = false;
     setIsInitialLoading(false);
+  }, [histPhase]);
+  const dismissInitialLoading = () => { awaitingSettleRef.current = false; setIsInitialLoading(false); };
+  // 인트로 막대 클릭 = 영상 정지 + 대시보드('계속 사용하기'와 같다). 단 Drive 계좌 로드 전('loading')이면
+  // 빈 대시보드를 보이지 않고 로딩 팝업을 거쳐, 로드가 끝나는 즉시(histPhase가 'loading'을 벗어나면) 닫는다.
+  const handleIntroToDashboard = () => {
+    setIntroPlaying(false);
+    if (histPhase === 'loading') introToDashRef.current = true;
+    else dismissInitialLoading();
+  };
+  useEffect(() => {
+    if (!introToDashRef.current || histPhase === 'loading') return;
+    introToDashRef.current = false;
+    dismissInitialLoading();
   }, [histPhase]);
 
   const [bootRefreshSeq, setBootRefreshSeq] = useState(0);
@@ -3974,6 +4000,7 @@ export default function App() {
 
     // 로그인 완료 즉시 오버레이 표시 — Drive 로딩 전 구간부터 차단
     setIsInitialLoading(true);
+    startIntroOnce();
 
     const token = authUser.token;
 
@@ -4913,13 +4940,22 @@ export default function App() {
       {cardWinFeeds}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
       <LoadingOverlay
-        visible={isInitialLoading}
+        visible={isInitialLoading && !introPlaying}
         notificationLog={notificationLog}
-        onDismiss={() => { awaitingSettleRef.current = false; setIsInitialLoading(false); }}
+        onDismiss={dismissInitialLoading}
         histPhase={histPhase}
         histProgress={histProgress}
         histPartial={histPartial}
       />
+      {introPlaying && (
+        <IntroVideoOverlay
+          histPhase={histPhase}
+          histProgress={histProgress}
+          histPartial={histPartial}
+          onClose={() => setIntroPlaying(false)}
+          onSkipToDashboard={handleIntroToDashboard}
+        />
+      )}
       {showInactivityWarning && <InactivityModal onContinue={handleInactivityContinue} onLogout={handleInactivityLogout} />}
       {showAdminChoiceModal && (
         <AdminChoiceModal

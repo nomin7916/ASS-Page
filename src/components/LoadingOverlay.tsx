@@ -10,6 +10,7 @@ interface Props {
   autoCloseMs?: number;
   // 부팅 상태 머신(useStockData) — 이 팝업이 '과거 종가 동기화'까지 표시하고, 정착되면 App이 닫는다.
   // ⚠️ 상단바에는 같은 정보를 두지 않는다(사용자 확정 2026-09) — 표시는 여기 한 곳뿐이다.
+  //    예외: 인트로 영상(IntroVideoOverlay)이 재생되는 동안은 이 팝업을 숨기고 영상 위 막대가 대신 표시한다(2026-11-02).
   histPhase?: 'loading' | 'hydrated' | 'hydrate-failed' | 'refreshing' | 'settled';
   histProgress?: { done: number; total: number };
   histPartial?: boolean;

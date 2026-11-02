@@ -590,15 +590,19 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
   // ⚠️ 상단바 배지 부활 차단 — 구름 아이콘 옆 상시 문구는 정상 상태에서도 진행 중처럼 보인다(사용자 확정).
   ok('G9d AccountTabBar에 배지 흔적(HistSyncBadge·histPhase·histProgress·histPartial)이 없다',
     !/HistSyncBadge|histPhase|histProgress|histPartial/.test(tabBar));
-  ok('G9e App이 AccountTabBar에 진행 상태 prop을 넘기지 않는다',
+  // 진행 상태를 받는 곳은 로딩 팝업과 인트로 영상(재생 중에는 팝업 대신 영상 위 막대 — 사용자 확정 2026-11-02) 둘뿐이다.
+  const histPropSites = [...app.matchAll(/histPhase=\{histPhase\}/g)].map(m => app.slice(Math.max(0, m.index - 200), m.index));
+  ok('G9e App이 AccountTabBar에 진행 상태 prop을 넘기지 않는다(받는 곳 = LoadingOverlay·IntroVideoOverlay 둘뿐)',
     !/histPhase=\{histPhase\}\s*histProgress=\{histProgress\}\s*histPartial=\{histPartial\}\s*\n\s*handleDriveLoadOnly/.test(app)
-    && count(app, /histPhase=\{histPhase\}/g) === 1);
+    && histPropSites.length === 2
+    && histPropSites.every(before => /<(LoadingOverlay|IntroVideoOverlay)\b[^<]*$/.test(before)));
   // ⚠️ 해제는 정착 신호 한 곳 — '팝업이 닫히면 동기화도 끝나 있다'가 이 기능의 계약이다.
   ok('G9f 오버레이 해제 effect는 awaitingSettleRef 게이트 + histPhase settled에서만 닫고, 닫을 때 게이트를 내린다',
     /if \(!awaitingSettleRef\.current\) return;\s*if \(histPhase !== 'settled'\) return;\s*awaitingSettleRef\.current = false;\s*setIsInitialLoading\(false\);/.test(app)
     && /\}, \[histPhase\]\);/.test(app));
-  ok('G9g 수동 해제(계속 사용하기·자동 해제)도 게이트를 내린다(뒤늦은 정착이 다시 닫으려 하지 않게)',
-    /onDismiss=\{\(\) => \{ awaitingSettleRef\.current = false; setIsInitialLoading\(false\); \}\}/.test(app));
+  ok('G9g 수동 해제(계속 사용하기·자동 해제·인트로 막대 클릭)도 게이트를 내린다(뒤늦은 정착이 다시 닫으려 하지 않게)',
+    /const dismissInitialLoading = \(\) => \{ awaitingSettleRef\.current = false; setIsInitialLoading\(false\); \};/.test(app)
+    && /<LoadingOverlay[\s\S]{0,200}?onDismiss=\{dismissInitialLoading\}/.test(app));
 
   // ── G5 STOCK 저장: hydrated 가드가 앞 + 참조 비교 dirty + 성공 후 대입 ──
   ok('G5 STOCK 분기 한 식에서 stockHydratedRef.current && 가 lastSavedStockMapRef 비교보다 앞이고 성공 시 대입한다',

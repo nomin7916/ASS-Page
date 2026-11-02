@@ -26,6 +26,7 @@ src/
 ├── brazilNotes.ts       # 브라질 정치 메모 기본값(빈 배열) + readBrazilNotes 읽기 함수
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
+├── introVideo.ts        # 인트로 영상(public/intro) 진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
@@ -63,7 +64,8 @@ src/
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)
     ├── CashTransferModal.tsx    # 현금(예수금) 계좌 간 이관 모달(원금 반영 선택, z=1070)
     ├── CustomDatePicker.tsx      # 날짜 선택기
-    ├── LoadingOverlay.tsx        # 앱 시작 블로킹 오버레이 (z-1100)
+    ├── LoadingOverlay.tsx        # 앱 시작 블로킹 오버레이 (z-1100) — 인트로 재생 중엔 숨김
+    ├── IntroVideoOverlay.tsx     # 로그인 뒤 로딩 중 인트로 영상(페이지당 1회·impersonation 제외) · 좌상단 막대 클릭=대시보드 · Enter/Esc=영상만 닫기
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
     ├── LoginGate.tsx             # 로그인 / PIN 인증 게이트
     ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회·분배금 열) · 자동 '보유종목' 가상 그룹(저장 금지 — 정본 portfolios, 같은 종목은 한 줄 + 보유 계좌 칩)

@@ -1,10 +1,33 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-11-01  
+> 마지막 작업일: 2026-11-02  
 > 브랜치: main  
 > 작업 PC: 클라우드 세션(node 있음 · node_modules 없음 — build 실행 불가)
 
 ---
+
+## 2026-11-02 — [부팅] 계좌 로딩 중 인트로 영상 · 좌측 상단 진행 막대(클릭 = 대시보드) · 우측 상단 로딩 현황
+
+**대상 파일**: `public/intro/nominfi-intro.mp4`(신규 6.6MB) · `src/introVideo.ts`(신규) · `src/components/IntroVideoOverlay.tsx`(신규) ·
+`src/App.tsx` · `src/components/LoadingOverlay.tsx`(주석) · `scripts/verify-intro.mjs`(신규) · `scripts/verify-boot.mjs` · `package.json` · `CLAUDE.md`
+
+> 계정 로그인하고 비번을 입력하면 계좌 로딩 대기 상태일 때 실행 … 엔터나 esc 누르면 로딩 진행 화면이나 바로 대시보드 … 상단 우측에 작은 글씨로
+> 로딩현황 … 영상의 색감과 디자인을 고려해서 좌측 상단에 bar 형태의 로딩진행상태 … bar를 클릭하면 인트로 영상 정지와 대시보드
+
+- 영상 위치(사용자 확정): 구글 드라이브가 아니라 **앱 저장소 `public/intro/`** — 6.9MB는 드라이브 연결 도구로 올릴 수 없고, 일반 사용자(drive.file)는
+  관리자 폴더 파일을 못 읽어 공개+서버 중계가 필요했다. moov가 앞(faststart)이라 받는 즉시 재생된다.
+- 흐름: 로그인·PIN → `isInitialLoading`을 켜는 **같은 배치**에서 `startIntroOnce()`(페이지당 한 번, 관리자 접속(impersonation) 제외) →
+  재생 중엔 가운데 로딩 팝업을 숨기고(`visible={isInitialLoading && !introPlaying}`) 영상 위 HUD가 진행을 표시.
+  Enter·Esc·영상 끝 = 영상만 닫기(로딩이 남았으면 기존 팝업이 5초 버튼·20초 자동 해제와 함께 이어받음).
+  막대 클릭 = 영상 정지 + 대시보드(`dismissInitialLoading` — '계속 사용하기'와 같음). 단 Drive 계좌 로드 전(histPhase 'loading')이면
+  빈 대시보드 대신 팝업을 거쳐 로드 직후 닫는다(`introToDashRef`).
+- 로딩이 먼저 끝나도 영상은 끝까지(사용자 확정) — 막대가 READY 100%로 바뀌고 '준비 완료 — 클릭하면 대시보드'.
+- 디자인: 영상 색(검정 #060606 · 코랄 #FF494D · 고정폭 글씨)에 맞춘 반투명 패널. 막대 = 계좌 로드 0→25%(시간), 종가 동기화 30→95%(done/total),
+  정착 100%, 뒤로 가지 않음. 우측 상단 = '계좌 불러오는 중 / 과거 종가 동기화 n/N / 준비 완료' · 경과 초 · SOUND ON/OFF.
+  자동 재생이 소리 때문에 막히면 소리를 끄고 재생, 6초 안에 시작 못 하거나 오류면 닫고 팝업으로. 벨 알림·브라우저 저장소 없음.
+- 검증: gate(build는 실행 불가 — node_modules 없음) · verify:intro 51건 신설(변이 7종 전부 검출) · verify:boot G9e·G9g 갱신
+  (진행 상태 수신처 = LoadingOverlay·IntroVideoOverlay 둘뿐, 해제 함수 일원화 — 변이 2종 검출) ·
+  스크래치 하네스(React UMD + 실제 컴포넌트, 헤드리스 Chromium)로 1440×900·390×844 화면과 Enter/Esc/막대 클릭 동작 확인. 실제 사이트 화면은 아직 못 봄.
 
 ## 2026-11-01 (4) — [종목 비교 차트 창] 매입가 계좌별/통합 전환 · 비교 종목 찾기(이름 일부·초성·코드·계좌 → 종목)
 
