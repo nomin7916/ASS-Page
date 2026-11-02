@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-11-02 (4) — [부팅] 인트로 영상 v3로 교체 · 음량 20%
+
+**대상 파일**: `public/intro/nominfi-intro-v3.mp4`(신규 6.8MB) · `public/intro/nominfi-intro.mp4`(삭제) · `src/introVideo.ts` · `scripts/verify-intro.mjs`
+
+> 이 영상으로 인트로 영상 교체 하고 볼륨은 20%이하로 해줘
+
+- 영상: NominFi_bumper_v3(1920×1080 · 40초 · H.264/AAC · moov 앞). 같은 디자인(검정·코랄·고정폭)이라 막대·글씨는 그대로.
+  파일 이름을 `-v3`로 바꿔 캐시가 옛 영상을 트는 일을 막았다.
+- 음량: v3 원본이 v2보다 약 9.4dB 작다(통합 −22.3 vs −12.9 LUFS, 최대 −9.9 vs −0.5 dBFS). 10%면 거의 안 들려 지시 상한인 20%로 —
+  체감은 v2를 약 7%로 틀던 정도라 직전(v2 10%)보다 조용하다. verify:intro #V1은 '0 < 음량 ≤ 20%'로 바꿨다.
+- 검증: gate(build는 실행 불가) · verify:intro 53건.
+
 ## 2026-11-02 (3) — [부팅] 인트로 영상 소리 20% → 10%
 
 **대상 파일**: `src/introVideo.ts` · `scripts/verify-intro.mjs`

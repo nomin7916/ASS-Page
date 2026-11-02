@@ -1,10 +1,12 @@
 // 인트로 영상(로그인·PIN 뒤 계좌 로딩 중 재생) — 순수 로직. ⚠️ import 0 — verify:intro가 직접 import한다.
 // 영상 파일은 public/intro/ (사이트와 함께 배포). 화면은 components/IntroVideoOverlay.tsx, 배선은 App.tsx.
 
-export const INTRO_VIDEO_SRC = '/intro/nominfi-intro.mp4';
+// 영상을 바꿀 때는 파일 이름도 바꾼다 — 같은 주소면 브라우저·CDN 캐시가 옛 영상을 계속 틀 수 있다.
+export const INTRO_VIDEO_SRC = '/intro/nominfi-intro-v3.mp4';
 
-// 재생 음량 10% — 원본 그대로(100%)면 로그인 직후 갑자기 커서 놀란다(사용자 확정 2026-11-02: 20% → 절반 10%).
-export const INTRO_VOLUME = 0.1;
+// 재생 음량 — 사용자 지시 '20% 이하'(2026-11-02). v3 원본은 v2보다 약 9.4dB 작아(−22.3 vs −12.9 LUFS)
+// 20%로 틀어도 v2를 10%로 틀던 것보다 조용하다. 영상을 바꾸면 원본 음량을 재고 다시 정할 것.
+export const INTRO_VOLUME = 0.2;
 
 // 영상이 이 시간 안에 재생을 시작하지 못하면 닫고 기존 로딩 팝업으로 넘긴다(검은 화면 방치 금지).
 export const INTRO_START_TIMEOUT_MS = 6000;

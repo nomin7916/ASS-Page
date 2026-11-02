@@ -30,7 +30,7 @@ if (I) {
   const { bootProgressRatio: ratio, ratchetProgress: ratchet, introStatusText: status, introKeyAction: key, INTRO_KEY_GRACE_MS: GRACE } = I;
 
   console.log('\n── 파트⓪ 음량 ──');
-  eq('#V1 재생 음량 10%(사용자 확정 2026-11-02 — 20%에서 절반으로)', I.INTRO_VOLUME, 0.1);
+  ok(`#V1 재생 음량은 20% 이하(사용자 지시 2026-11-02 — 크면 놀란다) (got ${I.INTRO_VOLUME})`, typeof I.INTRO_VOLUME === 'number' && I.INTRO_VOLUME > 0 && I.INTRO_VOLUME <= 0.2);
 
   console.log('\n── 파트① 진행 막대 비율 ──');
   eq('#P1 계좌 로드 시작 = 0', ratio('loading', { done: 0, total: 0 }, 0), 0);
