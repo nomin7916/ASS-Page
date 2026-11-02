@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-11-02 (3) — [부팅] 인트로 영상 소리 20% → 10%
+
+**대상 파일**: `src/introVideo.ts` · `scripts/verify-intro.mjs`
+
+> 지금 볼륨에 절반으로 줄여 주세요
+
+- `INTRO_VOLUME` 0.2 → 0.1. 적용 지점(첫 `play()` 전)·iPhone 예외는 (2)와 같다.
+- 검증: gate(build는 실행 불가) · verify:intro 53건(#V1 기대값 0.1로 갱신).
+
 ## 2026-11-02 (2) — [부팅] 인트로 영상 소리 20%
 
 **대상 파일**: `src/introVideo.ts` · `src/components/IntroVideoOverlay.tsx` · `scripts/verify-intro.mjs`

@@ -3,8 +3,8 @@
 
 export const INTRO_VIDEO_SRC = '/intro/nominfi-intro.mp4';
 
-// 재생 음량 20% — 원본 그대로(100%)면 로그인 직후 갑자기 커서 놀란다(사용자 확정 2026-11-02).
-export const INTRO_VOLUME = 0.2;
+// 재생 음량 10% — 원본 그대로(100%)면 로그인 직후 갑자기 커서 놀란다(사용자 확정 2026-11-02: 20% → 절반 10%).
+export const INTRO_VOLUME = 0.1;
 
 // 영상이 이 시간 안에 재생을 시작하지 못하면 닫고 기존 로딩 팝업으로 넘긴다(검은 화면 방치 금지).
 export const INTRO_START_TIMEOUT_MS = 6000;
