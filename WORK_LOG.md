@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-11-02 (2) — [부팅] 인트로 영상 소리 20%
+
+**대상 파일**: `src/introVideo.ts` · `src/components/IntroVideoOverlay.tsx` · `scripts/verify-intro.mjs`
+
+> 로딩화면 인트로 소리를 20%로 줄입니다. 너무 커서 사용자가 놀랄 수도 있음
+
+- `INTRO_VOLUME = 0.2`를 첫 `play()` 전에 건다 — 자동 재생이 소리째 되든, 막혀서 소리 없이 시작한 뒤 SOUND ON을 누르든 20%.
+  영상 파일은 그대로(음량은 재생기에서만). ⚠️ iPhone·iPad Safari는 웹페이지가 음량을 바꾸지 못해(기기 음량 버튼만) 거기선 기기 음량 그대로다.
+- 검증: gate(build는 실행 불가) · verify:intro 53건(#V1·#C11 신설, 변이 2종 검출) · 헤드리스 Chromium에서 volume 0.2 확인(자동 재생 허용/차단 두 경우).
+
 ## 2026-11-02 — [부팅] 계좌 로딩 중 인트로 영상 · 좌측 상단 진행 막대(클릭 = 대시보드) · 우측 상단 로딩 현황
 
 **대상 파일**: `public/intro/nominfi-intro.mp4`(신규 6.6MB) · `src/introVideo.ts`(신규) · `src/components/IntroVideoOverlay.tsx`(신규) ·

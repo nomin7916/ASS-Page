@@ -4,7 +4,7 @@
 // Enter·Esc·영상 끝 → onClose(로딩이 남았으면 App이 기존 로딩 팝업을 띄운다), 막대 클릭 → onSkipToDashboard.
 import React, { useEffect, useRef, useState } from 'react';
 import { Z } from '../design';
-import { INTRO_VIDEO_SRC, INTRO_START_TIMEOUT_MS, bootProgressRatio, ratchetProgress, introStatusText, introKeyAction } from '../introVideo';
+import { INTRO_VIDEO_SRC, INTRO_VOLUME, INTRO_START_TIMEOUT_MS, bootProgressRatio, ratchetProgress, introStatusText, introKeyAction } from '../introVideo';
 
 const C = {
   bg: '#060606',
@@ -51,6 +51,7 @@ export default function IntroVideoOverlay({ histPhase = 'loading', histProgress 
     const v = videoRef.current;
     let alive = true;
     if (v) {
+      v.volume = INTRO_VOLUME;
       v.play().catch(() => {
         if (!alive || closedRef.current) return;
         v.muted = true;

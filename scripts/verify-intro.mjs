@@ -29,6 +29,9 @@ const videoUrl = srcMatch ? srcMatch[1] : null;
 if (I) {
   const { bootProgressRatio: ratio, ratchetProgress: ratchet, introStatusText: status, introKeyAction: key, INTRO_KEY_GRACE_MS: GRACE } = I;
 
+  console.log('\n── 파트⓪ 음량 ──');
+  eq('#V1 재생 음량 20%(사용자 확정 2026-11-02 — 100%면 놀란다)', I.INTRO_VOLUME, 0.2);
+
   console.log('\n── 파트① 진행 막대 비율 ──');
   eq('#P1 계좌 로드 시작 = 0', ratio('loading', { done: 0, total: 0 }, 0), 0);
   ok('#P2 계좌 로드는 시간이 지나도 25%를 넘지 않는다', ratio('loading', { done: 0, total: 0 }, 600) <= 0.25 && ratio('loading', { done: 0, total: 0 }, 600) > 0.24);
@@ -107,6 +110,8 @@ ok('#C7 막대는 좌측 상단, 로딩 현황 글씨는 우측 상단', /top:\s
 ok('#C8 모바일 인라인 재생(playsInline)', /\bplaysInline\b/.test(comp));
 ok('#C9 벨 알림·브라우저 저장소 없음(알림 최소화·다중 계정 정책)', !/\bnotify\s*\(/.test(comp) && !/localStorage|sessionStorage/.test(comp));
 ok('#C10 한 번만 닫힌다(closedRef)', /if\s*\(closedRef\.current\)\s*return;/.test(comp));
+ok('#C11 음량(INTRO_VOLUME)을 import해 첫 play() 전에 건다', /import\s*\{[^}]*\bINTRO_VOLUME\b[^}]*\}\s*from\s*'\.\.\/introVideo'/.test(comp)
+  && /v\.volume\s*=\s*INTRO_VOLUME;\s*v\.play\(\)/.test(comp));
 
 console.log('\n── 파트⑦ App 배선 ──');
 const app = stripComments(read('src/App.tsx'));
