@@ -15,6 +15,7 @@
 src/
 ├── App.tsx              # 메인 컴포넌트 (~2,099줄 — 분리 진행 중)
 ├── api.ts               # 외부 API 호출
+├── appsScript.ts        # 승인 스크립트(Apps Script) 호출 단일 관문 — 본문에 로그인 토큰을 싣는다(⚠️ 직접 fetch 금지)
 ├── watchlistQuote.ts    # 관심종목 코드→시장 판정(detectMarket)·시세/이력/최근 분배금 조회(api.ts 재사용)
 ├── watchlistChart.ts    # 관심종목 기간 구간·등락율·비교 차트 행·분배금 파서·보유 매입가(buildHoldings)·보유종목 줄(holdingWatchStocks)·찾기(holdingCatalog·초성 searchHoldingCatalog) (⚠️ import 0 — verify:watchlist 직접 import)
 ├── rateMetrics.ts       # 금리 지표 계산: 현재값·1개월 변화·52주 위치·3년 백분위·꺾임 (⚠️ import 0)
@@ -115,7 +116,16 @@ src/
 - ⚠️ 배포·병합 모두 `divLinksBootFor`(STATE를 정상 로드한 계정) 게이트를 지난다 — 빼면 로드 전 기본값(빈 7칸)이 모든 사용자 칸을 지운다.
   관리자 접속(impersonation) 중엔 배포도 병합도 하지 않는다. 벨 알림 없음 — 공유 상태는 링크 편집창 안 한 줄. 검증: `verify:div-links`.
 
-## 서버 경로 로그인 확인 (`api/_auth.ts` · `src/apiAuth.ts`, ⚠️ 회귀 주의 — 2026-11-05)
+## 접속 승인·스크립트 권한 (⚠️ 회귀 주의 — 2026-11-05 OAuth 앱 게시로 누구나 구글 로그인 통과)
+
+- 사이트 코드·스크립트 주소는 공개다 → **문은 스크립트(`_downloads/AppsScript_계정관리_*.js`)가 지킨다.** 모든 요청은 POST 본문
+  `token`을 tokeninfo로 확인(aud=GOOGLE_CLIENT_ID)하고 이메일은 토큰에서만 꺼낸다. 권한: 본인(check·requestAccess·clearReset) /
+  승인 사용자(getSettings·getFeatureLabels·getNotifications — 공지는 전체·묶음·본인 것만) / 관리자(나머지). GET은 `{status:'ok'}`만.
+- 승인 요청 = `access_requests`에 PENDING + 관리자 메일. ⚠️ 옛 `addUser`(요청=자동 승인)로 되돌리지 말 것. 승인은 관리자 페이지 '승인 대기'.
+- 사이트는 `callScript`(src/appsScript.ts)로만 부른다 — 토큰은 `registerScriptAuth`(App, driveTokenRef). 포털 토큰은 drive 범위뿐이라 못 쓴다.
+- 스크립트를 바꾸면 관리자가 script.google.com에서 **새 버전 배포**해야 한다(사이트 배포와 순서 맞추기). 검증: `verify:access`(원본 실행).
+
+## 서버 경로 로그인·승인 확인 (`api/_auth.ts` · `src/apiAuth.ts`, ⚠️ 회귀 주의 — 2026-11-05)
 
 - 모든 `api/*.ts` 경로는 처리부 **첫 줄**이 `const denied = await requireAuth(req); if (denied) return denied;`(새 경로도).
   예외는 `market-calendar`뿐(로그인 화면에서 부름·비밀 키 없음 — 대신 연도 범위를 작년-4~+10년으로 묶는다).
@@ -125,8 +135,10 @@ src/
 - 앱: 호출 지점을 고치지 않는다 — `main.tsx`가 렌더 전 `installApiAuth`로 fetch를 감싸 같은 출처 `/api/…`에만 토큰을 싣는다.
   앱 탭 = `registerApiAuth(driveTokenRef, 무음 재발급)` · 별도 창(main.tsx `*_WINDOW_BOOT` 전부) = opener에게 `apiauth:want/token`
   postMessage로 받아 메모리에만(창의 창은 중간 창이 전달). 401이면 재발급 1회 후 재시도. 로그인 전엔 서버를 부르지 않고 401.
-- 다음 단계(사용자 확정 '단계적'): 승인 스크립트 보안 강화 `a0b09f4`가 main에 들어간 뒤 승인 명단 확인을 더한다 —
-  미승인은 401이 아니라 **403**(401이면 클라이언트가 재발급을 반복한다). 검증: `verify:api-auth`.
+- 승인 명단: 토큰이 통과하면 같은 토큰으로 승인 스크립트 `check`(본문에 이메일 없음) → `approved`만 통과, 관리자는 바로 통과.
+  미승인은 **403**(401이면 앱이 재발급을 반복한다). 이메일별 메모리 + Redis(이메일 해시 키): 승인 **1시간**(사용자 확정 — 취소 반영
+  최대 시간, 토큰 캐시도 이 시각을 넘지 않는다) · 미승인 5분. 스크립트 무응답일 때만 24시간 안 승인 기록으로 통과, 그 외 503.
+  ⚠️ `SCRIPT_URL`·`ADMIN_EMAIL`·`CLIENT_ID`는 src/config.ts 사본이다(verify:api-auth가 대조). 검증: `verify:api-auth`.
 
 ## 상세 문서 위치 (⚠️ 자동 로드 금지 — 이 절이 생긴 이유: 2026-10-18 CLAUDE.md가 916KB까지 커져 모든 세션이 시작과 동시에 작업 기억 한계에 걸려 압축만 반복했다)
 

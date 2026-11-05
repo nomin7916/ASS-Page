@@ -120,7 +120,8 @@ console.log('\n── 파트④ 배선 가드 ──');
   ok('#G8 공유 상태 문구가 링크 편집창까지 전달된다', /dividendLinksNote=\{dividendLinksNote\}/.test(APP) && /note=\{dividendLinksNote\}/.test(DST) && /\{note\.text\}/.test(DST));
   ok('#G9 벨 알림 없음(알림 최소화) — 공유 실패는 편집창 안 문구', !/notify\([^)]*공유/.test(APP));
   ok('#G10 재배포 불필요 — 기존 Apps Script도 reportLinks 쓰기를 허용하고 읽기에 돌려준다',
-    /const allowed = \{[^}]*reportLinks: true[^}]*\};/.test(GS) && /reportLinks:\s*safeParseJson\(map\['reportLinks'\], \[\]\)/.test(GS));
+    /const SETTINGS_KEYS\s*=\s*\{[^}]*reportLinks: true[^}]*\};/.test(GS) && /if \(!SETTINGS_KEYS\[key\]\)/.test(GS)
+    && /reportLinks:\s*safeParseJson\(map\['reportLinks'\], \[\]\)/.test(GS));
   ok('#G12 reportLinks 행은 읽고-고쳐-쓰기로만 쓴다(통째 쓰기 금지 · error 응답 불신 · 같으면 생략)',
     (APP.match(/deploySettingToSheet\('reportLinks'/g) || []).length === 1
     && /return deploySettingToSheet\('reportLinks', JSON\.stringify\(next\)\);/.test(APP)
