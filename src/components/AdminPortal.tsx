@@ -4,8 +4,7 @@ import {
   RefreshCw, ChevronLeft, TrendingUp, TrendingDown, Minus, AlertCircle,
   EyeOff, Plus, Trash2, Pencil, Check, X, ArrowUp, ArrowDown, Users,
 } from 'lucide-react';
-import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
-import { callScript } from '../appsScript';
+import { APPS_SCRIPT_URL, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
 import {
   findUserIndexFolder, loadDriveFile, DRIVE_FILES,
   getOrCreateAdminFolder, saveAdminUserCache, loadAdminUserCache,
@@ -266,10 +265,11 @@ const fmtDays = (firstAt: number | null) => {
 
 async function fetchApprovedUsers(): Promise<ApprovedUser[]> {
   try {
-    // 포털 토큰(portalToken)은 drive 범위뿐이라 스크립트가 이메일을 확인하지 못한다 → 앱 로그인 토큰을 쓰는 callScript 기본값.
-    const data = await callScript('listUsers');
+    const res = await fetch(`${APPS_SCRIPT_URL}?action=listUsers&cacheBust=${Date.now()}`);
+    if (!res.ok) return [];
+    const data = await res.json();
     // 관리자도 사용자 현황에 포함(시트 이름 그대로 사용). 숨김은 포털 설정으로 별도 제어.
-    return (data?.users || []).filter((u: any) => u.email);
+    return (data.users || []).filter((u: any) => u.email);
   } catch {
     return [];
   }

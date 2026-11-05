@@ -6,44 +6,14 @@
 
 ---
 
-## 2026-11-05 (5) — [보안] 서버 경로(/api) 2단계: 승인 명단 확인 · 승인 스크립트 보안 강화 main 반영
+## 2026-11-05 (4) — [긴급] 승인 스크립트 보안 강화(`efc3d63`)·/api 2단계(`41fd929`) 되돌림 — 전 사용자 로그인 차단 복구
 
-**대상 파일**: `api/_auth.ts` · `scripts/verify-api-auth.mjs` · `CLAUDE.md` (+ `a0b09f4`를 `efc3d63`으로 main에 옮김)
-
-> 다음 — 스크립트 새 버전은 배포했다 · 승인 취소가 서버 경로에 반영되는 최대 시간은 1시간
-
-- `a0b09f4`(브랜치 `claude/practical-goldberg-fr622l`)를 main 위로 cherry-pick → `efc3d63`. 충돌 3곳(CLAUDE.md·WORK_LOG.md·package.json)은
-  양쪽 추가분을 모두 살렸다. 스크립트 배포 여부는 이 세션 네트워크에서 script.google.com이 막혀 직접 확인하지 못했다(사용자 답변 기준).
-- 서버: tokeninfo 통과 뒤 같은 토큰으로 승인 스크립트 `check` → `approved`만 통과(관리자 바로 통과), 미승인 403.
-  이메일별 메모리 + Redis(`auth:appr:v1:<이메일 해시>`, 24시간 보관): 승인 1시간 · 미승인 5분 재사용. 토큰 캐시는 승인 유효 시각을 넘지 않는다
-  → 취소는 최대 1시간 뒤 반영. 스크립트 무응답이면 24시간 안 승인 기록만 통과(1분 캐시), 기록이 없거나 미승인이면 503/403.
-- Redis 저장이 실패해 Redis에 '취소 전 승인'이 남은 경우에도 메모리의 더 새 기록이 이긴다(낡은 기록이 무응답 시 통과시키지 않게).
-- 검증: `verify:api-auth` 110건(시계를 돌려 1시간·5분·24시간 경계 실행 · 다른 인스턴스 Redis 공유 · 앱의 403 무재시도) · 2단계 변이 11종 전부 검출 ·
-  `tsc`(api, 내 변경 오류 0 — 처음 쓴 타입 판별 함수가 부정 분기에서 never로 좁혀지던 것을 고쳤다) · gate(build 실행 불가).
-
-## 2026-11-05 (4) — [로그인·관리자] 승인 스크립트 보안 강화 — 승인 요청은 '대기'로만 · 모든 호출에 로그인 확인
-
-**대상 파일**: `_downloads/AppsScript_계정관리_arui114501.js` · `src/appsScript.ts`(신규) · `src/components/LoginGate.tsx` ·
-`src/components/AdminPage.tsx` · `src/components/AdminPortal.tsx` · `src/App.tsx` · `scripts/verify-access.mjs`(신규) ·
-`scripts/verify-{div-links,ledger,migrate}.mjs`(옛 스크립트 모양 가드를 새 구조로)
-
-> 프로덕션 전환으로 아무나 접속 가능 — 접속 관리자 권한 강화·해킹 시 대책. 어려우면 테스트로 돌아간다.
-
-- 확인된 구멍(코드): ① '관리자에게 승인 요청' = `addUser`라 요청이 곧 자동 승인 ② 스크립트에 호출자 확인이 없어 주소만 알면
-  명단 조회(이메일 유출)·삭제·기능 켜기·설정/공지 변경·남의 PIN 초기화 비번 조회(`GET check&email=`) 가능 — 테스트 모드에서도
-  스크립트 직접 호출은 열려 있었다(바깥 문은 구글 로그인뿐이었다). 관리자 페이지의 '메일이 자동 발송' 안내도 사실과 달랐다.
-- 스크립트: 모든 요청 POST + 본문 token → tokeninfo(aud=CLIENT_ID·email_verified·영숫자로 시작하는 이메일만 — 시트 수식 주입 차단),
-  10분 캐시. 권한 3단계(본인/승인 사용자/관리자). 승인 요청 → `access_requests` PENDING + 관리자 메일(하루 20통), 대기 상한 30.
-  관리자 동작 `listRequests·approveRequest·rejectRequest·deleteRequest·removeUser(승인 취소 = 거절로 남김)·listAudit`.
-  `audit_log` 시트(최근 1000줄)에 요청·승인·거절·취소·관리자 변경·권한 없는 시도(같은 계정·동작은 10분에 1줄). 쓰지 않던 setReset 제거.
-- 사이트: 모든 호출을 `callScript`(토큰 탑재, 만료 시 무음 재발급 1회 — 진행 중인 Drive 재발급 대기자를 덮지 않고 함께 기다림)로.
-  로그인 화면은 대기 중·거절 상태를 구분해 보여 주고 버튼을 숨긴다. 확인 실패는 '권한 없음'이 아니라 '다시 시도' 오류.
-  관리자 페이지: '승인 대기'(승인/거절·거절 기록 지우기)·사용자별 '승인 취소'(두 번 눌러 실행)·'보안 기록 50건'.
-  부팅 getSettings가 error 응답이면 덮지 않는다(덮으면 Drive 캐시의 링크가 지워진다). 유튜브 기록 불러오기가 배열을 JSON.parse해
-  늘 실패하던 것도 함께 고침.
-- 배포 순서: 스크립트 새 버전 배포(관리자) → 사이트 main 반영. 사이트만 먼저 나가면 새 로그인이 '확인 실패'로 막힌다.
-- 검증: `verify:access` 95건(원본 스크립트를 가짜 시트·tokeninfo 위에서 실행) · 변이 11종 전부 검출 · gate 통과(build 실행 불가) ·
-  bun 번들(123모듈, 외부 패키지 제외) 오류 0.
+- 원인: 사이트(main)는 새 코드인데 사이트가 부르는 스크립트 배포(`AKfycbyfIO3…`)는 옛 코드였다.
+  실측: GET → `{"status":"ok","admin":…}`, POST `check` → `unknown action: check` → 로그인·`/api` 승인 확인이 전부 실패.
+- 조치: 두 커밋을 revert(사용자 확정) → 트리가 `abc6e83`(/api 1단계, 스크립트 무관)과 같다.
+- ⚠️ 다시 적용하는 순서: 관리자가 `efc3d63`의 `_downloads/AppsScript_계정관리_arui114501.js`(711줄)를 기존 배포에 **새 버전**으로 배포
+  → GET이 `{"status":"ok"}`만 답하는지 확인 → 이 revert 커밋을 revert. 순서가 바뀌면 같은 장애가 난다.
+  지금 스크립트만 새로 배포하면 옛 사이트가 막힌다.
 
 ## 2026-11-05 (3) — [보안] 서버 경로(/api) 로그인 확인 — 1단계: 이 앱의 로그인 토큰만
 

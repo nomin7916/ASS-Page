@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// verify:api-auth — 서버 경로(/api/…) 로그인 확인 (2026-11-05, CLAUDE.md '서버 경로 로그인·승인 확인' 절)
+// verify:api-auth — 서버 경로(/api/…) 로그인 확인 (2026-11-05, CLAUDE.md '서버 경로 로그인 확인' 절)
 //
 // 막는 것: 주소만 알면 누구나 /api/…를 불러 관리자의 KIS·FRED·ECOS·구글 키 한도를 소모하던 구멍이 다시 열리는 것.
 //   파트① 소스 가드 — 모든 경로가 처리부 첫 줄에서 requireAuth를 부르는가(열린 경로는 목록에 있는 것만),
 //          서버끼리 부르는 /api/fred에 내부 키가 실리는가, 클라이언트 관문이 렌더 전에 설치되고 별도 창이 전부 'window'인가,
 //          클라이언트·서버의 헤더 이름·CLIENT_ID·열린 경로 목록이 같은가. + 가드 자체의 변이 검출.
-//   파트② api/_auth.ts 직접 import(타입 스트리핑) — tokeninfo·승인 스크립트·Redis를 가짜 fetch로 바꿔 통과·거부(401/403)·캐시·
-//          내부 키·승인 취소 1시간 반영·스크립트 무응답(24시간 안 승인 기록)·인스턴스 간 Redis 공유를 시계를 돌려 실행으로 확인.
+//   파트② api/_auth.ts 직접 import(타입 스트리핑) — tokeninfo를 가짜 fetch로 바꿔 통과·거부·캐시·내부 키를 실행으로 확인.
 //   파트③ src/apiAuth.ts를 창마다 따로 실행(타입 제거 후 window를 주입) — 앱 탭·별도 창·창의 창 사이 토큰 전달과
 //          401 무음 재발급 1회를 실제 postMessage 순서대로 확인.
 // ⚠️ 실패하면 먼저 정규식이 낡았는지 확인하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
@@ -87,14 +86,6 @@ const clientSrc = read('src/apiAuth.ts');
 const serverClientId = (authSrc.match(/export const CLIENT_ID = '([^']+)'/) || [])[1];
 const appClientId = (read('src/config.ts').match(/export const GOOGLE_CLIENT_ID = '([^']+)'/) || [])[1];
 ok('CLIENT_ID = src/config.ts GOOGLE_CLIENT_ID', !!serverClientId && serverClientId === appClientId);
-{
-  const cfg = read('src/config.ts');
-  const pick = (src, re) => (src.match(re) || [])[1];
-  const admin = pick(authSrc, /export const ADMIN_EMAIL = '([^']+)'/);
-  ok('ADMIN_EMAIL = src/config.ts ADMIN_EMAIL', !!admin && admin === pick(cfg, /export const ADMIN_EMAIL = '([^']+)'/));
-  const script = pick(authSrc, /export const SCRIPT_URL = '([^']+)'/);
-  ok('SCRIPT_URL = src/config.ts APPS_SCRIPT_URL', !!script && script === pick(cfg, /export const APPS_SCRIPT_URL = '([^']+)'/));
-}
 const serverHeader = (authSrc.match(/export const AUTH_HEADER = '([^']+)'/) || [])[1];
 const clientHeader = (clientSrc.match(/export const AUTH_HEADER = '([^']+)'/) || [])[1];
 ok('토큰 헤더 이름이 서버·클라이언트에서 같다', !!serverHeader && serverHeader.toLowerCase() === String(clientHeader).toLowerCase());
@@ -137,55 +128,25 @@ console.log('\n[파트②] api/_auth.ts');
 
 const CID = serverClientId;
 const GOOD = 'ya29.good-token-0123456789abcdef';
-let tokeninfoCalls = 0, scriptCalls = 0;
+let tokeninfoCalls = 0;
 let tokeninfoMode = {};   // token → 'ok' | 'aud' | 'unverified' | '400' | '500' | 'throw' | 'short'
-const tokenEmail = {};    // token → 구글이 알려 줄 이메일(기본 User@Example.com)
-const scriptMode = {};    // email → 'approved' | 'not_approved' | '500' | 'throw' | 'authError'(기본 approved)
-let scriptBodies = [];
-const SCRIPT = (authSrc.match(/export const SCRIPT_URL = '([^']+)'/) || [])[1];
-const REDIS = 'https://redis.example';
-const redisStore = new Map();
-let redisDown = false;
-let redisCmds = [];
-const emailOf = (tok) => String(tokenEmail[tok] || 'User@Example.com');
 const realFetch = globalThis.fetch;
-globalThis.fetch = async (url, init) => {
+globalThis.fetch = async (url) => {
   const u = String(url);
+  if (!u.startsWith('https://oauth2.googleapis.com/tokeninfo?access_token=')) throw new Error(`예상 밖 fetch ${u}`);
+  tokeninfoCalls++;
+  const tok = decodeURIComponent(u.split('access_token=')[1]);
+  const m = tokeninfoMode[tok] || '400';
   await new Promise(r => setTimeout(r, 5));
-  if (u.startsWith('https://oauth2.googleapis.com/tokeninfo?access_token=')) {
-    tokeninfoCalls++;
-    const tok = decodeURIComponent(u.split('access_token=')[1]);
-    const m = tokeninfoMode[tok] || '400';
-    if (m === 'throw') throw new TypeError('network');
-    if (m === '500') return new Response('err', { status: 500 });
-    if (m === '400') return new Response('{"error":"invalid_token"}', { status: 400 });
-    const info = { aud: m === 'aud' ? 'other.apps.googleusercontent.com' : CID, email: emailOf(tok),
-      email_verified: m === 'unverified' ? 'false' : 'true', expires_in: m === 'short' ? '20' : '3599' };
-    return new Response(JSON.stringify(info), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }
-  if (u === SCRIPT) {
-    scriptCalls++;
-    const body = JSON.parse(init.body);
-    scriptBodies.push({ method: init.method, ct: new Headers(init.headers).get('content-type'), body });
-    const m = scriptMode[emailOf(body.token).toLowerCase()] || 'approved';
-    if (m === 'throw') throw new TypeError('network');
-    if (m === '500') return new Response('err', { status: 500 });
-    if (m === 'authError') return Response.json({ success: false, authError: true, error: 'auth required' });
-    if (m === 'not_approved') return Response.json({ status: 'not_approved', request: 'none' });
-    return Response.json({ status: 'approved', resetPassword: '1234', name: 'x' });
-  }
-  if (u === REDIS) {
-    if (redisDown) throw new TypeError('redis down');
-    const cmd = JSON.parse(init.body);
-    redisCmds.push(cmd);
-    if (cmd[0] === 'GET') return Response.json({ result: redisStore.get(cmd[1]) ?? null });
-    if (cmd[0] === 'SET') { redisStore.set(cmd[1], cmd[2]); return Response.json({ result: 'OK' }); }
-  }
-  throw new Error(`예상 밖 fetch ${u}`);
+  if (m === 'throw') throw new TypeError('network');
+  if (m === '500') return new Response('err', { status: 500 });
+  if (m === '400') return new Response('{"error":"invalid_token"}', { status: 400 });
+  const info = { aud: m === 'aud' ? 'other.apps.googleusercontent.com' : CID, email: 'User@Example.com',
+    email_verified: m === 'unverified' ? 'false' : 'true', expires_in: m === 'short' ? '20' : '3599' };
+  return new Response(JSON.stringify(info), { status: 200, headers: { 'Content-Type': 'application/json' } });
 };
 const reqWith = (headers) => new Request('https://site.example/api/history?key=x', { headers });
 
-for (const k of ['UPSTASH_REDIS_REST_URL', 'KV_REST_API_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_TOKEN']) delete process.env[k];
 process.env.KIS_APP_SECRET = 'kis-secret-for-test';
 const A = await import(pathToFileURL(join(ROOT, 'api/_auth.ts')).href + '?env=1');
 const AUTH = A.AUTH_HEADER;
@@ -240,118 +201,6 @@ for (const mode of ['500', 'throw']) {
   eq('틀린 내부 키 → 401', (await A.requireAuth(reqWith({ [A.INTERNAL_HEADER]: 'f'.repeat(64) }), { allowInternal: true }))?.status, 401);
   eq('틀린 내부 키 + 맞는 토큰 → 통과', await A.requireAuth(reqWith({ [A.INTERNAL_HEADER]: 'x', [AUTH]: GOOD }), { allowInternal: true }), null);
 }
-
-console.log('  — 승인 명단(승인 스크립트 check)');
-eq('승인 결과 재사용 1시간 · 미승인 5분 · 무응답 대비 보관 24시간(사용자 확정 2026-11-05)', [A.APPROVED_FRESH, A.DENIED_FRESH, A.APPROVAL_KEEP], [3600000, 300000, 86400000]);
-const realNow = Date.now;
-let skew = 0;
-Date.now = () => realNow() + skew;
-const mk = (name, email) => { const t = `ya29.${name}-0123456789abcdef`; tokeninfoMode[t] = 'ok'; tokenEmail[t] = email; return t; };
-try {
-  const U1 = mk('one-a', 'one@example.com'), U1b = mk('one-b', 'One@Example.com');
-  scriptCalls = 0; scriptBodies = [];
-  eq('승인 계정 → 통과 · 스크립트 1회', [await A.requireAuth(reqWith({ [AUTH]: U1 })), scriptCalls], [null, 1]);
-  const sb = scriptBodies[0] || { body: {} };
-  eq('스크립트 호출 = POST text/plain {action:check, token} · 본문에 이메일 없음',
-    [sb.method, sb.ct, sb.body.action, sb.body.token === U1, 'email' in sb.body], ['POST', 'text/plain', 'check', true, false]);
-  eq('같은 계정의 다른 토큰(대소문자 다른 이메일) → 스크립트 다시 안 부름', [await A.requireAuth(reqWith({ [AUTH]: U1b })), scriptCalls], [null, 1]);
-
-  const N1 = mk('stranger', 'stranger@example.com');
-  scriptMode['stranger@example.com'] = 'not_approved';
-  const n1 = await A.requireAuth(reqWith({ [AUTH]: N1 }));
-  const n2 = await A.requireAuth(reqWith({ [AUTH]: N1 }));
-  eq('미승인 계정 → 403(401이 아님 = 재발급 반복 없음) · no-store · 다시 와도 스크립트 1회',
-    [n1?.status, n1?.headers.get('cache-control'), n2?.status, scriptCalls], [403, 'no-store', 403, 2]);
-
-  const ADM = mk('admin', A.ADMIN_EMAIL.toUpperCase());
-  eq('관리자 → 스크립트 없이 통과', [await A.requireAuth(reqWith({ [AUTH]: ADM })), scriptCalls], [null, 2]);
-
-  for (const mode of ['500', 'throw', 'authError']) {
-    const email = `down-${mode.toLowerCase()}@example.com`;
-    const tok = mk(`down-${mode}`, email);
-    scriptMode[email] = mode;
-    const s0 = scriptCalls;
-    const r = await A.requireAuth(reqWith({ [AUTH]: tok }));
-    scriptMode[email] = 'approved';
-    const again = await A.requireAuth(reqWith({ [AUTH]: tok }));
-    eq(`스크립트 판정 불가(${mode}) · 기록 없는 계정 → 503 · 캐시하지 않고 다음 요청은 다시 확인`, [r?.status, again, scriptCalls - s0], [503, null, 2]);
-  }
-
-  let s0 = scriptCalls;
-  skew = 4 * 60_000;
-  eq('미승인 4분 뒤 → 스크립트 다시 안 부르고 403', [(await A.requireAuth(reqWith({ [AUTH]: N1 })))?.status, scriptCalls - s0], [403, 0]);
-  skew = 6 * 60_000;
-  scriptMode['stranger@example.com'] = 'approved';
-  eq('미승인 5분이 지나면 다시 확인 → 그새 승인됐으면 통과', [await A.requireAuth(reqWith({ [AUTH]: N1 })), scriptCalls - s0], [null, 1]);
-
-  s0 = scriptCalls;
-  const T = mk('one-later', 'one@example.com');
-  skew = 59 * 60_000;
-  eq('승인 59분 뒤 새 토큰 → 스크립트 다시 안 부름', [await A.requireAuth(reqWith({ [AUTH]: T })), scriptCalls - s0], [null, 0]);
-  scriptMode['one@example.com'] = 'not_approved';
-  skew = 61 * 60_000;
-  eq('승인 취소 → 61분 뒤엔 같은 토큰도 403(최대 1시간)', [(await A.requireAuth(reqWith({ [AUTH]: T })))?.status, scriptCalls - s0], [403, 1]);
-
-  const S1 = mk('two-a', 'two@example.com'), S2 = mk('two-b', 'two@example.com'), S3 = mk('two-c', 'two@example.com');
-  s0 = scriptCalls;
-  ok('계정 2 승인(61분 시점)', await A.requireAuth(reqWith({ [AUTH]: S1 })) === null);
-  scriptMode['two@example.com'] = 'throw';
-  skew = 61 * 60_000 + 2 * 3600_000;
-  const st1 = await A.requireAuth(reqWith({ [AUTH]: S2 }));
-  const st2 = await A.requireAuth(reqWith({ [AUTH]: S2 }));
-  eq('2시간 뒤 스크립트 무응답 → 24시간 안 승인 기록으로 통과 · 1분은 다시 묻지 않음', [st1, st2, scriptCalls - s0], [null, null, 2]);
-  skew = 61 * 60_000 + 25 * 3600_000;
-  eq('25시간 뒤에도 무응답 → 503', (await A.requireAuth(reqWith({ [AUTH]: S3 })))?.status, 503);
-  scriptMode['two@example.com'] = 'not_approved';
-  const S4 = mk('two-d', 'two@example.com');
-  eq('무응답이 아니라 미승인이면 기록이 있어도 403', (await A.requireAuth(reqWith({ [AUTH]: S4 })))?.status, 403);
-} finally {
-  Date.now = realNow;
-}
-
-console.log('  — Redis 공유(다른 인스턴스)');
-{
-  process.env.UPSTASH_REDIS_REST_URL = REDIS;
-  process.env.UPSTASH_REDIS_REST_TOKEN = 'redis-token-for-test';
-  const R1 = await import(pathToFileURL(join(ROOT, 'api/_auth.ts')).href + '?env=r1');
-  const R2 = await import(pathToFileURL(join(ROOT, 'api/_auth.ts')).href + '?env=r2');
-  const RT = mk('three-a', 'three@example.com');
-  const s0 = scriptCalls;
-  redisCmds = [];
-  eq('인스턴스 1 → 스크립트로 확인', [await R1.requireAuth(reqWith({ [AUTH]: RT })), scriptCalls - s0], [null, 1]);
-  const setCmd = redisCmds.find(c => c[0] === 'SET') || [];
-  ok('Redis 키 = 이메일 해시(원문 없음)', /^auth:appr:v1:[0-9a-f]{64}$/.test(String(setCmd[1])) && !String(setCmd[1]).includes('three'));
-  eq('Redis 값 = 승인:시각 · 보관 24시간(PX)', [/^1:\d{13}$/.test(String(setCmd[2])), setCmd[3], setCmd[4]], [true, 'PX', 86400000]);
-  eq('인스턴스 2 → Redis 기록으로 통과 · 스크립트 다시 안 부름', [await R2.requireAuth(reqWith({ [AUTH]: mk('three-b', 'three@example.com') })), scriptCalls - s0], [null, 1]);
-  redisCmds = [];
-  eq('같은 인스턴스의 새 토큰 → Redis도 다시 읽지 않는다(메모리)', [await R1.requireAuth(reqWith({ [AUTH]: mk('three-d', 'three@example.com') })), redisCmds.length], [null, 0]);
-  redisDown = true;
-  const R3 = await import(pathToFileURL(join(ROOT, 'api/_auth.ts')).href + '?env=r3');
-  eq('Redis가 응답하지 않아도 스크립트로 확인해 통과', [await R3.requireAuth(reqWith({ [AUTH]: mk('three-c', 'three@example.com') })), scriptCalls - s0], [null, 2]);
-  redisDown = false;
-
-  // Redis 저장이 실패해 Redis엔 '취소 전 승인'이, 메모리엔 '방금 미승인'이 있을 때 — 낡은 Redis 기록이 이기면 안 된다
-  const { createHash } = await import('node:crypto');
-  const fourKey = `auth:appr:v1:${createHash('sha256').update('ass-approval|four@example.com').digest('hex')}`;
-  const R4 = await import(pathToFileURL(join(ROOT, 'api/_auth.ts')).href + '?env=r4');
-  const realNow2 = Date.now;
-  let skew2 = 0;
-  Date.now = () => realNow2() + skew2;
-  try {
-    redisStore.set(fourKey, `1:${realNow2() - 2 * 3600_000}`);
-    scriptMode['four@example.com'] = 'not_approved';
-    redisDown = true;
-    eq('취소된 계정(Redis 저장 실패) → 403', (await R4.requireAuth(reqWith({ [AUTH]: mk('four-a', 'four@example.com') })))?.status, 403);
-    redisDown = false;
-    skew2 = 6 * 60_000;
-    scriptMode['four@example.com'] = 'throw';
-    eq('6분 뒤 스크립트 무응답 → 낡은 Redis 승인 기록으로 통과시키지 않는다(503)', (await R4.requireAuth(reqWith({ [AUTH]: mk('four-b', 'four@example.com') })))?.status, 503);
-  } finally {
-    Date.now = realNow2;
-    redisDown = false;
-  }
-  delete process.env.UPSTASH_REDIS_REST_URL;
-}
 {
   for (const k of ['API_INTERNAL_KEY', 'KIS_APP_SECRET', 'FRED_API_KEY', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_TOKEN', 'ECOS_API_KEY', 'GOOGLE_API_KEY']) delete process.env[k];
   const B = await import(pathToFileURL(join(ROOT, 'api/_auth.ts')).href + '?env=0');
@@ -369,7 +218,6 @@ const loadClient = (win) => new Function('window', `${CLIENT_CODE}\nreturn { ins
 const tick = () => new Promise(r => setTimeout(r, 0));
 
 let validTokens = new Set();
-let forbidden = new Set();
 let wantMessages = 0;
 function makeWin(name) {
   const listeners = new Set();
@@ -383,7 +231,6 @@ function makeWin(name) {
       const tok = req.headers.get('x-app-token');
       w.calls.push({ url: req.url, tok, accept: req.headers.get('accept') });
       const u = new URL(req.url);
-      if (forbidden.has(tok)) return new Response('{"error":"not approved"}', { status: 403 });
       if (u.origin === ORIGIN && u.pathname.startsWith('/api/') && u.pathname !== '/api/market-calendar' && !validTokens.has(tok)) {
         return new Response('{"error":"auth required"}', { status: 401 });
       }
@@ -439,12 +286,6 @@ function link(parent, child) {
   const n0 = app.calls.length;
   const rf = await app.fetch('/api/history?key=x');
   eq('재발급 실패 → 원래 401 그대로 · 한 번만 보낸다(무한 반복 없음)', [rf.status, app.calls.length - n0, refreshCalls], [401, 1, 2]);
-
-  token = 'tokF'; forbidden = new Set(['tokF']);
-  const nf = app.calls.length, rcf = refreshCalls;
-  const r403 = await app.fetch('/api/history?key=x');
-  eq('미승인(403) → 재발급·재시도 없이 그대로', [r403.status, app.calls.length - nf, refreshCalls - rcf], [403, 1, 0]);
-  forbidden = new Set();
 
   // 별도 창 — opener(앱 탭)에게 토큰을 받는다
   token = 'tokC'; validTokens = new Set(['tokC']);
