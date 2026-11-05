@@ -125,7 +125,7 @@ src/
 - 사이트는 `callScript`(src/appsScript.ts)로만 부른다 — 토큰은 `registerScriptAuth`(App, driveTokenRef). 포털 토큰은 drive 범위뿐이라 못 쓴다.
 - 스크립트를 바꾸면 관리자가 script.google.com에서 **새 버전 배포**해야 한다(사이트 배포와 순서 맞추기). 검증: `verify:access`(원본 실행).
 
-## 서버 경로 로그인 확인 (`api/_auth.ts` · `src/apiAuth.ts`, ⚠️ 회귀 주의 — 2026-11-05)
+## 서버 경로 로그인·승인 확인 (`api/_auth.ts` · `src/apiAuth.ts`, ⚠️ 회귀 주의 — 2026-11-05)
 
 - 모든 `api/*.ts` 경로는 처리부 **첫 줄**이 `const denied = await requireAuth(req); if (denied) return denied;`(새 경로도).
   예외는 `market-calendar`뿐(로그인 화면에서 부름·비밀 키 없음 — 대신 연도 범위를 작년-4~+10년으로 묶는다).
@@ -135,8 +135,10 @@ src/
 - 앱: 호출 지점을 고치지 않는다 — `main.tsx`가 렌더 전 `installApiAuth`로 fetch를 감싸 같은 출처 `/api/…`에만 토큰을 싣는다.
   앱 탭 = `registerApiAuth(driveTokenRef, 무음 재발급)` · 별도 창(main.tsx `*_WINDOW_BOOT` 전부) = opener에게 `apiauth:want/token`
   postMessage로 받아 메모리에만(창의 창은 중간 창이 전달). 401이면 재발급 1회 후 재시도. 로그인 전엔 서버를 부르지 않고 401.
-- 다음 단계(사용자 확정 '단계적'): 승인 스크립트 보안 강화 `a0b09f4`가 main에 들어간 뒤 승인 명단 확인을 더한다 —
-  미승인은 401이 아니라 **403**(401이면 클라이언트가 재발급을 반복한다). 검증: `verify:api-auth`.
+- 승인 명단: 토큰이 통과하면 같은 토큰으로 승인 스크립트 `check`(본문에 이메일 없음) → `approved`만 통과, 관리자는 바로 통과.
+  미승인은 **403**(401이면 앱이 재발급을 반복한다). 이메일별 메모리 + Redis(이메일 해시 키): 승인 **1시간**(사용자 확정 — 취소 반영
+  최대 시간, 토큰 캐시도 이 시각을 넘지 않는다) · 미승인 5분. 스크립트 무응답일 때만 24시간 안 승인 기록으로 통과, 그 외 503.
+  ⚠️ `SCRIPT_URL`·`ADMIN_EMAIL`·`CLIENT_ID`는 src/config.ts 사본이다(verify:api-auth가 대조). 검증: `verify:api-auth`.
 
 ## 상세 문서 위치 (⚠️ 자동 로드 금지 — 이 절이 생긴 이유: 2026-10-18 CLAUDE.md가 916KB까지 커져 모든 세션이 시작과 동시에 작업 기억 한계에 걸려 압축만 반복했다)
 
