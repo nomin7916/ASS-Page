@@ -3,6 +3,7 @@
 // [최적화] &cache=N 쿼리 파라미터가 있으면 s-maxage=N 캐시 허용, 없으면 기존 no-cache 유지(호환성 보존)
 
 export const config = { runtime: 'edge' };
+import { requireAuth } from './_auth.js';
 
 const ALLOWED_DOMAINS = [
   'tradingeconomics.com',
@@ -14,6 +15,8 @@ const ALLOWED_DOMAINS = [
 ];
 
 export default async function handler(request: Request): Promise<Response> {
+  const denied = await requireAuth(request);
+  if (denied) return denied;
   const { searchParams } = new URL(request.url);
   const target = searchParams.get('url');
   const cacheSeconds = parseInt(searchParams.get('cache') ?? '0', 10);

@@ -109,6 +109,7 @@ import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './c
 import { DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSize, sameWatchSize } from './watchlistGroups';
 import { buildHoldings } from './watchlistChart';
 import { groupCategoryOf, sharedCategoryOf } from './userCategory';
+import { registerApiAuth } from './apiAuth';
 
 // 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
@@ -885,6 +886,19 @@ export default function App() {
   useEffect(() => {
     document.title = authUser ? `종합 자산 관리 - ${authUser.email}` : '종합 자산 관리';
   }, [authUser]);
+
+  // 서버 경로(/api/…)에 실을 로그인 토큰(apiAuth.ts) — 별도 창도 이 탭에서 받아 간다. 관리자 접속 탭에선 관리자 토큰이다.
+  // 만료 재발급은 Drive와 같은 무음 클라이언트를 쓰되, 진행 중인 재발급의 대기자를 덮지 않고 함께 기다린다
+  // (pendingTokenResolveRef는 한 칸이라 덮으면 Drive 저장이 영영 끝나지 않는다).
+  useEffect(() => {
+    registerApiAuth(() => driveTokenRef.current, () => new Promise<string | null>((resolve) => {
+      const client = tokenClientRef.current;
+      if (!client) { resolve(null); return; }
+      const prev = pendingTokenResolveRef.current;
+      pendingTokenResolveRef.current = (t) => { if (prev) prev(t); resolve(t); };
+      if (!prev) client.requestAccessToken({ prompt: '' });
+    }));
+  }, []);
 
   // ── useMarketData 훅 ──
   const {

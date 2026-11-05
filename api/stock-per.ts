@@ -1,6 +1,7 @@
 // Vercel Edge Function — 종목 PER/선행PER 서버사이드 조회
 // 클라이언트에서 CORS/401로 실패하는 Yahoo Finance, Naver API를 서버에서 직접 호출
 export const config = { runtime: 'edge' };
+import { requireAuth } from './_auth.js';
 
 const parseNum = (v: any): number | null => {
   if (v == null || v === '' || v === '-') return null;
@@ -211,6 +212,8 @@ async function debugKoreanRaw(code: string): Promise<object> {
 }
 
 export default async function handler(request: Request): Promise<Response> {
+  const denied = await requireAuth(request);
+  if (denied) return denied;
   const { searchParams } = new URL(request.url);
   const code = (searchParams.get('code') ?? '').trim().toUpperCase();
   const ticker = (searchParams.get('ticker') ?? '').trim().toUpperCase();

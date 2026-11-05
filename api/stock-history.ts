@@ -2,6 +2,7 @@
 // [최적화] 과거 주가 히스토리(수년치 차트용)는 당일 1회 이상 갱신 불필요 → 24h 캐시
 export const config = { runtime: 'edge' };
 
+import { requireAuth } from './_auth.js';
 import { getKisToken } from './_kisToken.js';
 import { fetchKisDailyRange } from './_kisDaily.js';
 
@@ -13,6 +14,8 @@ const CHUNK_TIMEOUT_MS = 5000;  // 개별 KIS 호출 최대 대기
 const DEADLINE_MS      = 22000; // Edge 30s 제한 전에 부분 결과 반환
 
 export default async function handler(request: Request): Promise<Response> {
+  const denied = await requireAuth(request);
+  if (denied) return denied;
   const { searchParams } = new URL(request.url);
   const code     = searchParams.get('code') ?? '';
   const fromYear = parseInt(searchParams.get('fromYear') ?? '2000', 10);

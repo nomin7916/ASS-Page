@@ -6,6 +6,25 @@
 
 ---
 
+## 2026-11-05 (3) — [보안] 서버 경로(/api) 로그인 확인 — 1단계: 이 앱의 로그인 토큰만
+
+**대상 파일**: `api/_auth.ts`(신규) · `api/` 경로 9개 · `api/market-calendar.ts` · `src/apiAuth.ts`(신규) · `src/main.tsx` · `src/App.tsx` · `scripts/verify-api-auth.mjs`(신규)
+
+> 서버 경로가 호출자를 확인하지 않아 주소만 알면 관리자 키 한도를 소모할 수 있다 — 설계 제안 후 확인받고 구현(허용 대상 '단계적', 공휴일 경로 '열어 두고 범위 제한')
+
+- 구멍: `history`·`stock-history`·`us-stock-price`(KIS), `indicators`(ECOS), `fred`(FRED·Redis), `study-material`(GOOGLE_API_KEY),
+  `proxy`·`etf-holdings`·`stock-per`(네이버·야후 중계)가 누구 호출이든 받았다. OAuth 테스트 모드여도 주소는 공개라 같았다.
+- 서버: `requireAuth` — `X-App-Token`을 tokeninfo로 확인(aud=GOOGLE_CLIENT_ID·email_verified), 토큰 해시별 메모리 캐시·동시 요청 합치기.
+  401/503은 `no-store`. `Authorization`을 쓰지 않은 이유: Vercel CDN이 그 요청을 캐시하지 않아 외부 호출이 오히려 는다.
+  서버끼리 부르는 `/api/fred`는 서버 비밀값 해시(내부 키)로 통과.
+- `market-calendar`: 열어 두되 연도 범위를 작년-4~+10년·정수로 묶었다(전엔 `yearEnd=99999` 한 번에 nager 호출 수만 건 가능).
+- 앱: 호출 지점 74곳을 고치지 않고 fetch를 한 번 감쌌다. 별도 창은 opener에게 postMessage로 토큰을 받는다(관심종목 창 → 종목 차트 창은 중계).
+  로그인 전 호출(지수 10년치 3건)은 서버를 건너뛰고 기존 대체 경로로 — 로그인 뒤 시세 새로고침·보충 수집이 다시 채운다.
+- 구현 중 찾은 결함(검증으로 고정): 앱 탭이 예전에 재발급받은 토큰을 '새 토큰'으로 창에 건넸다 → 401 받은 토큰 집합 + getter가 바뀌면 재발급분 폐기.
+- 검증: `verify:api-auth` 82건(소스 가드·`_auth.ts` 실행·창별 postMessage 실행) · 변이 7종 전부 검출 · gate(build 실행 불가) ·
+  `tsc`(api·apiAuth, `@types/node` 없이 — 내 변경 오류 0).
+- 다음: 승인 스크립트 보안 강화(`a0b09f4`)가 main에 들어간 뒤 승인 명단 확인 추가(미승인 = 403).
+
 ## 2026-11-05 (2) — [로그인] 개인정보처리방침 쪽 신설(구글 OAuth 앱 게시 준비)
 
 **대상 파일**: `public/privacy.html`(신규)

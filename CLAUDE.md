@@ -27,6 +27,7 @@ src/
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
 ├── introVideo.ts        # 인트로 영상(public/intro) 진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro)
+├── apiAuth.ts           # /api/… fetch 관문(로그인 토큰 탑재·401 재발급 1회·별도 창 토큰 전달) (⚠️ import 0 — verify:api-auth)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
@@ -113,6 +114,19 @@ src/
   기준값 `dividendLinksSeen`은 사용자 STATE에 저장(payload·deps·구조 지문·applyStateData 네 곳). 공유값이 없으면(키 없음·빈 배열) 아무것도 안 바꾼다.
 - ⚠️ 배포·병합 모두 `divLinksBootFor`(STATE를 정상 로드한 계정) 게이트를 지난다 — 빼면 로드 전 기본값(빈 7칸)이 모든 사용자 칸을 지운다.
   관리자 접속(impersonation) 중엔 배포도 병합도 하지 않는다. 벨 알림 없음 — 공유 상태는 링크 편집창 안 한 줄. 검증: `verify:div-links`.
+
+## 서버 경로 로그인 확인 (`api/_auth.ts` · `src/apiAuth.ts`, ⚠️ 회귀 주의 — 2026-11-05)
+
+- 모든 `api/*.ts` 경로는 처리부 **첫 줄**이 `const denied = await requireAuth(req); if (denied) return denied;`(새 경로도).
+  예외는 `market-calendar`뿐(로그인 화면에서 부름·비밀 키 없음 — 대신 연도 범위를 작년-4~+10년으로 묶는다).
+- 헤더 `X-App-Token`(구글 로그인 액세스 토큰) → tokeninfo `aud`=GOOGLE_CLIENT_ID·`email_verified`(인스턴스 메모리 캐시: 통과 ≤10분·거부 1분).
+  ⚠️ `Authorization`으로 바꾸지 말 것 — Vercel CDN이 그 요청은 캐시하지 않는다. CDN 캐시 적중은 토큰 없이 나간다(공개 시세·함수 미실행 = 키 한도 0).
+- 서버끼리(`history`·`indicators` → `fred`)는 `internalAuthHeaders()`(서버 비밀값 해시). `allowInternal`은 `fred`만.
+- 앱: 호출 지점을 고치지 않는다 — `main.tsx`가 렌더 전 `installApiAuth`로 fetch를 감싸 같은 출처 `/api/…`에만 토큰을 싣는다.
+  앱 탭 = `registerApiAuth(driveTokenRef, 무음 재발급)` · 별도 창(main.tsx `*_WINDOW_BOOT` 전부) = opener에게 `apiauth:want/token`
+  postMessage로 받아 메모리에만(창의 창은 중간 창이 전달). 401이면 재발급 1회 후 재시도. 로그인 전엔 서버를 부르지 않고 401.
+- 다음 단계(사용자 확정 '단계적'): 승인 스크립트 보안 강화 `a0b09f4`가 main에 들어간 뒤 승인 명단 확인을 더한다 —
+  미승인은 401이 아니라 **403**(401이면 클라이언트가 재발급을 반복한다). 검증: `verify:api-auth`.
 
 ## 상세 문서 위치 (⚠️ 자동 로드 금지 — 이 절이 생긴 이유: 2026-10-18 CLAUDE.md가 916KB까지 커져 모든 세션이 시작과 동시에 작업 기억 한계에 걸려 압축만 반복했다)
 

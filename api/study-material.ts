@@ -9,6 +9,7 @@
 // HTML을 200으로 돌려줄 수 있어 그대로 중계하면 안 되므로 응답을 검증한 뒤에만 전달한다.
 
 export const config = { runtime: 'edge' };
+import { requireAuth } from './_auth.js';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY ?? '';
 
@@ -25,6 +26,8 @@ function looksLikeInterstitial(res: Response, body: string): boolean {
 }
 
 export default async function handler(request: Request): Promise<Response> {
+  const denied = await requireAuth(request);
+  if (denied) return denied;
   // 교차 출처 브라우저 호출 차단 — 같은 출처 fetch만 허용 (오픈 릴레이/CORS 남용 방지).
   // 같은 출처 GET fetch는 Sec-Fetch-Site: same-origin, 직접 내비게이션은 none, 비브라우저는 헤더 없음.
   const sfs = request.headers.get('sec-fetch-site');

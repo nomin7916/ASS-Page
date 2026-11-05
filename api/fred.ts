@@ -7,6 +7,7 @@
 // mode=history: 날짜→값 JSON(실패 502). 값을 지어내지 않는다.
 export const config = { runtime: 'edge', regions: ['iad1'] };
 
+import { requireAuth } from './_auth.js';
 import {
   parseFredGraphCsv, parseFredApiObservations, fredLatest, fredStartFor, logSafe,
   fredKvKey, packFredKv, unpackFredKv,
@@ -95,6 +96,8 @@ const json = (body: unknown, status: number, cache: string) => new Response(JSON
 });
 
 export default async function handler(req: Request): Promise<Response> {
+  const denied = await requireAuth(req, { allowInternal: true });
+  if (denied) return denied;
   const q = new URL(req.url).searchParams;
   const today = new Date().toISOString().slice(0, 10);
   const budget = Math.max(3000, Math.min(22000, Number(q.get('ms')) || 20000));

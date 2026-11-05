@@ -3,6 +3,7 @@
 // [최적화] timeout 9000→6000ms(느린 응답 CPU 점유 단축), SWR 60→600s(캐시 만료 후 백그라운드 갱신 확대)
 export const config = { runtime: 'edge' };
 
+import { requireAuth, internalAuthHeaders } from './_auth.js';
 import { parseBokBaseRateHtml, stepLatest, extendStepChanges, parseNyFedTarget, parsePmmsCsv, logSafe } from './_indicatorSources.js';
 import { US_FED_RATE_CHANGES } from './_usFedRateData.js';
 import { KR_BASE_RATE_CHANGES, KR_BASE_RATE_SNAPSHOT_AT } from './_krBaseRateData.js';
@@ -31,7 +32,7 @@ const FRED_DIFF = ['T10Y2Y', 'T10Y3M', 'BAMLH0A0HYM2'];
 async function fetchFredBatch(origin: string, fresh = false): Promise<Record<string, any>> {
   const t0 = Date.now();
   try {
-    const res = await fetch(`${origin}/api/fred?mode=latest&ids=${FRED_LATEST.join(',')}&diff=${FRED_DIFF.join(',')}${fresh ? `&t=${Date.now()}` : ''}`, { signal: AbortSignal.timeout(23000) });
+    const res = await fetch(`${origin}/api/fred?mode=latest&ids=${FRED_LATEST.join(',')}&diff=${FRED_DIFF.join(',')}${fresh ? `&t=${Date.now()}` : ''}`, { headers: await internalAuthHeaders(), signal: AbortSignal.timeout(23000) });
     if (res.ok) return await res.json();
     console.error(`[indicators] /api/fred status=${res.status} ${Date.now() - t0}ms`);
   } catch (e) {
@@ -282,6 +283,8 @@ async function fetchCoinGecko(coinId: string) {
 }
 
 export default async function handler(req: Request): Promise<Response> {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   // ?fresh=1 — 사용자가 직접 누른 갱신(헤더 시장지표 칩·새로고침 버튼). 엣지 캐시(s-maxage=300)를
   // 건너뛰고 항상 업스트림에서 다시 수집한다. 자동 수집(앱 시작)은 파라미터 없이 캐시 경로를 그대로 쓴다.
   const fresh = new URL(req.url).searchParams.get('fresh') === '1';

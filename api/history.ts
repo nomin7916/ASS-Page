@@ -5,6 +5,7 @@ export const config = { runtime: 'edge' };
 
 const ECOS_KEY = process.env.ECOS_API_KEY ?? '';   // 한국은행 ECOS — 한국 기준금리(krBase). 없으면 '인증키 필요' 502
 
+import { requireAuth, internalAuthHeaders } from './_auth.js';
 import { getKisToken } from './_kisToken.js';
 import { fetchKisDailyRange } from './_kisDaily.js';
 import {
@@ -177,7 +178,7 @@ async function fetchFredHistory(seriesId: string, d1: string, d2: string, timeou
   if (signed) p.set('signed', '1');
   const t0 = Date.now();
   try {
-    const res = await fetch(`${SELF_ORIGIN}/api/fred?${p}`, { signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetch(`${SELF_ORIGIN}/api/fred?${p}`, { headers: await internalAuthHeaders(), signal: AbortSignal.timeout(timeoutMs) });
     if (res.ok) return await res.json();
     console.error(`[history] /api/fred ${seriesId} status=${res.status} ${Date.now() - t0}ms`);
   } catch (e) {
@@ -582,6 +583,8 @@ async function fetchKisDomesticActualHistory(code: string, token: string, d1: st
 }
 
 export default async function handler(request: Request): Promise<Response> {
+  const denied = await requireAuth(request);
+  if (denied) return denied;
   const { searchParams, origin } = new URL(request.url);
   SELF_ORIGIN = origin;
   const key   = searchParams.get('key') ?? '';

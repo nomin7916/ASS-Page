@@ -77,8 +77,12 @@ export default async function handler(request: Request): Promise<Response> {
 
   const url = new URL(request.url);
   const nowYear = new Date().getUTCFullYear();
-  const yStart = Number(url.searchParams.get('yearStart')) || nowYear;
-  const yEnd = Number(url.searchParams.get('yearEnd')) || nowYear + 5;
+  // 로그인 없이 열린 경로라 연도 범위를 묶는다(작년-4 ~ +10년) — 범위 밖 연도마다 nager를 부르므로 상한이 없으면
+  // yearStart=1&yearEnd=99999 한 번에 외부 호출 수만 건이 나갔다(2026-11-05). 소수 연도는 큐레이션 색인을 깨뜨려 정수로 자른다.
+  const Y_MIN = nowYear - 5, Y_MAX = nowYear + 10;
+  const clampYear = (v: number) => Math.min(Y_MAX, Math.max(Y_MIN, Math.trunc(v)));
+  const yStart = clampYear(Number(url.searchParams.get('yearStart')) || nowYear);
+  const yEnd = Math.max(yStart, clampYear(Number(url.searchParams.get('yearEnd')) || nowYear + 5));
 
   const kr: string[] = [];
   const us: string[] = [];

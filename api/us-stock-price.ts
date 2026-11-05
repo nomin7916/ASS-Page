@@ -2,6 +2,7 @@
 // Yahoo Finance(직접) → KIS 해외주식 API → Naver worldstock polling 순으로 시도
 export const config = { runtime: 'edge' };
 
+import { requireAuth } from './_auth.js';
 import { getKisToken } from './_kisToken.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
@@ -115,6 +116,8 @@ async function naverPrice(
 }
 
 export default async function handler(request: Request): Promise<Response> {
+  const denied = await requireAuth(request);
+  if (denied) return denied;
   const { searchParams } = new URL(request.url);
   const rawTicker = (searchParams.get('ticker') ?? '').trim().toUpperCase();
   const hintExcd = searchParams.get('excd') ?? '';

@@ -11,6 +11,7 @@ import RateWindow from './components/RateWindow.tsx'
 import WatchlistWindow from './components/WatchlistWindow.tsx'
 import StockChartWindow from './components/StockChartWindow.tsx'
 import ErrorBoundary from './components/ErrorBoundary.tsx'
+import { installApiAuth } from './apiAuth'
 
 // 메모 달력 별도 창(`/?calendarWindow=1`)은 **App을 마운트하지 않는다** — 앱을 통째로 부팅하면
 // 로그인·Drive 로드·자동저장 타이머가 모두 돌아 두 번째 writer가 되고, STATE 파일을 통째로
@@ -33,6 +34,12 @@ const WATCHLIST_WINDOW_BOOT = _params.get('watchlistWindow') === '1'
 // 종목 비교 차트 창(`/?stockChartWindow=1&code=…`, 관심종목 미니차트 클릭)도 같은 규약 — App을 마운트하지 않는다.
 // 이 창은 시세를 스스로 조회하고 아무것도 저장하지 않는다(브릿지 없음).
 const STOCK_CHART_WINDOW_BOOT = _params.get('stockChartWindow') === '1'
+
+// 서버 경로(/api/…) 호출에 로그인 토큰을 싣는 관문 — 어떤 컴포넌트보다 먼저 설치한다(apiAuth.ts 머리말).
+// 별도 창은 App이 없어 opener에게 토큰을 받는다.
+const SEPARATE_WINDOW_BOOT = CALENDAR_WINDOW_BOOT || FLOW_WINDOW_BOOT || BACKTEST_WINDOW_BOOT || CARD_WINDOW_BOOT
+  || LEDGER_WINDOW_BOOT || RATE_WINDOW_BOOT || WATCHLIST_WINDOW_BOOT || STOCK_CHART_WINDOW_BOOT
+installApiAuth(SEPARATE_WINDOW_BOOT ? 'window' : 'app')
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

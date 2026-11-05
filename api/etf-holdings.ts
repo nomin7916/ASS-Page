@@ -2,6 +2,7 @@
 // 국내 ETF: Naver etfWeight 직접 사용
 // 국내상장 해외 ETF: crumb 인증 후 Yahoo Finance topHoldings 사용
 export const config = { runtime: 'edge' };
+import { requireAuth } from './_auth.js';
 
 const NAVER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -151,6 +152,8 @@ function parseNaverHoldingList(
 }
 
 export default async function handler(request: Request): Promise<Response> {
+  const denied = await requireAuth(request);
+  if (denied) return denied;
   const { searchParams } = new URL(request.url);
   const code = (searchParams.get('code') ?? '').trim().toUpperCase();
   const debug = searchParams.get('debug') === '1';
