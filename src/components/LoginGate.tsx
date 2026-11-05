@@ -104,23 +104,25 @@ export async function savePinToDrive(pinHash: string, token: string, email: stri
 // ── Apps Script를 통해 승인 여부 + RESET 플래그 확인 ────────────
 // 구글 시트를 비공개로 유지하고 Apps Script가 대신 조회 (보안 정책 준수)
 // B열: 비어있음 = 정상, "RESET" = 초기화(0000), "RESET:1234" = 초기화(1234)
-async function checkApproval(email: string): Promise<{ approved: boolean; needsReset: boolean; adminPin: string } & UserFeatures> {
+// checked: 응답을 실제로 받아 읽었는가 — false(네트워크·Apps Script 오류)는 '미승인'이 아니라 '모름'이다.
+async function checkApproval(email: string): Promise<{ approved: boolean; checked: boolean; needsReset: boolean; adminPin: string } & UserFeatures> {
   try {
     const url = `${APPS_SCRIPT_URL}?action=check&email=${encodeURIComponent(email)}&cacheBust=${Date.now()}`;
     const res = await fetch(url);
-    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
+    if (!res.ok) return { approved: false, checked: false, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
     const data = await res.json();
     // Apps Script returns { status: 'approved'/'not_approved', resetPassword: string|null, name, feature1, ... }
     // ⚠️ pickFeatures의 `!!` 가 Apps Script 미배포 시 graceful degradation의 핵심 —
     //    응답에 새 키가 없으면 조용히 false(OFF)가 되고 기존 플래그·기능에는 회귀가 없다.
     return {
       approved: data.status === 'approved',
+      checked: true,
       needsReset: data.resetPassword != null,
       adminPin: data.resetPassword ?? DEFAULT_PIN,
       ...pickFeatures(data),
     };
   } catch {
-    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
+    return { approved: false, checked: false, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
   }
 }
 
@@ -324,7 +326,18 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
             return;
           }
         } catch { /* 네트워크 오류 → 세션 유지하고 앱 진입 허용 */ }
-        onApproved(email, token, pickFeatures(await checkApproval(email)));
+        // ⚠️ 승인 명단 재확인 — OAuth 앱이 '프로덕션'이면 누구나 구글 토큰을 받으므로, 이 경로가
+        //    승인 검사를 건너뛰면 SESSION_KEY만 심어 명단 밖 계정이 들어오고 승인 취소도 탭이 닫힐 때까지 안 먹힌다.
+        //    '명단에 없음'이 확인된 경우만 막는다(응답 실패는 기존대로 진입 — 일시 장애로 쫓겨나지 않게).
+        const approval = await checkApproval(email);
+        if (approval.checked && !approval.approved) {
+          sessionStorage.removeItem(SESSION_KEY);
+          setUserEmail(email);
+          setUserToken(token);
+          setStep('pending');
+          return;
+        }
+        onApproved(email, token, pickFeatures(approval));
       },
       onFail: () => {
         sessionStorage.removeItem(SESSION_KEY);
