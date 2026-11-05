@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Line, ReferenceArea, ReferenceLine, ReferenceDot, Tooltip as RechartsTooltip } from 'recharts';
-import { X, Plus, RefreshCw, ExternalLink, Calendar, Percent, TrendingUp, Wallet, Search, List, ChevronRight } from 'lucide-react';
+import { X, Plus, RefreshCw, ExternalLink, Calendar, Percent, TrendingUp, Wallet, Search, List, ChevronRight, Activity } from 'lucide-react';
 import ErrorBoundary from './ErrorBoundary';
 import CustomDatePicker from './CustomDatePicker';
 import { formatChangeRate, selectionDimBands } from '../utils';
@@ -13,6 +13,7 @@ import {
   normalizeChartCode, normalizeChartComps, normalizeChartView, stockDetailUrl, stockChartUrl,
   EMPTY_CHART_SEL, chartSelStep,
   holdingsFor, holdingAvg, holdingPct, holdingLayout, normalizeHoldings,
+  MA_PRESETS, MA_MIN, MA_MAX, MAX_MA_LINES, MA_DEFAULT, maSelFromPeriods, toggleMaSel, maColor, maFetchFrom, movingAverage, withMaRows,
   holdingKey, normalizeHoldingCatalog, searchHoldingCatalog, catalogAccounts, krCodeWithZeros,
 } from '../watchlistChart';
 
@@ -33,6 +34,9 @@ import {
  * ⚠️ 조회 결과를 공유 stockHistoryMap에 병합하지 말 것 — 이 창은 그 맵에 닿을 수조차 없고(App 미마운트),
  *    닿게 만들면 보유종목 과거 평가액이 영구히 오염된다(관심종목·백테스트와 같은 불변식).
  * ⚠️ 자체 `ErrorBoundary label`이 필요하다(main.tsx 루트 경계는 label이 없어 창 전체가 오류 페이지가 된다).
+ * 이동평균선(사용자 요청 2026-11-05): 대상 종목 하나(기본 = 기준 종목)에 고른 기간(5·10·20·60·120·150·200 + 직접 2~400일)마다
+ *    한 줄. 계산은 watchlistChart.movingAverage, 색은 종목 선과 겹치지 않는 MA_COLORS. 고른 기간·보이기·대상도 **주소에만**
+ *    남긴다(ma · maoff · mat — 저장 0 규약 그대로). 대상 종목만 가장 긴 기간만큼 앞 종가를 더 받는다(maFetchFrom).
  */
 
 const MARKETS = ['kr', 'us', 'fund'];
@@ -297,7 +301,9 @@ function readInitial() {
   const market = MARKETS.includes(mk) ? mk : detectMarket(code);
   const view = normalizeChartView({ period: p.get('period'), customStart: p.get('from') || '', customEnd: p.get('to') || '' });
   const comps = normalizeChartComps(p.get('comp') || '', code).map((c) => ({ code: c, market: detectMarket(c) }));
-  return { main: { code, market, name: (p.get('name') || '').slice(0, 80) }, view, comps };
+  // 이평선 — 주소에 ma가 없으면(관심종목에서 새로 연 창) 기본 기간 · 'ma='이면 모두 끔.
+  const ma = maSelFromPeriods(p.has('ma') ? p.get('ma') : MA_DEFAULT);
+  return { main: { code, market, name: (p.get('name') || '').slice(0, 80) }, view, comps, ma, maOn: p.get('maoff') !== '1', maTarget: normalizeChartCode(p.get('mat') || '') };
 }
 
 function StockChartPage() {
@@ -319,6 +325,12 @@ function StockChartPage() {
   const [catalog, setCatalog] = useState(null);
   const [showAvg, setShowAvg] = useState(true);       // 매입가 선 보이기(이 창 안에서만 — 저장하지 않는다)
   const [avgMode, setAvgMode] = useState('acct');     // 매입가 보기 'acct' = 계좌별 · 'sum' = 통합(평균) — 저장하지 않는다
+  // 이동평균선 `[{ n, c }]`(n = 일수 · c = 색 칸) · 보이기 · 대상 종목('' = 기준 종목) — 주소에만 남긴다.
+  const [maSel, setMaSel] = useState(init.ma);
+  const [showMa, setShowMa] = useState(init.maOn);
+  const [maTarget, setMaTarget] = useState(init.maTarget);
+  const [maText, setMaText] = useState('');
+  const [maMsg, setMaMsg] = useState('');
   const dailyFromRef = useRef({});                     // code:market → 받은 이력의 시작일
   const dailySeqRef = useRef({});                      // code:market → 조회 세대(늦게 온 응답 폐기)
   const today = todayKST();
@@ -326,6 +338,12 @@ function StockChartPage() {
   const all = useMemo(() => [main, ...comps].filter((s) => s.code), [main, comps]);
   const cutoff = view.period === CHART_CUSTOM_PERIOD ? '' : periodCutoff(view.period, today);
   const needFrom = view.period === CHART_CUSTOM_PERIOD ? view.customStart : cutoff;
+  // 이평선 대상(차트에서 빠졌으면 기준 종목) — 그 종목만 조회 시작일보다 가장 긴 이평선 일수만큼 앞에서부터 받는다
+  // (첫날부터 선이 이어지게). 구간·기간 수익률은 그대로다(watchPeriodWindow가 시작일로 자른다).
+  const maTgt = all.find((s) => maTarget && s.code === maTarget) || all[0] || null;
+  const maCode = maTgt ? maTgt.code : '';
+  const maMax = showMa ? maSel.reduce((m, x) => Math.max(m, x.n), 0) : 0;
+  const maFrom = maFetchFrom(needFrom, maMax);
 
   useEffect(() => {
     const nm = quotes[main.code]?.name || main.name || main.code;
@@ -339,9 +357,10 @@ function StockChartPage() {
       window.history.replaceState(null, '', stockChartUrl({
         code: main.code, market: main.market, name: main.name, period: view.period,
         customStart: view.customStart, customEnd: view.customEnd, comps: comps.map((c) => c.code),
+        ma: maSel.map((x) => x.n), maOff: !showMa, maTarget,
       }));
     } catch { /* 주소 갱신 실패는 무해 */ }
-  }, [main, comps, view]);
+  }, [main, comps, view, maSel, showMa, maTarget]);
 
   const loadQuote = useCallback(async (s) => {
     const d = await fetchWatchQuote(s.market, s.code);
@@ -394,8 +413,8 @@ function StockChartPage() {
   }, [loadQuote, all]);
 
   useEffect(() => {
-    all.forEach((s) => loadDaily(s, needFrom));
-  }, [all, needFrom, loadDaily]);
+    all.forEach((s) => loadDaily(s, s.code === maCode ? maFrom : needFrom));
+  }, [all, needFrom, maFrom, maCode, loadDaily]);
 
   // ── 보유 매입가: opener에 묻고(ping) 답(holdings)만 받는다 — 읽기 전용 ──
   const codesKey = all.map((s) => s.code).join(',');
@@ -428,7 +447,7 @@ function StockChartPage() {
 
   const refreshAll = () => {
     dailyFromRef.current = {};
-    all.forEach((s) => loadDaily(s, needFrom, true));
+    all.forEach((s) => loadDaily(s, s.code === maCode ? maFrom : needFrom, true));
   };
 
   // ── 시리즈: 화면의 '기간 수익률'과 같은 구간(watchPeriodWindow) ──
@@ -447,11 +466,19 @@ function StockChartPage() {
     };
   }).map((s) => ({ ...s, holdShown: holdLines(s.hold, avgMode) })), [all, quotes, dailyMap, view, cutoff, today, holdings, avgMode]);
 
-  const rows = useMemo(() => buildChartRows(series.map((s) => ({ key: s.key, win: s.win }))), [series]);
+  const baseRows = useMemo(() => buildChartRows(series.map((s) => ({ key: s.key, win: s.win }))), [series]);
+  // ── 이동평균선: 대상 종목 하나 · 고른 기간마다 한 줄(짧은 기간부터) — 키 'ma5'…(시리즈 키 s0…와 겹치지 않는다) ──
+  const maS = series.find((s) => s.code === maCode) || null;
+  const maLines = useMemo(() => (!showMa || !maS ? [] : [...maSel].sort((a, b) => a.n - b.n).map((m) => ({
+    key: `ma${m.n}`, n: m.n, color: maColor(m.c), win: maS.win,
+    pts: movingAverage(dailyMap[maS.code], maS.win, m.n),
+  }))), [showMa, maS, maSel, dailyMap]);
+  const rows = useMemo(() => withMaRows(baseRows, maLines), [baseRows, maLines]);
   // 종가 보기도 모든 종목을 겹쳐 그린다 — 통화가 같은 종목끼리 한 눈금(실제 가격 그대로 비교),
   // 기준 종목과 통화가 다른 종목(원화 ↔ 달러)만 오른쪽 눈금. 수익률 보기는 전부 왼쪽(%) 하나.
   const shown = series.map((s) => ({ ...s, axisId: mode === 'price' && isUsd(s.market) !== isUsd(main.market) ? RIGHT_AXIS : 0 }));
   const rightS = shown.find((s) => s.axisId === RIGHT_AXIS);
+  const maAxis = (maS && shown.find((s) => s.code === maS.code)?.axisId) || 0;
   const dim = sel.left && sel.right ? selectionDimBands(rows, sel.left, sel.right) : null;
   // 마우스가 가리키는 날짜의 값마다 가로줄(수익률 차트와 같은 방식) — 그 값이 차트 전체에서 어느 시기와 같은 높이인지 보이게.
   //   구간 선택(딤) 중에는 끄고, 그날 값이 없는 시리즈(휴장 등)는 건너뛴다
@@ -567,6 +594,32 @@ function StockChartPage() {
     if (s.i === 0) setMain((m) => ({ ...m, market }));
     else setComps((p) => p.map((c) => (c.code === s.code ? { ...c, market } : c)));
     delete dailyFromRef.current[s.code + ':' + market];
+  };
+
+  // ── 이평선 고르기 — 반환 true = 처리 끝(입력 칸을 비운다) · false = 그대로 두고 안내만 ──
+  const pickMa = (n) => {
+    const next = toggleMaSel(maSel, n);
+    if (next === maSel) { setMaMsg(`이평선은 ${MAX_MA_LINES}개까지 그립니다 — 다른 선을 먼저 끄세요.`); return false; }
+    setMaSel(next);
+    setMaMsg('');
+    return true;
+  };
+  const addMaText = () => {
+    const t = maText.trim();
+    if (!t) { setMaMsg(`원하는 일수(${MA_MIN}~${MA_MAX})를 넣고 Enter`); return; }
+    const n = Number(t);
+    if (!Number.isInteger(n) || n < MA_MIN || n > MA_MAX) { setMaMsg(`${MA_MIN}~${MA_MAX} 사이의 일수를 넣으세요.`); return; }
+    if (maSel.some((x) => x.n === n)) { setMaText(''); setMaMsg(''); return; }   // 이미 그어져 있다
+    if (pickMa(n)) setMaText('');
+  };
+  // 기간 버튼 = 기본 목록 + 직접 넣은 기간(짧은 기간부터)
+  const maChips = [...new Set([...MA_PRESETS, ...maSel.map((x) => x.n)])].sort((a, b) => a - b);
+  // 칩의 값 — 마우스가 가리키는 날(그날 값이 없으면 직전 값), 아니면 마지막 날. 이격도 = 그날 종가 ÷ 이평선 − 1.
+  const maReadout = (l) => {
+    const p = hover ? closeOnOrBefore(l.pts, hover) : l.pts[l.pts.length - 1] || null;
+    if (!p || !maS) return null;
+    const c = closeOnOrBefore(maS.win, p[0]);
+    return { date: p[0], v: p[1], gap: c && c[0] === p[0] && p[1] > 0 ? (c[1] / p[1] - 1) * 100 : null };
   };
 
   // ── 상단 정보 줄: 선택 구간 > 호버 날짜 > 조회기간 요약 ──
@@ -776,6 +829,75 @@ function StockChartPage() {
         </span>
       </div>
 
+      {/* 이동평균선 — 대상 종목 하나에 고른 기간마다 한 줄. 켠 칩 = 그 선의 색(범례 겸용) + 값(마우스가 가리키는 날 · 아니면 마지막 날) */}
+      <div className="flex flex-wrap items-center gap-1.5 px-4 py-1.5 border-b border-gray-800/70 text-[11px]">
+        <button
+          onClick={() => { setShowMa((v) => !v); setMaMsg(''); }}
+          title={showMa ? '이동평균선 숨기기(고른 기간은 그대로 둡니다)' : '이동평균선 보이기'}
+          className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-medium transition-colors ${
+            showMa ? 'bg-lime-500/10 border-lime-500/40 text-lime-300' : 'border-gray-700 text-gray-500 hover:text-lime-300'
+          }`}
+        ><Activity size={11} /> 이평선</button>
+        {showMa && maChips.map((n) => {
+          const on = maSel.find((x) => x.n === n);
+          const color = on ? maColor(on.c) : '';
+          const line = on ? maLines.find((l) => l.n === n) : null;
+          const r = line ? maReadout(line) : null;
+          const tip = !on
+            ? `${n}일 이동평균선 그리기`
+            : line && !line.pts.length && status[maCode] === 'ok'
+              ? `${n}일 이동평균선 — 종가가 ${n}개보다 적어 아직 그릴 수 없습니다(클릭하면 끕니다)`
+              : `${n}일 이동평균선${r ? ` ${fmtWatchPrice(maS.market, r.v)}(${fmtShort(r.date)})${r.gap != null ? ` · 종가는 이평선보다 ${fmtPct(r.gap)}` : ''}` : ''} — 클릭하면 끕니다`;
+          return (
+            <button
+              key={n}
+              onClick={() => pickMa(n)}
+              title={tip}
+              className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 tabular-nums transition-colors ${
+                on ? 'bg-white/[0.04] font-semibold' : 'border-gray-700/80 text-gray-500 hover:text-gray-300 hover:border-gray-500'
+              }`}
+              style={on ? { borderColor: color, color } : undefined}
+            >
+              {on && <span className="inline-block w-3 h-[3px] rounded-full" style={{ backgroundColor: color }} />}
+              {n}일
+              {r && <span className="font-normal text-gray-300">{fmtWatchPrice(maS.market, r.v)}</span>}
+              {on && line && !line.pts.length && status[maCode] === 'ok' && <span className="font-normal text-gray-600">자료 부족</span>}
+            </button>
+          );
+        })}
+        {showMa && (
+          <span className="inline-flex items-center rounded border border-gray-700 overflow-hidden">
+            <input
+              value={maText}
+              onChange={(e) => { setMaText(e.target.value.replace(/[^0-9]/g, '').slice(0, 3)); setMaMsg(''); }}
+              onKeyDown={(e) => { if (e.nativeEvent && e.nativeEvent.isComposing) return; if (e.key === 'Enter') addMaText(); }}
+              inputMode="numeric"
+              placeholder="직접"
+              title={`원하는 일수(${MA_MIN}~${MA_MAX})를 넣고 Enter — 예: 33`}
+              className="w-10 bg-transparent pl-1.5 py-0.5 text-gray-200 placeholder-gray-600 tabular-nums focus:outline-none"
+            />
+            <span className="text-gray-600 pr-1">일</span>
+            <button onClick={addMaText} title="이 일수의 이동평균선 추가" className="px-1.5 py-1 border-l border-gray-700 text-gray-400 hover:text-lime-300 transition-colors">
+              <Plus size={10} />
+            </button>
+          </span>
+        )}
+        {showMa && maS && shown.length > 1 && (
+          <label className="inline-flex items-center gap-1 text-gray-500 ml-1" title="이동평균선을 그릴 종목">
+            대상
+            <select
+              value={maS.code}
+              onChange={(e) => setMaTarget(e.target.value === main.code ? '' : e.target.value)}
+              className="bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-[11px] max-w-[11rem] focus:outline-none focus:border-lime-500/60"
+              style={{ color: maS.color }}
+            >
+              {series.map((s) => <option key={s.key} value={s.code} style={{ color: s.color, backgroundColor: '#111827' }}>{s.name}</option>)}
+            </select>
+          </label>
+        )}
+        {maMsg && <span className="text-amber-300">{maMsg}</span>}
+      </div>
+
       {/* 정보 줄 — 선택 구간 · 호버 날짜 · 조회기간 요약 */}
       <div className="px-4 py-2 border-b border-gray-800/70 text-[12px] flex flex-wrap items-center gap-x-4 gap-y-1 min-h-[34px]">
         <span className="font-semibold text-gray-300">{infoTitle}</span>
@@ -845,6 +967,23 @@ function StockChartPage() {
               )}
               {mode === 'pct' && <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="4 3" />}
               <RechartsTooltip content={() => null} cursor={{ stroke: '#e5e7eb', strokeWidth: 1 }} />
+              {/* 이동평균선 — 시세 선보다 **앞**에 선언해 시세 선이 위에 그려지게(paint 순서 = 선언 순서).
+                  시세 선보다 가늘게, 색은 MA_COLORS(종목 선 색과 겹치지 않는 색)만 쓴다. 대상 종목과 같은 눈금. */}
+              {maLines.map((m) => (
+                <Line
+                  key={m.key}
+                  type="monotone"
+                  dataKey={mode === 'pct' ? m.key : `px:${m.key}`}
+                  yAxisId={maAxis}
+                  stroke={m.color}
+                  strokeWidth={1.3}
+                  strokeOpacity={0.95}
+                  dot={false}
+                  activeDot={false}
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              ))}
               {shown.map((s) => (
                 <Line
                   key={s.key}
@@ -907,6 +1046,7 @@ function StockChartPage() {
         수익률 = 각 종목의 조회 시작 후 첫 종가를 0%로 둔 등락(관심종목 등락율과 같은 계산) · 종가는 관심종목 미니차트와 같은 소스
         (종가 보기: 같은 통화는 한 눈금, 원화·달러가 섞이면 기준 종목과 다른 통화는 오른쪽 눈금) ·
         직접 선택 기간에서 종료일을 비우면 마지막 값은 실시간 현재가입니다. 이 창은 아무것도 저장하지 않습니다(비교 종목·기간은 주소에만 남습니다).
+        {showMa && maLines.length > 0 && ` · 이평선 = ${maS ? maS.name : ''}의 n일 이동평균(그날까지 n거래일 종가의 평균 — 조회 시작 전 종가도 받아 첫날부터 그립니다, 종가가 n개 미만인 날은 긋지 않습니다).`}
         {holdAny && ' · 점선 = 포트폴리오 테이블에 있는 종목의 매입가(구매단가 — 앱 창에서 읽어 옵니다). 계좌별: 계좌마다 한 줄(무늬로 구분) · 통합: 전 계좌 평균 매입가 한 줄(총 투자금액 ÷ 총 수량).'}
       </div>
     </div>

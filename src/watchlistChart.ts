@@ -133,6 +133,11 @@ export function stockChartUrl(o: any): string {
   if (typeof x.name === 'string' && x.name.trim()) qs.set('name', x.name.trim().slice(0, 80));
   const comps = normalizeChartComps(x.comps, code);
   if (comps.length) qs.set('comp', comps.join(','));
+  // 이평선 — 넘겨받았을 때만 싣는다(없으면 창이 MA_DEFAULT로 연다). 빈 목록은 'ma='(모두 끔).
+  if (Array.isArray(x.ma)) qs.set('ma', normalizeMaPeriods(x.ma).join(','));
+  if (x.maOff === true) qs.set('maoff', '1');
+  const mat = normalizeChartCode(x.maTarget);
+  if (mat && mat.toLowerCase() !== code.toLowerCase()) qs.set('mat', mat);
   return '/?' + qs.toString();
 }
 
@@ -278,6 +283,132 @@ export function chartSelStep(st: any, ev: any): { dragging: boolean; left: strin
     default:
       return s;
   }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 이동평균선(사용자 요청 2026-11-05 — 5·10·150·200일 등 원하는 기간을 골라 본다).
+// 종목 차트 창에서 **대상 종목 하나**(기본 = 기준 종목)에 대해 고른 기간마다 한 줄씩 긋는다.
+// 이평선 값 = 그날까지 n거래일 종가의 단순 평균. 조회 기간 앞의 종가도 함께 받아(maFetchFrom)
+// 구간 첫날부터 선이 이어진다. 종가가 n개 미만인 날은 긋지 않는다(짧은 평균으로 대신 채우지 않는다).
+// ⚠️ 색은 종목 선 색(CHART_SERIES_COLORS — 빨강·주황·노랑·초록·하늘·파랑·보라·분홍·흰색)의 **빈 색상대**에서만
+//    고른다(연두·자홍·청록·남색·회청) — 종목 선과 이평선이 같은 색으로 보이면 어느 선이 시세인지 알 수 없다.
+
+/** 기간 버튼(화면 순서 그대로). 그 밖의 기간은 '직접' 칸에 일수를 넣어 추가한다. */
+export const MA_PRESETS = [5, 10, 20, 60, 120, 150, 200];
+export const MA_MIN = 2;
+export const MA_MAX = 400;
+/** 한 번에 긋는 이평선 수 — 색이 서로 구분되는 개수까지만. */
+export const MAX_MA_LINES = 5;
+/** 창을 처음 열 때(주소에 ma가 없을 때)의 이평선 — 증권사 차트의 흔한 기본값. */
+export const MA_DEFAULT = [5, 20, 60, 120];
+export const MA_COLORS = Object.freeze(['#a3e635', '#e879f9', '#2dd4bf', '#818cf8', '#94a3b8']);
+
+/** 이평선 기간 정리 — 'a,b' 문자열이나 배열 → 정수 · [MA_MIN, MA_MAX] · 중복 제외 · 입력 순서 · 최대 MAX_MA_LINES개. */
+export function normalizeMaPeriods(raw: any): number[] {
+  const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [];
+  const out: number[] = [];
+  for (const v of arr) {
+    const t = typeof v === 'string' ? v.trim() : v;
+    if (t === '' || t == null || typeof t === 'boolean') continue;
+    const n = Number(t);
+    if (!Number.isInteger(n) || n < MA_MIN || n > MA_MAX || out.includes(n)) continue;
+    out.push(n);
+    if (out.length >= MAX_MA_LINES) break;
+  }
+  return out;
+}
+
+/** 선택 목록 `[{ n, c }]`(c = MA_COLORS 칸) — 주소에서 읽은 기간은 순서대로 칸 0, 1, 2…를 받는다. */
+export function maSelFromPeriods(raw: any): { n: number; c: number }[] {
+  return normalizeMaPeriods(raw).map((n, i) => ({ n, c: i }));
+}
+
+/**
+ * 이평선 켜고 끄기 — 있으면 빼고, 없으면 **비어 있는 가장 앞 색 칸**으로 넣는다.
+ * 다른 선을 끄고 켜도 이미 그어진 선의 색은 바뀌지 않는다(색이 바뀌면 사용자가 선을 다시 찾아야 한다).
+ * 이미 MAX_MA_LINES개면 그대로 돌려준다(같은 참조 — 호출부가 안내를 띄운다). 잘못된 기간도 그대로.
+ */
+export function toggleMaSel(sel: any, n: any): { n: number; c: number }[] {
+  const cur = (Array.isArray(sel) ? sel : []).filter(
+    (x: any) => x && Number.isInteger(x.n) && Number.isInteger(x.c) && x.c >= 0 && x.c < MA_COLORS.length,
+  );
+  const p = normalizeMaPeriods([n])[0];
+  if (p == null) return Array.isArray(sel) ? sel : cur;
+  if (cur.some((x: any) => x.n === p)) return cur.filter((x: any) => x.n !== p);
+  if (cur.length >= MAX_MA_LINES) return Array.isArray(sel) ? sel : cur;
+  let c = 0;
+  while (cur.some((x: any) => x.c === c)) c++;
+  return [...cur, { n: p, c }];
+}
+
+/** 이평선 색(칸 번호 → MA_COLORS, 모르는 칸은 첫 색). */
+export function maColor(c: any): string {
+  return Number.isInteger(c) && c >= 0 && c < MA_COLORS.length ? MA_COLORS[c] : MA_COLORS[0];
+}
+
+/**
+ * 이평선을 조회 첫날부터 그리려면 필요한 종가 시작일 — 시작일에서 n거래일 앞(달력일 n × 1.5 + 14일 여유:
+ * 거래일은 달력일의 약 68%이고 설·추석 연휴가 몰린다). n이 없거나 시작일이 없으면 시작일 그대로.
+ */
+export function maFetchFrom(from: any, maxN: any): string {
+  if (!isIsoDay(from)) return typeof from === 'string' ? from : '';
+  const n = Number(maxN);
+  if (!Number.isFinite(n) || n < 1) return from as string;
+  const [y, m, d] = (from as string).split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - (Math.ceil(Math.min(n, MA_MAX) * 1.5) + 14));
+  return dt.toISOString().split('T')[0];
+}
+
+/**
+ * n일 이동평균 — 구간(win) 날짜마다 그날까지 n개 종가의 평균 `[date, ma][]`.
+ * 구간 앞 종가는 daily(같은 종목의 전체 이력)에서 잇는다. 구간 안은 win 그대로라
+ * 직접 선택 '현재까지'의 실시간 끝점(watchPeriodWindow liveTail)도 평균에 들어간다.
+ * 종가가 n개 미만인 날은 결과에서 빠진다.
+ */
+export function movingAverage(daily: any, win: any, n: any): Pair[] {
+  const N = Number(n);
+  if (!Number.isInteger(N) || N < 1) return [];
+  const w = goodPairs(win);
+  if (!w.length) return [];
+  const start = w[0][0];
+  const pre = goodPairs(daily).filter(([d]) => d < start).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const seq = [...pre, ...w];
+  const out: Pair[] = [];
+  let sum = 0;
+  for (let i = 0; i < seq.length; i++) {
+    sum += seq[i][1];
+    if (i >= N) sum -= seq[i - N][1];
+    if (i >= N - 1 && seq[i][0] >= start) out.push([seq[i][0], sum / N]);
+  }
+  return out;
+}
+
+/**
+ * 차트 행에 이평선 값을 싣는다(새 배열 — 받은 행은 고치지 않는다). lines = [{ key, pts, win }].
+ * - `key` = 수익률(%) — 대상 종목 구간 첫 종가(= buildChartRows의 0% 기준)로 환산해 시세 선과 같은 자리에 선다.
+ * - `px:key` = 이평선 값 그대로(종가 보기).
+ * 그날 값이 없으면 null(선은 connectNulls로 잇는다).
+ */
+export function withMaRows(rows: any, lines: any): any[] {
+  const list = (Array.isArray(lines) ? lines : []).filter((l: any) => l && typeof l.key === 'string' && l.key);
+  const src = Array.isArray(rows) ? rows : [];
+  if (!list.length) return src;
+  const prepared = list.map((l: any) => {
+    const w = goodPairs(l.win);
+    const map = new Map<string, number>();
+    for (const [d, v] of goodPairs(l.pts)) map.set(d, v);
+    return { key: l.key as string, base: w.length ? w[0][1] : 0, map };
+  });
+  return src.map((r: any) => {
+    const row: any = { ...(r && typeof r === 'object' ? r : {}) };
+    for (const p of prepared) {
+      const v = typeof row.date === 'string' ? p.map.get(row.date) : undefined;
+      row[p.key] = v != null && p.base > 0 ? (v / p.base - 1) * 100 : null;
+      row['px:' + p.key] = v != null ? v : null;
+    }
+    return row;
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────────────

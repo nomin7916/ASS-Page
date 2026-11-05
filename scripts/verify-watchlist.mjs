@@ -20,7 +20,8 @@
 //     #98a~#98b 앞자리 0이 빠진 국내 코드 복원 후보(241D0 → 0241D0)
 //     #99a~#99i 자동 '보유종목' 그룹 — 전체 계좌 종목 · 같은 종목은 한 줄(보유 계좌 목록) · 통화가 다르면 따로
 //     #99j~#99n 차트 창 비교 종목 찾기 — 보유 카탈로그(매입가 없음) · 계좌 → 종목 · 이름 일부·초성·조합 중 글자 · 순위
-//   파트② 소스 텍스트 가드 (#G1~#G108c)
+//     #M1~#M13 이동평균선 — 참조 구현 대조 · 조회 전 종가로 첫날부터 · 수익률 기준 · 색 칸 유지 · 색 구분 · 주소
+//   파트② 소스 텍스트 가드 (#G1~#G109f)
 //     미러로는 표현할 수 없는 **배선**을 단언한다(브릿지·읽기 전용·좌표계·부팅 분기).
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 //     ⚠️ 가드는 '선언'이 아니라 **사용부**를 단언한다.
@@ -694,6 +695,129 @@ if (C) {
   }
 }
 
+// ── 이동평균선(사용자 요청 2026-11-05 — 종목 차트 창에서 5·10·150·200일 등 원하는 기간) ──
+if (C) {
+  const { movingAverage, withMaRows, maFetchFrom, normalizeMaPeriods, maSelFromPeriods, toggleMaSel, maColor,
+    MA_PRESETS, MA_COLORS, MA_DEFAULT, MAX_MA_LINES, MA_MIN, MA_MAX, CHART_SERIES_COLORS, buildChartRows, stockChartUrl } = C;
+  const near = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9 * Math.max(1, Math.abs(b));
+  // 참조 구현 — 날짜마다 직전 n개를 새로 더한다(누적합 구현과 독립).
+  const naiveMa = (seq, n, start) => seq.flatMap((p, i) => (i >= n - 1 && p[0] >= start
+    ? [[p[0], seq.slice(i - n + 1, i + 1).reduce((s, q) => s + q[1], 0) / n]] : []));
+  const dayAt = (i) => new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10);
+  const daily = Array.from({ length: 30 }, (_, i) => [dayAt(i), 100 + i * 2 + (i % 3 === 0 ? 5 : 0)]);
+  const win = daily.slice(20);
+  const ma5 = S('(ma5)', () => movingAverage(daily, win, 5)) || [];
+  const ref5 = naiveMa(daily, 5, win[0][0]);
+  ok('#M1 5일 이평선 = 직전 5개 종가 평균 · 조회 첫날부터 값이 있다(조회 전 종가로 이어 계산)',
+    ma5.length === 10 && ma5[0][0] === win[0][0] && ma5.every((p, i) => p[0] === ref5[i][0] && near(p[1], ref5[i][1])));
+  ok('#M2 1일 이평선 = 종가 그대로', movingAverage(daily, win, 1).every((p, i) => p[0] === win[i][0] && near(p[1], win[i][1])));
+  {
+    const ma25 = movingAverage(daily, win, 25);
+    ok('#M3 종가가 n개 미만인 날은 빠진다(짧은 평균으로 채우지 않는다)', ma25.length === 6 && ma25[0][0] === dayAt(24));
+  }
+  {
+    const live = [...win.slice(0, -1), [win[win.length - 1][0], 999]];
+    const m = movingAverage(daily, live, 5);
+    ok('#M4 구간 안은 win 값을 쓴다(직접 선택 현재까지의 실시간 끝점이 평균에 들어간다)',
+      near(m[m.length - 1][1], (win.slice(-5, -1).reduce((s, p) => s + p[1], 0) + 999) / 5));
+  }
+  {
+    let rnd = 7;
+    const r = () => { rnd = (rnd * 1103515245 + 12345) % 2147483648; return rnd / 2147483648; };
+    let bad = 0;
+    for (let t = 0; t < 60; t++) {
+      const len = 20 + Math.floor(r() * 300);
+      const d = Array.from({ length: len }, (_, i) => [dayAt(i), Math.round((50 + r() * 1000) * 100) / 100]);
+      const st = Math.floor(r() * (len - 2));
+      const w = d.slice(st);
+      const n = 2 + Math.floor(r() * 60);
+      const got = movingAverage(d, w, n);
+      const want = naiveMa(d, n, w[0][0]);
+      if (got.length !== want.length || got.some((p, i) => p[0] !== want[i][0] || !near(p[1], want[i][1]))) bad++;
+    }
+    eq('#M5 무작위 60건 — 참조 구현과 날짜·값 일치', bad, 0);
+  }
+  S('#M6 손상 입력에도 던지지 않는다(빈 배열)',
+    () => [movingAverage(null, null, 5), movingAverage(daily, win, 0), movingAverage(daily, win, 2.5), movingAverage(daily, win, 'x'), movingAverage(daily, [], 5), movingAverage('x', win, 3)],
+    (v) => v.slice(0, 5).every((x) => Array.isArray(x) && x.length === 0) && v[5].length === win.length - 2);
+  {
+    const rows = buildChartRows([{ key: 's0', win }]);
+    const out = withMaRows(rows, [{ key: 'ma5', pts: ma5, win }, { key: 'ma25', pts: movingAverage(daily, win, 25), win }]);
+    const base = win[0][1];
+    ok('#M7 차트 행 — 종가 보기 = 이평선 값 · 수익률 보기 = 시세 선과 같은 0% 기준(구간 첫 종가)',
+      out.length === rows.length && out.every((row, i) => near(row['px:ma5'], ma5[i][1]) && near(row.ma5, (ma5[i][1] / base - 1) * 100) && row.s0 === rows[i].s0));
+    ok('#M7b 그날 이평선이 없으면 null · 받은 행은 고치지 않는다',
+      out[0].ma25 === null && out[0]['px:ma25'] === null && out[5].ma25 !== null && !('ma5' in rows[0]));
+    ok('#M7c 이평선이 없으면 받은 행 그대로(같은 참조)', withMaRows(rows, []) === rows && withMaRows(rows, null) === rows);
+    S('#M7d 손상 입력에도 던지지 않는다', () => [withMaRows(null, [{ key: 'm', pts: ma5, win }]), withMaRows([null, { date: 5 }], [{ key: 'm', pts: null, win: null }])],
+      (v) => v[0].length === 0 && v[1].length === 2 && v[1][1].m === null);
+  }
+  {
+    const back = (from, to) => Math.round((Date.parse(from) - Date.parse(to)) / 86400000);
+    ok('#M8 조회 시작일을 가장 긴 이평선만큼 앞당긴다(달력일 n × 1.5 + 14)',
+      back('2026-03-01', maFetchFrom('2026-03-01', 200)) === 314 && back('2026-03-01', maFetchFrom('2026-03-01', 5)) === 22);
+    ok('#M8b 이평선이 없거나 시작일이 없으면 그대로', maFetchFrom('2026-03-01', 0) === '2026-03-01' && maFetchFrom('', 200) === '' && maFetchFrom(null, 200) === '');
+    // 평일만 세도(설·추석 연휴 = 연 15일 안팎을 빼도) n개 이상의 종가가 앞에 있어야 첫날부터 선이 이어진다.
+    const enough = [5, 10, 20, 60, 120, 150, 200, MA_MAX].every((n) => {
+      const from = '2026-10-05';
+      let wd = 0;
+      for (let t = Date.parse(maFetchFrom(from, n)); t < Date.parse(from); t += 86400000) { const g = new Date(t).getUTCDay(); if (g && g < 6) wd++; }
+      return wd - Math.ceil(wd * 15 / 250) >= n;
+    });
+    ok('#M8c 앞당긴 기간에 평일(연휴 제외 어림)이 n개 이상', enough);
+  }
+  eq('#M9 기간 정리 — 정수 · 2~400 · 중복 제외 · 입력 순서', normalizeMaPeriods(' 5, 20,abc,20,1,401,150.5,0,200').join(','), '5,20,200');
+  eq('#M9b 배열 입력 · 상한', [normalizeMaPeriods([10, '60', true, null]).join(','), normalizeMaPeriods([2, 3, 4, 5, 6, 7, 8]).length].join('|'), `10,60|${MAX_MA_LINES}`);
+  {
+    const s0 = maSelFromPeriods([5, 20, 60]);
+    const s1 = toggleMaSel(s0, 20);
+    const s2 = toggleMaSel(s1, 150);
+    ok('#M10 끄고 켜도 이미 그어진 선의 색은 그대로 · 새 선은 비어 있는 가장 앞 색',
+      JSON.stringify(s0) === '[{"n":5,"c":0},{"n":20,"c":1},{"n":60,"c":2}]'
+      && JSON.stringify(s1) === '[{"n":5,"c":0},{"n":60,"c":2}]' && JSON.stringify(s2) === '[{"n":5,"c":0},{"n":60,"c":2},{"n":150,"c":1}]');
+    const full = maSelFromPeriods([5, 10, 20, 60, 120, 150, 200]);
+    ok('#M10b 가득 차면 같은 참조(안내만) · 잘못된 기간도 같은 참조 · 가득 차도 끄기는 된다',
+      full.length === MAX_MA_LINES && toggleMaSel(full, 200) === full && toggleMaSel(s0, 1) === s0 && toggleMaSel(s0, 'x') === s0
+      && toggleMaSel(full, 5).length === MAX_MA_LINES - 1);
+    S('#M10c 손상 입력에도 던지지 않는다', () => [toggleMaSel(null, 5), toggleMaSel([null, { n: 5, c: 99 }], 10), maColor(99), maColor('x')],
+      (v) => JSON.stringify(v[0]) === '[{"n":5,"c":0}]' && JSON.stringify(v[1]) === '[{"n":10,"c":0}]' && v[2] === MA_COLORS[0] && v[3] === MA_COLORS[0]);
+  }
+  {
+    // 색 구분 — 채도 높은 색끼리는 색상(hue) 15° 이상, 한쪽만 무채색이면 채도 차 0.4 이상, 둘 다 무채색이면 명도 차 0.15 이상.
+    const hsl = (hex) => {
+      const v = parseInt(hex.slice(1), 16);
+      const r = ((v >> 16) & 255) / 255, g = ((v >> 8) & 255) / 255, b = (v & 255) / 255;
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+      const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+      let h = 0;
+      if (d) h = mx === r ? 60 * (((g - b) / d) % 6) : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+      return { h: (h + 360) % 360, s, l };
+    };
+    const distinct = (a, b) => {
+      const A = hsl(a), B = hsl(b);
+      const ca = A.s >= 0.5, cb = B.s >= 0.5;
+      if (ca && cb) { const x = Math.abs(A.h - B.h) % 360; return Math.min(x, 360 - x) >= 15; }
+      if (ca !== cb) return Math.abs(A.s - B.s) >= 0.4;
+      return Math.abs(A.l - B.l) >= 0.15;
+    };
+    const clash = [];
+    for (const m of MA_COLORS) for (const s of CHART_SERIES_COLORS) if (!distinct(m, s)) clash.push(`${m}~${s}`);
+    for (let i = 0; i < MA_COLORS.length; i++) for (let j = i + 1; j < MA_COLORS.length; j++) if (!distinct(MA_COLORS[i], MA_COLORS[j])) clash.push(`${MA_COLORS[i]}~${MA_COLORS[j]}`);
+    eq('#M11 이평선 색은 종목 선 색 전부와 · 서로 구분된다', clash.join(' '), '');
+    ok('#M11b 색 수 ≥ 한 번에 긋는 선 수', MA_COLORS.length >= MAX_MA_LINES);
+  }
+  ok('#M12 기본 이평선은 정리된 값 · 기간 버튼에 있다 · 사용자가 든 예(5·10·150·200)가 버튼에 있다',
+    normalizeMaPeriods(MA_DEFAULT).join(',') === MA_DEFAULT.join(',') && MA_DEFAULT.every((n) => MA_PRESETS.includes(n))
+    && [5, 10, 150, 200].every((n) => MA_PRESETS.includes(n)) && MA_PRESETS.every((n) => n >= MA_MIN && n <= MA_MAX));
+  {
+    const u = (o) => new URL('http://x' + stockChartUrl({ code: '005930', market: 'kr', period: '1년', ...o })).searchParams;
+    ok('#M13 주소 — 넘겨받은 이평선만 싣는다(관심종목에서 연 창 = 기본값) · 빈 목록은 ma= · 숨김 · 대상(기준 종목이면 생략)',
+      !u({}).has('ma') && u({ ma: [5, 200, 999] }).get('ma') === '5,200' && u({ ma: [] }).get('ma') === ''
+      && u({ ma: [5], maOff: true }).get('maoff') === '1' && !u({ ma: [5] }).has('maoff')
+      && u({ maTarget: 'AAPL' }).get('mat') === 'AAPL' && !u({ maTarget: '005930' }).has('mat') && !u({ maTarget: 'bad code' }).has('mat'));
+  }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n── 파트② 배선 가드 (소스 텍스트) ──');
 
@@ -1228,6 +1352,34 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     && /\{ \.\.\.p, code: fixed, name: dz\.name, currentPrice: dz\.price, changeRate: dz\.changeRate \}/.test(SDc));
   ok('#G103 수익률 차트 비교종목: 후보를 국내로 먼저 묻고 맞으면 칩 코드를 고쳐 같은 함수를 다시 탄다',
     /patchComp\(index, code, \{ code: zero, name: dz\.name \|\| zero \}\);\s*\n\s*return handleCompStockBlur\(index, zero\);/.test(SDc));
+}
+
+// ── 이동평균선 배선(사용자 요청 2026-11-05) ──
+// 계산은 watchlistChart(#M1~#M13)가 정본이고, 여기서는 창이 그 함수를 **같은 구간·같은 종가**로 부르는지,
+// 대상 종목만 앞 종가를 더 받는지, 시세 선 밑에 그리는지, 상태를 주소에만 남기는지를 잰다.
+{
+  const CHART = src('src/components/StockChartWindow.tsx');
+  const CW = stripComments(CHART);
+  ok('#G109 이평선 함수·아이콘 import(사용부와 함께)',
+    /  MA_PRESETS, MA_MIN, MA_MAX, MAX_MA_LINES, MA_DEFAULT, maSelFromPeriods, toggleMaSel, maColor, maFetchFrom, movingAverage, withMaRows,\r?\n/.test(CHART)
+    && /import \{[^}]*\bActivity\b[^}]*\} from 'lucide-react';/.test(CHART) && /<Activity size=\{11\} \/> 이평선/.test(CW));
+  ok('#G109b 이평선 = 대상 종목의 전체 종가 + 시세 선과 같은 구간(win) · 차트 행에 합친다',
+    /pts: movingAverage\(dailyMap\[maS\.code\], maS\.win, m\.n\),/.test(CW) && /key: `ma\$\{m\.n\}`, n: m\.n, color: maColor\(m\.c\), win: maS\.win,/.test(CW)
+    && /const rows = useMemo\(\(\) => withMaRows\(baseRows, maLines\), \[baseRows, maLines\]\);/.test(CW)
+    && /const baseRows = useMemo\(\(\) => buildChartRows\(series\.map\(\(s\) => \(\{ key: s\.key, win: s\.win \}\)\)\), \[series\]\);/.test(CW));
+  ok('#G109c 대상 종목만 가장 긴 이평선만큼 앞 종가를 더 받는다(자동 조회·새로고침 둘 다)',
+    /const maFrom = maFetchFrom\(needFrom, maMax\);/.test(CW)
+    && (CW.match(/loadDaily\(s, s\.code === maCode \? maFrom : needFrom/g) || []).length === 2
+    && /\}, \[all, needFrom, maFrom, maCode, loadDaily\]\);/.test(CW));
+  ok('#G109d 이평선은 시세 선보다 먼저 선언(시세 선이 위) · 대상 종목 눈금 · 같은 보기 키(수익률/종가)',
+    /\{maLines\.map\(\(m\) => \(\s*\n\s*<Line\s*\n\s*key=\{m\.key\}\s*\n\s*type="monotone"\s*\n\s*dataKey=\{mode === 'pct' \? m\.key : `px:\$\{m\.key\}`\}\s*\n\s*yAxisId=\{maAxis\}\s*\n\s*stroke=\{m\.color\}/.test(CW)
+    && CW.indexOf('{maLines.map((m) => (') < CW.indexOf('{shown.map((s) => (\n                <Line'));
+  ok('#G109e 이평선 상태(기간·보이기·대상)는 주소에만 — 없으면 기본값',
+    /const ma = maSelFromPeriods\(p\.has\('ma'\) \? p\.get\('ma'\) : MA_DEFAULT\);/.test(CW)
+    && /ma: maSel\.map\(\(x\) => x\.n\), maOff: !showMa, maTarget,\s*\n\s*\}\)\);/.test(CW)
+    && /\}, \[main, comps, view, maSel, showMa, maTarget\]\);/.test(CW));
+  ok('#G109f 칩 켜고 끄기는 toggleMaSel(색 칸 유지) · 가득 차면 안내', /const next = toggleMaSel\(maSel, n\);\s*\n\s*if \(next === maSel\) \{ setMaMsg\(/.test(CW)
+    && /onClick=\{\(\) => pickMa\(n\)\}/.test(CW));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:watchlist — ${pass} passed, ${fail} failed\n`);
