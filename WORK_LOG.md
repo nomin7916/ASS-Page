@@ -6,6 +6,30 @@
 
 ---
 
+## 2026-11-05 (4) — [로그인·관리자] 승인 스크립트 보안 강화 — 승인 요청은 '대기'로만 · 모든 호출에 로그인 확인
+
+**대상 파일**: `_downloads/AppsScript_계정관리_arui114501.js` · `src/appsScript.ts`(신규) · `src/components/LoginGate.tsx` ·
+`src/components/AdminPage.tsx` · `src/components/AdminPortal.tsx` · `src/App.tsx` · `scripts/verify-access.mjs`(신규) ·
+`scripts/verify-{div-links,ledger,migrate}.mjs`(옛 스크립트 모양 가드를 새 구조로)
+
+> 프로덕션 전환으로 아무나 접속 가능 — 접속 관리자 권한 강화·해킹 시 대책. 어려우면 테스트로 돌아간다.
+
+- 확인된 구멍(코드): ① '관리자에게 승인 요청' = `addUser`라 요청이 곧 자동 승인 ② 스크립트에 호출자 확인이 없어 주소만 알면
+  명단 조회(이메일 유출)·삭제·기능 켜기·설정/공지 변경·남의 PIN 초기화 비번 조회(`GET check&email=`) 가능 — 테스트 모드에서도
+  스크립트 직접 호출은 열려 있었다(바깥 문은 구글 로그인뿐이었다). 관리자 페이지의 '메일이 자동 발송' 안내도 사실과 달랐다.
+- 스크립트: 모든 요청 POST + 본문 token → tokeninfo(aud=CLIENT_ID·email_verified·영숫자로 시작하는 이메일만 — 시트 수식 주입 차단),
+  10분 캐시. 권한 3단계(본인/승인 사용자/관리자). 승인 요청 → `access_requests` PENDING + 관리자 메일(하루 20통), 대기 상한 30.
+  관리자 동작 `listRequests·approveRequest·rejectRequest·deleteRequest·removeUser(승인 취소 = 거절로 남김)·listAudit`.
+  `audit_log` 시트(최근 1000줄)에 요청·승인·거절·취소·관리자 변경·권한 없는 시도(같은 계정·동작은 10분에 1줄). 쓰지 않던 setReset 제거.
+- 사이트: 모든 호출을 `callScript`(토큰 탑재, 만료 시 무음 재발급 1회 — 진행 중인 Drive 재발급 대기자를 덮지 않고 함께 기다림)로.
+  로그인 화면은 대기 중·거절 상태를 구분해 보여 주고 버튼을 숨긴다. 확인 실패는 '권한 없음'이 아니라 '다시 시도' 오류.
+  관리자 페이지: '승인 대기'(승인/거절·거절 기록 지우기)·사용자별 '승인 취소'(두 번 눌러 실행)·'보안 기록 50건'.
+  부팅 getSettings가 error 응답이면 덮지 않는다(덮으면 Drive 캐시의 링크가 지워진다). 유튜브 기록 불러오기가 배열을 JSON.parse해
+  늘 실패하던 것도 함께 고침.
+- 배포 순서: 스크립트 새 버전 배포(관리자) → 사이트 main 반영. 사이트만 먼저 나가면 새 로그인이 '확인 실패'로 막힌다.
+- 검증: `verify:access` 95건(원본 스크립트를 가짜 시트·tokeninfo 위에서 실행) · 변이 11종 전부 검출 · gate 통과(build 실행 불가) ·
+  bun 번들(123모듈, 외부 패키지 제외) 오류 0.
+
 ## 2026-11-05 (3) — [보안] 서버 경로(/api) 로그인 확인 — 1단계: 이 앱의 로그인 토큰만
 
 **대상 파일**: `api/_auth.ts`(신규) · `api/` 경로 9개 · `api/market-calendar.ts` · `src/apiAuth.ts`(신규) · `src/main.tsx` · `src/App.tsx` · `scripts/verify-api-auth.mjs`(신규)

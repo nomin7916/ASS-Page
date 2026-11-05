@@ -15,6 +15,7 @@
 src/
 ├── App.tsx              # 메인 컴포넌트 (~2,099줄 — 분리 진행 중)
 ├── api.ts               # 외부 API 호출
+├── appsScript.ts        # 승인 스크립트(Apps Script) 호출 단일 관문 — 본문에 로그인 토큰을 싣는다(⚠️ 직접 fetch 금지)
 ├── watchlistQuote.ts    # 관심종목 코드→시장 판정(detectMarket)·시세/이력/최근 분배금 조회(api.ts 재사용)
 ├── watchlistChart.ts    # 관심종목 기간 구간·등락율·비교 차트 행·분배금 파서·보유 매입가(buildHoldings)·보유종목 줄(holdingWatchStocks)·찾기(holdingCatalog·초성 searchHoldingCatalog) (⚠️ import 0 — verify:watchlist 직접 import)
 ├── rateMetrics.ts       # 금리 지표 계산: 현재값·1개월 변화·52주 위치·3년 백분위·꺾임 (⚠️ import 0)
@@ -114,6 +115,15 @@ src/
   기준값 `dividendLinksSeen`은 사용자 STATE에 저장(payload·deps·구조 지문·applyStateData 네 곳). 공유값이 없으면(키 없음·빈 배열) 아무것도 안 바꾼다.
 - ⚠️ 배포·병합 모두 `divLinksBootFor`(STATE를 정상 로드한 계정) 게이트를 지난다 — 빼면 로드 전 기본값(빈 7칸)이 모든 사용자 칸을 지운다.
   관리자 접속(impersonation) 중엔 배포도 병합도 하지 않는다. 벨 알림 없음 — 공유 상태는 링크 편집창 안 한 줄. 검증: `verify:div-links`.
+
+## 접속 승인·스크립트 권한 (⚠️ 회귀 주의 — 2026-11-05 OAuth 앱 게시로 누구나 구글 로그인 통과)
+
+- 사이트 코드·스크립트 주소는 공개다 → **문은 스크립트(`_downloads/AppsScript_계정관리_*.js`)가 지킨다.** 모든 요청은 POST 본문
+  `token`을 tokeninfo로 확인(aud=GOOGLE_CLIENT_ID)하고 이메일은 토큰에서만 꺼낸다. 권한: 본인(check·requestAccess·clearReset) /
+  승인 사용자(getSettings·getFeatureLabels·getNotifications — 공지는 전체·묶음·본인 것만) / 관리자(나머지). GET은 `{status:'ok'}`만.
+- 승인 요청 = `access_requests`에 PENDING + 관리자 메일. ⚠️ 옛 `addUser`(요청=자동 승인)로 되돌리지 말 것. 승인은 관리자 페이지 '승인 대기'.
+- 사이트는 `callScript`(src/appsScript.ts)로만 부른다 — 토큰은 `registerScriptAuth`(App, driveTokenRef). 포털 토큰은 drive 범위뿐이라 못 쓴다.
+- 스크립트를 바꾸면 관리자가 script.google.com에서 **새 버전 배포**해야 한다(사이트 배포와 순서 맞추기). 검증: `verify:access`(원본 실행).
 
 ## 서버 경로 로그인 확인 (`api/_auth.ts` · `src/apiAuth.ts`, ⚠️ 회귀 주의 — 2026-11-05)
 

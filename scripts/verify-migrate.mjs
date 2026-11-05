@@ -232,7 +232,7 @@ ok('#G5f 원본 폴더에는 쓰지 않는다', !/updateDriveFileIfExists\(token
 ok('#G5g STATE는 prepareMigratedState를 거친다', /f\.key === 'STATE' \? prepareMigratedState\(srcState, now\)/.test(apply));
 ok('#G5h STATE 실패 시 나머지 중단 (반환 2경로)', count(apply, /if \(f\.key === 'STATE'\) return \{ ok: false/g) >= 2);
 ok('#G5i version 파일은 있을 때만 갱신(now)', /updateDriveFileIfExists\(token, dstFolder, DRIVE_FILES\.VERSION, \{ portfolioUpdatedAt: now \}\)/.test(apply));
-ok('#G5j 기능 플래그는 setUserFeature로 대상 이메일에', /action: 'setUserFeature', email: dstEmail, feature: d\.feature, value: d\.value/.test(apply));
+ok('#G5j 기능 플래그는 setUserFeature로 대상 이메일에', /callScript\('setUserFeature', \{ email: dstEmail, feature: d\.feature, value: d\.value \}\)/.test(apply));
 ok('#G5k 결과 ok는 fail 단계가 없을 때만', /ok: !steps\.some\(s => s\.status === 'fail'\)/.test(apply));
 ok('#G6 AdminPage 렌더에 두 핸들러 전달', /onMigrationPreview=\{handleMigrationPreview\} onMigrationApply=\{handleMigrationApply\}/.test(appNC));
 ok('#G6b App import 배선', /import \{[^}]*\bupdateDriveFileIfExists\b[^}]*\} from '\.\/driveStorage';/.test(app)

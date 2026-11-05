@@ -1606,14 +1606,18 @@ ok('#G3f UserInfoBar 조건부 렌더(사용부)', /\{canAccessLedger && \([\s\S
 //    없으면 undefined 컴포넌트 렌더로 상단바가 던지는데 UserInfoBar는 ErrorBoundary 격리 밖이다.
 ok('#G3g 인라인 SVG 아이콘(lucide 신규 아이콘 아님)', /const LedgerIcon = \(/.test(UIB));
 // Apps Script 6지점 — 인덱스 12 = M열
-ok('#G4 AppsScript checkApproval/listUsers가 row[12]를 읽는다',
-  (AS.match(/ledgerEnabled:\s*parseBool\(row\[12\]\)/g) || []).length >= 2);
-ok('#G4b AppsScript colMap에 ledgerEnabled: 12', /ledgerEnabled:\s*12/.test(AS));
+// 2026-11 보안 강화판: 기능 열은 FEATURE_KEYS 한 곳(E열부터 순서대로)으로 모였다 — 가계부 = 9번째 = M열(row[12]).
+//   실행 검증(14칸·기능 전부 OFF·기능 켜기)은 verify:access #M6·#M9가 원본 스크립트를 돌려 확인한다.
+const FEATURE_KEYS_AS = ((AS.match(/const FEATURE_KEYS\s*=\s*\[([^\]]*)\]/) || [])[1] || '').split(',').map(s => s.trim().replace(/'/g, ''));
+ok('#G4 AppsScript checkApproval/listUsers가 FEATURE_KEYS 순서(row[4 + i])로 읽고 ledgerEnabled = 9번째(M열·row[12])',
+  FEATURE_KEYS_AS[8] === 'ledgerEnabled' && (AS.match(/parseBool\(row\[4 \+ [ij]\]\)/g) || []).length >= 2);
+ok('#G4b AppsScript setUserFeature가 FEATURE_KEYS 인덱스로 열을 고른다(E=5열부터)',
+  /const col = FEATURE_KEYS\.indexOf\(feature\);/.test(AS) && /getRange\(found\.index \+ 1, 5 \+ col\)/.test(AS));
 // 2026-10: N열(금리 모니터링) 추가로 범위가 E1:N1·E2:N100으로 넓어졌다 — M열(가계부)을 포함하는 한 통과.
 ok('#G4c AppsScript 라벨 범위가 M열을 포함 (E1:M1 이상)', /E1:[MN]1/.test(AS) && !/getRange\('E1:L1'\)/.test(AS));
 ok('#G4d AppsScript 검증 범위가 M열을 포함 (E2:M100 이상)', /E2:[MN]100/.test(AS));
-ok('#G4e AppsScript addUser가 13열을 쓴다',
-  (sliceBlock(AS, 'function handleAddUser', '\n}').match(/'OFF'/g) || []).length >= 9);
+ok('#G4e AppsScript 승인(approveRequest)이 기능 열 전부를 OFF로 쓴다',
+  /concat\(FEATURE_KEYS\.map\(function \(\) \{ return 'OFF'; \}\)\)/.test(sliceBlock(AS, 'function approveRequest', '\n}')));
 
 // ── 별도 창 브릿지 ─────────────────────────────────────────────────────────
 ok('#G5 main.tsx 부트 스위치', /LEDGER_WINDOW_BOOT/.test(MAIN) && /ledgerWindow/.test(MAIN));

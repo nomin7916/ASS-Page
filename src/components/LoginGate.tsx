@@ -1,7 +1,8 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from '../config';
+import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
 import { getOrCreateIndexFolder, saveDriveFile, loadDriveFile, DRIVE_FILES } from '../driveStorage';
+import { callScript } from '../appsScript';
 
 type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'error' | 'pin_entry' | 'silent_auth';
 
@@ -102,39 +103,33 @@ export async function savePinToDrive(pinHash: string, token: string, email: stri
 }
 
 // ── Apps Script를 통해 승인 여부 + RESET 플래그 확인 ────────────
-// 구글 시트를 비공개로 유지하고 Apps Script가 대신 조회 (보안 정책 준수)
-// B열: 비어있음 = 정상, "RESET" = 초기화(0000), "RESET:1234" = 초기화(1234)
-// checked: 응답을 실제로 받아 읽었는가 — false(네트워크·Apps Script 오류)는 '미승인'이 아니라 '모름'이다.
-async function checkApproval(email: string): Promise<{ approved: boolean; checked: boolean; needsReset: boolean; adminPin: string } & UserFeatures> {
+// 스크립트가 토큰에서 이메일을 꺼내 **본인** 줄만 답한다(email 인자는 관리자 토큰일 때만 따른다 — 관리자 접속).
+// A열: 비어있음 = 정상, "RESET" = 초기화(0000), "RESET:1234" = 초기화(1234)
+// checked: 응답을 실제로 받아 읽었는가 — false(네트워크·스크립트 오류)는 '미승인'이 아니라 '모름'이다.
+// request: 미승인일 때 승인 요청 상태 — 'none'(요청 전) | 'pending'(관리자 확인 대기) | 'rejected'(거절·승인 취소)
+type RequestState = 'none' | 'pending' | 'rejected';
+async function checkApproval(token: string, email?: string): Promise<{ approved: boolean; checked: boolean; request: RequestState; needsReset: boolean; adminPin: string } & UserFeatures> {
+  const unknown = { approved: false, checked: false, request: 'none' as RequestState, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
   try {
-    const url = `${APPS_SCRIPT_URL}?action=check&email=${encodeURIComponent(email)}&cacheBust=${Date.now()}`;
-    const res = await fetch(url);
-    if (!res.ok) return { approved: false, checked: false, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
-    const data = await res.json();
-    // Apps Script returns { status: 'approved'/'not_approved', resetPassword: string|null, name, feature1, ... }
-    // ⚠️ pickFeatures의 `!!` 가 Apps Script 미배포 시 graceful degradation의 핵심 —
+    const data = await callScript('check', email ? { email } : {}, token);
+    if (data?.status !== 'approved' && data?.status !== 'not_approved') return unknown;
+    // ⚠️ pickFeatures의 `!!` 가 스크립트 미배포 시 graceful degradation의 핵심 —
     //    응답에 새 키가 없으면 조용히 false(OFF)가 되고 기존 플래그·기능에는 회귀가 없다.
     return {
       approved: data.status === 'approved',
       checked: true,
+      request: data.request === 'pending' || data.request === 'rejected' ? data.request : 'none',
       needsReset: data.resetPassword != null,
       adminPin: data.resetPassword ?? DEFAULT_PIN,
       ...pickFeatures(data),
     };
   } catch {
-    return { approved: false, checked: false, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
+    return unknown;
   }
 }
 
-async function clearResetFlag(email: string): Promise<void> {
-  try {
-    await fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'clear_reset', email }),
-    });
-  } catch { /* fire and forget */ }
+async function clearResetFlag(token: string): Promise<void> {
+  try { await callScript('clearReset', {}, token); } catch { /* fire and forget */ }
 }
 
 // ── 구글 인증 오류 → 사용자 안내 메시지 ─────────────────────────
@@ -168,17 +163,15 @@ export async function fetchUserEmail(token: string): Promise<string | null> {
   }
 }
 
-async function sendApprovalRequest(email: string): Promise<boolean> {
+// 승인 요청 = '대기' 등록 + 관리자 메일. 승인 명단에 넣는 것은 관리자뿐이다(스크립트가 강제).
+// ⚠️ 옛 'addUser'(요청이 곧 자동 승인)로 되돌리지 말 것 — 아무 구글 계정이나 버튼 하나로 들어왔다(2026-11).
+async function sendApprovalRequest(token: string): Promise<'pending' | 'approved' | 'rejected' | 'error'> {
   try {
-    await fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'addUser', email, name: email.split('@')[0] }),
-    });
-    return true;
+    const data = await callScript('requestAccess', {}, token);
+    if (data?.success && (data.status === 'pending' || data.status === 'approved' || data.status === 'rejected')) return data.status;
+    return 'error';
   } catch {
-    return false;
+    return 'error';
   }
 }
 
@@ -236,6 +229,8 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
   const [userToken, setUserToken] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [resetNotice, setResetNotice] = useState(false);
+  const [requestState, setRequestState] = useState<RequestState>('none');
+  const [requestResult, setRequestResult] = useState<'pending' | 'approved'>('pending');
   const [gisReady, setGisReady] = useState<boolean>(
     typeof window !== 'undefined' && !!(window as any).google?.accounts?.oauth2
   );
@@ -329,11 +324,12 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         // ⚠️ 승인 명단 재확인 — OAuth 앱이 '프로덕션'이면 누구나 구글 토큰을 받으므로, 이 경로가
         //    승인 검사를 건너뛰면 SESSION_KEY만 심어 명단 밖 계정이 들어오고 승인 취소도 탭이 닫힐 때까지 안 먹힌다.
         //    '명단에 없음'이 확인된 경우만 막는다(응답 실패는 기존대로 진입 — 일시 장애로 쫓겨나지 않게).
-        const approval = await checkApproval(email);
+        const approval = await checkApproval(token);
         if (approval.checked && !approval.approved) {
           sessionStorage.removeItem(SESSION_KEY);
           setUserEmail(email);
           setUserToken(token);
+          setRequestState(approval.request);
           setStep('pending');
           return;
         }
@@ -363,7 +359,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         } else if (!isPinSet(adminViewUserCtx.userEmail)) {
           sessionStorage.setItem(PIN_KEY(adminViewUserCtx.userEmail), hashPin('0000'));
         }
-        return checkApproval(adminViewUserCtx.userEmail);
+        return checkApproval(adminViewUserCtx.adminToken, adminViewUserCtx.userEmail);
       })
       .then((res) => {
         featuresRef.current = pickFeatures(res);
@@ -409,9 +405,15 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         setUserEmail(email);
         setUserToken(token);
 
-        const checkRes = await checkApproval(email);
-        const { approved, needsReset, adminPin } = checkRes;
+        const checkRes = await checkApproval(token);
+        const { approved, checked, needsReset, adminPin } = checkRes;
+        if (!checked) {
+          setStep('error');
+          setErrorMsg('승인 여부를 확인하지 못했습니다.\n잠시 후 다시 시도해 주세요.');
+          return;
+        }
         if (!approved) {
+          setRequestState(checkRes.request);
           setStep('pending');
           return;
         }
@@ -421,7 +423,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
           const adminHash = hashPin(adminPin);
           sessionStorage.setItem(PIN_KEY(email), adminHash);
           savePinToDrive(adminHash, token, email);
-          clearResetFlag(email);
+          clearResetFlag(token);
           setResetNotice(true);
         } else {
           const { pinHash: drivePinHash, folderId: pinFolderId } = await loadPinFromDrive(token, email);
@@ -467,7 +469,18 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
 
   const handleRequestAccess = async () => {
     setStep('requesting');
-    await sendApprovalRequest(userEmail);
+    const r = await sendApprovalRequest(userToken);
+    if (r === 'error') {
+      setStep('error');
+      setErrorMsg('승인 요청을 보내지 못했습니다.\n잠시 후 다시 시도해 주세요.');
+      return;
+    }
+    if (r === 'rejected') {
+      setRequestState('rejected');
+      setStep('pending');
+      return;
+    }
+    setRequestResult(r);
     setStep('requested');
   };
 
@@ -480,6 +493,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
     setPinDigits(['', '', '', '']);
     setPinError('');
     setResetNotice(false);
+    setRequestState('none');
     if (onCancelAdminView) onCancelAdminView();
   };
 
@@ -578,14 +592,23 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
                 </svg>
               </div>
               <div>
-                <p className="text-white font-semibold mb-1">접근 권한이 없습니다</p>
-                <p className="text-gray-400 text-sm">
-                  <span className="text-blue-400">{userEmail}</span> 계정은<br />아직 승인되지 않았습니다.
+                <p className="text-white font-semibold mb-1">
+                  {requestState === 'pending' ? '승인 대기 중입니다' : requestState === 'rejected' ? '승인되지 않은 계정입니다' : '접근 권한이 없습니다'}
+                </p>
+                <p className="text-gray-400 text-sm leading-relaxed">
+                  <span className="text-blue-400">{userEmail}</span> 계정은<br />
+                  {requestState === 'pending'
+                    ? <>이미 승인 요청을 보냈습니다.<br />관리자가 승인하면 다시 로그인해 주세요.</>
+                    : requestState === 'rejected'
+                      ? <>관리자가 접속을 허용하지 않았습니다.<br />필요하면 관리자에게 직접 문의해 주세요.</>
+                      : '아직 승인되지 않았습니다.'}
                 </p>
               </div>
-              <button onClick={handleRequestAccess} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200">
-                관리자에게 승인 요청
-              </button>
+              {requestState === 'none' && (
+                <button onClick={handleRequestAccess} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200">
+                  관리자에게 승인 요청
+                </button>
+              )}
               <button onClick={handleRetry} className="text-gray-500 hover:text-gray-300 text-sm transition-colors">
                 다른 계정으로 로그인
               </button>
@@ -609,9 +632,11 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
                 </svg>
               </div>
               <div>
-                <p className="text-white font-semibold mb-1">승인 요청 완료</p>
+                <p className="text-white font-semibold mb-1">{requestResult === 'approved' ? '이미 승인된 계정입니다' : '승인 요청 완료'}</p>
                 <p className="text-gray-400 text-sm leading-relaxed">
-                  관리자에게 요청이 전달되었습니다.<br />승인 후 다시 로그인해 주세요.
+                  {requestResult === 'approved'
+                    ? '다시 로그인해 주세요.'
+                    : <>관리자에게 요청이 전달되었습니다.<br />관리자가 승인한 뒤 다시 로그인해 주세요.</>}
                 </p>
               </div>
               <button onClick={handleRetry} className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200">
