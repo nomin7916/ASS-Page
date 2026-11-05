@@ -1,9 +1,10 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
 import { LayoutDashboard } from 'lucide-react';
-import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
+import { APPROVED_SHEET_ID, ADMIN_EMAIL } from '../config';
 import { RULED_BG_STYLE, NOTIFY_HEX } from '../design';
 import { notebookNoticeMessage } from '../utils';
+import { callScript } from '../appsScript';
 
 const COLAB_URL = 'https://colab.research.google.com/drive/1hjCwtVjyKzooWly4AU_ufrMSV87FApzi#scrollTo=fe7b764e';
 const COLAB_PASSWORD = '0000';
@@ -104,18 +105,30 @@ function MigSummary({ title, s, tone }: { title: string; s: any; tone: 'src' | '
   );
 }
 
-// Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
+// Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지 — 관리자 토큰만 통과)
 async function fetchApprovedUsers(): Promise<ApprovedUser[]> {
   try {
-    const url = `${APPS_SCRIPT_URL}?action=listUsers&cacheBust=${Date.now()}`;
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.users || []).filter((u: ApprovedUser) => u.email).map((u: ApprovedUser) => ({ ...u, email: u.email.trim() }));
+    const data = await callScript('listUsers');
+    return (data?.users || []).filter((u: ApprovedUser) => u.email).map((u: ApprovedUser) => ({ ...u, email: u.email.trim() }));
   } catch {
     return [];
   }
 }
+
+interface AccessRequest {
+  email: string;
+  name: string;
+  requestedAt: string;
+  status: 'PENDING' | 'REJECTED';
+  decidedAt: string;
+}
+
+// 보안 기록(audit_log)의 동작 이름 → 화면 글씨
+const AUDIT_ACTION_LABEL: Record<string, string> = {
+  requestAccess: '승인 요청', approveRequest: '승인', rejectRequest: '거절', deleteRequest: '거절 기록 삭제',
+  removeUser: '승인 취소', setUserFeature: '기능 변경', setSettings: '설정 변경', sendNotification: '공지 발송',
+  deleteAllNotifications: '공지 일괄 삭제', setupSecurity: '보안 설치', mail: '메일',
+};
 
 function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   const diff = Date.now() - ts;
@@ -236,6 +249,13 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   // ConfirmDialog·알림 벨이 언마운트 상태이고 notify prop도 받지 않는다(nbUploadError 패턴과 동일).
   const [featureToggleError, setFeatureToggleError] = useState('');
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
+  // 승인 대기·승인 취소·보안 기록 — 스크립트가 관리자 토큰일 때만 답한다
+  const [requests, setRequests] = useState<AccessRequest[]>([]);
+  const [requestBusy, setRequestBusy] = useState('');
+  const [requestError, setRequestError] = useState('');
+  const [revokeConfirm, setRevokeConfirm] = useState('');
+  const [auditEntries, setAuditEntries] = useState<any[] | null>(null);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   // API 진단 상태
   const [apiTestCode, setApiTestCode] = useState('');
@@ -361,12 +381,9 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
 
   const loadYoutubeHistory = async () => {
     try {
-      const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.youtubeUrlHistory) {
-          setYoutubeHistory(JSON.parse(data.youtubeUrlHistory));
-        }
+      const data = await callScript('getSettings');
+      if (data?.youtubeUrlHistory) {
+        setYoutubeHistory(Array.isArray(data.youtubeUrlHistory) ? data.youtubeUrlHistory : JSON.parse(data.youtubeUrlHistory));
       }
     } catch {}
   };
@@ -376,19 +393,14 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     const newHistory = [newEntry, ...currentHistory.filter(h => h.url !== url)].slice(0, 20);
     setYoutubeHistory(newHistory);
     try {
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrlHistory', value: JSON.stringify(newHistory) }),
-      });
+      await callScript('setSettings', { key: 'youtubeUrlHistory', value: JSON.stringify(newHistory) });
     } catch {}
   };
 
   const loadFeatureSettings = async () => {
     try {
-      const res = await fetch(`${APPS_SCRIPT_URL}?action=getFeatureLabels&cacheBust=${Date.now()}`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await callScript('getFeatureLabels');
+      if (data) {
         // ⚠️ `>= 6` + 인덱스 머지 — 절대 `=== 7`로 바꾸지 말 것.
         //    Apps Script를 아직 배포하지 않은 구간에서는 구버전이 E1:J1만 읽어 6개를 반환하는데,
         //    `=== 7`이면 응답이 통째로 거부돼 시트에 설정해 둔 커스텀 라벨 6개가 전부 제네릭
@@ -401,31 +413,12 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     } catch {}
   };
 
-  // Apps Script doPost에 아래 코드 추가 필요:
-  // if (action === 'setUserFeature') {
-  //   const ss = SpreadsheetApp.openById(SHEET_ID);
-  //   const sheet = ss.getSheetByName(APPROVED_SHEET_NAME);
-  //   const rows = sheet.getDataRange().getValues();
-  //   const colMap = { feature1: 4, feature2: 5, feature3: 6, youtubeEnabled: 7, notebookEnabled: 8 }; // E=4,F=5,G=6,H=7,I=8 (0-indexed)
-  //   for (let i = 1; i < rows.length; i++) {
-  //     if (String(rows[i][1]).toLowerCase() === params.email.toLowerCase()) {
-  //       sheet.getRange(i + 1, colMap[params.feature] + 1).setValue(params.value ? 'ON' : 'OFF');
-  //       break;
-  //     }
-  //   }
-  //   return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
-  // }
   const handleToggleFeature = async (email: string, feature: string, currentValue: boolean) => {
     const key = `${email}:${feature}`;
     setTogglingKey(key);
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'setUserFeature', email, feature, value: !currentValue }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.success) {
+      const data = await callScript('setUserFeature', { email, feature, value: !currentValue });
+      if (data?.success) {
         setUsers(prev => prev.map(u =>
           u.email === email ? { ...u, [feature]: !currentValue } : u
         ));
@@ -434,7 +427,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
         // ⚠️ 과거엔 실패가 완전 무음이라(로컬 state도 안 바뀌고 표시도 없음) 관리자가 '버튼이
         //    고장났다'고 오판했다. 구버전 Apps Script에 새 feature 키를 보내면 'invalid feature'로
         //    거부되는데 그 사실이 어디에도 드러나지 않았다.
-        setFeatureToggleError(`${email} · ${feature} 저장 실패 — Apps Script 새 버전 배포를 확인하세요`);
+        setFeatureToggleError(`${email} · ${feature} 저장 실패 — ${data?.authError || data?.forbidden ? '관리자 로그인 확인 실패(새로고침 후 다시 로그인)' : 'Apps Script 새 버전 배포를 확인하세요'}`);
       }
     } catch {
       setFeatureToggleError(`${email} · ${feature} 저장 실패 — 네트워크 오류`);
@@ -451,16 +444,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     // '__notebook__' 센티넬 → App.tsx notifTargetsUser가 학습자료 ON 사용자만 통과시킴
     // 헤더의 '공지 OFF'면 발송 자체를 건너뛴다(자료 등록·배포는 그대로 진행)
     if (noticeOn('notebook')) {
-      fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          action: 'sendNotification',
-          targetEmail: '__notebook__',
-          message: notebookNoticeMessage(newLink.title),
-          type: 'info',
-        }),
-      }).catch(() => {});
+      callScript('sendNotification', { targetEmail: '__notebook__', message: notebookNoticeMessage(newLink.title), type: 'info' }).catch(() => {});
     }
     setNbTitle('');
     setNbUrl('');
@@ -479,16 +463,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       await onSetNotebookLinks([newLink, ...notebookLinks]);
       // 학습자료(notebookEnabled) ON 사용자에게만 자동 알림 (비차단) — 헤더 '공지 OFF'면 생략
       if (noticeOn('notebook')) {
-        fetch(APPS_SCRIPT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({
-            action: 'sendNotification',
-            targetEmail: '__notebook__',
-            message: notebookNoticeMessage(title),
-            type: 'info',
-          }),
-        }).catch(() => {});
+        callScript('sendNotification', { targetEmail: '__notebook__', message: notebookNoticeMessage(title), type: 'info' }).catch(() => {});
       }
       setNbFile(null);
       setNbFileTitle('');
@@ -573,23 +548,16 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     const newHistory = youtubeHistory.filter(h => h.savedAt !== savedAt);
     setYoutubeHistory(newHistory);
     try {
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrlHistory', value: JSON.stringify(newHistory) }),
-      });
+      await callScript('setSettings', { key: 'youtubeUrlHistory', value: JSON.stringify(newHistory) });
     } catch {}
   };
 
   const fetchSentNotifications = async () => {
     setNotifsLoading(true);
     try {
-      const res = await fetch(`${APPS_SCRIPT_URL}?action=getNotifications&cacheBust=${Date.now()}`);
-      if (res.ok) {
-        const data = await res.json();
-        const all: SentNotification[] = data.notifications || [];
-        setSentNotifs(all.sort((a, b) => b.createdAt - a.createdAt));
-      }
+      const data = await callScript('getNotifications');
+      const all: SentNotification[] = data?.notifications || [];
+      setSentNotifs(all.sort((a, b) => b.createdAt - a.createdAt));
     } catch {}
     setNotifsLoading(false);
   };
@@ -597,13 +565,8 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const handleDeleteNotification = async (id: string) => {
     setDeletingIds(prev => new Set([...prev, id]));
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'deleteNotification', notifId: id }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.success) {
+      const data = await callScript('deleteNotification', { notifId: id });
+      if (data?.success) {
         setSentNotifs(prev => prev.filter(n => n.id !== id));
       }
     } catch {}
@@ -619,20 +582,11 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     const ids = new Set(targets.map(t => t.id));
     try {
       // 1차: 백엔드 일괄 삭제 (Apps Script 미배포 시 success:false → 폴백)
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'deleteAllNotifications', targetEmail: notifFilter }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!data.success) {
+      const data = await callScript('deleteAllNotifications', { targetEmail: notifFilter });
+      if (!data?.success) {
         // 폴백: 개별 순차 삭제 (동시 deleteRow 시 행 인덱스 경쟁 방지 → await로 직렬화)
         for (const t of targets) {
-          await fetch(APPS_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({ action: 'deleteNotification', notifId: t.id }),
-          }).catch(() => {});
+          await callScript('deleteNotification', { notifId: t.id }).catch(() => {});
         }
       }
       setSentNotifs(prev => prev.filter(n => !ids.has(n.id)));
@@ -663,14 +617,70 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     fetchSentNotifications();
     loadYoutubeHistory();
     loadFeatureSettings();
+    loadRequests();
   }, []);
 
   const handleRefresh = async () => {
     setLoading(true);
+    loadRequests();
     const u = await fetchApprovedUsers();
     setUsers(u);
     setLoading(false);
     triggerSessionRefresh(u);
+  };
+
+  // ── 승인 대기 · 승인 취소 · 보안 기록 ──
+  // 승인 요청은 스크립트가 '대기'로만 적는다 — 승인 명단에 넣는 길은 여기 '승인' 버튼(관리자 토큰)뿐이다.
+  const loadRequests = async () => {
+    try {
+      const data = await callScript('listRequests');
+      if (data?.error) { setRequestError('승인 대기 목록을 불러오지 못했습니다 — Apps Script 새 버전 배포를 확인하세요.'); return; }
+      setRequests(data?.requests || []);
+      setRequestError('');
+    } catch {
+      setRequestError('승인 대기 목록을 불러오지 못했습니다 — 네트워크 오류');
+    }
+  };
+
+  const handleRequestDecision = async (email: string, action: 'approveRequest' | 'rejectRequest' | 'deleteRequest') => {
+    if (requestBusy) return;
+    setRequestBusy(email);
+    try {
+      const data = await callScript(action, { email });
+      if (!data?.success) setRequestError(`${email} 처리 실패 — ${data?.error || '알 수 없는 오류'}`);
+      else setRequestError('');
+    } catch {
+      setRequestError(`${email} 처리 실패 — 네트워크 오류`);
+    }
+    setRequestBusy('');
+    if (action === 'approveRequest') await handleRefresh();
+    else await loadRequests();
+  };
+
+  // 승인 취소 — 명단에서 지우고 '거절'로 남긴다(같은 계정이 곧바로 다시 요청하지 못하게). 두 번 눌러야 실행된다.
+  const handleRevokeUser = async (email: string) => {
+    if (revokeConfirm !== email) { setRevokeConfirm(email); return; }
+    setRevokeConfirm('');
+    setRequestBusy(email);
+    try {
+      const data = await callScript('removeUser', { email });
+      if (!data?.success) setFeatureToggleError(`${email} · 승인 취소 실패 — ${data?.error || '알 수 없는 오류'}`);
+    } catch {
+      setFeatureToggleError(`${email} · 승인 취소 실패 — 네트워크 오류`);
+    }
+    setRequestBusy('');
+    await handleRefresh();
+  };
+
+  const loadAudit = async () => {
+    setAuditLoading(true);
+    try {
+      const data = await callScript('listAudit', { limit: 50 });
+      setAuditEntries(data?.error ? [] : (data?.entries || []));
+    } catch {
+      setAuditEntries([]);
+    }
+    setAuditLoading(false);
   };
 
   // ── 계정 이전 (CLAUDE.md '관리자 계정 이전' 절) ──
@@ -705,28 +715,8 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     setSending(true);
     setSendResult(null);
     try {
-      // Apps Script에 POST로 공지 전송
-      // Apps Script doPost에 아래 코드 추가 필요:
-      // if (action === 'sendNotification') {
-      //   const ss = SpreadsheetApp.openById(SHEET_ID);
-      //   let sheet = ss.getSheetByName('notifications') || ss.insertSheet('notifications');
-      //   if (sheet.getLastRow() === 0) sheet.appendRow(['id','targetEmail','message','type','createdAt']);
-      //   const id = Utilities.getUuid();
-      //   sheet.appendRow([id, params.targetEmail, params.message, params.type || 'info', Date.now()]);
-      //   return ContentService.createTextOutput(JSON.stringify({ success: true, id })).setMimeType(ContentService.MimeType.JSON);
-      // }
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          action: 'sendNotification',
-          targetEmail: notifTarget,
-          message: notifMessage.trim(),
-          type: notifType,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.success) {
+      const data = await callScript('sendNotification', { targetEmail: notifTarget, message: notifMessage.trim(), type: notifType });
+      if (data?.success) {
         setSendResult('success');
         setNotifMessage('');
         fetchSentNotifications();
@@ -783,6 +773,71 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
             </button>
           </div>
         </div>
+
+        {/* 승인 대기 — 요청은 '대기'로만 쌓이고 여기서 승인해야 승인 명단에 들어간다(스크립트가 강제) */}
+        {(() => {
+          const pending = requests.filter(r => r.status !== 'REJECTED');
+          const rejected = requests.filter(r => r.status === 'REJECTED');
+          return (
+            <div className={`bg-gray-900 border rounded-2xl p-6 shadow-2xl mb-4 ${pending.length > 0 ? 'border-amber-600/60' : 'border-gray-800'}`}>
+              <h2 className="text-white font-semibold mb-3">
+                승인 대기
+                <span className={`ml-2 text-sm font-normal ${pending.length > 0 ? 'text-amber-300' : 'text-gray-500'}`}>({pending.length}명)</span>
+              </h2>
+              {requestError && <p className="text-red-400 text-xs mb-2">{requestError}</p>}
+              {pending.length === 0 ? (
+                <p className="text-gray-600 text-sm text-center py-2">대기 중인 승인 요청이 없습니다.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {pending.map(r => (
+                    <li key={r.email} className="bg-gray-800 rounded-lg px-3 py-2 flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-gray-200 text-xs truncate block">{r.email}</span>
+                        <div className="text-gray-500 text-[10px] mt-0.5">요청: {r.requestedAt || '-'}</div>
+                      </div>
+                      <button
+                        onClick={() => handleRequestDecision(r.email, 'approveRequest')}
+                        disabled={!!requestBusy}
+                        className="text-xs font-semibold px-3 py-1 rounded-md bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50"
+                      >
+                        {requestBusy === r.email ? '처리 중…' : '승인'}
+                      </button>
+                      <button
+                        onClick={() => handleRequestDecision(r.email, 'rejectRequest')}
+                        disabled={!!requestBusy}
+                        className="text-xs font-semibold px-3 py-1 rounded-md bg-red-900/70 hover:bg-red-800 text-red-200 disabled:opacity-50"
+                      >
+                        거절
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {rejected.length > 0 && (
+                <details className="mt-3">
+                  <summary className="text-gray-500 text-xs cursor-pointer select-none">
+                    거절·승인 취소된 계정 {rejected.length}명 — 기록을 지우면 다시 요청할 수 있습니다
+                  </summary>
+                  <ul className="mt-2 space-y-1">
+                    {rejected.map(r => (
+                      <li key={r.email} className="flex items-center gap-2 text-[11px] text-gray-400 bg-gray-800/60 rounded px-2 py-1">
+                        <span className="flex-1 min-w-0 truncate">{r.email}</span>
+                        <span className="text-gray-600">{r.decidedAt}</span>
+                        <button
+                          onClick={() => handleRequestDecision(r.email, 'deleteRequest')}
+                          disabled={!!requestBusy}
+                          className="text-gray-400 hover:text-white border border-gray-700 rounded px-1.5 disabled:opacity-50"
+                        >
+                          기록 지우기
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          );
+        })()}
 
         {/* 승인 사용자 목록 */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-2xl">
@@ -908,6 +963,19 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                                 {switching ? '전환 중...' : '접속'}
                               </button>
                             )}
+                            <button
+                              onClick={() => handleRevokeUser(u.email)}
+                              onBlur={() => revokeConfirm === u.email && setRevokeConfirm('')}
+                              disabled={!!requestBusy}
+                              title="승인 명단에서 지우고 '거절'로 남깁니다(다시 요청 불가 — 승인 대기 칸에서 기록을 지우면 풀림)"
+                              className={`text-[10px] border px-1.5 py-0.5 rounded-full transition-colors disabled:opacity-50 ${
+                                revokeConfirm === u.email
+                                  ? 'bg-red-700 text-white border-red-500'
+                                  : 'bg-gray-800/60 hover:bg-red-900/60 text-gray-400 hover:text-red-200 border-gray-700/50'
+                              }`}
+                            >
+                              {requestBusy === u.email ? '취소 중…' : revokeConfirm === u.email ? '정말 취소?' : '승인 취소'}
+                            </button>
                           </>
                         )}
                       </div>
@@ -950,7 +1018,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
           {/* 사용자 추가/시트 버튼 */}
           <div className="mt-5 pt-5 border-t border-gray-800">
             <p className="text-gray-500 text-sm mb-3">
-              사용자 추가/제거는 구글 시트에서 직접 관리합니다.
+              승인은 위 '승인 대기', 취소는 각 사용자의 '승인 취소' 버튼으로 합니다. 시트에서 직접 고쳐도 됩니다.
             </p>
             <button
               onClick={handleOpenSheet}
@@ -1675,13 +1743,43 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
           </div>
         </div>
 
-        {/* 승인 요청 안내 */}
+        {/* 승인 요청 안내 + 보안 기록 */}
         <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4">
           <p className="text-gray-500 text-xs leading-relaxed">
             <span className="text-yellow-400 font-semibold">승인 요청 수신:</span>{' '}
-            새 사용자가 접근을 요청하면 <span className="text-gray-300">{ADMIN_EMAIL}</span>로 이메일이 자동 발송됩니다.
-            이메일을 확인 후 구글 시트에 해당 이메일을 추가하면 즉시 접근이 허용됩니다.
+            새 사용자가 승인을 요청하면 위 <span className="text-gray-300">승인 대기</span> 칸에 올라오고{' '}
+            <span className="text-gray-300">{ADMIN_EMAIL}</span>로 메일이 갑니다(하루 최대 20통).
+            관리자가 <span className="text-emerald-400">승인</span>을 눌러야만 들어올 수 있고, 새 사용자는 기능이 모두 꺼진 채 시작합니다.
           </p>
+          <details className="mt-3" onToggle={e => { if ((e.target as HTMLDetailsElement).open && auditEntries === null) loadAudit(); }}>
+            <summary className="text-gray-400 text-xs cursor-pointer select-none">
+              보안 기록 (최근 50건) — 승인 요청·승인·거절·승인 취소·관리자 변경·권한 없는 시도
+            </summary>
+            <div className="mt-2">
+              <button onClick={loadAudit} disabled={auditLoading} className="text-[11px] text-gray-400 hover:text-white mb-2 disabled:opacity-50">
+                {auditLoading ? '불러오는 중…' : '새로고침'}
+              </button>
+              {auditEntries && auditEntries.length === 0 && !auditLoading && (
+                <p className="text-gray-600 text-xs">기록이 없거나 불러오지 못했습니다.</p>
+              )}
+              {auditEntries && auditEntries.length > 0 && (
+                <ul className="space-y-0.5 max-h-64 overflow-y-auto font-mono text-[10px]">
+                  {auditEntries.map((a, i) => {
+                    const denied = String(a.detail || '').startsWith('권한 없음');
+                    return (
+                      <li key={i} className={`flex flex-wrap gap-x-2 ${denied ? 'text-red-300' : 'text-gray-400'}`}>
+                        <span className="text-gray-600">{a.at}</span>
+                        <span>{a.who}</span>
+                        <span className={denied ? '' : 'text-gray-200'}>{AUDIT_ACTION_LABEL[a.action] || a.action}</span>
+                        {a.target && <span>{a.target}</span>}
+                        {a.detail && <span className="text-gray-500">{a.detail}</span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </details>
         </div>
 
         {/* API 진단 도구 */}

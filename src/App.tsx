@@ -10,7 +10,8 @@ import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
-import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
+import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
+import { callScript, registerScriptAuth } from './appsScript';
 import { applySettingsFile, buildSettingsFile } from './rateSettings';
 import { HIST_FILE_NAMES } from './rateHistStore';
 import { RATE_RULES } from './rateSignals';
@@ -588,12 +589,7 @@ export default function App() {
       for (const d of preview.features) {
         const label = `기능 ${d.feature} → ${d.value ? 'ON' : 'OFF'}`;
         try {
-          const res = await fetch(APPS_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({ action: 'setUserFeature', email: dstEmail, feature: d.feature, value: d.value }),
-          });
-          const data = await res.json().catch(() => ({}));
+          const data = await callScript('setUserFeature', { email: dstEmail, feature: d.feature, value: d.value });
           push(label, data?.success ? 'ok' : 'fail', data?.success ? undefined : (data?.error || '시트 기록 실패'));
         } catch { push(label, 'fail', '네트워크 오류'); }
       }
@@ -859,6 +855,19 @@ export default function App() {
       window.location.reload();
     },
   });
+
+  // 승인 스크립트 호출에 실을 토큰(appsScript.ts) — 로그인 토큰(이메일 확인 권한 포함)이고, 관리자 접속 탭에선 관리자 토큰이다.
+  // 만료 시 재발급은 Drive와 같은 무음 클라이언트를 쓰되, 이미 진행 중인 재발급의 대기자를 덮지 않고 함께 기다린다
+  // (pendingTokenResolveRef는 한 칸이라 덮으면 Drive 저장이 영영 끝나지 않는다).
+  useEffect(() => {
+    registerScriptAuth(() => driveTokenRef.current, () => new Promise<string | null>((resolve) => {
+      const client = tokenClientRef.current;
+      if (!client) { resolve(null); return; }
+      const prev = pendingTokenResolveRef.current;
+      pendingTokenResolveRef.current = (t) => { if (prev) prev(t); resolve(t); };
+      if (!prev) client.requestAccessToken({ prompt: '' });
+    }));
+  }, []);
 
   // ── 사용자 활동 감지 → 비활동 타임아웃 리셋 ──
   useEffect(() => {
@@ -3708,14 +3717,8 @@ export default function App() {
   //    옛 링크에 무기한 묶였다**(어느 쪽에도 표시 없음). 이제 결과를 돌려 호출부가 경고를 띄운다.
   const deploySettingToSheet = async (key: string, value: string): Promise<boolean> => {
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'setSettings', key, value }),
-      });
-      if (!res.ok) return false;
-      const data = await res.json().catch(() => null);
-      return !data || data.success !== false;   // 본문 파싱 실패는 성공으로 간주(응답 형식 변화 대비)
+      const data = await callScript('setSettings', { key, value });
+      return data?.success === true;
     } catch { return false; }
   };
 
@@ -3728,9 +3731,7 @@ export default function App() {
   const patchSheetReportRow = async (patch: { report?: any[]; dividendLinks?: any[] }): Promise<boolean> => {
     let row: any;
     try {
-      const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
-      if (!res.ok) return false;
-      const d = await res.json();
+      const d = await callScript('getSettings');
       if (!d || d.error) return false;
       row = typeof d.reportLinks === 'string' ? JSON.parse(d.reportLinks) : d.reportLinks;
     } catch { return false; }
@@ -3870,22 +3871,8 @@ export default function App() {
       // ⚠️ 발송이 실패하면 래치를 되돌린다 — 세션당 1회는 '성공 1건'을 뜻한다. 낙관적으로 래치만 남기면
       // 일시 장애(네트워크 단절·5xx) 1회로 그 세션 공지가 영영 사라진다(변경 전엔 다음 편집이 재발송해
       // 자연 복구됐다). Apps Script는 거부도 200 + {success:false}로 답하므로 본문까지 본다.
-      // 본문을 못 읽는 경우(파싱 실패)는 성공으로 간주 — 중복 발송보다 낫다.
-      fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          action: 'sendNotification',
-          targetEmail: finalEmail,
-          message: '목표 비중이 수정되었습니다.',
-          type: 'warning',
-        }),
-      })
-        .then(async res => {
-          if (!res.ok) return false;
-          const data = await res.json().catch(() => null);
-          return !data || data.success !== false;
-        })
+      callScript('sendNotification', { targetEmail: finalEmail, message: '목표 비중이 수정되었습니다.', type: 'warning' })
+        .then(data => data?.success === true)
         .catch(() => false)
         .then(ok => {
           // 늦게 온 응답이 다른 세션의 래치를 지우지 않도록 대상 일치 확인
@@ -4093,9 +4080,9 @@ export default function App() {
       if (!settingsWrittenRef.current && (!isAdmin || !driveSettingsFound)) {
         // 일반 사용자는 항상, 관리자는 Drive 파일 없을 때만 (최초 마이그레이션)
         try {
-          const settingsRes = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
-          if (settingsRes.ok) {
-            const settingsData = await settingsRes.json();
+          // ⚠️ error 응답(권한·토큰 만료)은 빈 값으로 덮지 않는다 — 덮으면 아래 Drive 캐시 저장이 링크를 지운다.
+          const settingsData = await callScript('getSettings');
+          if (settingsData && !settingsData.error) {
             const yu = settingsData.youtubeUrl || '';
             const rawNl = settingsData.notebookLinks;
             const nl: any[] | null = rawNl ? (Array.isArray(rawNl) ? rawNl : (() => { try { return JSON.parse(rawNl); } catch { return null; } })()) : null;
@@ -4127,11 +4114,9 @@ export default function App() {
       // 관리자 공지 확인 (관리자 본인 제외)
       if (authUser.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
         try {
-          // Apps Script getNotifications 엔드포인트 필요:
-          // action=getNotifications → { notifications: [{id, targetEmail, message, type, createdAt}] }
-          const notifsRes = await fetch(`${APPS_SCRIPT_URL}?action=getNotifications&cacheBust=${Date.now()}`);
-          if (notifsRes.ok) {
-            const notifsData = await notifsRes.json();
+          // 스크립트가 전체·묶음 공지와 본인 공지만 돌려준다(다른 사용자 이메일 비노출) — 묶음 판정은 여기서.
+          const notifsData = await callScript('getNotifications');
+          if (notifsData) {
             const all: AdminNotification[] = notifsData.notifications || [];
             const myAll = all.filter(n =>
               notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled)
@@ -4195,9 +4180,8 @@ export default function App() {
       } catch {}
       if (!found && !settingsWrittenRef.current) {
         try {
-          const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
-          if (res.ok) {
-            const d = await res.json();
+          const d = await callScript('getSettings');
+          if (d && !d.error) {
             if (settingsWrittenRef.current) return;   // 폴백 응답이 늦게 와도 방금 저장한 값을 덮지 않는다
             if (d.youtubeUrl) setYoutubeUrl(d.youtubeUrl);
             if (d.notebookLinks) {
@@ -4221,10 +4205,8 @@ export default function App() {
       // 백그라운드 탭에서는 폴링 스킵 — 불필요한 외부 API 호출 방지
       if (document.visibilityState === 'hidden') return;
       try {
-        const res = await fetch(`${APPS_SCRIPT_URL}?action=getNotifications&cacheBust=${Date.now()}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const all: AdminNotification[] = data.notifications || [];
+        const data = await callScript('getNotifications');
+        const all: AdminNotification[] = data?.notifications || [];
         const myAll = all.filter(n =>
           notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled)
         );
