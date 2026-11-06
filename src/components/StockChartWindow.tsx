@@ -13,7 +13,7 @@ import {
   normalizeChartCode, normalizeChartComps, normalizeChartView, stockDetailUrl, stockChartUrl,
   EMPTY_CHART_SEL, chartSelStep,
   holdingsFor, holdingAvg, holdingPct, holdingLayout, normalizeHoldings,
-  MA_PRESETS, MA_MIN, MA_MAX, MAX_MA_LINES, MA_DEFAULT, maSelFromPeriods, toggleMaSel, maColor, maFetchFrom, movingAverage, withMaRows,
+  MA_PRESETS, MA_MIN, MA_MAX, MAX_MA_LINES, MA_DEFAULT, maSelFromPeriods, maSlots, toggleMaSel, maColor, maFetchFrom, movingAverage, withMaRows,
   holdingKey, normalizeHoldingCatalog, searchHoldingCatalog, catalogAccounts, krCodeWithZeros,
 } from '../watchlistChart';
 
@@ -26,8 +26,9 @@ import {
  *    비교 종목·기간은 이 창의 주소(URL)에만 남긴다(새로고침해도 유지 — localStorage·Drive 금지).
  * ⚠️ opener와는 **읽기 전용 물음 하나**만 주고받는다(사용자 요청 2026-10-30 — 보유 종목 매입가 가로선):
  *    창 → opener `stockchart:ping { codes }` / opener(관심종목 팝업 — 앱 탭 또는 관심종목 창) →
- *    `stockchart:holdings { holdings, catalog }`. 받은 값은 이 창 메모리에만 두고, 이 창이 보내는 메시지는 ping 하나뿐이다
- *    (쓰기 메시지를 늘리면 '두 번째 writer'가 된다). 매입가를 주소에 싣지 말 것 — 주소창·방문 기록에 남는다.
+ *    `stockchart:holdings { holdings, catalog }`. 받은 값은 이 창 메모리에만 두고, 이 창이 보내는 메시지는 ping과
+ *    이평선 설정(`stockchart:ma` — 아래) 둘뿐이다(그 밖의 쓰기 메시지를 늘리면 '두 번째 writer'가 된다 — 이평선도 저장은
+ *    관심종목이 자기 보기 상태 경로로 한다). 매입가를 주소에 싣지 말 것 — 주소창·방문 기록에 남는다.
  *    catalog = 비교 종목 찾기용 보유 종목 목록(계좌·코드·종목명뿐 — 사용자 요청 2026-11-01, 아래 CompPicker).
  * ⚠️ 구간 자르기·기간 수익률은 관심종목 팝업과 **같은 함수**(watchlistChart.watchPeriodWindow·windowRate)를
  *    쓰고 종가도 같은 소스(fetchWatchDaily)라, 같은 기간이면 팝업 등락율과 차트 끝점이 한 글자도 다르지 않다.
@@ -35,8 +36,11 @@ import {
  *    닿게 만들면 보유종목 과거 평가액이 영구히 오염된다(관심종목·백테스트와 같은 불변식).
  * ⚠️ 자체 `ErrorBoundary label`이 필요하다(main.tsx 루트 경계는 label이 없어 창 전체가 오류 페이지가 된다).
  * 이동평균선(사용자 요청 2026-11-05): 대상 종목 하나(기본 = 기준 종목)에 고른 기간(5·10·20·60·120·150·200 + 직접 2~400일)마다
- *    한 줄. 계산은 watchlistChart.movingAverage, 색은 종목 선과 겹치지 않는 MA_COLORS. 고른 기간·보이기·대상도 **주소에만**
- *    남긴다(ma · maoff · mat — 저장 0 규약 그대로). 대상 종목만 가장 긴 기간만큼 앞 종가를 더 받는다(maFetchFrom).
+ *    한 줄. 계산은 watchlistChart.movingAverage, 색은 종목 선과 겹치지 않는 MA_COLORS. 고른 기간·보이기·대상은 주소에 남기고
+ *    (ma · maoff · mat), 기간·보이기는 사용자가 바꿀 때 opener에 `stockchart:ma`로 알린다 → 관심종목 보기 상태
+ *    (chartPrefs.watchlistView — 기간·정렬과 같은 저장 경로)에 저장되어 다음에 여는 창이 같은 이평선으로 열린다
+ *    (사용자 요청 2026-11-06). ⚠️ 이 창이 보내는 메시지는 ping과 이 둘뿐 — 이 창이 직접 저장하는 것은 여전히 0이다.
+ *    대상 종목만 가장 긴 기간만큼 앞 종가를 더 받는다(maFetchFrom).
  */
 
 const MARKETS = ['kr', 'us', 'fund'];
@@ -357,7 +361,7 @@ function StockChartPage() {
       window.history.replaceState(null, '', stockChartUrl({
         code: main.code, market: main.market, name: main.name, period: view.period,
         customStart: view.customStart, customEnd: view.customEnd, comps: comps.map((c) => c.code),
-        ma: maSel.map((x) => x.n), maOff: !showMa, maTarget,
+        ma: maSlots(maSel), maOff: !showMa, maTarget,
       }));
     } catch { /* 주소 갱신 실패는 무해 */ }
   }, [main, comps, view, maSel, showMa, maTarget]);
@@ -596,12 +600,27 @@ function StockChartPage() {
     delete dailyFromRef.current[s.code + ':' + market];
   };
 
+  // ── 이평선 저장(사용자 요청 2026-11-06) — 고른 기간·숨김을 opener(관심종목)에 알리면 관심종목 보기 상태로 저장되어
+  //    다음에 여는 차트 창도 같은 이평선으로 열린다. ⚠️ 사용자가 바꿀 때만 보낸다(열 때·새로고침 때 보내지 않는다 —
+  //    주소로 연 값이 저장값을 덮지 않게). 이 창은 여전히 아무것도 직접 저장하지 않는다(쓰기는 관심종목 → 앱 탭 하나).
+  const saveMa = (sel, on) => {
+    const op = window.opener;
+    if (!op || op.closed) return;
+    try { op.postMessage({ type: 'stockchart:ma', ma: maSlots(sel), maOff: !on }, window.location.origin); } catch { /* 닫히는 중 */ }
+  };
+  const toggleMa = () => {
+    const on = !showMa;
+    setShowMa(on);
+    setMaMsg('');
+    saveMa(maSel, on);
+  };
   // ── 이평선 고르기 — 반환 true = 처리 끝(입력 칸을 비운다) · false = 그대로 두고 안내만 ──
   const pickMa = (n) => {
     const next = toggleMaSel(maSel, n);
     if (next === maSel) { setMaMsg(`이평선은 ${MAX_MA_LINES}개까지 그립니다 — 다른 선을 먼저 끄세요.`); return false; }
     setMaSel(next);
     setMaMsg('');
+    saveMa(next, showMa);
     return true;
   };
   const addMaText = () => {
@@ -832,7 +851,7 @@ function StockChartPage() {
       {/* 이동평균선 — 대상 종목 하나에 고른 기간마다 한 줄. 켠 칩 = 그 선의 색(범례 겸용) + 값(마우스가 가리키는 날 · 아니면 마지막 날) */}
       <div className="flex flex-wrap items-center gap-1.5 px-4 py-1.5 border-b border-gray-800/70 text-[11px]">
         <button
-          onClick={() => { setShowMa((v) => !v); setMaMsg(''); }}
+          onClick={toggleMa}
           title={showMa ? '이동평균선 숨기기(고른 기간은 그대로 둡니다)' : '이동평균선 보이기'}
           className={`inline-flex items-center gap-1 rounded border px-2 py-1 font-medium transition-colors ${
             showMa ? 'bg-lime-500/10 border-lime-500/40 text-lime-300' : 'border-gray-700 text-gray-500 hover:text-lime-300'

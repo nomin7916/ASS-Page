@@ -1,10 +1,27 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-11-05  
+> 마지막 작업일: 2026-11-06  
 > 브랜치: main  
 > 작업 PC: 클라우드 세션(node 있음 · node_modules 없음 — build 실행 불가)
 
 ---
+
+## 2026-11-06 — [관심종목] 차트 창에서 고른 이평선 저장 — 다음에 여는 차트 창도 같은 이평선·같은 색
+
+**대상 파일**: `src/watchlistGroups.ts` · `src/watchlistChart.ts` · `src/components/StockChartWindow.tsx` · `src/components/WatchlistPopup.tsx` · `scripts/verify-watchlist.mjs` · `CLAUDE.md`
+
+- 사용자 요청: 고른 이평선이 저장되게. 저장 단위는 **사용자 하나**(종목마다 따로가 아님 — 어느 종목 차트를 열어도 같은 이평선).
+- 경로: 차트 창에서 칩·직접 입력·[이평선] 켜기/끄기를 **사용자가 바꿀 때만** opener에 `stockchart:ma { ma, maOff }` →
+  관심종목 `patchView` → 보기 상태 `chartPrefs.watchlistView`(기간·정렬과 같은 경로 — 앱 탭 Drive 저장 · 관심종목 창은 앱 탭으로 전달 ·
+  관리자 접속 중엔 팝업 로컬만). 관심종목이 차트 창을 열 때 저장값을 주소(`ma`·`maoff`)로 넘긴다. 열기·새로고침은 저장하지 않는다.
+  대상 종목(mat)은 비교 종목에 딸린 값이라 저장하지 않는다.
+- 저장 모양 = **색 칸 순서 배열(빈 칸 0)** — 처음엔 고른 순서로 저장했더니 끄고 켠 뒤 다시 열면 선 색이 바뀌었다(브라우저 확인 중 발견).
+  `normalizeMaPeriods`·`maSelFromPeriods`·`maSlots`(watchlistChart) ↔ `normalizeWatchMa`(watchlistGroups, import 0이라 같은 규칙을 따로 둠 — #M14가 무작위 대조).
+  `ma: null` = 고른 적 없음(차트 창 기본 5·20·60·120) · `[]` = 모두 끔. 옛 저장값은 null로 읽힌다.
+- 차트 창이 opener에 보내는 메시지 = ping + `stockchart:ma` 둘(#G81 갱신). 창이 직접 저장하는 것은 여전히 0.
+- 검증: `verify:watchlist` 417건(#32b~#32e · #M9~#M9e · #M14 · #G110~#G110c 추가, #23·#25 보기 모양 기대값에 ma·maOff 추가) ·
+  변이 6종 전부 검출 · gate 통과(build 실행 불가 — node_modules 없음). 임시 폴더에서 실제 관심종목 팝업(opener) + 차트 창을 띄워
+  열기(저장 0) → 칩 바꾸기(저장) → 새로고침(저장 0) → 닫고 다시 열기(같은 이평선·숨김·같은 색) 확인, 콘솔 오류 0.
 
 ## 2026-11-05 (8) — [관심종목] 종목 비교 차트 창에 이동평균선(5·10·20·60·120·150·200 + 직접 2~400일)
 

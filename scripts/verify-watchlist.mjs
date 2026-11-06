@@ -131,10 +131,10 @@ if (W) {
   ok('#21 기본값은 1개월·정렬 없음(하위호환)', DEF.period === '1개월' && DEF.sortDir === null && DEF.customStart === '' && DEF.customEnd === '');
   eq('#22 기간 목록 = 화면 버튼 6종(직접 포함)', (WATCH_PERIODS || []).join(','), '1일,1주,1개월,3개월,1년,직접');
   eq('#23 정상 값은 그대로', JSON.stringify(nv({ period: '1년', customStart: '', customEnd: '', sortDir: 'asc' })),
-    JSON.stringify({ period: '1년', customStart: '', customEnd: '', sortDir: 'asc', showDiv: false }));
+    JSON.stringify({ period: '1년', customStart: '', customEnd: '', sortDir: 'asc', showDiv: false, ma: null, maOff: false }));
   eq('#24 화이트리스트 밖 기간은 기본값', nv({ period: 'weke' }).period, '1개월');
   eq('#25 직접 선택 + 시작일 보존', JSON.stringify(nv({ period: '직접', customStart: '2025-01-02', customEnd: '2025-06-30' })),
-    JSON.stringify({ period: '직접', customStart: '2025-01-02', customEnd: '2025-06-30', sortDir: null, showDiv: false }));
+    JSON.stringify({ period: '직접', customStart: '2025-01-02', customEnd: '2025-06-30', sortDir: null, showDiv: false, ma: null, maOff: false }));
   // ── 분배금 열 펼침(showDiv) — 기본 숨김(사용자 요청), 옛 저장값·손상값도 숨김 ──
   ok('#25b showDiv 기본값은 false(기본 숨김)', DEF.showDiv === false && nv({}).showDiv === false);
   eq('#25c showDiv는 === true 일 때만 펼침(문자열·1·"true"는 숨김)',
@@ -151,6 +151,17 @@ if (W) {
   ok('#31 sameWatchView — 같은 내용이면 true(손상 키는 정규화 후 비교)',
     SAME({ period: '1주', sortDir: 'desc' }, { period: '1주', customStart: '', customEnd: '', sortDir: 'desc', extra: 1 }));
   ok('#32 sameWatchView — 정렬만 달라도 false', !SAME({ period: '1주', sortDir: 'desc' }, { period: '1주', sortDir: 'asc' }));
+  // ── 종목 차트 창 이평선 저장(사용자 요청 2026-11-06) — null = 고른 적 없음(창 기본값) · [] = 모두 끔 ──
+  ok('#32b 이평선 기본값 = 고른 적 없음(null) · 보이기(maOff false) — 옛 저장값도 같다',
+    DEF.ma === null && DEF.maOff === false && nv({ period: '1주' }).ma === null && nv({}).maOff === false);
+  eq('#32c 이평선 정리 — 색 칸 순서 · 잘못되거나 겹친 값은 빈 칸(0) · 최대 5자리 · 끝 빈 칸 제외 · 빈 배열 유지 · 배열이 아니면 null',
+    JSON.stringify([nv({ ma: [200, '5', 5, 150, 1, 60] }).ma, nv({ ma: [5, 0, 60, 0] }).ma, nv({ ma: [2, 3, 4, 5, 6, 7] }).ma, nv({ ma: [] }).ma, nv({ ma: '5,20' }).ma, nv({ ma: { 0: 5 } }).ma]),
+    JSON.stringify([[200, 5, 0, 150], [5, 0, 60], [2, 3, 4, 5, 6], [], null, null]));
+  eq('#32d maOff 는 === true 일 때만 숨김', [nv({ maOff: true }).maOff, nv({ maOff: 'true' }).maOff, nv({ maOff: 1 }).maOff].join(','), 'true,false,false');
+  // ⚠️ 비교에서 빠지면 '이평선만 바꾼 저장'이 같은 값으로 오판돼 Drive에 실리지 않는다. 순서는 선 색 순서라 다르면 다른 값.
+  ok('#32e sameWatchView 가 이평선 차이(기간·순서·없음↔모두 끔·숨김)를 잡는다',
+    !SAME({ ma: [5, 20] }, { ma: [5, 60] }) && !SAME({ ma: [5, 20] }, { ma: [20, 5] }) && !SAME({ ma: null }, { ma: [] })
+    && !SAME({ maOff: true }, {}) && SAME({ ma: [5, 20], maOff: false }, { ma: ['5', 20, 20] }));
 
   // ── 팝업 크기(모서리·가장자리 끌기) ──
   const { normalizeWatchSize: NS, sameWatchSize: SS, resizeWatchRect: RR, watchSizeAfterResize: AFTER,
@@ -766,8 +777,25 @@ if (C) {
     });
     ok('#M8c 앞당긴 기간에 평일(연휴 제외 어림)이 n개 이상', enough);
   }
-  eq('#M9 기간 정리 — 정수 · 2~400 · 중복 제외 · 입력 순서', normalizeMaPeriods(' 5, 20,abc,20,1,401,150.5,0,200').join(','), '5,20,200');
+  eq('#M9 저장 모양 — 색 칸 순서 · 잘못되거나 겹친 값은 빈 칸(0) · 최대 5자리 · 끝 빈 칸 제외',
+    [normalizeMaPeriods(' 5, 0,abc,20,5'), normalizeMaPeriods('5,20,abc,1,401,200'), normalizeMaPeriods('0,10'), normalizeMaPeriods('')].map((a) => a.join(',')).join('|'),
+    '5,0,0,20|5,20|0,10|');
   eq('#M9b 배열 입력 · 상한', [normalizeMaPeriods([10, '60', true, null]).join(','), normalizeMaPeriods([2, 3, 4, 5, 6, 7, 8]).length].join('|'), `10,60|${MAX_MA_LINES}`);
+  {
+    const { maSlots } = C;
+    // 저장했다가 다시 열어도 선마다 색이 같아야 한다 — 끄고 켠 뒤(빈 칸이 생긴 상태)에도.
+    let sel = maSelFromPeriods([5, 20, 60, 120]);
+    sel = toggleMaSel(sel, 20); sel = toggleMaSel(sel, 120); sel = toggleMaSel(sel, 10);   // 10 → 20이 쓰던 칸(1)
+    const back = maSelFromPeriods(maSlots(sel));
+    const colorOf = (list) => Object.fromEntries(list.map((x) => [x.n, maColor(x.c)]));
+    ok('#M9c 저장 → 다시 열기 왕복 — 선마다 같은 색(빈 칸 포함)',
+      JSON.stringify(maSlots(sel)) === '[5,10,60]' && JSON.stringify(colorOf(back)) === JSON.stringify(colorOf(sel)));
+    const gap = toggleMaSel(maSelFromPeriods([5, 20, 60]), 20);
+    ok('#M9d 가운데 칸이 비면 0으로 남긴다(뒤 선의 색이 당겨지지 않게)',
+      JSON.stringify(maSlots(gap)) === '[5,0,60]' && maColor(maSelFromPeriods(maSlots(gap)).find((x) => x.n === 60).c) === MA_COLORS[2]);
+    S('#M9e 손상 입력에도 던지지 않는다', () => [maSlots(null), maSlots([null, { n: 5, c: 9 }, { n: 1, c: 0 }, { n: 7, c: 1 }, { n: 7, c: 2 }, { n: 8, c: 1 }])],
+      (v) => v[0].length === 0 && JSON.stringify(v[1]) === '[0,7]');
+  }
   {
     const s0 = maSelFromPeriods([5, 20, 60]);
     const s1 = toggleMaSel(s0, 20);
@@ -1121,10 +1149,11 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   // ⚠️ 이 창은 쓰기가 0이다 — 브라우저 저장소·공유 종가 맵에 닿거나 opener에 쓰기 메시지를 보내는 순간
   //    '두 번째 writer'나 평가액 오염이 된다. opener와는 **읽기 전용 물음 하나**(stockchart:ping)만 허용한다
   //    (보유 매입가 가로선 — 2026-10-30). 보내는 메시지가 늘면 이 가드가 잡는다.
-  ok('#G81 차트 창은 저장소·stockHistoryMap 을 쓰지 않고, opener에는 stockchart:ping 하나만 보낸다',
+  ok('#G81 차트 창은 저장소·stockHistoryMap 을 쓰지 않고, opener에는 stockchart:ping(물음)과 stockchart:ma(이평선 설정) 둘만 보낸다',
     !/localStorage|sessionStorage|stockHistoryMap|saveDriveFile/.test(CW)
-    && (CW.match(/postMessage\(/g) || []).length === 1
-    && /op\.postMessage\(\{ type: 'stockchart:ping', codes \}, window\.location\.origin\);/.test(CW));
+    && (CW.match(/postMessage\(/g) || []).length === 2
+    && /op\.postMessage\(\{ type: 'stockchart:ping', codes \}, window\.location\.origin\);/.test(CW)
+    && /op\.postMessage\(\{ type: 'stockchart:ma', ma: maSlots\(sel\), maOff: !on \}, window\.location\.origin\);/.test(CW));
   ok('#G81b 차트 창은 같은 출처 · opener의 답(stockchart:holdings)만 받고, null(모름)이면 기존 선을 지우지 않는다',
     /if \(e\.origin !== window\.location\.origin\) return;/.test(CW) && /if \(!window\.opener \|\| e\.source !== window\.opener\) return;/.test(CW)
     && /d\.type !== 'stockchart:holdings'/.test(CW) && /const h = normalizeHoldings\(d\.holdings\);\s*\n\s*if \(!h\) return;/.test(CW));
@@ -1361,7 +1390,7 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
   const CHART = src('src/components/StockChartWindow.tsx');
   const CW = stripComments(CHART);
   ok('#G109 이평선 함수·아이콘 import(사용부와 함께)',
-    /  MA_PRESETS, MA_MIN, MA_MAX, MAX_MA_LINES, MA_DEFAULT, maSelFromPeriods, toggleMaSel, maColor, maFetchFrom, movingAverage, withMaRows,\r?\n/.test(CHART)
+    /  MA_PRESETS, MA_MIN, MA_MAX, MAX_MA_LINES, MA_DEFAULT, maSelFromPeriods, maSlots, toggleMaSel, maColor, maFetchFrom, movingAverage, withMaRows,\r?\n/.test(CHART)
     && /import \{[^}]*\bActivity\b[^}]*\} from 'lucide-react';/.test(CHART) && /<Activity size=\{11\} \/> 이평선/.test(CW));
   ok('#G109b 이평선 = 대상 종목의 전체 종가 + 시세 선과 같은 구간(win) · 차트 행에 합친다',
     /pts: movingAverage\(dailyMap\[maS\.code\], maS\.win, m\.n\),/.test(CW) && /key: `ma\$\{m\.n\}`, n: m\.n, color: maColor\(m\.c\), win: maS\.win,/.test(CW)
@@ -1376,10 +1405,39 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     && CW.indexOf('{maLines.map((m) => (') < CW.indexOf('{shown.map((s) => (\n                <Line'));
   ok('#G109e 이평선 상태(기간·보이기·대상)는 주소에만 — 없으면 기본값',
     /const ma = maSelFromPeriods\(p\.has\('ma'\) \? p\.get\('ma'\) : MA_DEFAULT\);/.test(CW)
-    && /ma: maSel\.map\(\(x\) => x\.n\), maOff: !showMa, maTarget,\s*\n\s*\}\)\);/.test(CW)
+    && /ma: maSlots\(maSel\), maOff: !showMa, maTarget,\s*\n\s*\}\)\);/.test(CW)
     && /\}, \[main, comps, view, maSel, showMa, maTarget\]\);/.test(CW));
   ok('#G109f 칩 켜고 끄기는 toggleMaSel(색 칸 유지) · 가득 차면 안내', /const next = toggleMaSel\(maSel, n\);\s*\n\s*if \(next === maSel\) \{ setMaMsg\(/.test(CW)
     && /onClick=\{\(\) => pickMa\(n\)\}/.test(CW));
+
+  // ── 이평선 저장(사용자 요청 2026-11-06): 차트 창 → opener(관심종목) → 보기 상태(chartPrefs.watchlistView) ──
+  // ⚠️ 차트 창은 사용자가 바꿀 때만 알린다 — effect에서 보내면 주소로 연 값(새로고침·다른 창)이 저장값을 덮는다.
+  const P = stripComments(POPUP);
+  ok('#G110 차트 창: 칩·직접 입력(pickMa)과 [이평선] 켜기/끄기(toggleMa)에서만 saveMa — effect에서 보내지 않는다',
+    /setMaSel\(next\);\s*\n\s*setMaMsg\(''\);\s*\n\s*saveMa\(next, showMa\);\s*\n\s*return true;/.test(CW)
+    && /const on = !showMa;\s*\n\s*setShowMa\(on\);\s*\n\s*setMaMsg\(''\);\s*\n\s*saveMa\(maSel, on\);/.test(CW)
+    && /onClick=\{toggleMa\}/.test(CW) && (CW.match(/saveMa\(/g) || []).length === 2
+    && !/useEffect\(\(\) => \{[^}]*saveMa\(/.test(CW));
+  ok('#G110b 관심종목: 같은 출처의 stockchart:ma 만 받아 patchView(기간·정렬과 같은 저장 경로)로 넣는다',
+    /d\.type !== 'stockchart:ma' \|\| !e\.source\) return;\s*\n\s*patchView\(\{ ma: d\.ma, maOff: d\.maOff === true \}\);/.test(P)
+    && /\}, \[patchView\]\);/.test(P)
+    && (P.match(/if \(e\.origin !== window\.location\.origin\) return;/g) || []).length >= 2);
+  ok('#G110c 관심종목: 차트 창을 열 때 저장한 이평선을 주소로 넘긴다',
+    /period: chartPeriodFromWatch\(period\), customStart, customEnd,\s*\n\s*ma: curView\.ma, maOff: curView\.maOff,/.test(P));
+}
+if (C && W) {
+  // 보기 상태의 이평선 정리(watchlistGroups — import 0)와 차트 창의 정리(watchlistChart.normalizeMaPeriods)는
+  // 같은 규칙이어야 한다 — 한쪽만 고치면 저장값과 화면이 갈린다. 무작위 배열로 대조한다.
+  let rnd = 11;
+  const r = () => { rnd = (rnd * 1103515245 + 12345) % 2147483648; return rnd / 2147483648; };
+  const pool = [0, 1, 2, 3, 5, 10, 20, 60, 120, 150, 200, 399, 400, 401, -5, 2.5, '5', ' 20 ', '', 'x', null, undefined, true, false, NaN, 1e9];
+  let bad = 0;
+  for (let t = 0; t < 300; t++) {
+    const arr = Array.from({ length: Math.floor(r() * 9) }, () => pool[Math.floor(r() * pool.length)]);
+    if (JSON.stringify(W.normalizeWatchView({ ma: arr }).ma) !== JSON.stringify(C.normalizeMaPeriods(arr))) bad++;
+  }
+  eq('#M14 보기 상태의 이평선 정리 = 차트 창의 정리(무작위 300건)', bad, 0);
+  eq('#M14b 저장 상한 = 차트 창 상한', W.normalizeWatchView({ ma: [2, 3, 4, 5, 6, 7, 8, 9] }).ma.length, C.MAX_MA_LINES);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:watchlist — ${pass} passed, ${fail} failed\n`);

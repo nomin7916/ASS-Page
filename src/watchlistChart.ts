@@ -303,24 +303,42 @@ export const MAX_MA_LINES = 5;
 export const MA_DEFAULT = [5, 20, 60, 120];
 export const MA_COLORS = Object.freeze(['#a3e635', '#e879f9', '#2dd4bf', '#818cf8', '#94a3b8']);
 
-/** 이평선 기간 정리 — 'a,b' 문자열이나 배열 → 정수 · [MA_MIN, MA_MAX] · 중복 제외 · 입력 순서 · 최대 MAX_MA_LINES개. */
+/**
+ * 이평선 저장 모양(주소 ma · 관심종목 보기 상태 ma) — **색 칸 순서** 배열, 빈 칸 = 0. 'a,b' 문자열이나 배열 입력.
+ * 자리 i = MA_COLORS[i]라 저장했다가 다시 열어도 선마다 색이 그대로다(사용자 요청 2026-11-06 — 저장 후 다시 열기).
+ * 정수 · [MA_MIN, MA_MAX]가 아니거나 앞에 나온 기간과 겹치면 빈 칸 · 최대 MAX_MA_LINES자리 · 끝의 빈 칸은 뺀다.
+ * ⚠️ watchlistGroups.normalizeWatchMa가 같은 규칙이다(verify:watchlist #M14가 대조).
+ */
 export function normalizeMaPeriods(raw: any): number[] {
   const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [];
   const out: number[] = [];
   for (const v of arr) {
-    const t = typeof v === 'string' ? v.trim() : v;
-    if (t === '' || t == null || typeof t === 'boolean') continue;
-    const n = Number(t);
-    if (!Number.isInteger(n) || n < MA_MIN || n > MA_MAX || out.includes(n)) continue;
-    out.push(n);
     if (out.length >= MAX_MA_LINES) break;
+    const t = typeof v === 'string' ? v.trim() : v;
+    const n = t === '' || t == null || typeof t === 'boolean' ? NaN : Number(t);
+    out.push(Number.isInteger(n) && n >= MA_MIN && n <= MA_MAX && !out.includes(n) ? n : 0);
   }
+  while (out.length && out[out.length - 1] === 0) out.pop();
   return out;
 }
 
-/** 선택 목록 `[{ n, c }]`(c = MA_COLORS 칸) — 주소에서 읽은 기간은 순서대로 칸 0, 1, 2…를 받는다. */
+/** 저장 모양 → 선택 목록 `[{ n, c }]`(c = 자리 = MA_COLORS 칸). 빈 칸은 건너뛴다. */
 export function maSelFromPeriods(raw: any): { n: number; c: number }[] {
-  return normalizeMaPeriods(raw).map((n, i) => ({ n, c: i }));
+  return normalizeMaPeriods(raw).flatMap((n, c) => (n ? [{ n, c }] : []));
+}
+
+/** 선택 목록 → 저장 모양(maSelFromPeriods의 역) — 색 칸 자리에 기간, 빈 칸 0, 끝의 빈 칸 제외. */
+export function maSlots(sel: any): number[] {
+  const out: number[] = [];
+  for (const x of Array.isArray(sel) ? sel : []) {
+    if (!x || !Number.isInteger(x.c) || x.c < 0 || x.c >= MAX_MA_LINES) continue;
+    const n = Number(x.n);
+    if (!Number.isInteger(n) || n < MA_MIN || n > MA_MAX || out.includes(n)) continue;
+    while (out.length <= x.c) out.push(0);
+    if (!out[x.c]) out[x.c] = n;
+  }
+  while (out.length && out[out.length - 1] === 0) out.pop();
+  return out;
 }
 
 /**

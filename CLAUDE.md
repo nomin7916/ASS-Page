@@ -71,7 +71,7 @@ src/
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
     ├── LoginGate.tsx             # 로그인 / PIN 인증 게이트
     ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회·분배금 열) · 자동 '보유종목' 가상 그룹(저장 금지 — 정본 portfolios, 같은 종목은 한 줄 + 보유 계좌 칩)
-    ├── StockChartWindow.tsx      # 종목 비교 차트 별도 창(/?stockChartWindow=1) — 미니차트 클릭, App 미마운트·쓰기 0 · 매입가 점선(계좌별/통합) · 비교 종목 찾기(이름·초성·코드·계좌→종목) · 이동평균선(대상 종목 하나·상태는 주소에만) — opener에 읽기 전용 ping 하나
+    ├── StockChartWindow.tsx      # 종목 비교 차트 별도 창(/?stockChartWindow=1) — 미니차트 클릭, App 미마운트·쓰기 0 · 매입가 점선(계좌별/통합) · 비교 종목 찾기(이름·초성·코드·계좌→종목) · 이동평균선(대상 종목 하나 · 고른 기간·숨김은 `stockchart:ma`로 opener에 → 관심종목 보기 상태로 저장) — opener에 보내는 건 ping과 이것 둘뿐
     ├── FlowBoard.tsx             # 자금 흐름도 보드(z=990) — 시트 탭 바, 로컬 사본 + idle 승격, overlay/page 겸용
     ├── FlowCanvas.tsx            # 흐름도 SVG 캔버스(React.memo) — 드래그·리사이즈·연결
     ├── FlowInspector.tsx         # 흐름도 속성 패널(날짜·이름·계좌연결·금액·메모) — id 앵커 draft

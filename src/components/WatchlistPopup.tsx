@@ -240,6 +240,19 @@ export default function WatchlistPopup({
     else setLocalView(next);
   }, [viewControlled, onViewChange]);
   const { period, customStart, customEnd, sortDir, showDiv } = curView;
+  // 종목 차트 창에서 고른 이평선을 보기 상태에 저장한다(사용자 요청 2026-11-06) — 다음에 여는 차트 창도 같은 이평선으로 열린다.
+  // ⚠️ 저장 경로는 기간·정렬과 같은 patchView 하나(앱 탭 = chartPrefs.watchlistView → Drive · 관리자 열람 = 팝업 로컬만).
+  //    창이 보낸 값은 normalizeWatchView가 다시 거른다(차트 창은 조작 가능한 주소로 열린다).
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'stockchart:ma' || !e.source) return;
+      patchView({ ma: d.ma, maOff: d.maOff === true });
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [patchView]);
 
   // ── 팝업 크기 — 모서리·가장자리를 끌어 폭·높이를 바꾼다(인앱 팝업 전용) ──
   // ⚠️ 끄는 동안의 크기는 **로컬(liveRect)에만** 두고 손을 놓을 때 한 번만 저장한다 — 포인터가 움직일
@@ -637,6 +650,7 @@ export default function WatchlistPopup({
     const w = window.open(stockChartUrl({
       code: s.code, market: s.market, name: q?.name || s.name || '',
       period: chartPeriodFromWatch(period), customStart, customEnd,
+      ma: curView.ma, maOff: curView.maOff,   // 저장해 둔 이평선(null = 고른 적 없음 → 차트 창 기본값)
     }), name);
     // 차단되면 그 사실을 이 패널 안에 알린다(z-1050이라 토스트가 가려진다 — 인라인이 유일한 피드백).
     if (!w) { setChartBlocked(true); return; }

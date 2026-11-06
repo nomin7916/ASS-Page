@@ -83,7 +83,7 @@ export const WATCH_CUSTOM_PERIOD = '직접';
  * 처음 쓰는 사용자의 보기 상태 — 종전 화면 기본값과 같다(하위호환의 축).
  * showDiv = 현재가 오른쪽 '분배금·분배율' 열을 펼쳤는가(사용자 요청 2026-10 — **기본은 숨김**).
  */
-export const DEFAULT_WATCH_VIEW = Object.freeze({ period: '1개월', customStart: '', customEnd: '', sortDir: null, showDiv: false });
+export const DEFAULT_WATCH_VIEW = Object.freeze({ period: '1개월', customStart: '', customEnd: '', sortDir: null, showDiv: false, ma: null, maOff: false });
 
 // 실제 달력에 있는 YYYY-MM-DD만 — 패턴만 보면 '2026-02-31'이 통과한다(utils.isValidIsoDate와 같은 판정).
 const isIsoDay = (s: any): boolean => {
@@ -101,7 +101,7 @@ const isIsoDay = (s: any): boolean => {
  * - sortDir: `'desc'|'asc'`만, 그 외는 null(원래 순서).
  * - showDiv: `=== true`일 때만 펼침(옛 저장값·손상값은 숨김 — 기본 숨김 계약).
  */
-export function normalizeWatchView(v: any): { period: string; customStart: string; customEnd: string; sortDir: string | null; showDiv: boolean } {
+export function normalizeWatchView(v: any): { period: string; customStart: string; customEnd: string; sortDir: string | null; showDiv: boolean; ma: number[] | null; maOff: boolean } {
   const o = v && typeof v === 'object' ? v : {};
   const customStart = isIsoDay(o.customStart) ? o.customStart : '';
   let customEnd = isIsoDay(o.customEnd) ? o.customEnd : '';
@@ -110,7 +110,7 @@ export function normalizeWatchView(v: any): { period: string; customStart: strin
   if (period === WATCH_CUSTOM_PERIOD && !customStart) period = DEFAULT_WATCH_VIEW.period;
   const sortDir = o.sortDir === 'desc' || o.sortDir === 'asc' ? o.sortDir : null;
   const showDiv = o.showDiv === true;
-  return { period, customStart, customEnd, sortDir, showDiv };
+  return { period, customStart, customEnd, sortDir, showDiv, ma: normalizeWatchMa(o.ma), maOff: o.maOff === true };
 }
 
 /** 두 보기 상태가 같은가 — 같으면 저장·전송을 건너뛴다(헛된 Drive 저장 방지). */
@@ -118,7 +118,29 @@ export function sameWatchView(a: any, b: any): boolean {
   const x = normalizeWatchView(a);
   const y = normalizeWatchView(b);
   return x.period === y.period && x.customStart === y.customStart && x.customEnd === y.customEnd
-    && x.sortDir === y.sortDir && x.showDiv === y.showDiv;
+    && x.sortDir === y.sortDir && x.showDiv === y.showDiv
+    && (x.ma === null) === (y.ma === null) && (x.ma || []).join(',') === (y.ma || []).join(',') && x.maOff === y.maOff;
+}
+
+/**
+ * 종목 차트 창의 이동평균선 — 차트 창에서 고른 기간(ma)·숨김(maOff)을 보기 상태에 저장해
+ * 다음에 여는 차트 창이 같은 이평선으로 열린다(사용자 요청 2026-11-06).
+ * - null = 아직 고른 적 없음(차트 창 기본값) · [] = 모두 끔.
+ * - 배열 = **색 칸 순서**(자리 i = 차트 창의 i번째 선 색, 빈 칸 = 0) — 다시 열어도 선마다 색이 그대로다.
+ * ⚠️ 규칙은 watchlistChart.normalizeMaPeriods와 같다(정수 · 2~400 · 겹치거나 잘못된 값은 빈 칸 · 최대 5자리 · 끝 빈 칸 제외).
+ *    두 파일 모두 import 0 규약이라 함수를 공유할 수 없어 verify:watchlist가 두 함수를 무작위 입력으로 대조한다.
+ */
+function normalizeWatchMa(raw: any): number[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: number[] = [];
+  for (const v of raw) {
+    if (out.length >= 5) break;
+    const t = typeof v === 'string' ? v.trim() : v;
+    const n = t === '' || t == null || typeof t === 'boolean' ? NaN : Number(t);
+    out.push(Number.isInteger(n) && n >= 2 && n <= 400 && !out.includes(n) ? n : 0);
+  }
+  while (out.length && out[out.length - 1] === 0) out.pop();
+  return out;
 }
 
 // ── 팝업 크기(인앱 팝업 전용 — 별도 창은 브라우저가 창 크기를 정한다) ──
