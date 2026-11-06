@@ -12,6 +12,7 @@ import WatchlistWindow from './components/WatchlistWindow.tsx'
 import StockChartWindow from './components/StockChartWindow.tsx'
 import ErrorBoundary from './components/ErrorBoundary.tsx'
 import { installApiAuth } from './apiAuth'
+import { installActivityRelay } from './sessionKeepAlive'
 
 // 메모 달력 별도 창(`/?calendarWindow=1`)은 **App을 마운트하지 않는다** — 앱을 통째로 부팅하면
 // 로그인·Drive 로드·자동저장 타이머가 모두 돌아 두 번째 writer가 되고, STATE 파일을 통째로
@@ -40,6 +41,8 @@ const STOCK_CHART_WINDOW_BOOT = _params.get('stockChartWindow') === '1'
 const SEPARATE_WINDOW_BOOT = CALENDAR_WINDOW_BOOT || FLOW_WINDOW_BOOT || BACKTEST_WINDOW_BOOT || CARD_WINDOW_BOOT
   || LEDGER_WINDOW_BOOT || RATE_WINDOW_BOOT || WATCHLIST_WINDOW_BOOT || STOCK_CHART_WINDOW_BOOT
 installApiAuth(SEPARATE_WINDOW_BOOT ? 'window' : 'app')
+// 별도 창에서 하는 조작도 앱 탭의 비활동 자동 로그아웃을 미룬다(sessionKeepAlive.ts) — 없으면 창에서만 일하는 동안 앱 탭이 로그아웃된다.
+if (SEPARATE_WINDOW_BOOT) installActivityRelay(window)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

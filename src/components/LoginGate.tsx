@@ -4,7 +4,7 @@ import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
 import { getOrCreateIndexFolder, saveDriveFile, loadDriveFile, DRIVE_FILES } from '../driveStorage';
 import { callScript } from '../appsScript';
 
-type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'error' | 'pin_entry' | 'silent_auth';
+type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'error' | 'pin_entry' | 'silent_auth' | 'resume';
 
 export const SESSION_KEY = 'portfolio_session_email_v1';
 
@@ -251,6 +251,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
           client_id: GOOGLE_CLIENT_ID,
           scope: 'openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly',
           hint: opts.hint,
+          login_hint: opts.hint,
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {
               opts.onFail(resp.error_description || resp.error || '토큰 응답 없음');
@@ -293,11 +294,15 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 새로고침 시 자동 재인증 ─────────────────────────────────────
-  useEffect(() => {
-    const savedEmail = sessionStorage.getItem(SESSION_KEY);
-    if (!savedEmail) return;
-
+  // silent=true: 화면이 열릴 때 무음 시도(클릭 밖) · false: '이어서 사용하기' 버튼 클릭 안(구글 창이 막히지 않는다).
+  // ⚠️ 무음 시도가 실패해도 세션(SESSION_KEY)을 지우지 않고 버튼을 보인다 — 클릭 밖에서 여는 구글 창을 막는 브라우저가 많아
+  //    새로고침할 때마다 처음 로그인(계정 고르기 + 비밀번호)으로 떨어졌다(2026-11-06, sessionKeepAlive.ts ③).
+  //    이 탭은 이미 비밀번호를 통과했다(SESSION_KEY) — 버튼도 무음 경로와 같이 비밀번호를 다시 묻지 않는다.
+  //    계정이 다르거나·Drive 권한이 없거나·승인 명단에 없으면 종전대로 세션을 지운다.
+  const resumeSession = (savedEmail: string, silent: boolean) => {
     setStep('silent_auth');
+    setErrorMsg('');
+    setUserEmail(savedEmail);
 
     requestGoogleToken({
       prompt: '',
@@ -335,11 +340,17 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         }
         onApproved(email, token, pickFeatures(approval));
       },
-      onFail: () => {
-        sessionStorage.removeItem(SESSION_KEY);
-        setStep('idle');
+      onFail: (detail) => {
+        if (!silent) setErrorMsg(describeAuthError(detail));
+        setStep('resume');
       },
     });
+  };
+
+  useEffect(() => {
+    const savedEmail = sessionStorage.getItem(SESSION_KEY);
+    if (!savedEmail) return;
+    resumeSession(savedEmail, true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -511,6 +522,26 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
             <div className="flex flex-col items-center gap-4 text-center py-4">
               <div className="w-8 h-8 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
               <p className="text-gray-300 text-sm">세션을 복원하는 중...</p>
+            </div>
+          )}
+
+          {/* 이어서 사용하기 (새로고침 뒤 무음 재인증이 막혔을 때 — 한 번 누르면 됨) */}
+          {step === 'resume' && (
+            <div className="flex flex-col items-center gap-5 text-center">
+              <div>
+                <p className="text-white font-semibold mb-1">이어서 사용하기</p>
+                <p className="text-gray-500 text-sm">{userEmail}</p>
+              </div>
+              <button
+                onClick={() => resumeSession(userEmail, false)}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
+              >
+                이어서 사용하기
+              </button>
+              {errorMsg && <p className="text-red-400 text-sm whitespace-pre-line">{errorMsg}</p>}
+              <button onClick={handleRetry} className="text-gray-500 hover:text-gray-300 text-sm transition-colors">
+                다른 계정으로 로그인
+              </button>
             </div>
           )}
 

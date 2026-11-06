@@ -111,6 +111,7 @@ import { DEFAULT_WATCH_VIEW, normalizeWatchView, sameWatchView, normalizeWatchSi
 import { buildHoldings } from './watchlistChart';
 import { groupCategoryOf, sharedCategoryOf } from './userCategory';
 import { registerApiAuth } from './apiAuth';
+import { ACTIVITY_EVENTS, LOGIN_SCOPE, TOKEN_WANTED_MSG, isActivityMessage, freshTokenOf } from './sessionKeepAlive';
 
 // 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
@@ -832,7 +833,7 @@ export default function App() {
     lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
     goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef, ownFolderIdRef, syncStatusRef, stockMetaRef, stockLoadFailedRef,
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
-    initTokenClient, checkAndSyncFromDrive,
+    initTokenClient, adoptFreshToken, tokenIsStale, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
     initSession, seedLastAutoBackupAt, lastAutoBackupAtRef, stateAppliedRef,
   } = useDriveSync({
@@ -876,21 +877,40 @@ export default function App() {
     const handler = () => resetActivity();
     // ⚠️ **캡처 단계** 등록 — 버블로 두면 하위 컴포넌트의 stopPropagation(예: 흐름도 캔버스가
     //    계산기 전역 키 핸들러로 키가 새는 것을 막는 onKeyDownCapture)이 이 리스너까지 차단해
-    //    "도형 배치·장문 메모 입력만 하는 세션"이 활동으로 집계되지 않는다(50분 뒤 작업 중
+    //    "도형 배치·장문 메모 입력만 하는 세션"이 활동으로 집계되지 않는다(비활동 시간이 지나면 작업 중
     //    비활동 로그아웃 모달이 튀어나옴). 캡처면 React 트리보다 먼저 발화해 항상 집계된다.
     // ⚠️ pointerdown 추가 — 드래그 핸들러가 preventDefault를 하면 호환 mousedown이 억제된다.
+    // 스크롤·휠·마우스 이동도 센다(ACTIVITY_EVENTS) — 화면을 읽기만 하는 사용이 '비활동'으로 잡혀 로그아웃되던 것.
     const opts = true;
-    document.addEventListener('mousedown', handler, opts);
-    document.addEventListener('pointerdown', handler, opts);
-    document.addEventListener('keydown', handler, opts);
-    document.addEventListener('touchstart', handler, opts);
-    return () => {
-      document.removeEventListener('mousedown', handler, opts);
-      document.removeEventListener('pointerdown', handler, opts);
-      document.removeEventListener('keydown', handler, opts);
-      document.removeEventListener('touchstart', handler, opts);
-    };
+    ACTIVITY_EVENTS.forEach(ev => document.addEventListener(ev, handler, opts));
+    return () => ACTIVITY_EVENTS.forEach(ev => document.removeEventListener(ev, handler, opts));
   }, [authUser]);
+
+  // 별도 창(금리·흐름도·관심종목·가계부 등)의 조작 신호 — main.tsx installActivityRelay가 보낸다. 같은 출처만.
+  // ⚠️ 경고가 이미 떴으면 resetActivity로는 못 막는다(카드 창 card:activity와 같은 이유).
+  // 앱 탭 토큰이 낡았으면 그 창에 '다음 클릭에서 받아 달라'고 답한다(클릭 권한은 창마다 따로 — sessionKeepAlive.ts).
+  // 창이 넘긴 토큰은 **계정이 로그인 계정과 같을 때만** 쓴다 — 다른 계정 토큰이 들어오면 저장이 엉뚱한 Drive로 간다.
+  useEffect(() => {
+    if (!authUser) return;
+    const me = authUser.email.toLowerCase();
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;
+      if (isActivityMessage(e.data)) {
+        if (showInactivityWarning) handleInactivityContinue(); else resetActivity();
+        if (tokenIsStale() && e.source) {
+          try { e.source.postMessage({ type: TOKEN_WANTED_MSG, hint: authUser.email, clientId: GOOGLE_CLIENT_ID, scope: LOGIN_SCOPE }, window.location.origin); } catch {}
+        }
+        return;
+      }
+      const fresh = freshTokenOf(e.data);
+      if (!fresh || adminViewingAsRef.current) return;
+      fetchUserEmail(fresh).then((email) => {
+        if (email && email.toLowerCase() === me && !adminViewingAsRef.current) adoptFreshToken(fresh);
+      });
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [authUser, showInactivityWarning]);
 
   useEffect(() => {
     document.title = authUser ? `종합 자산 관리 - ${authUser.email}` : '종합 자산 관리';

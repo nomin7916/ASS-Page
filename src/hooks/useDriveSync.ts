@@ -12,6 +12,7 @@ import { backtestScenariosHaveContent } from '../backtest';
 import { ledgerBooksHaveContent, ledgerSnapshotsHaveContent } from '../ledger';
 import { normalizeStockMeta, mergeStockMeta, pruneStockMeta } from '../stockHistorySync';
 import { getTodayKST } from './useMarketCalendar';
+import { IDLE_LOGOUT_MS, LOGIN_SCOPE, TOKEN_DEAD, isTokenStale, shouldRefreshToken } from '../sessionKeepAlive';
 
 // STOCK(종목별 과거 종가 캐시) 하이드레이션 대기 상한(ms).
 // ⚠️ 부팅은 STATE+MARKET+STOCK을 **함께** 적용해 첫 렌더부터 과거 평가액이 최종값이어야 한다(STOCK-first).
@@ -130,6 +131,11 @@ export function useDriveSync({
   const driveFolderIdRef = useRef('');
   const tokenClientRef = useRef(null);
   const pendingTokenResolveRef = useRef<((token: string | null) => void) | null>(null);
+  // 로그인 토큰(1시간)을 받은 시각 · 클릭 안 미리 받기를 마지막으로 시도한 시각(sessionKeepAlive.ts)
+  const tokenIssuedAtRef = useRef(0);
+  const tokenTryAtRef = useRef(0);
+  // 401 뒤 무음 재발급까지 막혀 저장을 못 했다 — 다음 클릭에서 토큰을 받으면 곧바로 다시 저장한다.
+  const saveAfterTokenRef = useRef(false);
   const isInitialLoad = useRef(true);
   // STOCK 파일(종목별 과거 종가) 하이드레이션 완료 플래그.
   // ⚠️ 이 플래그가 false인 동안에는 STOCK 파일을 **절대 쓰지 않는다**.
@@ -374,7 +380,8 @@ export function useDriveSync({
         notify('Drive 데이터 폴더를 찾을 수 없습니다. Google Drive 휴지통을 확인하거나 관리자에게 문의하세요.', 'error');
         setDriveStatus('error');
       } else if (msg.includes('401')) {
-        console.warn('[Drive] 토큰 갱신 실패 → 재로그인 필요');
+        console.warn('[Drive] 토큰 갱신 실패 → 다음 클릭에서 다시 받는다');
+        tokenIssuedAtRef.current = TOKEN_DEAD;
         setDriveStatus('auth_needed');
       } else if (msg.includes('403')) {
         console.warn('[Drive] 403 Forbidden: Google Cloud Console에서 drive.file 권한 또는 테스트 사용자 설정 확인 필요');
@@ -494,10 +501,13 @@ export function useDriveSync({
           //    (STOCK은 백업 0본 → 복구 불가). pendingSaveRef가 이미 같은 패턴을 쓴다.
           return saveAllToDrive(saveStateRef.current ?? state, backupDone ? false : versioned, true);
         }
-        // 갱신 실패(세션 만료·권한 거부) → auth_needed 유지, 재시도 무의미
+        // 갱신 실패(클릭 밖이라 브라우저가 구글 창을 막음·세션 만료) → auth_needed. 다음 클릭에서 토큰을 받아 다시 저장한다.
         setSS('error');
         setDriveStatus('auth_needed');
-        notify('Drive 인증이 만료되었습니다. 헤더의 Drive 아이콘을 눌러 다시 연결해 주세요.', 'warning');
+        saveAfterTokenRef.current = true;
+        tokenIssuedAtRef.current = TOKEN_DEAD;
+        tokenTryAtRef.current = 0;
+        notify('Drive 연결이 만료되었습니다. 화면을 한 번 누르면 다시 연결되어 저장됩니다.', 'warning');
         return;
       }
       setSS('error');
@@ -549,6 +559,35 @@ export function useDriveSync({
     }
   };
 
+  // ── 새 로그인 토큰 반영(앱 탭 재발급 콜백·별도 창이 넘긴 토큰 공통) ──
+  // 401 뒤 재발급까지 막혀 못 한 저장이 있으면 이어서 한다 — 토큰을 어느 길로 받았든(클릭·창·Drive 버튼) 한 곳에서.
+  const setFreshToken = (t: string) => {
+    tokenIssuedAtRef.current = Date.now();
+    driveTokenRef.current = t;
+    setDriveToken(t);
+    if (syncStatusRef.current !== 'loading') setSS('ready');
+    setDriveStatus('');
+    if (saveAfterTokenRef.current) {
+      saveAfterTokenRef.current = false;
+      setTimeout(() => {
+        const snap = saveStateRef.current;
+        if (snap?.portfolios?.length > 0 && stateAppliedRef.current) saveAllToDrive(snap);
+      }, 0);
+    }
+  };
+
+  // 별도 창이 자기 클릭 안에서 받아 넘긴 토큰(sessionKeepAlive.ts) — App이 토큰의 계정이 로그인 계정과 같은지 확인한 뒤 부른다.
+  // 401 재발급을 기다리는 대기자가 있으면 이 토큰으로 끝낸다.
+  const adoptFreshToken = (t: string) => {
+    if (!t || adminViewingAsRef.current) return;
+    setFreshToken(t);
+    const wait = pendingTokenResolveRef.current;
+    if (wait) { pendingTokenResolveRef.current = null; wait(t); }
+  };
+
+  // 앱 탭 토큰이 낡았는가(받은 지 40분 이상·401 확인) — 별도 창에 '다음 클릭에서 받아 달라'고 할지 정한다.
+  const tokenIsStale = () => !adminViewingAsRef.current && isTokenStale(Date.now(), tokenIssuedAtRef.current);
+
   // ── OAuth 토큰 요청 ──
   const requestDriveToken = (prompt = '') => {
     if (!tokenClientRef.current) return;
@@ -560,7 +599,10 @@ export function useDriveSync({
     if ((window as any).google?.accounts?.oauth2) {
       const client = (window as any).google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
-        scope: 'openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly',
+        scope: LOGIN_SCOPE,
+        // 재발급 때 로그인한 계정을 바로 고르게 한다 — 한 기기에 구글 계정이 여럿이면 계정 고르기 창이 떠 '다시 로그인'처럼 보였다.
+        // 관리자 접속(impersonation) 탭은 토큰 주인이 관리자라 authUser.email(대상 사용자)을 넣으면 안 된다 — 종전대로 둔다.
+        ...(!adminViewingAsRef.current && authUser?.email ? { login_hint: authUser.email, hint: authUser.email } : {}),
         callback: (resp: any) => {
           const t: string | null = resp.error ? null : resp.access_token;
           if (t) {
@@ -569,10 +611,7 @@ export function useDriveSync({
               // 관리자 자신의 쓰기 토큰 ref만 업데이트하여 복귀 시 유효한 토큰 사용
               adminOwnDriveTokenRef.current = t;
             } else {
-              driveTokenRef.current = t;
-              setDriveToken(t);
-              if (syncStatusRef.current !== 'loading') setSS('ready');
-              setDriveStatus('');
+              setFreshToken(t);
             }
           } else {
             setSS('error');
@@ -887,10 +926,41 @@ export function useDriveSync({
     return () => clearInterval(timer);
   }, [authUser]);
 
-  // ── 비활동 타임아웃: 30초마다 체크, 50분 비활동 시 경고 ──
+  // ── 로그인 토큰 미리 받기: 받은 지 40분이 지나면 **다음 클릭 안에서** 새로 받는다(sessionKeepAlive.ts) ──
+  // ⚠️ 클릭 처리 안에서 불러야 한다 — 구글 재발급은 작은 창을 잠깐 여는데, 클릭 밖(401 뒤·타이머)에서 열면 브라우저가 막아
+  //    'Drive 인증 만료 → 다시 로그인'이 됐다. window 버블 단계라 앱의 클릭 처리가 먼저 돈다 — 그쪽이 별도 창을 열어
+  //    클릭 권한을 이미 썼으면(userActivation.isActive=false) 다음 클릭으로 미룬다(별도 창 열기를 막지 않게).
+  // ⚠️ 관리자 접속 탭은 하지 않는다(토큰 주인·범위가 달라 종전 경로 그대로).
   useEffect(() => {
     if (!authUser) return;
-    const TIMEOUT = 50 * 60 * 1000;
+    tokenIssuedAtRef.current = Date.now();
+    tokenTryAtRef.current = 0;
+    saveAfterTokenRef.current = false;
+    const onClick = () => {
+      if (adminViewingAsRef.current) return;
+      const client = tokenClientRef.current;
+      if (!client || pendingTokenResolveRef.current) return;
+      const now = Date.now();
+      if (!shouldRefreshToken(now, tokenIssuedAtRef.current, tokenTryAtRef.current)) return;
+      const ua = (navigator as any).userActivation;
+      if (ua && !ua.isActive) return;
+      tokenTryAtRef.current = now;
+      // 토큰 반영·밀린 저장은 콜백(setFreshToken)이 한다. 이 대기자는 '받는 중' 표시 — 그동안 다른 재발급 대기자는 함께 기다린다.
+      let timer = null;
+      const mine = () => { clearTimeout(timer); };
+      // 응답이 영영 없을 때 대기 칸을 비운다 — 비우지 않으면 401 재발급 대기자들이 이 칸에 묶인다.
+      timer = setTimeout(() => { if (pendingTokenResolveRef.current === mine) pendingTokenResolveRef.current = null; }, 30000);
+      pendingTokenResolveRef.current = mine;
+      client.requestAccessToken({ prompt: '' });
+    };
+    window.addEventListener('click', onClick);
+    return () => window.removeEventListener('click', onClick);
+  }, [authUser]);
+
+  // ── 비활동 타임아웃: 30초마다 체크, IDLE_LOGOUT_MS(4시간) 비활동 시 경고 ──
+  useEffect(() => {
+    if (!authUser) return;
+    const TIMEOUT = IDLE_LOGOUT_MS;
     const id = setInterval(() => {
       if (isInitialLoad.current) return;
       if (inactivityWarningActiveRef.current) return;
@@ -981,6 +1051,8 @@ export function useDriveSync({
     saveAllToDrive,
     requestDriveToken,
     initTokenClient,
+    adoptFreshToken,
+    tokenIsStale,
     checkAndSyncFromDrive,
     handleDriveLoadOnly,
     handleOpenBackupModal,

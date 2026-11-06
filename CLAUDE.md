@@ -29,6 +29,7 @@ src/
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
 ├── introVideo.ts        # 인트로 영상(public/intro) 진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro)
 ├── apiAuth.ts           # /api/… fetch 관문(로그인 토큰 탑재·401 재발급 1회·별도 창 토큰 전달) (⚠️ import 0 — verify:api-auth)
+├── sessionKeepAlive.ts  # 로그인 유지: 비활동 로그아웃(4시간)·조작 목록·토큰 미리 받기(40분) 판정·별도 창 활동/토큰 중계 (⚠️ import 0 — verify:session)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
@@ -71,7 +72,7 @@ src/
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
     ├── LoginGate.tsx             # 로그인 / PIN 인증 게이트
     ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회·분배금 열) · 자동 '보유종목' 가상 그룹(저장 금지 — 정본 portfolios, 같은 종목은 한 줄 + 보유 계좌 칩)
-    ├── StockChartWindow.tsx      # 종목 비교 차트 별도 창(/?stockChartWindow=1) — 미니차트 클릭, App 미마운트·쓰기 0 · 매입가 점선(계좌별/통합) · 비교 종목 찾기(이름·초성·코드·계좌→종목) · 이동평균선(대상 종목 하나 · 고른 기간·숨김은 `stockchart:ma`로 opener에 → 관심종목 보기 상태로 저장) — opener에 보내는 건 ping과 이것 둘뿐
+    ├── StockChartWindow.tsx      # 종목 비교 차트 별도 창(/?stockChartWindow=1) — 미니차트 클릭, App 미마운트·쓰기 0 · 매입가 점선(계좌별/통합) · 비교 종목 찾기(이름·초성·코드·계좌→종목) · 이동평균선(대상 종목 하나 · 고른 기간·숨김은 `stockchart:ma`로 opener에 → 관심종목 보기 상태로 저장) — opener에 보내는 건 ping과 이것 둘뿐(+ 모든 별도 창 공통 `app:activity`·`app:tokenFresh` — main.tsx 중계)
     ├── FlowBoard.tsx             # 자금 흐름도 보드(z=990) — 시트 탭 바, 로컬 사본 + idle 승격, overlay/page 겸용
     ├── FlowCanvas.tsx            # 흐름도 SVG 캔버스(React.memo) — 드래그·리사이즈·연결
     ├── FlowInspector.tsx         # 흐름도 속성 패널(날짜·이름·계좌연결·금액·메모) — id 앵커 draft
@@ -124,6 +125,16 @@ src/
 - 승인 요청 = `access_requests`에 PENDING + 관리자 메일. ⚠️ 옛 `addUser`(요청=자동 승인)로 되돌리지 말 것. 승인은 관리자 페이지 '승인 대기'.
 - 사이트는 `callScript`(src/appsScript.ts)로만 부른다 — 토큰은 `registerScriptAuth`(App, driveTokenRef). 포털 토큰은 drive 범위뿐이라 못 쓴다.
 - 스크립트를 바꾸면 관리자가 script.google.com에서 **새 버전 배포**해야 한다(사이트 배포와 순서 맞추기). 검증: `verify:access`(원본 실행).
+
+## 로그인 유지 — 사용 중 재로그인 금지 (`src/sessionKeepAlive.ts`, ⚠️ 회귀 주의 — 2026-11-06)
+
+- 사용자 요청: 꼭 필요한 경우가 아니면 다시 로그인하지 않는다. 숫자는 sessionKeepAlive.ts 한 곳(비활동 4시간·미리 받기 40분·재시도 1분).
+- 구글 토큰(1시간) 재발급은 작은 창을 여는 일이라 **클릭 안에서만** 확실하다 → useDriveSync가 window 클릭(버블)에서 낡은 토큰(40분↑·401=`TOKEN_DEAD`)을
+  미리 받는다. 앱이 그 클릭으로 창을 열었으면(`userActivation.isActive=false`) 다음 클릭. 401 뒤 못 한 저장은 `setFreshToken`이 이어 한다.
+- 별도 창: main.tsx `installActivityRelay` → `app:activity`(10초 1회) · 앱 탭 토큰이 낡았으면 `app:tokenWanted` → 창이 자기 클릭에서 받아 `app:tokenFresh`
+  → 앱 탭은 **userinfo 이메일 = 로그인 계정**일 때만 `adoptFreshToken`. 관리자 접속(impersonation) 탭은 미리 받기·힌트·창 토큰 셋 다 안 한다.
+- 새로고침 무음 재인증 실패 = 세션 유지 + '이어서 사용하기'(비밀번호 없음 — 이 탭은 이미 통과). 계정 불일치·Drive 401/403·미승인만 세션을 지운다.
+- 비활동 로그아웃은 자리 비움 안전장치로만 남긴다. 조작 = `ACTIVITY_EVENTS`(스크롤·휠·마우스 이동 포함). 검증: `verify:session`.
 
 ## 서버 경로 로그인·승인 확인 (`api/_auth.ts` · `src/apiAuth.ts`, ⚠️ 회귀 주의 — 2026-11-05)
 
