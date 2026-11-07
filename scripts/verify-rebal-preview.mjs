@@ -41,7 +41,7 @@ try {
 }
 
 if (P) {
-  const { rebalCapitalBase: FB, rebalActionQty: AQ, rebalRowOutcome: RO, parseDraftNumber: PD, flowSign: FS, REBAL_PREVIEW_DELAY_MS: DELAY } = P;
+  const { rebalCapitalBase: FB, rebalActionQty: AQ, rebalRowOutcome: RO, parseDraftNumber: PD, flowSign: FS, REBAL_PREVIEW_DELAY_MS: DELAY, tradeSideLabel: TS } = P;
 
   eq('#1 말풍선 대기 = 0.3초 (사용자 확정)', DELAY, 300);
 
@@ -111,6 +111,8 @@ if (P) {
 
   // ── 말풍선 부호 ──
   eq('#21 종목 입장 부호: 매수 + · 매도 − · 0은 없음', S(() => [FS(625440), FS(-7922240), FS(0)]), ['+', '-', '']);
+  eq('#22 칸 이름 꼬리: + 매수 · − 매도 · 0 없음 (수량(매수) / 실 구매비용(매도))', S(() => [TS(6), TS(-76), TS(0), TS(625440), TS(-7922240)]), ['매수', '매도', '', '매수', '매도']);
+  eq('#23 스크린샷 값: 4,000,000 → 수량 −41(매도) · −₩4,273,840(매도)', S(() => { const o = RO({ ...base, amount: 4000000 }); return [o.totalAction, TS(o.totalAction), o.flow, TS(o.flow)]; }), [-41, '매도', -4273840, '매도']);
 }
 
 console.log('\n── 파트② 소스 가드 ──');
@@ -150,6 +152,11 @@ ok('#G10 말풍선은 body 포털 + 클릭 통과',
 ok('#G11 말풍선이 떠 있는 칸은 기본 title 풍선을 끈다(두 풍선 겹침 방지)',
   /title=\{draftPreview\?\.id === item\.id && draftPreview\.col === 'targetAmount' \? undefined :/.test(rp)
   && /title=\{draftPreview\?\.id === item\.id && draftPreview\.col === 'targetRatio' \? undefined :/.test(rp));
+ok('#G13 수량·실 구매비용 칸 이름에 (매수)/(매도) — tradeSideLabel import + 두 칸 사용',
+  /import \{[^}]*\btradeSideLabel\b[^}]*\} from '\.\.\/rebalPreview';/.test(rp)
+  && /const side = tradeSideLabel\(n\);/.test(rp)
+  && /수량\{sideTag\(out\.totalAction\)\}/.test(rp)
+  && /실 구매비용\{sideTag\(out\.flow\)\}/.test(rp));
 ok('#G12 package.json에 verify:rebal-preview 등록', pkg.scripts['verify:rebal-preview'] === 'node scripts/verify-rebal-preview.mjs');
 
 console.log(`\n  총 ${pass + fail}건 — 통과 ${pass} / 실패 ${fail}`);

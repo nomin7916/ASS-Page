@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-11-07 (2) — [리밸런싱] 미리보기 말풍선 칸 이름에 (매수)/(매도)
+
+**대상 파일**: `src/rebalPreview.ts`(tradeSideLabel) · `src/components/RebalancingPanel.tsx` · `scripts/verify-rebal-preview.mjs`
+
+- 사용자 요청: 수량·실 구매비용이 + 이면 매수, − 이면 매도 — "수량(매수)" / "수량(매도)"처럼 표시.
+- 고친 것: 말풍선 칸 이름 = `수량(매수)`·`실 구매비용(매수)` / `수량(매도)`·`실 구매비용(매도)` (매수 초록 · 매도 빨강), 0이면 꼬리 없음.
+  아래 안내 줄은 "Enter로 표에 적용 · + 매수 / − 매도"로 줄였다.
+- 검증: `verify:rebal-preview` 37건 · gate 통과(build 실행 불가 — node_modules 없음) · Chromium 하네스로 매수·매도·0 세 경우 칸 이름 확인.
+
 ## 2026-11-07 — [리밸런싱] 목표금액·목표비중 입력 중 0.3초 뒤 미리보기 말풍선
 
 **대상 파일**: `src/rebalPreview.ts`(신규) · `src/components/RebalPreviewBubble.tsx`(신규) · `src/hooks/usePortfolioData.ts` ·

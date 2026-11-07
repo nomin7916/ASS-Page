@@ -47,3 +47,6 @@ export function parseDraftNumber(raw) {
 
 // 말풍선 금액 부호(종목 입장) — 비중을 높이면(매수) +, 줄이면(매도) −. 0은 부호 없음.
 export const flowSign = (n) => (n > 0 ? '+' : n < 0 ? '-' : '');
+
+// 말풍선 칸 이름 꼬리 — 수량·실 구매비용이 + 이면 '매수', − 이면 '매도', 0이면 없음(사용자 요청 2026-11-07: '수량(매수)').
+export const tradeSideLabel = (n) => (n > 0 ? '매수' : n < 0 ? '매도' : '');

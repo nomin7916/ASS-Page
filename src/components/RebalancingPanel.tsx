@@ -7,7 +7,7 @@ import { rowHighlightOf, nextRowHighlight } from '../watchlistGroups';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isManualCashRow, manualCashEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources, blendWithDarkBg } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { ladderWinId } from '../cardWindow';
-import { rebalCapitalBase, rebalRowOutcome, parseDraftNumber, flowSign, REBAL_PREVIEW_DELAY_MS } from '../rebalPreview';
+import { rebalCapitalBase, rebalRowOutcome, parseDraftNumber, flowSign, REBAL_PREVIEW_DELAY_MS, tradeSideLabel } from '../rebalPreview';
 import RebalPreviewBubble from './RebalPreviewBubble';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import CardExpandButton from './CardExpandButton';
@@ -672,14 +672,18 @@ export default function RebalancingPanel({
       : `목표비중 ${typed != null ? typed : 0}%`;
     const big = 'text-sm font-bold';
     const small = 'font-bold';
+    const sideTag = (n) => {
+      const side = tradeSideLabel(n);
+      return side ? <span className={n > 0 ? 'text-green-400' : 'text-red-400'}>({side})</span> : null;
+    };
     return (
       <RebalPreviewBubble anchor={draftPreview.anchor}>
         <div className={`min-w-[210px] transition-opacity ${pending ? 'opacity-50' : ''}`}>
           <div className="mb-1.5 text-[11px] text-gray-400">미리보기 · <span className="text-gray-200">{inputText}</span></div>
           <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-1">
-            <span className="text-gray-400">수량</span>
+            <span className="text-gray-400">수량{sideTag(out.totalAction)}</span>
             <span className={`text-right ${small} ${actColor}`}>{(out.totalAction > 0 ? '+' : '') + out.totalAction}<span className="ml-1 font-normal text-gray-500">→ {formatNumber(cleanNum(item.quantity) + out.totalAction)}</span></span>
-            <span className="text-gray-400">실 구매비용</span>
+            <span className="text-gray-400">실 구매비용{sideTag(out.flow)}</span>
             <span className={`text-right ${isAmt ? small : big} ${flowColor}`}>{flowText}</span>
             <span className="text-gray-400">예상평가금</span>
             <span className={`text-right ${isAmt ? small : big} text-yellow-500`}>{money(out.expEval)}</span>
@@ -688,7 +692,7 @@ export default function RebalancingPanel({
           </div>
           {extraQty !== 0 && <div className="mt-1.5 text-[10px] text-gray-500">'추가' {extraQty > 0 ? '+' : ''}{extraQty} 포함</div>}
           {maxAddLink[item.id] && <div className="mt-1 text-[10px] text-amber-300/80">추가 가능 연동 중 — 적용 뒤 '추가' 수량이 잔액에 맞춰 다시 바뀔 수 있습니다</div>}
-          <div className="mt-1.5 border-t border-gray-700 pt-1 text-[10px] text-gray-500">Enter로 표에 적용 · 금액 + 매수 / − 매도 (종목 기준)</div>
+          <div className="mt-1.5 border-t border-gray-700 pt-1 text-[10px] text-gray-500">Enter로 표에 적용 · + 매수 / − 매도</div>
         </div>
       </RebalPreviewBubble>
     );
