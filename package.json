@@ -31,6 +31,7 @@
     "verify:boot": "node scripts/verify-boot.mjs",
     "verify:watchlist": "node scripts/verify-watchlist.mjs",
     "verify:rebal-extra": "node scripts/verify-rebal-extra.mjs",
+    "verify:rebal-preview": "node scripts/verify-rebal-preview.mjs",
     "verify:deposit-ledger": "node scripts/verify-deposit-ledger.mjs",
     "verify:migrate": "node scripts/verify-migrate.mjs",
     "verify:cash-row": "node scripts/verify-cash-row.mjs",

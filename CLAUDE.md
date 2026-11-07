@@ -18,6 +18,7 @@ src/
 ├── appsScript.ts        # 승인 스크립트(Apps Script) 호출 단일 관문 — 본문에 로그인 토큰을 싣는다(⚠️ 직접 fetch 금지)
 ├── watchlistQuote.ts    # 관심종목 코드→시장 판정(detectMarket)·시세/이력/최근 분배금 조회(api.ts 재사용)
 ├── watchlistChart.ts    # 관심종목 기간 구간·등락율·비교 차트 행·분배금 파서·보유 매입가(buildHoldings)·보유종목 줄(holdingWatchStocks)·찾기(holdingCatalog·초성 searchHoldingCatalog)·이동평균(movingAverage·withMaRows) (⚠️ import 0 — verify:watchlist 직접 import)
+├── rebalPreview.ts      # 리밸런싱 수량·예상평가금·예상비중 산식 단일 소스(표 usePortfolioData + 입력 중 말풍선 RebalPreviewBubble) · 말풍선 금액은 종목 입장 부호(매수 +) (⚠️ import 0 — verify:rebal-preview)
 ├── rateMetrics.ts       # 금리 지표 계산: 현재값·1개월 변화·52주 위치·3년 백분위·꺾임 (⚠️ import 0)
 ├── rateSignals.ts       # 금리 판정: RATE_RULES(기준치 단일 소스) + 자산군 7개 evaluate* (⚠️ import 0)
 ├── rateAssets.ts        # 자산군별 종목 목록·MANUAL_INPUTS(주당 장부가/순자산)·배당률 계산 (⚠️ import 0)

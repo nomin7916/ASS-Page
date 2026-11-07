@@ -7,6 +7,8 @@ import { rowHighlightOf, nextRowHighlight } from '../watchlistGroups';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isManualCashRow, manualCashEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources, blendWithDarkBg } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { ladderWinId } from '../cardWindow';
+import { rebalCapitalBase, rebalRowOutcome, parseDraftNumber, flowSign, REBAL_PREVIEW_DELAY_MS } from '../rebalPreview';
+import RebalPreviewBubble from './RebalPreviewBubble';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import CardExpandButton from './CardExpandButton';
 import CategoryViewSwitch from './CategoryViewSwitch';
@@ -175,6 +177,21 @@ export default function RebalancingPanel({
   // ⚠️ 초안(editingTargetAmount)과 비교하면 안 된다 — 입력이 초안으로 controlled라 타이핑해도
   //    blur 값과 초안이 항상 같아져 모든 편집이 무시된다.
   const amtFocusValRef = useRef({});
+  // 입력 중 미리보기 말풍선 — 목표금액·목표비중 칸에서 타이핑을 멈추고 0.3초 뒤, Enter 전에 그 값의 결과
+  // (수량·실 구매비용·예상평가금·예상비중)를 보여준다(사용자 요청 2026-11-07). { id, col, raw, anchor } | null.
+  // ⚠️ 값은 표와 같은 rebalPreview 함수로 계산한다 — 여기서 식을 다시 굴리지 말 것(Enter 뒤 표와 어긋난다).
+  // ⚠️ 이 상태는 화면 전용이다 — 쓰기(writeTargets·handleUpdate)는 종전대로 blur(=Enter)에서만 한다.
+  const [draftPreview, setDraftPreview] = useState(null);
+  const draftPreviewTimerRef = useRef(null);
+  const scheduleDraftPreview = (id, col, raw, anchor) => {
+    clearTimeout(draftPreviewTimerRef.current);
+    draftPreviewTimerRef.current = setTimeout(() => setDraftPreview({ id, col, raw, anchor }), REBAL_PREVIEW_DELAY_MS);
+  };
+  const clearDraftPreview = () => {
+    clearTimeout(draftPreviewTimerRef.current);
+    setDraftPreview(null);
+  };
+  useEffect(() => () => clearTimeout(draftPreviewTimerRef.current), []);
   // '추가' 입력 초안 — 상태값(rebalExtraQty)은 반드시 number로 유지하고 타이핑 중 문자열만 여기 담는다.
   // ⚠️ 이게 없으면 '-' 한 글자가 parseInt에서 NaN→0이 되고 controlled value가 즉시 ''로 되돌려
   //    **마이너스 부호를 입력하는 것 자체가 불가능**하다(음수 매도 수량 직접 조절 불가).
@@ -606,6 +623,76 @@ export default function RebalancingPanel({
   const rebalTotalAvailable = headerDepositForBuy + headerAmount + headerTotalSell;
   const rebalBalance = rebalTotalAvailable - headerTotalBuy;
   const rebalRemaining = Math.max(0, rebalBalance);
+
+  // 입력 중 미리보기 말풍선의 내용 — 칸에 친 값이 Enter로 적용됐을 때 그 행에 나올 값.
+  // ⚠️ 실 구매비용은 **말풍선에서만 부호를 뒤집는다**(종목 입장: 매수 +, 매도 −). 표 열(displayAdjustedCost,
+  //    계좌 현금 입장: 매수 −)은 그대로 둔다 — 사용자 요청(2026-11-07): 비중을 높이면 종목 금액이 늘어나니 +.
+  const renderDraftPreview = () => {
+    if (!draftPreview || !draftPreview.anchor?.isConnected) return null;
+    const item = rebalanceData.find(d => d.id === draftPreview.id);
+    if (!item || item.isSavings || item.isManualCash) return null;
+    const isAmt = draftPreview.col === 'targetAmount';
+    const liveDraft = isAmt ? editingTargetAmount[item.id] : editingRatio[item.id];
+    if (liveDraft === undefined) return null;
+    // 0.3초 대기 중(칸 값 ≠ 말풍선이 계산한 값)이면 흐리게 — 곧 새 값으로 바뀐다.
+    const pending = liveDraft !== draftPreview.raw;
+    const typed = parseDraftNumber(draftPreview.raw);
+    const isOv = activePortfolioAccountType === 'overseas';
+    const fx = marketIndicators.usdkrw || 1;
+    const { overallExp, allocBase } = rebalCapitalBase({
+      totalEval: totals.totalEval,
+      fx: isOv ? fx : 1,
+      amount: headerAmount,
+      depositAmount: headerDepositAmount,
+      useDepositAmount: settings.useDepositAmount != null ? cleanNum(settings.useDepositAmount) : null,
+    });
+    const curEval = cleanNum(item.curEval);
+    // 빈 칸은 커밋 규약 그대로 — 목표금액은 비우면 ''로 저장돼 (₩)미러 중엔 현재 평가금, 아니면 목표비중
+    // 힌트로 계산되고(commitAmt), 목표비중은 비우면 0%로 저장된다(handleUpdate → cleanNum).
+    const amtMirrorOn = isAmountMode && (settings.targetAmountMirror || 'off') === 'on';
+    const amount = isAmt
+      ? (typed != null ? typed : (amtMirrorOn ? curEval : cleanNum(item.targetAmountHint)))
+      : cleanNum(item.effectiveTargetAmount);
+    const ratio = isAmt ? cleanNum(item.effectiveTargetRatio) : (typed != null ? typed : 0);
+    const extraQty = rebalExtraQty[item.id] || 0;
+    const out = rebalRowOutcome({
+      mode: settings.mode,
+      price: cleanNum(item.currentPrice),
+      qty: cleanNum(item.quantity),
+      curEval, overallExp, allocBase, extraQty, ratio, amount,
+    });
+    const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
+    const money = (n) => (isOv ? `${fmtUSD(n)} (${formatCurrency(n * fx)})` : formatCurrency(n));
+    const digits = isOv ? 2 : 1;
+    const flowText = `${flowSign(out.flow)}${money(Math.abs(out.flow))}`;
+    const flowColor = out.flow > 0 ? 'text-green-400' : out.flow < 0 ? 'text-red-400' : 'text-gray-400';
+    const actColor = out.totalAction > 0 ? 'text-green-400' : out.totalAction < 0 ? 'text-red-400' : 'text-gray-400';
+    const inputText = isAmt
+      ? (typed != null ? `목표금액 ${isOv ? fmtUSD(typed) : formatCurrency(typed)}` : '목표금액 비움 → 목표비중 기준')
+      : `목표비중 ${typed != null ? typed : 0}%`;
+    const big = 'text-sm font-bold';
+    const small = 'font-bold';
+    return (
+      <RebalPreviewBubble anchor={draftPreview.anchor}>
+        <div className={`min-w-[210px] transition-opacity ${pending ? 'opacity-50' : ''}`}>
+          <div className="mb-1.5 text-[11px] text-gray-400">미리보기 · <span className="text-gray-200">{inputText}</span></div>
+          <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-1">
+            <span className="text-gray-400">수량</span>
+            <span className={`text-right ${small} ${actColor}`}>{(out.totalAction > 0 ? '+' : '') + out.totalAction}<span className="ml-1 font-normal text-gray-500">→ {formatNumber(cleanNum(item.quantity) + out.totalAction)}</span></span>
+            <span className="text-gray-400">실 구매비용</span>
+            <span className={`text-right ${isAmt ? small : big} ${flowColor}`}>{flowText}</span>
+            <span className="text-gray-400">예상평가금</span>
+            <span className={`text-right ${isAmt ? small : big} text-yellow-500`}>{money(out.expEval)}</span>
+            <span className="text-gray-400">예상비중</span>
+            <span className={`text-right ${isAmt ? big : small} text-yellow-500`}><span className="mr-1 font-normal text-gray-500">{cleanNum(item.expRatio).toFixed(digits)}% →</span>{out.expRatio.toFixed(digits)}%</span>
+          </div>
+          {extraQty !== 0 && <div className="mt-1.5 text-[10px] text-gray-500">'추가' {extraQty > 0 ? '+' : ''}{extraQty} 포함</div>}
+          {maxAddLink[item.id] && <div className="mt-1 text-[10px] text-amber-300/80">추가 가능 연동 중 — 적용 뒤 '추가' 수량이 잔액에 맞춰 다시 바뀔 수 있습니다</div>}
+          <div className="mt-1.5 border-t border-gray-700 pt-1 text-[10px] text-gray-500">Enter로 표에 적용 · 금액 + 매수 / − 매도 (종목 기준)</div>
+        </div>
+      </RebalPreviewBubble>
+    );
+  };
 
   useEffect(() => {
     if (settings.mode === 'deposit-only') {
@@ -1614,8 +1701,13 @@ export default function RebalancingPanel({
                               <input type="text" data-col="targetRatio" data-item-id={item.id} className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-blue-400 ${textColor} ${ratioMuted ? 'opacity-40 focus:opacity-100' : ''} ${cellLocked ? 'cursor-pointer focus:bg-amber-900/10' : 'focus:bg-blue-900/20'}`}
                                 value={displayVal}
                                 readOnly={ratioReadOnly}
-                                onChange={e => { if (!ratioReadOnly) setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); }}
+                                onChange={e => {
+                                  if (ratioReadOnly) return;
+                                  setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value }));
+                                  if (!isSavings) scheduleDraftPreview(item.id, 'targetRatio', e.target.value, e.currentTarget);
+                                }}
                                 onBlur={e => {
+                                  clearDraftPreview();
                                   if (ratioReadOnly) return;
                                   // ⚠️ 변경 판정은 시세 파생 baseVal이 아니라 슬롯 원본 slotVal로 한다 —
                                   // 라이브 미러에선 baseVal이 현재비중이라 포커스~blur 사이 시세가 움직이면
@@ -1651,7 +1743,7 @@ export default function RebalancingPanel({
                                   if (e.key === 'Enter') e.target.blur();
                                   handleTableKeyDown(e, 'targetRatio');
                                 }}
-                                title={ratioDisabled ? "투자선택이 '목표금액'이라 목표비중은 비활성입니다 (수량은 목표금액으로 계산)" : cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : slotRead.inherited ? `'${RATIO_SLOT_LABEL[slotRead.field] || slotRead.field}'에서 이어받은 목표비중입니다 — 이 칸에 직접 입력하면 현재 투자선택 전용 값으로 고정됩니다` : undefined}
+                                title={draftPreview?.id === item.id && draftPreview.col === 'targetRatio' ? undefined : ratioDisabled ? "투자선택이 '목표금액'이라 목표비중은 비활성입니다 (수량은 목표금액으로 계산)" : cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : slotRead.inherited ? `'${RATIO_SLOT_LABEL[slotRead.field] || slotRead.field}'에서 이어받은 목표비중입니다 — 이 칸에 직접 입력하면 현재 투자선택 전용 값으로 고정됩니다` : undefined}
                               />
                               {showResetIcon && !ratioDisabled && (
                                 <button
@@ -1765,7 +1857,7 @@ export default function RebalancingPanel({
                                 value={displayAmt}
                                 placeholder={hintText}
                                 readOnly={amountDisabled || readOnly}
-                                title={amountDisabled
+                                title={draftPreview?.id === item.id && draftPreview.col === 'targetAmount' ? undefined : amountDisabled
                                   ? "투자선택이 목표비중 기준이라 이 열은 비활성입니다 — '투자선택'을 '목표금액'으로 바꾸면 이 금액이 수량을 만듭니다"
                                   : isAmtMirror
                                     ? '라이브 미러 추종 중 — 목표금액 = 현재 평가금(매매 0). 직접 입력하면 이 종목만 수동 고정'
@@ -1780,6 +1872,7 @@ export default function RebalancingPanel({
                                   const parts = cleaned.split('.');
                                   const raw = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
                                   setEditingTargetAmount(prev => ({ ...prev, [item.id]: raw }));
+                                  scheduleDraftPreview(item.id, 'targetAmount', raw, e.currentTarget);
                                 }}
                                 onFocus={e => {
                                   if (amountDisabled) { e.target.blur(); return; }
@@ -1788,6 +1881,7 @@ export default function RebalancingPanel({
                                   e.target.select();
                                 }}
                                 onBlur={e => {
+                                  clearDraftPreview();
                                   if (amountDisabled) return;
                                   commitAmt(e.target.value);
                                   setEditingTargetAmount(prev => { const n = { ...prev }; delete n[item.id]; return n; });
@@ -2006,6 +2100,7 @@ export default function RebalancingPanel({
               </tfoot>
             </table>
           </div>
+          {renderDraftPreview()}
           {/* ⚠️ 하단 요약(투자가능금액·매수금액·잔액)과 퇴직연금 D/S 바는 표 **바깥**에 둔다 —
               가로 스크롤 컨테이너(overflow-x-auto) 밖이라 열 구성·가로 스크롤과 완전히 무관하다.
               과거엔 요약이 '실 구매비용' 열의 colSpan td 안에 있어 ① 그 열을 숨기면 요약이 통째로

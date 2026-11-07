@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio, depositRowEval, depositKrwTotalOf, ledgerRowsWithRunningSum, sortLedgerRows, isManualCashRow, manualCashEval, MANUAL_CASH_CATEGORY } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 import { groupCategoryOf, userCategoryList, userCategoryNames, sharedUserCategoryMap } from '../userCategory';
+import { rebalCapitalBase, rebalRowOutcome } from '../rebalPreview';
 
 export function usePortfolioData({
   portfolio,
@@ -100,13 +101,14 @@ export function usePortfolioData({
 
   const rebalanceData = useMemo(() => {
     const rebalFxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-    const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-    const nativeTotalEval = rebalFxRate > 1 ? totals.totalEval / rebalFxRate : totals.totalEval;
-    const overallExp = nativeTotalEval + cleanNum(settings.amount);
-    const useDeposit = settings.useDepositAmount != null
-      ? Math.min(Math.max(0, cleanNum(settings.useDepositAmount)), depositAmount)
-      : depositAmount;
-    const allocBase = cleanNum(settings.amount) + useDeposit;
+    // ⚠️ 자금 축·수량 산식은 rebalPreview.ts 하나 — 목표금액·목표비중 칸의 입력 중 말풍선이 같은 함수를 부른다.
+    const { overallExp, allocBase } = rebalCapitalBase({
+      totalEval: totals.totalEval,
+      fx: rebalFxRate,
+      amount: cleanNum(settings.amount),
+      depositAmount: cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0),
+      useDepositAmount: settings.useDepositAmount != null ? cleanNum(settings.useDepositAmount) : null,
+    });
     // 투자선택(settings.mode) = 'rebalance' | 'accumulate' | 'targetAmount'
     // ⚠️ 'targetAmount'만 수량을 금액에서 뽑는다. 자금 축(총평가금 기준·예수금 전액)은 리밸런싱과 동일.
     // ⚠️ 비-금액 모드의 분기는 `=== 'rebalance'` 그대로 둔다 — 마이그레이션 전 레거시 값
@@ -183,8 +185,8 @@ export function usePortfolioData({
       //    (curEval + allocBase×비중). 이래야 힌트를 그대로 입력해도 수량이 1주도 바뀌지 않는다
       //    (두 모드 모두 대수적 항등). 적립식에 레벨 식(overallExp×비중)만 쓰면 힌트를 옮겨 적는 순간
       //    수량이 전혀 달라져 사용자가 '금액을 넣으면 값이 튄다'고 느낀다.
-      // ⚠️ `price > 0` 가드는 반드시 바깥에 유지 — 기준가 미로드 펀드에서 Infinity/NaN이 cost·expEval·
-      //    rebalBalance·maxAdd를 거쳐 rebalExtraQty(계좌별로 Drive에 저장됨)까지 오염된다.
+      // ⚠️ `price > 0` 가드는 rebalActionQty 안에 있다(지우지 말 것) — 기준가 미로드 펀드에서 Infinity/NaN이
+      //    cost·expEval·rebalBalance·maxAdd를 거쳐 rebalExtraQty(계좌별로 Drive에 저장됨)까지 오염된다.
       // ⚠️ 타입까지 본다 — String(x).trim() !== '' 만으로는 손상된 Drive 값(true/객체/'abc')이
       //    전부 '입력됨'으로 통과하고 cleanNum이 그걸 0으로 만들어 **조용히 전량 매도**가 된다.
       const rawTargetAmount = item.targetAmount;
@@ -209,15 +211,12 @@ export function usePortfolioData({
       //    금액이 입력돼 있어도 무시하고 목표비중이 적용된다 — 사용자가 정한 규약이다.
       //    금액 미입력 행은 effectiveTargetAmount가 힌트(=비중대로 도달하는 평가금)라
       //    '목표금액' 모드에서도 리밸런싱과 **완전히 같은 수량**이 나온다(대수적 항등).
-      let action = price > 0
-        ? (isAmountMode
-          ? Math.trunc((effectiveTargetAmount - curEval) / price)
-          : (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((allocBase * tRatio) / price)))
-        : 0;
-      const extraQty = rebalExtraQty[item.id] || 0;
-      const expEval = (qty + action + extraQty) * price;
-      const cost = action * price;
-      const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
+      const { action, cost, expEval, expRatio } = rebalRowOutcome({
+        mode: settings.mode, price, qty, curEval, overallExp, allocBase,
+        extraQty: rebalExtraQty[item.id] || 0,
+        ratio: effectiveTargetRatio,
+        amount: effectiveTargetAmount,
+      });
       return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio, returnRate, hasTargetAmount, isAmtLiveMirror, targetAmountHint, effectiveTargetAmount };
     });
     if (rebalanceSortConfig.key === 'code-global') {
