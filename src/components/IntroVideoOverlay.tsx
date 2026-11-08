@@ -1,14 +1,14 @@
 // @ts-nocheck
 // 인트로 영상 — 로그인·PIN 뒤 계좌 로딩 중 전체 화면 재생. 로딩 표시는 가운데 팝업 대신
-// 좌측 상단 진행 막대(클릭 = 영상 정지 + 대시보드)와 우측 상단 작은 글씨로 한다. 색은 영상(검정 바탕 · 코랄 레드 · 고정폭 글씨)에 맞춘다.
+// 좌측 상단 진행 막대(클릭 = 영상 정지 + 대시보드)와 우측 상단 작은 글씨로 한다. 바탕은 검정 · 고정폭 글씨, 강조색은 그날 영상의 색.
+// 영상은 두 편을 하루씩 번갈아(introVideoFor) — 뜰 때 한 번 고르고, 재생 중 자정이 지나도 바꾸지 않는다.
 // Enter·Esc·영상 끝 → onClose(로딩이 남았으면 App이 기존 로딩 팝업을 띄운다), 막대 클릭 → onSkipToDashboard.
 import React, { useEffect, useRef, useState } from 'react';
 import { Z } from '../design';
-import { INTRO_VIDEO_SRC, INTRO_VOLUME, INTRO_START_TIMEOUT_MS, bootProgressRatio, ratchetProgress, introStatusText, introKeyAction } from '../introVideo';
+import { INTRO_VOLUME, INTRO_START_TIMEOUT_MS, introVideoFor, bootProgressRatio, ratchetProgress, introStatusText, introKeyAction } from '../introVideo';
 
 const C = {
   bg: '#060606',
-  coral: '#FF494D',
   ink: '#F3F1EF',
   mute: '#8A8990',
   dim: '#5E5D63',
@@ -24,6 +24,7 @@ const KEYFRAMES = `
 `;
 
 export default function IntroVideoOverlay({ histPhase = 'loading', histProgress = { done: 0, total: 0 }, histPartial = false, onClose, onSkipToDashboard }) {
+  const [video] = useState(() => introVideoFor(new Date()));
   const videoRef = useRef(null);
   const mountAtRef = useRef(Date.now());
   const startedRef = useRef(false);
@@ -92,10 +93,10 @@ export default function IntroVideoOverlay({ histPhase = 'loading', histProgress 
       <style dangerouslySetInnerHTML={{ __html: KEYFRAMES }} />
       <video
         ref={videoRef}
-        src={INTRO_VIDEO_SRC}
+        src={video.src}
         playsInline
         preload="auto"
-        aria-label="노민파이 인트로 영상"
+        aria-label={video.label}
         onPlaying={() => { startedRef.current = true; }}
         onEnded={() => finish('close')}
         onError={() => finish('close')}
@@ -111,13 +112,13 @@ export default function IntroVideoOverlay({ histPhase = 'loading', histProgress 
         className="absolute text-left font-mono"
         style={{
           top: 16, left: 16, width: 'min(280px, calc(58vw - 16px))', padding: '9px 12px 10px',
-          background: C.panel, border: `1px solid ${hover ? 'rgba(255, 73, 77, 0.5)' : C.edge}`, borderRadius: 6,
+          background: C.panel, border: `1px solid ${hover ? `rgba(${video.accentRgb}, 0.5)` : C.edge}`, borderRadius: 6,
           backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', cursor: 'pointer', transition: 'border-color .2s',
         }}
       >
         <div className="flex items-baseline justify-between gap-2" style={{ fontSize: 10, letterSpacing: '0.18em' }}>
           <span className="truncate">
-            <span style={{ color: C.coral }}>{ready ? 'READY' : 'LOADING'}</span>
+            <span style={{ color: video.accent }}>{ready ? 'READY' : 'LOADING'}</span>
             <span className="hidden sm:inline"><span style={{ color: C.dim }}> / </span><span style={{ color: C.mute }}>ASSET DATA</span></span>
           </span>
           <span style={{ color: C.ink, letterSpacing: '0.06em' }}>{pct}%</span>
@@ -126,7 +127,7 @@ export default function IntroVideoOverlay({ histPhase = 'loading', histProgress 
           <div
             style={{
               position: 'relative', width: `${pct}%`, height: '100%', overflow: 'hidden', borderRadius: 2,
-              background: `linear-gradient(90deg, ${C.coral}, #FF7A6B)`, boxShadow: '0 0 8px rgba(255, 73, 77, 0.55)',
+              background: `linear-gradient(90deg, ${video.accent}, ${video.accentTo})`, boxShadow: `0 0 8px rgba(${video.accentRgb}, 0.55)`,
               transition: 'width .45s ease-out', animation: ready ? 'introReady 1.6s ease-in-out infinite' : 'none',
             }}
           >

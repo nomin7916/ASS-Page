@@ -28,7 +28,7 @@ src/
 ├── brazilNotes.ts       # 브라질 정치 메모 기본값(빈 배열) + readBrazilNotes 읽기 함수
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
-├── introVideo.ts        # 인트로 영상(public/intro) 진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro)
+├── introVideo.ts        # 인트로 영상(public/intro) 2편(INTRO_VIDEOS) 하루씩 번갈아(introVideoFor — 현지 날짜, 저장소 없음)·진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro · 영상 음량은 −22.3 LUFS로 맞춰 INTRO_VOLUME 하나)
 ├── apiAuth.ts           # /api/… fetch 관문(로그인 토큰 탑재·401 재발급 1회·별도 창 토큰 전달) (⚠️ import 0 — verify:api-auth)
 ├── sessionKeepAlive.ts  # 로그인 유지: 비활동 로그아웃(4시간)·조작 목록·토큰 미리 받기(40분) 판정·별도 창 활동/토큰 중계 (⚠️ import 0 — verify:session)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
@@ -69,7 +69,7 @@ src/
     ├── CashTransferModal.tsx    # 현금(예수금) 계좌 간 이관 모달(원금 반영 선택, z=1070)
     ├── CustomDatePicker.tsx      # 날짜 선택기
     ├── LoadingOverlay.tsx        # 앱 시작 블로킹 오버레이 (z-1100) — 인트로 재생 중엔 숨김
-    ├── IntroVideoOverlay.tsx     # 로그인 뒤 로딩 중 인트로 영상(페이지당 1회·impersonation 제외) · 좌상단 막대 클릭=대시보드 · Enter/Esc=영상만 닫기
+    ├── IntroVideoOverlay.tsx     # 로그인 뒤 로딩 중 인트로 영상(페이지당 1회·impersonation 제외) · 뜰 때 그날 영상 하나 고름(강조색도 영상 것) · 좌상단 막대 클릭=대시보드 · Enter/Esc=영상만 닫기
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
     ├── LoginGate.tsx             # 로그인 / PIN 인증 게이트
     ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회·분배금 열) · 자동 '보유종목' 가상 그룹(저장 금지 — 정본 portfolios, 같은 종목은 한 줄 + 보유 계좌 칩)

@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-11-08 (2) — [부팅] 인트로 영상 2편 하루씩 번갈아 — 새 모션 영상 'flow-v1'(60초) 추가
+
+**대상 파일**: `public/intro/nominfi-intro-flow-v1.mp4`(신규 60초 7.8MB) · `src/introVideo.ts`(INTRO_VIDEOS·introVideoFor) ·
+`src/components/IntroVideoOverlay.tsx` · `scripts/verify-intro.mjs` · `CLAUDE.md`
+
+> 모션그래픽을 추가합니다. 1분짜리 영상을 추가 합니다. 이전에 있는 영상과 이번 영상을 하루 단위로 인트로 영상을 번갈아 가면서 사용
+
+- 원본: claude.ai 아티팩트 「NominFi × 돈의 흐름에 올라타라 — 인트로 모션 v1」(캔버스 모션 · 16:9 120박 60초 · 소리는 WebAudio 합성).
+  아티팩트의 렌더 훅(`?render=1` · `__nf.seek(t)` · `__nf.renderAudio('wide')`)으로 헤드리스 Chromium에서 30fps 1,800장을 캡처 →
+  ffmpeg H.264 High@4.0 1920×1080 30fps(v3와 같은 규격) + AAC 192k, faststart. 소리는 −21.9 → −22.3 LUFS로 v3(−22.3)와 같게 맞춰
+  음량 상수(INTRO_VOLUME 20%) 하나로 두 영상 체감이 같다.
+- 번갈아: `introVideoFor(날짜)` = 현지 날짜로 센 일수 짝/홀 — 기준일 2026-11-08 = 새 영상, 11-09 = 기존 v3, 11-10 = 새 영상 …
+  저장소를 쓰지 않는다(다중 계정 정책 — 날짜만으로 정해진다). 영상은 뜰 때 한 번 고르고 재생 중 자정이 지나도 바꾸지 않는다.
+- 진행 막대·LOADING 글씨 강조색은 그날 영상 색(새 영상 = 네온 초록 #39FF14, v3 = 코랄 #FF494D).
+- 검증: `verify:intro` 69건(하루씩 번갈아 #D1~#D10 — 800일 연속·자정 경계·기준일 이전·잘못된 날짜, 영상 2편 파일·faststart, #C12·#C13) ·
+  변이 2종(번갈아 끄기·시각 기준으로 세기) 모두 검출 · gate(build 실행 불가 — node_modules 없음).
+
 ## 2026-11-08 — [리밸런싱] 말풍선 줄이기 + 적립식 '1주 최소 비중'
 
 **대상 파일**: `src/rebalPreview.ts`(minRatioForOneShare · flowSign 삭제) · `src/components/RebalancingPanel.tsx` · `scripts/verify-rebal-preview.mjs` · `CLAUDE.md`

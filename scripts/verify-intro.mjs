@@ -23,14 +23,31 @@ catch (e) {
 }
 
 const introSrc = read('src/introVideo.ts');
-const srcMatch = introSrc.match(/INTRO_VIDEO_SRC\s*=\s*'([^']+)'/);
-const videoUrl = srcMatch ? srcMatch[1] : null;
+const videoUrls = [...introSrc.matchAll(/\bsrc:\s*'([^']+)'/g)].map(m => m[1]);
 
 if (I) {
   const { bootProgressRatio: ratio, ratchetProgress: ratchet, introStatusText: status, introKeyAction: key, INTRO_KEY_GRACE_MS: GRACE } = I;
 
   console.log('\n── 파트⓪ 음량 ──');
   ok(`#V1 재생 음량은 20% 이하(사용자 지시 2026-11-02 — 크면 놀란다) (got ${I.INTRO_VOLUME})`, typeof I.INTRO_VOLUME === 'number' && I.INTRO_VOLUME > 0 && I.INTRO_VOLUME <= 0.2);
+
+  console.log('\n── 파트⓪-2 영상 두 편을 하루씩 번갈아(사용자 요청 2026-11-08) ──');
+  const { INTRO_VIDEOS: VIDS, introVideoIndexFor: idxFor, introVideoFor: vidFor } = I;
+  const at = (y, m, d, h = 12, mi = 0) => new Date(y, m - 1, d, h, mi);
+  ok(`#D1 영상은 두 편, 주소·강조색이 모두 다르다 (${VIDS.length}편)`, VIDS.length === 2
+    && new Set(VIDS.map(v => v.src)).size === 2 && new Set(VIDS.map(v => v.accent)).size === 2 && new Set(VIDS.map(v => v.id)).size === 2);
+  ok('#D2 각 영상은 주소·이름·강조색(#rrggbb ×2, "r, g, b")을 갖는다', VIDS.every(v => /^\/intro\/[\w.-]+\.mp4$/.test(v.src)
+    && v.label && /^#[0-9A-Fa-f]{6}$/.test(v.accent) && /^#[0-9A-Fa-f]{6}$/.test(v.accentTo) && /^\d{1,3}, \d{1,3}, \d{1,3}$/.test(v.accentRgb)));
+  ok('#D3 강조색 accentRgb = accent 와 같은 색', VIDS.every(v => v.accentRgb === [1, 3, 5].map(i => parseInt(v.accent.slice(i, i + 2), 16)).join(', ')));
+  eq('#D4 기준일 2026-11-08 = 새 영상(flow), 11-09 = 기존(v3), 11-10 = flow', [vidFor(at(2026, 11, 8)).id, vidFor(at(2026, 11, 9)).id, vidFor(at(2026, 11, 10)).id], ['flow', 'v3', 'flow']);
+  ok('#D5 같은 날은 몇 시든 같은 영상(00:00 · 12:00 · 23:59)', [0, 12, 23].every(h => idxFor(at(2026, 12, 3, h, h === 23 ? 59 : 0)) === idxFor(at(2026, 12, 3, 0, 0))));
+  ok('#D6 자정이 지나면 바뀐다(23:59 → 다음 날 00:00)', idxFor(at(2026, 12, 3, 23, 59)) !== idxFor(at(2026, 12, 4, 0, 0)));
+  let alt = true;
+  for (let i = 0; i < 800; i++) { const a = at(2026, 1, 1 + i), b = at(2026, 1, 2 + i); if (idxFor(a) === idxFor(b)) { alt = false; console.log(`    × ${a.toDateString()}`); break; } }
+  ok('#D7 800일 연속 하루씩 번갈아(월말·연말·윤년·서머타임 무관 — 현지 날짜로 센다)', alt);
+  eq('#D8 기준일 이전도 번갈아(음수 나머지)', [idxFor(at(2026, 11, 7)), idxFor(at(2026, 11, 6)), idxFor(at(2025, 1, 1)) === idxFor(at(2025, 1, 3))], [1, 0, true]);
+  eq('#D9 잘못된 날짜 → 첫 영상(오류 없이)', [idxFor(new Date(NaN)), idxFor(null), idxFor(undefined), vidFor(new Date(NaN)).id], [0, 0, 0, 'flow']);
+  eq('#D10 영상 수가 1이면 늘 0', [idxFor(at(2026, 11, 9), 1), idxFor(at(2026, 11, 10), 0)], [0, 0]);
 
   console.log('\n── 파트① 진행 막대 비율 ──');
   eq('#P1 계좌 로드 시작 = 0', ratio('loading', { done: 0, total: 0 }, 0), 0);
@@ -69,11 +86,12 @@ if (I) {
 }
 
 console.log('\n── 파트⑤ 영상 파일 ──');
-ok('#F1 INTRO_VIDEO_SRC는 사이트 루트 경로(/intro/…mp4)', !!videoUrl && /^\/intro\/[\w.-]+\.mp4$/.test(videoUrl));
-const videoPath = videoUrl ? join(ROOT, 'public', videoUrl.slice(1)) : null;
-const hasVideo = !!videoPath && existsSync(videoPath);
-ok(`#F2 public${videoUrl || '/?'} 파일이 있다`, hasVideo);
-if (hasVideo) {
+ok(`#F1 영상 주소 2개, 모두 사이트 루트 경로(/intro/…mp4) (${videoUrls.join(' · ')})`, videoUrls.length === 2 && videoUrls.every(u => /^\/intro\/[\w.-]+\.mp4$/.test(u)));
+for (const videoUrl of videoUrls) {
+  const videoPath = join(ROOT, 'public', videoUrl.slice(1));
+  const hasVideo = existsSync(videoPath);
+  ok(`#F2 public${videoUrl} 파일이 있다`, hasVideo);
+  if (!hasVideo) continue;
   const size = statSync(videoPath).size;
   ok(`#F3 크기 1MB~20MB (${(size / 1048576).toFixed(1)}MB)`, size > 1048576 && size < 20 * 1048576);
   // moov가 mdat보다 앞(faststart) — 뒤에 있으면 브라우저가 파일을 다 받기 전엔 재생을 시작하지 못한다(로딩 대기용이라 치명적).
@@ -112,6 +130,11 @@ ok('#C9 벨 알림·브라우저 저장소 없음(알림 최소화·다중 계�
 ok('#C10 한 번만 닫힌다(closedRef)', /if\s*\(closedRef\.current\)\s*return;/.test(comp));
 ok('#C11 음량(INTRO_VOLUME)을 import해 첫 play() 전에 건다', /import\s*\{[^}]*\bINTRO_VOLUME\b[^}]*\}\s*from\s*'\.\.\/introVideo'/.test(comp)
   && /v\.volume\s*=\s*INTRO_VOLUME;\s*v\.play\(\)/.test(comp));
+ok('#C12 영상은 뜰 때 한 번 고른다(useState 초기값 = introVideoFor(new Date())) — 재생 중 자정에 바뀌지 않게',
+  /import\s*\{[^}]*\bintroVideoFor\b[^}]*\}\s*from\s*'\.\.\/introVideo'/.test(comp)
+  && /const \[video\] = useState\(\(\) => introVideoFor\(new Date\(\)\)\);/.test(comp) && /src=\{video\.src\}/.test(comp));
+ok('#C13 강조색은 고른 영상 것(코랄 고정값이 남아 있지 않다)', /video\.accent\b/.test(comp) && /video\.accentTo\b/.test(comp) && /video\.accentRgb\b/.test(comp)
+  && !/#FF494D|#FF7A6B|255,\s*73,\s*77/i.test(comp));
 
 console.log('\n── 파트⑦ App 배선 ──');
 const app = stripComments(read('src/App.tsx'));
