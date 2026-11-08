@@ -7,7 +7,7 @@ import { rowHighlightOf, nextRowHighlight } from '../watchlistGroups';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isManualCashRow, manualCashEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources, blendWithDarkBg } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { ladderWinId } from '../cardWindow';
-import { rebalCapitalBase, rebalRowOutcome, parseDraftNumber, flowSign, REBAL_PREVIEW_DELAY_MS, tradeSideLabel } from '../rebalPreview';
+import { rebalCapitalBase, rebalRowOutcome, parseDraftNumber, REBAL_PREVIEW_DELAY_MS, tradeSideLabel, minRatioForOneShare } from '../rebalPreview';
 import RebalPreviewBubble from './RebalPreviewBubble';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import CardExpandButton from './CardExpandButton';
@@ -625,8 +625,8 @@ export default function RebalancingPanel({
   const rebalRemaining = Math.max(0, rebalBalance);
 
   // 입력 중 미리보기 말풍선의 내용 — 칸에 친 값이 Enter로 적용됐을 때 그 행에 나올 값.
-  // ⚠️ 실 구매비용은 **말풍선에서만 부호를 뒤집는다**(종목 입장: 매수 +, 매도 −). 표 열(displayAdjustedCost,
-  //    계좌 현금 입장: 매수 −)은 그대로 둔다 — 사용자 요청(2026-11-07): 비중을 높이면 종목 금액이 늘어나니 +.
+  // ⚠️ 말풍선은 '실 구매비용' 대신 종목 입장 매수금액/매도금액(부호 없음)을 보인다. 표 열(displayAdjustedCost,
+  //    계좌 현금 입장: 매수 −)은 그대로 둔다 — 사용자 요청(2026-11-07).
   const renderDraftPreview = () => {
     if (!draftPreview || !draftPreview.anchor?.isConnected) return null;
     const item = rebalanceData.find(d => d.id === draftPreview.id);
@@ -662,38 +662,34 @@ export default function RebalancingPanel({
       curEval, overallExp, allocBase, extraQty, ratio, amount,
     });
     const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
-    const money = (n) => (isOv ? `${fmtUSD(n)} (${formatCurrency(n * fx)})` : formatCurrency(n));
-    const digits = isOv ? 2 : 1;
-    const flowText = `${flowSign(out.flow)}${money(Math.abs(out.flow))}`;
-    const flowColor = out.flow > 0 ? 'text-green-400' : out.flow < 0 ? 'text-red-400' : 'text-gray-400';
-    const actColor = out.totalAction > 0 ? 'text-green-400' : out.totalAction < 0 ? 'text-red-400' : 'text-gray-400';
-    const inputText = isAmt
-      ? (typed != null ? `목표금액 ${isOv ? fmtUSD(typed) : formatCurrency(typed)}` : '목표금액 비움 → 목표비중 기준')
-      : `목표비중 ${typed != null ? typed : 0}%`;
-    const big = 'text-sm font-bold';
-    const small = 'font-bold';
-    const sideTag = (n) => {
-      const side = tradeSideLabel(n);
-      return side ? <span className={n > 0 ? 'text-green-400' : 'text-red-400'}>({side})</span> : null;
-    };
+    const money = (n) => (isOv ? fmtUSD(n) : formatCurrency(n));
+    // 방향은 칸 이름이 말한다 — 값은 부호 없이 크기만(사용자 요청 2026-11-07: 짧게, '실 구매비용' 대신 매수금액·매도금액).
+    const side = tradeSideLabel(out.totalAction);
+    const sideColor = out.totalAction > 0 ? 'text-green-400' : 'text-red-400';
+    // 적립식에서 친 비중으로 0주면 1주가 되는 최소 비중을 함께 보인다(사용자 요청 2026-11-08).
+    const minRatio = !isAmt && !isLevelMode && out.action === 0 && cleanNum(typed) > 0
+      ? minRatioForOneShare({ price: cleanNum(item.currentPrice), allocBase })
+      : null;
     return (
       <RebalPreviewBubble anchor={draftPreview.anchor}>
-        <div className={`min-w-[210px] transition-opacity ${pending ? 'opacity-50' : ''}`}>
-          <div className="mb-1.5 text-[11px] text-gray-400">미리보기 · <span className="text-gray-200">{inputText}</span></div>
-          <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-1">
-            <span className="text-gray-400">수량{sideTag(out.totalAction)}</span>
-            <span className={`text-right ${small} ${actColor}`}>{(out.totalAction > 0 ? '+' : '') + out.totalAction}<span className="ml-1 font-normal text-gray-500">→ {formatNumber(cleanNum(item.quantity) + out.totalAction)}</span></span>
-            <span className="text-gray-400">실 구매비용{sideTag(out.flow)}</span>
-            <span className={`text-right ${isAmt ? small : big} ${flowColor}`}>{flowText}</span>
-            <span className="text-gray-400">예상평가금</span>
-            <span className={`text-right ${isAmt ? small : big} text-yellow-500`}>{money(out.expEval)}</span>
-            <span className="text-gray-400">예상비중</span>
-            <span className={`text-right ${isAmt ? big : small} text-yellow-500`}><span className="mr-1 font-normal text-gray-500">{cleanNum(item.expRatio).toFixed(digits)}% →</span>{out.expRatio.toFixed(digits)}%</span>
-          </div>
-          {extraQty !== 0 && <div className="mt-1.5 text-[10px] text-gray-500">'추가' {extraQty > 0 ? '+' : ''}{extraQty} 포함</div>}
-          {maxAddLink[item.id] && <div className="mt-1 text-[10px] text-amber-300/80">추가 가능 연동 중 — 적용 뒤 '추가' 수량이 잔액에 맞춰 다시 바뀔 수 있습니다</div>}
-          <div className="mt-1.5 border-t border-gray-700 pt-1 text-[10px] text-gray-500">Enter로 표에 적용 · + 매수 / − 매도</div>
+        <div className={`grid grid-cols-[auto_auto] items-baseline gap-x-4 gap-y-0.5 transition-opacity ${pending ? 'opacity-50' : ''}`}>
+          <span className="text-gray-400">수량{side && <span className={sideColor}>({side})</span>}</span>
+          <span className={`text-right font-bold ${side ? sideColor : 'text-gray-400'}`}>{formatNumber(Math.abs(out.totalAction))}</span>
+          {side && <>
+            <span className="text-gray-400">{side}금액</span>
+            <span className={`text-right font-bold ${sideColor}`}>{money(Math.abs(out.flow))}</span>
+          </>}
+          {minRatio != null && <>
+            <span className="text-gray-400">1주 최소 비중</span>
+            <span className={`text-right font-bold ${minRatio > 100 ? 'text-red-400' : 'text-sky-300'}`}>{minRatio.toFixed(2)}%</span>
+          </>}
+          <span className="text-gray-400">예상평가금</span>
+          <span className="text-right font-bold text-yellow-500">{money(out.expEval)}</span>
+          <span className="text-gray-400">예상비중</span>
+          <span className="text-right font-bold text-yellow-500">{out.expRatio.toFixed(isOv ? 2 : 1)}%</span>
         </div>
+        {extraQty !== 0 && <div className="mt-1 text-[10px] text-gray-500">추가 {extraQty} 포함</div>}
+        {maxAddLink[item.id] && <div className="mt-0.5 text-[10px] text-amber-300/80">추가 연동 — 적용 뒤 바뀔 수 있음</div>}
       </RebalPreviewBubble>
     );
   };

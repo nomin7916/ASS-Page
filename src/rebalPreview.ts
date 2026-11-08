@@ -45,8 +45,19 @@ export function parseDraftNumber(raw) {
   return Number.isFinite(n) ? n : null;
 }
 
-// 말풍선 금액 부호(종목 입장) — 비중을 높이면(매수) +, 줄이면(매도) −. 0은 부호 없음.
-export const flowSign = (n) => (n > 0 ? '+' : n < 0 ? '-' : '');
-
-// 말풍선 칸 이름 꼬리 — 수량·실 구매비용이 + 이면 '매수', − 이면 '매도', 0이면 없음(사용자 요청 2026-11-07: '수량(매수)').
+// 말풍선 매매 방향 — 수량이 + 이면 '매수', − 이면 '매도', 0이면 없음. 칸 이름 '수량(매수)'·'매수금액'에 쓰고
+// 금액·수량 값은 부호 없이 크기만 보인다(사용자 요청 2026-11-07: 짧게).
 export const tradeSideLabel = (n) => (n > 0 ? '매수' : n < 0 ? '매도' : '');
+
+// 적립식에서 1주를 사는 데 필요한 최소 목표비중(%) — 배분액 × 비중 ÷ 가격 ≥ 1 (사용자 요청 2026-11-08:
+// 적립금 50만 원에 10만 4천 원짜리 종목은 10%로는 0주라, 1주가 되는 비중을 알려 달라).
+// 비중 칸 자릿수(소수 둘째 자리)로 올림한 뒤 **실제 수량식으로 1주가 되는지** 확인한다(부동소수 경계).
+// 가격·배분액이 없으면 null. 100%를 넘으면 그대로 돌려준다(배분액 전부로도 1주를 못 산다는 뜻).
+export function minRatioForOneShare({ price, allocBase }) {
+  if (!(price > 0) || !(allocBase > 0)) return null;
+  let r = Math.ceil((price / allocBase) * 10000 - 1e-9) / 100;
+  for (let i = 0; i < 3 && rebalActionQty({ mode: 'accumulate', price, curEval: 0, overallExp: 0, allocBase, tRatio: r / 100 }) < 1; i++) {
+    r = Math.round((r + 0.01) * 100) / 100;
+  }
+  return r;
+}

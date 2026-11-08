@@ -41,7 +41,7 @@ try {
 }
 
 if (P) {
-  const { rebalCapitalBase: FB, rebalActionQty: AQ, rebalRowOutcome: RO, parseDraftNumber: PD, flowSign: FS, REBAL_PREVIEW_DELAY_MS: DELAY, tradeSideLabel: TS } = P;
+  const { rebalCapitalBase: FB, rebalActionQty: AQ, rebalRowOutcome: RO, parseDraftNumber: PD, REBAL_PREVIEW_DELAY_MS: DELAY, tradeSideLabel: TS, minRatioForOneShare: MR } = P;
 
   eq('#1 말풍선 대기 = 0.3초 (사용자 확정)', DELAY, 300);
 
@@ -109,10 +109,30 @@ if (P) {
   eq('#19 빈 칸·점·글자만 → null(비움)', S(() => [PD(''), PD('.'), PD('  '), PD(null), PD(undefined), PD('abc')]), [null, null, null, null, null, null]);
   eq('#20 콤마·공백 섞여도 숫자', S(() => [PD('9,000,000'), PD(' 12.5 '), PD('9000000')]), [9000000, 12.5, 9000000]);
 
-  // ── 말풍선 부호 ──
-  eq('#21 종목 입장 부호: 매수 + · 매도 − · 0은 없음', S(() => [FS(625440), FS(-7922240), FS(0)]), ['+', '-', '']);
-  eq('#22 칸 이름 꼬리: + 매수 · − 매도 · 0 없음 (수량(매수) / 실 구매비용(매도))', S(() => [TS(6), TS(-76), TS(0), TS(625440), TS(-7922240)]), ['매수', '매도', '', '매수', '매도']);
-  eq('#23 스크린샷 값: 4,000,000 → 수량 −41(매도) · −₩4,273,840(매도)', S(() => { const o = RO({ ...base, amount: 4000000 }); return [o.totalAction, TS(o.totalAction), o.flow, TS(o.flow)]; }), [-41, '매도', -4273840, '매도']);
+  // ── 말풍선 매매 방향(칸 이름) — 값은 부호 없이 크기만 ──
+  eq('#22 방향: + 매수 · − 매도 · 0 없음 (수량(매수) / 매도금액)', S(() => [TS(6), TS(-76), TS(0), TS(625440), TS(-7922240)]), ['매수', '매도', '', '매수', '매도']);
+  eq('#23 스크린샷 값: 4,000,000 → 수량(매도) 41 · 매도금액 ₩4,273,840', S(() => { const o = RO({ ...base, amount: 4000000 }); return [TS(o.totalAction), Math.abs(o.totalAction), Math.abs(o.flow)]; }), ['매도', 41, 4273840]);
+
+  // ── 적립식 1주 최소 비중 (사용자 스크린샷 2026-11-08: 적립금 500,000 + 사용할 예수금 8,514, 104,240원 종목 10% → 0주) ──
+  const acc = { mode: 'accumulate', price: 104240, qty: 80, curEval: 8339200, overallExp: 0, extraQty: 0 };
+  eq('#24 스크린샷: 투자가능금 508,514 · 10% → 0주', S(() => RO({ ...acc, allocBase: 508514, ratio: 10 }).action), 0);
+  const m1 = S(() => MR({ price: 104240, allocBase: 508514 }));
+  eq('#25   └ 1주 최소 비중 20.50% (104,240 ÷ 508,514 = 20.4986%, 둘째 자리 올림)', m1, 20.5);
+  eq('#26   └ 20.50%면 실제 수량식으로 1주 · 20.49%면 0주', S(() => [RO({ ...acc, allocBase: 508514, ratio: m1 }).action, RO({ ...acc, allocBase: 508514, ratio: 20.49 }).action]), [1, 0]);
+  eq('#27 사용할 예수금 0(적립금 500,000만) → 20.85% (20.84%는 0주)', S(() => { const r = MR({ price: 104240, allocBase: 500000 }); return [r, RO({ ...acc, allocBase: 500000, ratio: r }).action, RO({ ...acc, allocBase: 500000, ratio: 20.84 }).action]; }), [20.85, 1, 0]);
+  eq('#28 나누어떨어지는 경계: 100,000 ÷ 500,000 = 20.00% (20.01%로 부풀지 않음)', S(() => MR({ price: 100000, allocBase: 500000 })), 20);
+  eq('#29 배분액보다 비싼 종목 → 100% 초과 그대로(배분액 전부로도 못 삼)', S(() => MR({ price: 600000, allocBase: 500000 })), 120);
+  eq('#30 가격·배분액 없음 → null', S(() => [MR({ price: 0, allocBase: 500000 }), MR({ price: 104240, allocBase: 0 })]), [null, null]);
+  let bad = 0;
+  for (let i = 0; i < 3000; i++) {
+    const price = Math.round(rnd() * 300000 * 100) / 100 + 1;
+    const allocBase = Math.round(rnd() * 3e6) + 1;
+    const r = MR({ price, allocBase });
+    const one = RO({ ...acc, price, allocBase, ratio: r }).action;
+    const less = RO({ ...acc, price, allocBase, ratio: Math.round((r - 0.01) * 100) / 100 }).action;
+    if (one < 1 || (r > 0.01 && less >= 1)) bad++;
+  }
+  eq('#31 무작위 3,000건 — 최소 비중이면 1주 이상, 0.01%p 낮추면 0주', bad, 0);
 }
 
 console.log('\n── 파트② 소스 가드 ──');
@@ -130,8 +150,9 @@ ok('#G2 표 계산(usePortfolioData)이 같은 함수를 import해 부른다',
   && /const \{ action, cost, expEval, expRatio \} = rebalRowOutcome\(\{/.test(pd));
 ok('#G2b 표 계산에 옛 인라인 수량식이 남아 있지 않다(두 식이 갈라지면 말풍선 ≠ 표)',
   !/Math\.trunc\(\(effectiveTargetAmount - curEval\) \/ price\)/.test(pd) && !/Math\.trunc\(\(allocBase \* tRatio\) \/ price\)/.test(pd));
-ok('#G3 패널이 rebalPreview 다섯 이름과 말풍선 컴포넌트를 import한다',
-  /import \{[^}]*\brebalCapitalBase\b[^}]*\brebalRowOutcome\b[^}]*\bparseDraftNumber\b[^}]*\bflowSign\b[^}]*\bREBAL_PREVIEW_DELAY_MS\b[^}]*\} from '\.\.\/rebalPreview';/.test(rp)
+ok('#G3 패널이 rebalPreview 여섯 이름과 말풍선 컴포넌트를 import한다',
+  ['rebalCapitalBase', 'rebalRowOutcome', 'parseDraftNumber', 'REBAL_PREVIEW_DELAY_MS', 'tradeSideLabel', 'minRatioForOneShare']
+    .every(n => new RegExp(`import \\{[^}]*\\b${n}\\b[^}]*\\} from '\\.\\./rebalPreview';`).test(rp))
   && /import RebalPreviewBubble from '\.\/RebalPreviewBubble';/.test(rp));
 ok('#G4 0.3초 대기는 상수로 — setTimeout(…, REBAL_PREVIEW_DELAY_MS)',
   /setTimeout\(\(\) => setDraftPreview\(\{ id, col, raw, anchor \}\), REBAL_PREVIEW_DELAY_MS\)/.test(rp));
@@ -141,8 +162,10 @@ ok('#G6 목표비중 칸 onChange가 말풍선을 예약한다(예적금·현금
   /setEditingRatio\(prev => \(\{ \.\.\.prev, \[item\.id\]: e\.target\.value \}\)\);\s*if \(!isSavings\) scheduleDraftPreview\(item\.id, 'targetRatio', e\.target\.value, e\.currentTarget\);/.test(rp));
 ok('#G7 두 칸 모두 blur(=Enter)에서 말풍선을 닫는다',
   (rp.match(/onBlur=\{e => \{\s*clearDraftPreview\(\);/g) || []).length === 2);
-ok('#G8 말풍선 금액은 flowSign(종목 입장) — 표 열은 계좌 입장(displayAdjustedCost = -adjustedCost) 그대로',
-  /const flowText = `\$\{flowSign\(out\.flow\)\}\$\{money\(Math\.abs\(out\.flow\)\)\}`;/.test(rp)
+ok('#G8 말풍선은 매수금액/매도금액 + 부호 없는 금액 — \'실 구매비용\' 글자 없음 · 표 열(displayAdjustedCost = -adjustedCost)은 그대로',
+  /\{side\}금액<\/span>/.test(rp)
+  && /\{money\(Math\.abs\(out\.flow\)\)\}/.test(rp)
+  && (() => { const i = rp.indexOf('const renderDraftPreview = () => {'); const body = i < 0 ? '' : rp.slice(i, rp.indexOf('\n  };', i)); return body.length > 500 && !/실 구매비용/.test(body) && !/Enter로/.test(body); })()
   && /const displayAdjustedCost = -adjustedCost;/.test(rp));
 ok('#G9 말풍선 값은 rebalCapitalBase + rebalRowOutcome로 계산한다(패널에서 식 재작성 금지)',
   /const renderDraftPreview = \(\) => \{[\s\S]*?rebalCapitalBase\(\{[\s\S]*?rebalRowOutcome\(\{[\s\S]*?<RebalPreviewBubble anchor=\{draftPreview\.anchor\}>/.test(rp)
@@ -152,11 +175,13 @@ ok('#G10 말풍선은 body 포털 + 클릭 통과',
 ok('#G11 말풍선이 떠 있는 칸은 기본 title 풍선을 끈다(두 풍선 겹침 방지)',
   /title=\{draftPreview\?\.id === item\.id && draftPreview\.col === 'targetAmount' \? undefined :/.test(rp)
   && /title=\{draftPreview\?\.id === item\.id && draftPreview\.col === 'targetRatio' \? undefined :/.test(rp));
-ok('#G13 수량·실 구매비용 칸 이름에 (매수)/(매도) — tradeSideLabel import + 두 칸 사용',
-  /import \{[^}]*\btradeSideLabel\b[^}]*\} from '\.\.\/rebalPreview';/.test(rp)
-  && /const side = tradeSideLabel\(n\);/.test(rp)
-  && /수량\{sideTag\(out\.totalAction\)\}/.test(rp)
-  && /실 구매비용\{sideTag\(out\.flow\)\}/.test(rp));
+ok('#G13 수량 칸 이름 수량(매수)/(매도) · 값은 부호 없이 크기만',
+  /const side = tradeSideLabel\(out\.totalAction\);/.test(rp)
+  && /수량\{side && <span className=\{sideColor\}>\(\{side\}\)<\/span>\}/.test(rp)
+  && /\{formatNumber\(Math\.abs\(out\.totalAction\)\)\}/.test(rp));
+ok('#G14 적립식(비-레벨 모드)·0주·비중 > 0일 때만 1주 최소 비중 — 배분액(allocBase)은 표와 같은 rebalCapitalBase 값',
+  /const minRatio = !isAmt && !isLevelMode && out\.action === 0 && cleanNum\(typed\) > 0\s*\? minRatioForOneShare\(\{ price: cleanNum\(item\.currentPrice\), allocBase \}\)/.test(rp)
+  && /1주 최소 비중<\/span>/.test(rp));
 ok('#G12 package.json에 verify:rebal-preview 등록', pkg.scripts['verify:rebal-preview'] === 'node scripts/verify-rebal-preview.mjs');
 
 console.log(`\n  총 ${pass + fail}건 — 통과 ${pass} / 실패 ${fail}`);
