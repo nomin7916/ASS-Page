@@ -1,27 +1,25 @@
 // 인트로 영상(로그인·PIN 뒤 계좌 로딩 중 재생) — 순수 로직. ⚠️ import 0 — verify:intro가 직접 import한다.
 // 영상 파일은 public/intro/ (사이트와 함께 배포). 화면은 components/IntroVideoOverlay.tsx, 배선은 App.tsx.
 
-// 영상 두 편을 하루씩 번갈아 튼다(사용자 요청 2026-11-08). 날짜는 브라우저 현지 날짜, 자정에 바뀐다.
+// 영상 목록 — ⚠️ 최신이 맨 앞(사용자 확정 2026-11-08: 기본 = 최신 · 영상 고르기 버튼도 이 순서).
+// 새 영상은 맨 앞에 한 줄 넣으면 버튼이 하나 늘어난다. name = 버튼 글씨(색 이름), added = 넣은 날(최신 순서 확인용).
 // 영상을 바꿀 때는 파일 이름도 바꾼다 — 같은 주소면 브라우저·CDN 캐시가 옛 영상을 계속 틀 수 있다.
-// accent = 진행 막대·글씨 강조색(그 영상의 색에 맞춘다). accentRgb는 같은 색의 'r, g, b'(반투명 테두리·빛번짐용).
-export type IntroVideo = { id: string; src: string; label: string; accent: string; accentTo: string; accentRgb: string };
+// accent = 진행 막대·글씨·버튼 점 강조색(그 영상의 색에 맞춘다). accentRgb는 같은 색의 'r, g, b'(반투명 테두리·빛번짐용).
+export type IntroVideo = { id: string; name: string; added: string; src: string; label: string; accent: string; accentTo: string; accentRgb: string };
 export const INTRO_VIDEOS: IntroVideo[] = [
-  { id: 'flow', src: '/intro/nominfi-intro-flow-v1.mp4', label: '노민파이 × 돈의 흐름에 올라타라 인트로 영상', accent: '#39FF14', accentTo: '#A6FF8C', accentRgb: '57, 255, 20' },
-  { id: 'v3', src: '/intro/nominfi-intro-v3.mp4', label: '노민파이 인트로 영상', accent: '#FF494D', accentTo: '#FF7A6B', accentRgb: '255, 73, 77' },
+  { id: 'flow', name: '네온형광', added: '2026-11-08', src: '/intro/nominfi-intro-flow-v1.mp4', label: '노민파이 × 돈의 흐름에 올라타라 인트로 영상', accent: '#39FF14', accentTo: '#A6FF8C', accentRgb: '57, 255, 20' },
+  { id: 'v3', name: '빨간색', added: '2026-11-02', src: '/intro/nominfi-intro-v3.mp4', label: '노민파이 인트로 영상', accent: '#FF494D', accentTo: '#FF7A6B', accentRgb: '255, 73, 77' },
 ];
 
-// 기준일(2026-11-08)에 INTRO_VIDEOS[0] — 이후 하루마다 다음 영상. 저장소를 쓰지 않는다(다중 계정 정책): 날짜만으로 정해진다.
-const INTRO_ROTATION_ANCHOR_UTC = Date.UTC(2026, 10, 8);
+// 로딩 때 처음 트는 영상: 'latest' = 최신(맨 앞) · 'random' = 무작위(영상이 많아지면 쓸 예정 — 사용자 계획 2026-11-08).
+// 저장소를 쓰지 않는다(다중 계정 정책) — 고른 영상은 그 화면에서만 유지된다.
+export const INTRO_PICK_MODE: 'latest' | 'random' = 'latest';
 
-export function introVideoIndexFor(date: Date, count: number = INTRO_VIDEOS.length): number {
-  const n = Math.max(1, Math.floor(Number(count)) || 1);
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return 0;
-  const day = Math.round((Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) - INTRO_ROTATION_ANCHOR_UTC) / 86400000);
-  return ((day % n) + n) % n;
-}
-
-export function introVideoFor(date: Date): IntroVideo {
-  return INTRO_VIDEOS[introVideoIndexFor(date)];
+export function pickIntroVideo(mode: string = INTRO_PICK_MODE, rnd: () => number = Math.random, list: IntroVideo[] = INTRO_VIDEOS): IntroVideo {
+  if (mode !== 'random' || list.length < 2) return list[0];
+  const r = Number(rnd());
+  const i = Number.isFinite(r) ? Math.floor(r * list.length) : 0;
+  return list[Math.min(list.length - 1, Math.max(0, i))];
 }
 
 // 재생 음량 — 사용자 지시 '20% 이하'(2026-11-02). v3 원본은 v2보다 약 9.4dB 작아(−22.3 vs −12.9 LUFS)

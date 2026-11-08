@@ -31,23 +31,23 @@ if (I) {
   console.log('\n── 파트⓪ 음량 ──');
   ok(`#V1 재생 음량은 20% 이하(사용자 지시 2026-11-02 — 크면 놀란다) (got ${I.INTRO_VOLUME})`, typeof I.INTRO_VOLUME === 'number' && I.INTRO_VOLUME > 0 && I.INTRO_VOLUME <= 0.2);
 
-  console.log('\n── 파트⓪-2 영상 두 편을 하루씩 번갈아(사용자 요청 2026-11-08) ──');
-  const { INTRO_VIDEOS: VIDS, introVideoIndexFor: idxFor, introVideoFor: vidFor } = I;
-  const at = (y, m, d, h = 12, mi = 0) => new Date(y, m - 1, d, h, mi);
-  ok(`#D1 영상은 두 편, 주소·강조색이 모두 다르다 (${VIDS.length}편)`, VIDS.length === 2
-    && new Set(VIDS.map(v => v.src)).size === 2 && new Set(VIDS.map(v => v.accent)).size === 2 && new Set(VIDS.map(v => v.id)).size === 2);
-  ok('#D2 각 영상은 주소·이름·강조색(#rrggbb ×2, "r, g, b")을 갖는다', VIDS.every(v => /^\/intro\/[\w.-]+\.mp4$/.test(v.src)
-    && v.label && /^#[0-9A-Fa-f]{6}$/.test(v.accent) && /^#[0-9A-Fa-f]{6}$/.test(v.accentTo) && /^\d{1,3}, \d{1,3}, \d{1,3}$/.test(v.accentRgb)));
+  console.log('\n── 파트⓪-2 영상 목록 · 기본 = 최신 · 고르기 버튼(사용자 확정 2026-11-08) ──');
+  const { INTRO_VIDEOS: VIDS, INTRO_PICK_MODE: MODE, pickIntroVideo: pick } = I;
+  const uniq = (k) => new Set(VIDS.map(v => v[k])).size === VIDS.length;
+  ok(`#D1 영상 1편 이상, id·주소·버튼 이름이 모두 다르다 (${VIDS.length}편: ${VIDS.map(v => v.name).join(' · ')})`, VIDS.length >= 1 && uniq('id') && uniq('src') && uniq('name'));
+  ok('#D2 각 영상은 주소·이름·버튼 이름·넣은 날(YYYY-MM-DD)·강조색(#rrggbb ×2, "r, g, b")을 갖는다', VIDS.every(v => /^\/intro\/[\w.-]+\.mp4$/.test(v.src)
+    && v.label && typeof v.name === 'string' && v.name.trim().length > 0 && v.name.length <= 8 && /^\d{4}-\d{2}-\d{2}$/.test(v.added)
+    && /^#[0-9A-Fa-f]{6}$/.test(v.accent) && /^#[0-9A-Fa-f]{6}$/.test(v.accentTo) && /^\d{1,3}, \d{1,3}, \d{1,3}$/.test(v.accentRgb)));
   ok('#D3 강조색 accentRgb = accent 와 같은 색', VIDS.every(v => v.accentRgb === [1, 3, 5].map(i => parseInt(v.accent.slice(i, i + 2), 16)).join(', ')));
-  eq('#D4 기준일 2026-11-08 = 새 영상(flow), 11-09 = 기존(v3), 11-10 = flow', [vidFor(at(2026, 11, 8)).id, vidFor(at(2026, 11, 9)).id, vidFor(at(2026, 11, 10)).id], ['flow', 'v3', 'flow']);
-  ok('#D5 같은 날은 몇 시든 같은 영상(00:00 · 12:00 · 23:59)', [0, 12, 23].every(h => idxFor(at(2026, 12, 3, h, h === 23 ? 59 : 0)) === idxFor(at(2026, 12, 3, 0, 0))));
-  ok('#D6 자정이 지나면 바뀐다(23:59 → 다음 날 00:00)', idxFor(at(2026, 12, 3, 23, 59)) !== idxFor(at(2026, 12, 4, 0, 0)));
-  let alt = true;
-  for (let i = 0; i < 800; i++) { const a = at(2026, 1, 1 + i), b = at(2026, 1, 2 + i); if (idxFor(a) === idxFor(b)) { alt = false; console.log(`    × ${a.toDateString()}`); break; } }
-  ok('#D7 800일 연속 하루씩 번갈아(월말·연말·윤년·서머타임 무관 — 현지 날짜로 센다)', alt);
-  eq('#D8 기준일 이전도 번갈아(음수 나머지)', [idxFor(at(2026, 11, 7)), idxFor(at(2026, 11, 6)), idxFor(at(2025, 1, 1)) === idxFor(at(2025, 1, 3))], [1, 0, true]);
-  eq('#D9 잘못된 날짜 → 첫 영상(오류 없이)', [idxFor(new Date(NaN)), idxFor(null), idxFor(undefined), vidFor(new Date(NaN)).id], [0, 0, 0, 'flow']);
-  eq('#D10 영상 수가 1이면 늘 0', [idxFor(at(2026, 11, 9), 1), idxFor(at(2026, 11, 10), 0)], [0, 0]);
+  ok(`#D4 목록은 최신이 맨 앞(넣은 날 내림차순 — 버튼 순서·기본 영상) (${VIDS.map(v => v.added).join(' ≥ ')})`, VIDS.every((v, i) => i === 0 || VIDS[i - 1].added >= v.added));
+  eq('#D5 지금 목록: 네온형광(flow, 최신) → 빨간색(v3)', VIDS.map(v => [v.id, v.name]), [['flow', '네온형광'], ['v3', '빨간색']]);
+  eq('#D6 로딩 때 처음 트는 방식 = 최신(사용자 확정 — 무작위는 영상이 많아지면)', MODE, 'latest');
+  eq('#D7 기본 호출 = 최신(맨 앞)', pick().id, VIDS[0].id);
+  eq('#D8 최신 방식은 난수와 무관하게 맨 앞', [pick('latest', () => 0.99).id, pick('latest', () => 0).id], [VIDS[0].id, VIDS[0].id]);
+  const L3 = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  eq('#D9 무작위 방식: 난수 구간대로 고른다', [0, 0.34, 0.67, 0.999].map(r => pick('random', () => r, L3).id), ['a', 'b', 'c', 'c']);
+  eq('#D10 무작위 방식: 이상한 난수(1·음수·NaN)도 목록 안에서', [1, -0.2, NaN].map(r => pick('random', () => r, L3).id), ['c', 'a', 'a']);
+  eq('#D11 모르는 방식 → 최신 · 영상 1편이면 늘 그 영상', [pick('shuffle', () => 0.9, L3).id, pick('random', () => 0.9, [{ id: 'x' }]).id], ['a', 'x']);
 
   console.log('\n── 파트① 진행 막대 비율 ──');
   eq('#P1 계좌 로드 시작 = 0', ratio('loading', { done: 0, total: 0 }, 0), 0);
@@ -124,17 +124,29 @@ ok('#C3 영상 끝·오류 → 닫기(검은 화면 방치 금지)', /onEnded=\{
 ok('#C4 시작 제한 시간 안에 재생이 안 되면 닫기', /INTRO_START_TIMEOUT_MS/.test(comp) && /startedRef\.current\s*=\s*true/.test(comp));
 ok('#C5 자동 재생이 막히면 소리 끄고 다시 시도', /v\.muted\s*=\s*true/.test(comp) && /v\.play\(\)\.catch/.test(comp));
 ok('#C6 막대 클릭 = finish(\'dashboard\') → onSkipToDashboard', /onClick=\{\(\)\s*=>\s*finish\('dashboard'\)\}/.test(comp) && /onSkipToDashboard/.test(comp));
-ok('#C7 막대는 좌측 상단, 로딩 현황 글씨는 우측 상단', /top:\s*16,\s*left:\s*16/.test(comp) && /top:\s*16,\s*right:\s*16/.test(comp));
+ok('#C7 막대(+영상 고르기)는 좌측 상단 한 묶음, 로딩 현황 글씨는 우측 상단', /className="absolute flex flex-col[^"]*" style=\{\{ top: 16, left: 16,/.test(comp) && /top:\s*16,\s*right:\s*16/.test(comp));
 ok('#C8 모바일 인라인 재생(playsInline)', /\bplaysInline\b/.test(comp));
 ok('#C9 벨 알림·브라우저 저장소 없음(알림 최소화·다중 계정 정책)', !/\bnotify\s*\(/.test(comp) && !/localStorage|sessionStorage/.test(comp));
 ok('#C10 한 번만 닫힌다(closedRef)', /if\s*\(closedRef\.current\)\s*return;/.test(comp));
 ok('#C11 음량(INTRO_VOLUME)을 import해 첫 play() 전에 건다', /import\s*\{[^}]*\bINTRO_VOLUME\b[^}]*\}\s*from\s*'\.\.\/introVideo'/.test(comp)
   && /v\.volume\s*=\s*INTRO_VOLUME;\s*v\.play\(\)/.test(comp));
-ok('#C12 영상은 뜰 때 한 번 고른다(useState 초기값 = introVideoFor(new Date())) — 재생 중 자정에 바뀌지 않게',
-  /import\s*\{[^}]*\bintroVideoFor\b[^}]*\}\s*from\s*'\.\.\/introVideo'/.test(comp)
-  && /const \[video\] = useState\(\(\) => introVideoFor\(new Date\(\)\)\);/.test(comp) && /src=\{video\.src\}/.test(comp));
+ok('#C12 처음 영상 = pickIntroVideo()(기본 최신)로 상태에 둔다 · 주소는 그 상태에서',
+  /import\s*\{[^}]*\bpickIntroVideo\b[^}]*\}\s*from\s*'\.\.\/introVideo'/.test(comp)
+  && /const \[video, setVideo\] = useState\(\(\) => pickIntroVideo\(\)\);/.test(comp) && /src=\{video\.src\}/.test(comp));
 ok('#C13 강조색은 고른 영상 것(코랄 고정값이 남아 있지 않다)', /video\.accent\b/.test(comp) && /video\.accentTo\b/.test(comp) && /video\.accentRgb\b/.test(comp)
   && !/#FF494D|#FF7A6B|255,\s*73,\s*77/i.test(comp));
+const playFx = comp.match(/useEffect\(\(\) => \{([\s\S]*?)\n  \}, \[video\.src\]\);/);
+ok('#C14 영상을 바꾸면(video.src) 그 영상을 처음부터 다시 튼다 — 음량·자동 재생 막힘 처리도 같은 곳', !!playFx
+  && /v\.volume\s*=\s*INTRO_VOLUME;\s*v\.play\(\)/.test(playFx[1]) && /v\.muted\s*=\s*true/.test(playFx[1])
+  && /return \(\) => \{ alive = false; \};/.test(playFx[1]));
+const leftCol = comp.slice(comp.indexOf('top: 16, left: 16'), comp.indexOf('top: 16, right: 16'));
+ok('#C15 영상 고르기 버튼: 좌측 묶음 안 · 진행 막대 아래 · INTRO_VIDEOS 수만큼(2편 이상일 때) · 라디오 + 이름 · 고르면 chooseVideo',
+  /import\s*\{[^}]*\bINTRO_VIDEOS\b[^}]*\}\s*from\s*'\.\.\/introVideo'/.test(comp)
+  && leftCol.indexOf("finish('dashboard')") > -1 && leftCol.indexOf('role="radiogroup"') > leftCol.indexOf("finish('dashboard')")
+  && /\{INTRO_VIDEOS\.length > 1 && \(/.test(leftCol) && /INTRO_VIDEOS\.map\(v => \{/.test(leftCol)
+  && /role="radio"/.test(leftCol) && /aria-checked=\{on\}/.test(leftCol) && /onClick=\{\(\) => chooseVideo\(v\)\}/.test(leftCol) && /\{v\.name\}/.test(leftCol));
+const chooseDef = comp.match(/const chooseVideo = \(next\) => \{([\s\S]*?)\n  \};/);
+ok('#C16 chooseVideo: 닫힌 뒤·같은 영상은 무시, 아니면 setVideo', !!chooseDef && /if \(closedRef\.current \|\| next\.id === video\.id\) return;/.test(chooseDef[1]) && /setVideo\(next\)/.test(chooseDef[1]));
 
 console.log('\n── 파트⑦ App 배선 ──');
 const app = stripComments(read('src/App.tsx'));
