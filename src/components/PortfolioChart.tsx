@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Settings, Search, BarChart2, Percent, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
-import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates, externalFlowInRange, selectionDimBands } from '../utils';
+import { formatShortDate, formatPeriodRange, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates, externalFlowInRange, selectionDimBands } from '../utils';
 import { CHART_SELECTION } from '../design';
 import CustomDatePicker from './CustomDatePicker';
 import ChartRangeControls from './ChartRangeControls';
@@ -491,7 +491,7 @@ export default function PortfolioChart({
                     <HelpCircle size={13} />
                   </button>
                   <span className="text-gray-500 text-[10px] font-bold shrink-0" title="드래그로 구간 선택 · 더블클릭으로 시작점을 고정한 뒤 클릭하거나 드래그해 끝점 지정 (Esc 취소)">{selectionResult ? '선택 기간' : '조회기간'}</span>
-                  <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
+                  <span className="text-gray-300 text-[11px] font-bold">{formatPeriodRange(displayResult.startDate, displayResult.endDate)}</span>
                   {anchorDate && <span className="text-sky-300 text-[10px] font-bold shrink-0 ml-1">시작점 고정 {formatShortDate(anchorDate)} — 끝점을 클릭하거나 드래그해 놓으세요 (Esc 취소)</span>}
                 </div>
                 {showCalcVerify && (() => {

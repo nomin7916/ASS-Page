@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
-import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, selectionDimBands, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine, periodBasisLines, holdReasonText, spanFromText } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatPeriodRange, formatVeryShortDate, cleanNum, recessionBandsForDates, selectionDimBands, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine, periodBasisLines, holdReasonText, spanFromText } from '../utils';
 import { CHART_SELECTION } from '../design';
 
 const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
@@ -1239,7 +1239,7 @@ export default function IntegratedDashboard({
                       {displayResult ? (
                         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 w-full">
                           <span className="text-gray-500 text-[10px] font-bold shrink-0" title="드래그로 구간 선택 · 더블클릭으로 시작점을 고정한 뒤 클릭하거나 드래그해 끝점 지정 (Esc 취소)">{intSelectionResult ? '선택 기간' : '조회기간'}</span>
-                          <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
+                          <span className="text-gray-300 text-[11px] font-bold">{formatPeriodRange(displayResult.startDate, displayResult.endDate)}</span>
                           {intAnchorDate && <span className="text-sky-300 text-[10px] font-bold shrink-0">시작점 고정 {formatShortDate(intAnchorDate)} — 끝점을 클릭하거나 드래그해 놓으세요 (Esc 취소)</span>}
                           <div className="flex items-center gap-1.5">
                             <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />

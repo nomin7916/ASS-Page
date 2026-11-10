@@ -117,6 +117,18 @@ if (U) {
   eq('#17 경계는 사전순이 아니라 배열 순서로 정한다', S(frozen, 'c', 'a'), {
     start: 'a', end: 'c', before: { from: 'b', to: 'a' }, after: null,
   });
+
+  // ── 기간 줄 "24/08/06 ~ 25/02/17 (6개월11일)" (사용자 요청 2026-11) ──
+  const { formatSpanMonthsDays: M, formatPeriodRange: R } = U;
+  eq('#18 사용자 예시: 24/08/06~25/02/17 = 6개월11일', M('2024-08-06', '2025-02-17'), '6개월11일');
+  eq('#18b 요일 없이 날짜만 + 괄호 안 기간', R('2024-08-06', '2025-02-17'), '24/08/06 ~ 25/02/17 (6개월11일)');
+  eq('#18c 딱 떨어지는 개월은 일을 붙이지 않는다', M('2024-01-15', '2024-07-15'), '6개월');
+  eq('#18d 한 달이 안 되면 일만', M('2025-02-01', '2025-02-20'), '19일');
+  eq('#18e 종료일이 시작일보다 앞선 날이면 개월을 하나 덜 센다', M('2024-08-17', '2025-02-06'), '5개월20일');
+  eq('#18f 같은 날이 없는 달은 말일로(1/31 + 1개월 = 2/29)', M('2024-01-31', '2024-02-29'), '1개월');
+  eq('#18g 해를 넘기는 긴 기간도 개월로', M('2024-01-31', '2026-11-10'), '33개월10일');
+  eq('#18h 순서가 뒤집혀 들어와도 같다', M('2025-02-17', '2024-08-06'), '6개월11일');
+  eq('#18i 날짜가 비면 기간 없이 날짜만', R('2024-08-06', ''), '24/08/06 ~ ');
 }
 
 console.log('\n── 파트② 소스 텍스트 가드 (배선·paint 순서) ──');
@@ -144,6 +156,9 @@ for (const [name, src, rows, left, right] of [
   ['PortfolioChart', pc, 'finalChartData', 'refAreaLeft', 'refAreaRight'],
   ['IntegratedDashboard', id, 'intChartData', 'intRefAreaLeft', 'intRefAreaRight'],
 ]) {
+  ok(`#G1d ${name}: 기간 줄이 formatPeriodRange(요일 없음 + 개월·일)를 import해 쓴다`,
+    /import \{[^}]*\bformatPeriodRange\b[^}]*\} from '\.\.\/utils'/.test(src)
+    && /\{formatPeriodRange\(displayResult\.startDate, displayResult\.endDate\)\}/.test(src));
   ok(`#G2 ${name}: selectionDim import·memo 배선`,
     /selectionDimBands/.test(src) && /const selectionDim = useMemo\(/.test(src));
   ok(`#G2b ${name}: 왼쪽 딤 ReferenceArea 렌더`,

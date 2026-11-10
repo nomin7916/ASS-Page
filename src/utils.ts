@@ -1625,6 +1625,32 @@ export const formatVeryShortDate = (s) => {
   const p = s.split('-');
   return p.length === 3 ? `${p[1]}/${p[2]}` : s;
 };
+// 수익률 차트 '선택 기간·조회기간' 줄의 길이: "6개월11일" (사용자 요청 2026-11).
+// 개월 = 시작일에 N개월을 더한 날(그 달에 같은 날이 없으면 말일)이 종료일을 넘지 않는 가장 큰 N,
+// 일 = 그 날부터 종료일까지. UTC 정수로만 계산한다(시간대에 따라 하루가 밀리지 않게).
+export const formatSpanMonthsDays = (startDate, endDate) => {
+  const parse = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? [+m[1], +m[2] - 1, +m[3]] : null; };
+  let a = parse(startDate), b = parse(endDate);
+  if (!a || !b) return '';
+  if (Date.UTC(b[0], b[1], b[2]) < Date.UTC(a[0], a[1], a[2])) [a, b] = [b, a];
+  const [y1, m1, d1] = a;
+  const endMs = Date.UTC(b[0], b[1], b[2]);
+  const plusMonths = (n) => {
+    const t = m1 + n, y = y1 + Math.floor(t / 12), mo = t % 12;
+    return Date.UTC(y, mo, Math.min(d1, new Date(Date.UTC(y, mo + 1, 0)).getUTCDate()));
+  };
+  let months = (b[0] - y1) * 12 + (b[1] - m1);
+  while (months > 0 && plusMonths(months) > endMs) months--;
+  const days = Math.round((endMs - plusMonths(months)) / 86400000);
+  if (months === 0) return `${days}일`;
+  return days > 0 ? `${months}개월${days}일` : `${months}개월`;
+};
+// "24/08/06 ~ 25/02/17 (6개월11일)" — 요일 없이 날짜만 + 기간 길이.
+export const formatPeriodRange = (startDate, endDate) => {
+  const d = (s) => { const p = (s || '').split('-'); return p.length === 3 ? `${p[0].slice(2)}/${p[1]}/${p[2]}` : (s || ''); };
+  const span = formatSpanMonthsDays(startDate, endDate);
+  return `${d(startDate)} ~ ${d(endDate)}${span ? ` (${span})` : ''}`;
+};
 
 // ── 역사적 경기침체 구간 (차트 음영) ──
 // NBER(전미경제연구소) 공식 미국 경기침체 구간 — FRED가 회색 음영으로 표시하는 것과 동일.
