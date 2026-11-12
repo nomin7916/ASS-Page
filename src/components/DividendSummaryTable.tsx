@@ -7,6 +7,8 @@ import ErrorBoundary from './ErrorBoundary';
 import CardExpandButton from './CardExpandButton';
 import { resolveAvgAdjState, avgAdjTooltip } from '../krEtfTaxHelpers';
 import { dividendYearChoices, resolveDividendViewYear } from '../dividendYear';
+import { dividendRecordQty } from '../dividendQty';
+import { getTodayKST } from '../hooks/useMarketCalendar';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const formatUsd = (v) => v > 0 ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
@@ -83,6 +85,28 @@ function holdingsForYear(pf, year, isPast) {
   if (pf.baselineDate && yearEnd < String(pf.baselineDate)) return [];
   const r = resolveHoldings(pf, yearEnd);
   return r.kind === 'live' ? (pf.portfolio || []) : (r.items || []);
+}
+
+// 그날 장 마감 보유 수량(자산검증 스냅샷 — 계산기 '전일 수량'과 같은 소스). 스냅샷이 하나도 없으면(live) 모름 → null.
+function holdingQtyAt(pf, code, date) {
+  const r = resolveHoldings(pf, date);
+  if (r.kind === 'live') return null;
+  const it = (r.items || []).find(i => String(i.code) === String(code));
+  return it ? cleanNum(it.quantity) : 0;
+}
+
+// 분배금 한 건의 계산 수량 — 공시된 분배금은 공시일(배당락 전 영업일) 장 마감 보유 수량(규칙은 dividendQty.ts).
+// ⚠️ 국내 계좌만. 해외는 스냅샷 날짜(KST 기록일)와 미국 거래일이 하루 어긋나 그날 보유를 잘못 읽는다 → 지금 수량.
+function srcDividendQty(pf, code, s, codeHistory, currentQty, today, hol) {
+  if (pf.accountType === 'overseas') return { qty: currentQty, source: 'current', qtyDate: '' };
+  return dividendRecordQty({
+    exDate: s.exDateRaw,
+    announced: !s.exPredicted && !!codeHistory?.[s.exYm],
+    today,
+    holidays: hol,
+    currentQty,
+    holdingAt: (d) => holdingQtyAt(pf, code, d),
+  });
 }
 
 // 종목의 배당락→지급 슬롯 오프셋(개월) 추정. 월배당 T+2 관례상 직전월 배당락→익월
@@ -220,8 +244,19 @@ function buildPaySlots(codeHistory, codeExHistory, hol, CY) {
 const pickDominant = (parts) => parts.reduce((a, b) => (b._w > a._w ? b : a), parts[0]);
 
 // 월 셀 상단: 분배락/지급일 + 수량×주당분배금 (예측월은 ~ 표기)
+// 하늘색 수량 = 공시일(배당락 전 영업일) 장 마감 보유 수량. 그날 보유가 0주면 금액이 없어 셀이 '-'가 되므로
+// 그 이유를 한 줄 남긴다(안 남기면 공시된 분배금이 사라진 것처럼 보인다).
 function DivMeta({ d, isOverseas }) {
-  if (!(d.amount > 0)) return null;
+  const recordTitle = d.qtyRecord && d.qtyDate
+    ? `공시일 ${fmtMD(d.qtyDate)} 장 마감 보유 수량 — 배당락(${d.exMD}) 전날까지 보유한 주식에 분배금이 붙습니다 (자산검증 기록)`
+    : undefined;
+  if (!(d.amount > 0)) {
+    return d.qtyRecord && d.perShare > 0 && d.qtyDate ? (
+      <span className="text-gray-600 text-[9px] leading-tight" title={recordTitle}>
+        {fmtMD(d.qtyDate)} 보유 0주
+      </span>
+    ) : null;
+  }
   const tilde = d.exPredicted ? '~' : '';
   const per = isOverseas ? formatUsd(d.perShare) : formatCurrency(d.perShare);
   return (
@@ -231,7 +266,10 @@ function DivMeta({ d, isOverseas }) {
           {tilde}{d.exMD}{d.payMD ? `-${d.payMD}` : ''}
         </span>
       )}
-      <span className={`text-[9px] leading-tight ${d.qtyBackCalc ? 'text-amber-400/70' : 'text-gray-500'}`}>
+      <span
+        className={`text-[9px] leading-tight ${d.qtyBackCalc ? 'text-amber-400/70' : d.qtyRecord ? 'text-sky-300/80' : 'text-gray-500'}`}
+        title={recordTitle}
+      >
         {d.qty.toLocaleString()}주 × {per}{d.srcCount > 1 ? ` 외 ${d.srcCount - 1}건` : ''}
       </span>
     </>
@@ -377,6 +415,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   // ⚠️ 지난 연도는 기본 **읽기 전용**이다. 모든 쓰기는 whenEditable을 지나고, 잠긴 동안엔 확인 창
   //    (열쇠 버튼과 같은 창)을 먼저 띄운다 — 승인하면 그 해만 열리고, 다른 해로 옮기면 다시 잠긴다.
   const currentYear = new Date().getFullYear();
+  // 공시일 보유 수량 판정의 '오늘'(KST) — 날짜가 바뀌면 그 전날이 공시일인 분배금이 지금 수량 → 공시일 수량으로 넘어간다.
+  const todayKST = getTodayKST();
   const [selectedYear, setSelectedYear] = useState(null);
   const viewYear = resolveDividendViewYear(selectedYear, currentYear);
   const isPastYear = viewYear < currentYear;
@@ -477,23 +517,25 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           if (!srcs.length) {
             return {
               amount: 0, amountUsd: 0, isActual: false, qty: baseQty, perShare: 0,
-              qtyBackCalc: false, exMD: '', payMD: '', exPredicted: false, yearMonth: '', srcCount: 0,
+              qtyBackCalc: false, qtyRecord: false, qtyDate: '', exMD: '', payMD: '', exPredicted: false, yearMonth: '', srcCount: 0,
             };
           }
           let amountUsd = 0;
           const parts = srcs.map(s => {
-            // 실지급액이 입력된 달은 (실지급액 ÷ 주당분배금)로 수량 역산, 그 외 현재 보유수량
+            // 수량: 실지급액이 입력된 달은 (실지급액 ÷ 주당분배금) 역산 → 공시된 분배금은 공시일 보유 수량 → 그 외 지금 수량
             const actualAmt = codeActual[s.exYm];
-            const q = (actualAmt > 0 && s.perShare > 0) ? Math.round(actualAmt / s.perShare) : baseQty;
+            const backCalc = actualAmt > 0 && s.perShare > 0;
+            const rq = backCalc ? null : srcDividendQty(pf, item.code, s, divHistory[item.code], baseQty, todayKST, hol);
+            const q = backCalc ? Math.round(actualAmt / s.perShare) : rq.qty;
             const aUsd = s.perShare * q;
             amountUsd += aUsd;
-            return { ...s, q, _w: aUsd, backCalc: actualAmt > 0 && s.perShare > 0 };
+            return { ...s, q, _w: aUsd, backCalc, recordQty: rq?.source === 'record', qtyDate: rq?.qtyDate || '' };
           });
           const dom = pickDominant(parts);
           const isActual = srcs.some(s => !s.exPredicted && !!divHistory[item.code]?.[s.exYm]);
           return {
             amount: amountUsd * fxRate, amountUsd: isOverseas ? amountUsd : 0, isActual,
-            qty: dom.q, perShare: dom.perShare, qtyBackCalc: dom.backCalc,
+            qty: dom.q, perShare: dom.perShare, qtyBackCalc: dom.backCalc, qtyRecord: dom.recordQty, qtyDate: dom.qtyDate,
             exMD: fmtMD(dom.exDateRaw), payMD: fmtMD(dom.payDateRaw), exPredicted: dom.exPredicted,
             yearMonth: dom.exYm, srcCount: parts.length,
           };
@@ -517,7 +559,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
     });
     return result;
-  }, [nonGoldPortfolios, holidays, usdkrw, viewYear, isPastYear]);
+  }, [nonGoldPortfolios, holidays, usdkrw, viewYear, isPastYear, todayKST]);
 
   // 월 입금 내역 rows — 예상값 기반 + 사용자 직접 입력 override
   const actualRows = useMemo(() => {
@@ -600,7 +642,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const parts = srcs.map(s => {
               const ek = s.exYm;
               const cm = ek in codeActual;
-              const predS = s.perShare * qty;
+              // 예상값(입력 전 기본값)도 월 예상 분배금과 같은 수량 — 공시된 분배금은 공시일 보유 수량.
+              // 유령 행(삭제 종목)은 종전대로 0주(예상값을 새로 만들지 않는다 — 실입력만 보여 준다).
+              const predS = s.perShare * (item.__orphan ? qty : srcDividendQty(pf, item.code, s, divHistory[item.code], qty, todayKST, hol).qty);
               const amtS = cm ? codeActual[ek] : predS;
               const taxS = (pf.dividendTaxAmounts || {})[item.code]?.[ek];
               const gS = amtS + (taxS || 0);
@@ -656,7 +700,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
     });
     return result;
-  }, [nonGoldPortfolios, holidays, usdkrw, viewYear, isPastYear]);
+  }, [nonGoldPortfolios, holidays, usdkrw, viewYear, isPastYear, todayKST]);
 
   // 수동 추가 행 (포트폴리오에서 제거된 종목의 과거 배당금 기록용)
   const extraActualRows = useMemo(() => {
@@ -706,12 +750,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         slots.forEach((srcs, pi) => {
           srcs.forEach(s => {
             const perShareUsd = s.perShare || 0;
-            if (isOverseas) monthData[pi].amountUsd += perShareUsd * qty;
-            const grossKrw = perShareUsd * qty * fxRate;
+            // 계좌 합계도 종목 표와 같은 수량 — 공시된 분배금은 공시일 보유 수량
+            const q = srcDividendQty(pf, item.code, s, divHistory[item.code], qty, todayKST, hol).qty;
+            if (isOverseas) monthData[pi].amountUsd += perShareUsd * q;
+            const grossKrw = perShareUsd * q * fxRate;
             monthData[pi].amount += grossKrw;
             const taxRec = !isOverseas && dividendTaxHistory?.[item.code]?.records?.[s.exYm];
-            monthData[pi].taxKrw += taxRec && qty > 0
-              ? Math.round(taxRec.perShareTaxableBase * qty * taxRate / 100)
+            monthData[pi].taxKrw += taxRec && q > 0
+              ? Math.round(taxRec.perShareTaxableBase * q * taxRate / 100)
               : Math.round(grossKrw * taxRate / 100);
             if (!s.exPredicted && !!divHistory[item.code]?.[s.exYm]) monthData[pi].hasActual = true;
           });
@@ -723,7 +769,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const annualTax = monthData.reduce((s, d) => s + d.taxKrw, 0);
       return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTax };
     }).filter(row => row.annual > 0);
-  }, [compact, nonGoldPortfolios, dividendTaxHistory, holidays, usdkrw, viewYear, isPastYear]);
+  }, [compact, nonGoldPortfolios, dividendTaxHistory, holidays, usdkrw, viewYear, isPastYear, todayKST]);
 
   const compactActualRows = useMemo(() => {
     if (!compact) return [];
@@ -1977,7 +2023,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             )}
             {!loading && expectedRows.length > 0 && (
               <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-                초록 배경 = {viewYear}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 날짜 = 배당락-지급일(~ 는 직전연도 기준 추정) &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산 &nbsp;·&nbsp; 월 상단 클릭 → 숨기기
+                초록 배경 = {viewYear}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 날짜 = 배당락-지급일(~ 는 직전연도 기준 추정) &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산 &nbsp;·&nbsp; <span className="text-sky-300/80">하늘 수량</span> = 공시일(배당락 전 영업일) 보유 &nbsp;·&nbsp; 월 상단 클릭 → 숨기기
                 {expectedHasOverseas && <> &nbsp;·&nbsp; <span className="text-teal-400/70">분배율</span> = 종목 세후 분배금 ÷ 그 종목 투자금(달러), 괄호 = 연환산(월×12)</>}
               </div>
             )}

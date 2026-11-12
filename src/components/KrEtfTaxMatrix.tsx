@@ -21,6 +21,7 @@ import {
   buildAvgTaxAnchors,
   monthEndOfYm,
 } from '../krEtfTaxHelpers';
+import { taxRowMonth, groupTaxRowsByMonth, taxMonthOpen, showTaxMonthHeads, taxMonthLabel, taxMonthSummary } from '../taxCalcMonths';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
@@ -122,6 +123,9 @@ export default function KrEtfTaxMatrix({
   // ⚠️ 세션 로컬이다. Drive 저장 지점 0곳 — 뷰 선호도이고, 영속화하면 계좌 필드(hiddenTaxMonths)나
   //    chartPrefs 5지점을 새로 걸어야 하는데 '?' 한 번 클릭으로 복구되는 상태라 값이 없다.
   const [showTaxHelp, setShowTaxHelp] = useState(false);
+  // 평균 과표 계산기 월별 접기 — `${code}|${ym}` → 펼침 여부. 누른 적 없는 달은 taxMonthOpen 기본값(지난 달만 접힘).
+  // ⚠️ 세션 로컬이다(showTaxHelp와 같은 근거) — 기본값이 '지난 달 접힘'이라 저장하지 않아도 다시 열면 같은 모양이다.
+  const [calcMonthOpen, setCalcMonthOpen] = useState({});
 
   // 가로 스크롤 시 '평균 과표 계산기'(확장 행)를 왼쪽에 고정(엑셀 틀 고정)하기 위해, 스크롤
   // 컨테이너의 가시 폭을 측정해 sticky 패널 너비로 사용한다. 콜백 ref + ResizeObserver로
@@ -449,9 +453,10 @@ export default function KrEtfTaxMatrix({
   // ── 이벤트 CRUD ─────────────────────────────────────────────────────────────
   const persistEvents = (code, next) => updateTaxBaseEvents(portfolio.id, code, next);
 
+  // 새 행 일자 = 오늘(KST). ⚠️ UTC 날짜를 쓰면 매월 1일 09시 전에 지난 달 날짜가 박혀 새 행이 접힌 달 안으로 숨는다.
   const addEvent = (code, events) => persistEvents(code, [
     ...events,
-    { id: generateId(), date: new Date().toISOString().slice(0, 10), prevQty: 0, change: 0, taxBasePrice: 0 },
+    { id: generateId(), date: getTodayKST(), prevQty: 0, change: 0, taxBasePrice: 0 },
   ]);
 
   const updateEvent = (code, events, id, field, value) => persistEvents(code, events.map(e =>
@@ -460,10 +465,22 @@ export default function KrEtfTaxMatrix({
 
   const deleteEvent = (code, events, id) => persistEvents(code, events.filter(e => e.id !== id));
 
+  // ── 계산기 월별 접기 ────────────────────────────────────────────────────────
+  const currentYm = getTodayKST().slice(0, 7);
+  const toggleCalcMonth = (code, ym, open) => setCalcMonthOpen(prev => ({ ...prev, [`${code}|${ym}`]: open }));
+  const setCalcMonthsOpen = (code, groups, open) => setCalcMonthOpen(prev => {
+    const next = { ...prev };
+    groups.forEach(g => { next[`${code}|${g.ym}`] = open; });
+    return next;
+  });
+
   const handleEventDateChange = (stock, events, id, newDate) => {
     const updates = { date: newDate };
     if (ISO_DATE.test(newDate)) {
       updates.prevQty = lookupPrevQty(newDate, stock.code);
+      // 지난 달로 날짜를 옮기면 그 달이 접혀 있어 방금 고친 행이 사라진다 → 그 달을 펼친다.
+      const ym = taxRowMonth(newDate);
+      if (ym < currentYm) toggleCalcMonth(stock.code, ym, true);
     }
     persistEvents(stock.code, events.map(e => e.id !== id ? e : { ...e, ...updates }));
   };
@@ -517,6 +534,18 @@ export default function KrEtfTaxMatrix({
         <tbody>
           {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, sellSummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected, avgTaxBaseAdj }) => {
             const isExpanded = expandedCode === stock.code;
+            // 계산기 행을 월별로 묶어 지난 달은 접는다(표시만 — 계산은 sortedEventsWithAvg 전 행 그대로).
+            const monthGroups = isExpanded ? groupTaxRowsByMonth(sortedEventsWithAvg, currentYm, r => r.evt.date) : [];
+            const monthHeads = showTaxMonthHeads(monthGroups);
+            const isCalcMonthOpen = (g) => taxMonthOpen(g, calcMonthOpen[`${stock.code}|${g.ym}`]);
+            const pastGroups = monthGroups.filter(g => g.past);
+            const pastClosed = pastGroups.filter(g => !isCalcMonthOpen(g)).length;
+            const calcRows = monthHeads
+              ? monthGroups.flatMap(g => {
+                const open = isCalcMonthOpen(g);
+                return [{ monthHead: g, open }, ...(open ? g.rows : [])];
+              })
+              : sortedEventsWithAvg;
             return (
               <React.Fragment key={stock.code}>
                 <tr className="border-b border-gray-700/40 hover:bg-gray-800/20">
@@ -702,6 +731,16 @@ export default function KrEtfTaxMatrix({
                           >
                             <Plus size={10} /> 행 추가
                           </button>
+                          {monthHeads && pastGroups.length > 0 && (
+                            <button
+                              onClick={() => setCalcMonthsOpen(stock.code, pastGroups, pastClosed > 0)}
+                              className="text-[10px] px-2 py-0.5 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500 inline-flex items-center gap-1"
+                              title={pastClosed > 0 ? '지난 달 기록을 모두 펼칩니다' : '지난 달 기록을 모두 접습니다 (기록은 지워지지 않습니다)'}
+                            >
+                              {pastClosed > 0 ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+                              지난 달 {pastGroups.length}개월 · {pastClosed > 0 ? '모두 펼치기' : '모두 접기'}
+                            </button>
+                          )}
                         </div>
                         {events.length === 0 ? (
                           <div className="text-[10px] text-gray-600 text-center py-4">
@@ -767,7 +806,38 @@ export default function KrEtfTaxMatrix({
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {sortedEventsWithAvg.map(({ evt, runningAvg, basis, basisDiverged, realized: rz }) => {
+                                  {calcRows.map((row) => {
+                                    if (row.monthHead) {
+                                      const g = row.monthHead;
+                                      const sm = taxMonthSummary(g.rows);
+                                      return (
+                                        <tr
+                                          key={`month-${g.ym || 'none'}`}
+                                          onClick={() => g.ym && toggleCalcMonth(stock.code, g.ym, !row.open)}
+                                          className={`border-b border-gray-800/60 bg-gray-800/25 select-none ${g.ym ? 'cursor-pointer hover:bg-gray-800/50' : ''}`}
+                                          title={g.ym ? (row.open ? `${taxMonthLabel(g.ym)} 기록 접기` : `${taxMonthLabel(g.ym)} 기록 펼치기 — 접어도 기록과 계산은 그대로입니다`) : '일자가 없는 행 — 일자를 넣으면 그 달로 옮겨집니다'}
+                                        >
+                                          <td colSpan={12} className="py-1 pl-2 pr-2">
+                                            <div className="flex items-center gap-x-2.5 gap-y-0.5 flex-wrap text-[10px]">
+                                              {row.open
+                                                ? <ChevronDown size={10} className="text-amber-400/80 shrink-0" />
+                                                : <ChevronRight size={10} className="text-gray-500 shrink-0" />}
+                                              <span className={`font-semibold ${g.past ? 'text-gray-300' : 'text-amber-300'}`}>{taxMonthLabel(g.ym)}</span>
+                                              <span className="text-gray-500">{sm.count}건</span>
+                                              {sm.buyQty > 0 && <span className="text-gray-500">매수 <span className="text-emerald-400/80 tabular-nums">{sm.buyQty.toLocaleString()}주</span></span>}
+                                              {sm.sellQty > 0 && <span className="text-gray-500">매도 <span className="text-rose-400/80 tabular-nums">{sm.sellQty.toLocaleString()}주</span></span>}
+                                              {g.ym && <span className="text-gray-500" title="그 달 마지막 행까지의 누적 보유 (계산기 매매수량 합)">보유 <span className="text-gray-300 tabular-nums">{sm.endQty.toLocaleString()}주</span></span>}
+                                              {g.ym && sm.endAvg > 0 && <span className="text-gray-500" title="그 달 마지막 행의 평균 과표">평균 과표 <span className="text-sky-300/80 tabular-nums">{fmtTaxBase(sm.endAvg)}</span></span>}
+                                              {sm.realizedCount > 0 && (
+                                                <span className="text-gray-500" title="그 달 매도 행 실현손익의 합 (최저가 우선 · 분석용)">실현손익 <span className={`tabular-nums ${sm.realized >= 0 ? 'text-red-400/80' : 'text-blue-400/80'}`}>{(sm.realized >= 0 ? '+' : '') + formatCurrency(Math.round(sm.realized))}</span></span>
+                                              )}
+                                              {!row.open && <span className="text-gray-600 ml-auto">눌러서 펼치기</span>}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    }
+                                    const { evt, runningAvg, basis, basisDiverged, realized: rz } = row;
                                     const changeNum = safeNum(evt.change);
                                     const isSell = changeNum < 0;
                                     const isBuy = changeNum > 0;
