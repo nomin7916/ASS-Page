@@ -228,7 +228,6 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
   const [userEmail, setUserEmail] = useState('');
   const [userToken, setUserToken] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [resetNotice, setResetNotice] = useState(false);
   const [requestState, setRequestState] = useState<RequestState>('none');
   const [requestResult, setRequestResult] = useState<'pending' | 'approved'>('pending');
   const [gisReady, setGisReady] = useState<boolean>(
@@ -297,7 +296,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
   // silent=true: 화면이 열릴 때 무음 시도(클릭 밖) · false: '이어서 사용하기' 버튼 클릭 안(구글 창이 막히지 않는다).
   // ⚠️ 무음 시도가 실패해도 세션(SESSION_KEY)을 지우지 않고 버튼을 보인다 — 클릭 밖에서 여는 구글 창을 막는 브라우저가 많아
   //    새로고침할 때마다 처음 로그인(계정 고르기 + 비밀번호)으로 떨어졌다(2026-11-06, sessionKeepAlive.ts ③).
-  //    이 탭은 이미 비밀번호를 통과했다(SESSION_KEY) — 버튼도 무음 경로와 같이 비밀번호를 다시 묻지 않는다.
+  //    이 탭은 이미 로그인을 통과했다(SESSION_KEY) — 버튼도 무음 경로와 같이 바로 들어간다.
   //    계정이 다르거나·Drive 권한이 없거나·승인 명단에 없으면 종전대로 세션을 지운다.
   const resumeSession = (savedEmail: string, silent: boolean) => {
     setStep('silent_auth');
@@ -428,14 +427,14 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
           setStep('pending');
           return;
         }
-        featuresRef.current = pickFeatures(checkRes);
 
+        // 본인 로그인은 비밀번호 단계 없이 바로 들어간다(2026-11-13 사용자 요청) — 비밀번호 화면은 관리자 접속에만.
+        // ⚠️ PIN 해시는 계속 불러 sessionStorage에 싣는다 — 금액 보기·리밸런싱 목표 편집·비밀번호 변경·관리자 접속 마스터 키가 이 값으로 확인한다.
         if (needsReset) {
           const adminHash = hashPin(adminPin);
           sessionStorage.setItem(PIN_KEY(email), adminHash);
           savePinToDrive(adminHash, token, email);
           clearResetFlag(token);
-          setResetNotice(true);
         } else {
           const { pinHash: drivePinHash, folderId: pinFolderId } = await loadPinFromDrive(token, email);
           if (drivePinHash) {
@@ -449,8 +448,8 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
           }
         }
 
-        setPinDigits(['', '', '', '']);
-        setStep('pin_entry');
+        sessionStorage.setItem(SESSION_KEY, email);
+        onApproved(email, token, pickFeatures(checkRes));
       },
       error_callback: (err: any) => {
         const detail = err?.message || err?.type || '인증 창 오류';
@@ -468,9 +467,6 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
     const isAdminMasterPin = adminViewUserCtx && adminViewUserCtx.adminPinHash === hashPin(finalPin);
     if (verifyPin(finalPin, userEmail) || isAdminMasterPin) {
       setPinError('');
-      if (!adminViewUserCtx) {
-        sessionStorage.setItem(SESSION_KEY, userEmail);
-      }
       onApproved(userEmail, userToken, featuresRef.current);
     } else {
       setPinError('비밀번호가 틀렸습니다.');
@@ -503,7 +499,6 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
     setErrorMsg('');
     setPinDigits(['', '', '', '']);
     setPinError('');
-    setResetNotice(false);
     setRequestState('none');
     if (onCancelAdminView) onCancelAdminView();
   };
@@ -584,12 +579,6 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
               {adminViewUserCtx && (
                 <div className="w-full bg-amber-950/50 border border-amber-800/60 rounded-lg px-4 py-2 text-amber-300 text-xs text-center">
                   관리자 접속 모드 — 관리자 비밀번호로도 접속 가능합니다
-                </div>
-              )}
-              {resetNotice && (
-                <div className="w-full bg-blue-950/50 border border-blue-800/60 rounded-lg px-4 py-2.5 text-blue-300 text-xs text-center">
-                  관리자가 비밀번호를 초기화했습니다.<br />
-                  로그인 후 대시보드에서 비밀번호를 변경하세요.
                 </div>
               )}
               <div className="text-center">

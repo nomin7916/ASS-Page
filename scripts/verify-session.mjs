@@ -229,6 +229,22 @@ const GUARDS = [
       const lit = `scope: '${m[1]}'`;
       return s.gate.split(lit).length - 1 === 2;
     }],
+  ['#S14 본인 로그인은 비밀번호 화면 없이 바로 진입(PIN 해시는 계속 싣는다) · 관리자 접속만 비밀번호 화면',
+    (s) => {
+      const a = s.gate.indexOf('const handleLogin = () => {');
+      const z = s.gate.indexOf('const handlePinSubmit = ');
+      const login = a >= 0 && z > a ? s.gate.slice(a, z) : '';
+      const imp = sliceFrom(s.gate, 'loadDriveFile(adminViewUserCtx.adminToken, adminViewUserCtx.userFolderId, DRIVE_FILES.PIN)', 900);
+      return login.length > 500
+        && /sessionStorage\.setItem\(SESSION_KEY, email\);\s*onApproved\(email, token, pickFeatures\(checkRes\)\);/.test(login)
+        && !/setStep\('pin_entry'\)/.test(login)
+        && /await loadPinFromDrive\(token, email\)/.test(login)
+        && /sessionStorage\.setItem\(PIN_KEY\(email\), drivePinHash\);/.test(login)
+        && /sessionStorage\.setItem\(PIN_KEY\(email\), adminHash\);/.test(login)
+        && /featuresRef\.current = pickFeatures\(res\);\s*setStep\('pin_entry'\);/.test(imp)
+        && /adminViewUserCtx\.adminPinHash === hashPin\(finalPin\)/.test(s.gate)
+        && /\{step === 'pin_entry' && \(/.test(s.gate);
+    }],
   ['#S13 안내창 문구가 idleLogoutLabel에서 온다(옛 50분 글자 없음)',
     (s) => /\{idleLogoutLabel\(\)\} 동안 사용이 없어/.test(s.modal) && !/50분/.test(s.modal)
       && /import \{ idleLogoutLabel \} from '\.\.\/sessionKeepAlive';/.test(s.modal)],
@@ -252,6 +268,10 @@ const MUTANTS = [
   ['#S10', 'main', 'if (SEPARATE_WINDOW_BOOT) installActivityRelay(window)', ''],
   ['#S11', 'gate', "if (!silent) setErrorMsg(describeAuthError(detail));\n        setStep('resume');", "sessionStorage.removeItem(SESSION_KEY);\n        setStep('idle');"],
   ['#S13', 'modal', '{idleLogoutLabel()} 동안', '50분간'],
+  ['#S14', 'gate', 'sessionStorage.setItem(SESSION_KEY, email);\n        onApproved(email, token, pickFeatures(checkRes));', "setStep('pin_entry');"],
+  ['#S14', 'gate', 'sessionStorage.setItem(PIN_KEY(email), drivePinHash);', ''],
+  ['#S14', 'gate', "featuresRef.current = pickFeatures(res);\n        setStep('pin_entry');", 'featuresRef.current = pickFeatures(res);\n        onApproved(adminViewUserCtx.userEmail, adminViewUserCtx.adminToken, featuresRef.current);'],
+  ['#S14', 'gate', 'adminViewUserCtx.adminPinHash === hashPin(finalPin)', 'false'],
 ];
 for (const [gid, key, from, to] of MUTANTS) {
   const guard = GUARDS.find(g => g[0].startsWith(gid + ' '));

@@ -137,6 +137,9 @@ src/
 - 별도 창: main.tsx `installActivityRelay` → `app:activity`(10초 1회) · 앱 탭 토큰이 낡았으면 `app:tokenWanted` → 창이 자기 클릭에서 받아 `app:tokenFresh`
   → 앱 탭은 **userinfo 이메일 = 로그인 계정**일 때만 `adoptFreshToken`. 관리자 접속(impersonation) 탭은 미리 받기·힌트·창 토큰 셋 다 안 한다.
 - 새로고침 무음 재인증 실패 = 세션 유지 + '이어서 사용하기'(비밀번호 없음 — 이 탭은 이미 통과). 계정 불일치·Drive 401/403·미승인만 세션을 지운다.
+- **본인 로그인 = 구글 + 승인만, 비밀번호(PIN) 화면 없음**(2026-11-13 사용자 요청). PIN 화면은 관리자 접속(impersonation)에만 —
+  사용자 PIN 또는 관리자 PIN(마스터). ⚠️ 로그인 때 Drive PIN 해시를 sessionStorage에 싣는 일은 남긴다 — 빼면 금액 보기·
+  리밸런싱 목표 편집·비밀번호 변경·관리자 마스터 키가 늘 '틀림'이 된다. 관리자 초기화(RESET)는 안내 없이 PIN만 바뀐다. 검증: `verify:session #S14`.
 - 비활동 로그아웃은 자리 비움 안전장치로만 남긴다. 조작 = `ACTIVITY_EVENTS`(스크롤·휠·마우스 이동 포함). 검증: `verify:session`.
 
 ## 서버 경로 로그인·승인 확인 (`api/_auth.ts` · `src/apiAuth.ts`, ⚠️ 회귀 주의 — 2026-11-05)
