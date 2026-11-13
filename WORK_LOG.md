@@ -1,10 +1,29 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-11-12  
+> 마지막 작업일: 2026-11-13  
 > 브랜치: main  
 > 작업 PC: 클라우드 세션(node 있음 · node_modules 없음 — build 실행 불가)
 
 ---
+
+## 2026-11-13 — [차트] 계좌 수익률 차트: 보유 비교 종목의 매입가 점선
+
+**대상 파일**: `src/watchlistChart.ts`(compAvgLines 신규) · `src/chartUtils.tsx`(AvgTag·stackAvgTags 이전) ·
+`src/components/PortfolioChart.tsx` · `src/components/StockChartWindow.tsx` · `src/App.tsx` · `scripts/verify-watchlist.mjs`
+
+> 계좌 수익률 차트에서 계좌에서 보유하고 있는 종목은 관심종목 차트에서처럼 평균단가를 표시해 주세요.
+
+- 계좌 차트의 비교 종목 중 **이 계좌가 보유한 종목**이면 그 종목 색 점선 + 오른쪽 끝 태그 `매입가 8,418 · -9.95%`
+  (차트 마지막 종가 대비). 높이 = 그 종목 조회기간 첫 종가 0% 눈금(비교 종목 선과 같은 기준 — compBases).
+  매입가 = buildHoldings([이 계좌]) — 표의 구매단가와 같은 식, TEST 계좌도 자기 차트엔 긋는다. 해외 계좌는 달러.
+- 너무 먼 매입가(눈금을 넓히면 선들이 높이 40% 미만으로 눌림)는 눈금을 넓히지 않고 위·아래 가장자리 표시(holdingLayout —
+  차트 창과 같은 규칙). 눈금 판정은 왼쪽 % 눈금에 지금 보이는 선만(leftLevelKeys).
+- 조회기간 줄의 비교 종목 칸에도 `· 매입가 8,418`(마우스를 올리면 보유 수량).
+- 태그·겹침 풀기(AvgTag·stackAvgTags)는 StockChartWindow 안 사본을 chartUtils로 옮겨 두 차트가 함께 쓴다(모양 동일).
+- 통합 대시보드 차트(총 자산 현황)는 손대지 않았다.
+- 검증: `verify:watchlist` 434건(#97p~#97p11 산식, #G99d~#G99i 배선) · 변이 6건 전부 검출 후 복원 ·
+  gate 통과(build 실행 불가 — node_modules 없음 · 외부 도구 3종 없음) · 전역 TypeScript 파서로 변경 파일 5개 구문 오류 0건.
+  화면은 아직 확인 못 함.
 
 ## 2026-11-12 — [분배금] 평균 과표 계산기 월별 접기 + 공시된 분배금은 공시일 보유 수량
 

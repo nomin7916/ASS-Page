@@ -668,6 +668,49 @@ export function holdingLayout(dataMin: any, dataMax: any, levels: any, minShare:
   return { pins, lo, hi };
 }
 
+/**
+ * 계좌 수익률 차트의 비교 종목 매입가 점선(사용자 요청 2026-11-13 — 관심종목 차트 창처럼 평균단가 표시).
+ * rows = 차트 행(`comp{n}Point` = 종가 · `comp{n}Rate` = 조회기간 첫 종가 0% — App finalChartData의 compBases와 같은 기준),
+ * comps = compStocks(n = 배열 순서 + 1 — 꺼진 칩도 번호를 먹는다), hold = buildHoldings([이 계좌]),
+ * market = 'us'(해외 계좌) | 'kr', levelKeys = 왼쪽 % 눈금에 지금 보이는 선의 키(눈금 넓히기 판정용).
+ * 반환 = 켜진 비교 종목 중 보유한 것만 [{ idx, avg, qty, mk, v(높이 %), ret(차트 마지막 종가 대비 %), pin }].
+ * pin '' = 눈금 안(넓혀서라도 긋는다) · 'top'/'bottom' = 너무 멀어 가장자리 표시(holdingLayout 40% — 차트 창과 같은 규칙).
+ * 여러 계좌 보유분을 넘기면 전 계좌 평균 매입가(holdingAvg) 한 줄이다.
+ */
+export function compAvgLines(rows: any, comps: any, hold: any, market: any, levelKeys: any): any[] {
+  const list = Array.isArray(rows) ? rows : [];
+  const out: any[] = [];
+  (Array.isArray(comps) ? comps : []).forEach((c: any, i: number) => {
+    if (!c || typeof c !== 'object' || !c.active || typeof c.code !== 'string' || !c.code.trim()) return;
+    const hs = holdingsFor(hold, c.code, market);
+    const a = holdingAvg(hs);
+    if (!a) return;
+    const pk = `comp${i + 1}Point`;
+    let base = 0, last = 0;
+    for (const r of list) {
+      const p = r && typeof r === 'object' ? r[pk] : null;
+      if (typeof p === 'number' && Number.isFinite(p) && p > 0) { if (!base) base = p; last = p; }
+    }
+    const v = holdingPct(a.avg, base);
+    if (v == null) return;
+    const mk = hs[0].mk === 'kr' || hs[0].mk === 'us' || hs[0].mk === 'fund' ? hs[0].mk : market === 'us' ? 'us' : 'kr';
+    out.push({ idx: i, avg: a.avg, qty: a.qty, mk, v, ret: (last / a.avg - 1) * 100, pin: '' });
+  });
+  if (!out.length) return out;
+  const keys = (Array.isArray(levelKeys) ? levelKeys : []).filter((k: any) => typeof k === 'string' && k);
+  let lo = 0, hi = 0;   // 0%(조회시작)도 눈금 안 — 차트 창 수익률 보기와 같다
+  for (const r of list) {
+    if (!r || typeof r !== 'object') continue;
+    for (const k of keys) {
+      const x = r[k];
+      if (typeof x === 'number' && Number.isFinite(x)) { if (x < lo) lo = x; if (x > hi) hi = x; }
+    }
+  }
+  const lay = holdingLayout(lo, hi, out.map((l) => l.v), 0.4);
+  out.forEach((l, i) => { l.pin = lay.pins[i]; });
+  return out;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // 종목 차트 창 '비교 종목' 찾기(사용자 요청 2026-11-01) — 보유 종목을 **이름 일부 · 초성 · 코드**로 찾고,
 // **계좌 → 종목** 계층으로도 고른다.

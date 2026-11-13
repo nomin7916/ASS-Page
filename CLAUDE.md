@@ -37,7 +37,7 @@ src/
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
 ├── utils.ts             # 순수 유틸 (generateId, cleanNum, hexToRgba, blendWithDarkBg 등)
-├── chartUtils.tsx       # 차트 컴포넌트/유틸 (PieLabelOutside, CustomChartTooltip 등)
+├── chartUtils.tsx       # 차트 컴포넌트/유틸 (PieLabelOutside, CustomChartTooltip, 매입가 태그 AvgTag·stackAvgTags 등)
 ├── driveStorage.ts      # Google Drive 저장/불러오기
 ├── flowMap.ts           # 자금 흐름도 타입 + 순수 로직 (⚠️ @ts-nocheck 금지)
 ├── backtest.ts          # 백테스트 엔진: 타입 + 순수 로직 (⚠️ @ts-nocheck 금지, verify-backtest 미러)
@@ -52,7 +52,7 @@ src/
     ├── KrEtfTaxModal.tsx         # 한국 ETF 과표 계산기 (매입/매도/배당락 과표 → 세금 산출)
     ├── PortfolioTable.tsx        # 종목 테이블
     ├── KrxGoldTable.tsx          # KRX 금현물 전용 테이블
-    ├── PortfolioChart.tsx        # 수익률 라인 차트
+    ├── PortfolioChart.tsx        # 수익률 라인 차트 · 이 계좌 보유 비교 종목 = 매입가 점선(watchlistChart.compAvgLines)
     ├── PortfolioSummaryPanel.tsx # 포트폴리오 요약 카드
     ├── PortfolioStatsPanel.tsx   # 투자원금·CAGR·수익률 통계 카드
     ├── HistoryPanel.tsx          # 수익률 히스토리 입력 패널

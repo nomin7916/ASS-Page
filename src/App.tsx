@@ -3571,6 +3571,12 @@ export default function App() {
     [portfolios, ledgerDataState],
   );
   const watchHoldings = useMemo(() => (watchHoldingsJson ? JSON.parse(watchHoldingsJson) : null), [watchHoldingsJson]);
+  // 계좌 수익률 차트 — 비교 종목 중 **이 계좌가** 보유한 종목의 매입가 점선(사용자 요청 2026-11-13).
+  // 같은 buildHoldings 한 곳(표의 '구매단가'와 같은 식) · 이 계좌 자신의 차트라 TEST 계좌도 긋는다.
+  const activeHoldings = useMemo(
+    () => (activePortfolio ? buildHoldings([{ ...activePortfolio, isTest: false }]) : {}),
+    [activePortfolio],
+  );
 
   // ── 관심종목 브릿지 ──
   const postToWatchlistWin = (msg) => {
@@ -5396,6 +5402,7 @@ export default function App() {
             setGoldIndicatorColors={setGoldIndicatorColors}
             compStocks={compStocks}
             setCompStocks={setCompStocks}
+            compHoldings={activeHoldings}
             userFeatures={effectiveUserFeatures}
             finalChartData={finalChartData}
             effectiveShowIndicators={effectiveShowIndicators}

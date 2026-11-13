@@ -6,6 +6,7 @@ import ErrorBoundary from './ErrorBoundary';
 import CustomDatePicker from './CustomDatePicker';
 import { formatChangeRate, selectionDimBands } from '../utils';
 import { CHART_SELECTION } from '../design';
+import { AvgTag, stackAvgTags } from '../chartUtils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fmtWatchPrice } from '../watchlistQuote';
 import {
   CHART_PERIODS, CHART_CUSTOM_PERIOD, CHART_SERIES_COLORS, MAX_CHART_COMPS,
@@ -60,50 +61,7 @@ const HOLD_PING_MS = 4000;
 const fmtAvg = (market, v) => fmtWatchPrice(market, market === 'kr' ? Math.round(v) : v);
 // 매입가 점선 무늬 — 같은 종목을 여러 계좌에 보유하면 계좌마다 무늬가 달라 선끼리 구분된다(색은 그 종목 색 그대로).
 const AVG_DASHES = ['6 4', '2 3', '10 3 2 3', '1 4'];
-// 매입가 태그 폭 어림(SVG 글자 폭 — 한글·기호는 넓게).
-const tagWidth = (t) => [...t].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2000 ? 10.5 : 6.2), 10);
-
-// 매입가 가로선 오른쪽 끝의 태그(증권사 차트의 '매입가' 표시처럼) — 선 높이에 그 종목 색 테두리 상자.
-// 높이가 비슷한 선의 태그끼리 겹치면 렌더 뒤 stackAvgTags가 위아래로 벌린다(data-avg-y = 선의 실제 높이).
-const TAG_H = 17;
-function AvgTag({ viewBox, text, color }) {
-  if (!viewBox || !Number.isFinite(viewBox.y) || !Number.isFinite(viewBox.x) || !Number.isFinite(viewBox.width)) return null;
-  const w = tagWidth(text);
-  const x0 = viewBox.x + viewBox.width - w - 4;
-  return (
-    <g pointerEvents="none" data-avg-tag="" data-avg-y={viewBox.y}>
-      <rect x={x0} y={viewBox.y - 9} width={w} height={17} rx={3} fill="#0b1120" fillOpacity={0.88} stroke={color} strokeWidth={1} />
-      <text x={x0 + 5} y={viewBox.y + 3.5} fill={color} fontSize={10.5} fontWeight={700}>{text}</text>
-    </g>
-  );
-}
-
-// 매입가 태그 겹침 풀기 — 렌더된 태그를 선 높이(data-avg-y) 순으로 훑어 위에서부터 태그 높이만큼 띄우고,
-// 플롯 아래로 넘치면 위로 민다. 선 자체는 제자리이고 태그만 옮긴다(transform — React가 관리하지 않는 속성).
-// ⚠️ ResponsiveContainer는 크기가 바뀌면 **자기만** 다시 그린다 → 부모 effect가 아니라 MutationObserver로 따라간다.
-//    관찰은 태그 추가·삭제(childList)와 data-avg-y 변화뿐 — 여기서 쓰는 transform은 관찰 대상이 아니라 되먹임이 없다.
-function stackAvgTags(root) {
-  if (!root) return;
-  const tags = [...root.querySelectorAll('g[data-avg-tag]')]
-    .map((g) => ({ g, y: Number(g.getAttribute('data-avg-y')) }))
-    .filter((t) => Number.isFinite(t.y))
-    .sort((a, b) => a.y - b.y);
-  if (!tags.length) return;
-  const axis = root.querySelector('.recharts-yAxis .recharts-cartesian-axis-line');
-  const ay1 = axis ? Number(axis.getAttribute('y1')) : NaN;
-  const ay2 = axis ? Number(axis.getAttribute('y2')) : NaN;
-  const top = Number.isFinite(ay1) && Number.isFinite(ay2) ? Math.min(ay1, ay2) + TAG_H / 2 : -Infinity;
-  const bottom = Number.isFinite(ay1) && Number.isFinite(ay2) ? Math.max(ay1, ay2) - TAG_H / 2 : Infinity;
-  const gap = TAG_H + 2;
-  const pos = tags.map((t) => t.y);
-  for (let i = 0; i < pos.length; i++) pos[i] = Math.max(pos[i], i ? pos[i - 1] + gap : top);
-  for (let i = pos.length - 1; i >= 0; i--) pos[i] = Math.min(pos[i], i === pos.length - 1 ? bottom : pos[i + 1] - gap);
-  tags.forEach((t, i) => {
-    const dy = pos[i] - t.y;
-    if (Math.abs(dy) < 0.5) t.g.removeAttribute('transform');
-    else t.g.setAttribute('transform', `translate(0 ${dy.toFixed(1)})`);
-  });
-}
+// 매입가 가로선 태그(AvgTag)·겹침 풀기(stackAvgTags)는 chartUtils 한 곳 — 계좌 수익률 차트(PortfolioChart)와 같은 모양.
 
 // 매입가 보기(사용자 요청 2026-11-01) — 'acct' = 계좌마다 한 줄(기본) · 'sum' = 통합 한 줄(전 계좌 평균 매입가 =
 // 총 투자금액 ÷ 총 수량, holdingAvg). 계좌가 하나뿐이면 두 보기가 같다(그대로 둔다).

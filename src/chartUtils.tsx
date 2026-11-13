@@ -3,6 +3,52 @@ import React from 'react';
 import { formatCurrency } from './utils';
 import { CHART_NAME_TO_PERIOD_KEY, CHART_NAME_TO_POINT_KEY } from './constants';
 
+// 매입가 태그 폭 어림(SVG 글자 폭 — 한글·기호는 넓게).
+const tagWidth = (t) => [...t].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2000 ? 10.5 : 6.2), 10);
+
+// 매입가 가로선 오른쪽 끝의 태그(증권사 차트의 '매입가' 표시처럼) — 선 높이에 그 종목 색 테두리 상자.
+// 종목 비교 차트 창(StockChartWindow)과 계좌 수익률 차트(PortfolioChart)가 함께 쓴다.
+// 높이가 비슷한 선의 태그끼리 겹치면 렌더 뒤 stackAvgTags가 위아래로 벌린다(data-avg-y = 선의 실제 높이).
+const TAG_H = 17;
+export function AvgTag({ viewBox, text, color }) {
+  if (!viewBox || !Number.isFinite(viewBox.y) || !Number.isFinite(viewBox.x) || !Number.isFinite(viewBox.width)) return null;
+  const w = tagWidth(text);
+  const x0 = viewBox.x + viewBox.width - w - 4;
+  return (
+    <g pointerEvents="none" data-avg-tag="" data-avg-y={viewBox.y}>
+      <rect x={x0} y={viewBox.y - 9} width={w} height={17} rx={3} fill="#0b1120" fillOpacity={0.88} stroke={color} strokeWidth={1} />
+      <text x={x0 + 5} y={viewBox.y + 3.5} fill={color} fontSize={10.5} fontWeight={700}>{text}</text>
+    </g>
+  );
+}
+
+// 매입가 태그 겹침 풀기 — 렌더된 태그를 선 높이(data-avg-y) 순으로 훑어 위에서부터 태그 높이만큼 띄우고,
+// 플롯 아래로 넘치면 위로 민다. 선 자체는 제자리이고 태그만 옮긴다(transform — React가 관리하지 않는 속성).
+// ⚠️ ResponsiveContainer는 크기가 바뀌면 **자기만** 다시 그린다 → 부모 effect가 아니라 MutationObserver로 따라간다.
+//    관찰은 태그 추가·삭제(childList)와 data-avg-y 변화뿐 — 여기서 쓰는 transform은 관찰 대상이 아니라 되먹임이 없다.
+export function stackAvgTags(root) {
+  if (!root) return;
+  const tags = [...root.querySelectorAll('g[data-avg-tag]')]
+    .map((g) => ({ g, y: Number(g.getAttribute('data-avg-y')) }))
+    .filter((t) => Number.isFinite(t.y))
+    .sort((a, b) => a.y - b.y);
+  if (!tags.length) return;
+  const axis = root.querySelector('.recharts-yAxis .recharts-cartesian-axis-line');
+  const ay1 = axis ? Number(axis.getAttribute('y1')) : NaN;
+  const ay2 = axis ? Number(axis.getAttribute('y2')) : NaN;
+  const top = Number.isFinite(ay1) && Number.isFinite(ay2) ? Math.min(ay1, ay2) + TAG_H / 2 : -Infinity;
+  const bottom = Number.isFinite(ay1) && Number.isFinite(ay2) ? Math.max(ay1, ay2) - TAG_H / 2 : Infinity;
+  const gap = TAG_H + 2;
+  const pos = tags.map((t) => t.y);
+  for (let i = 0; i < pos.length; i++) pos[i] = Math.max(pos[i], i ? pos[i - 1] + gap : top);
+  for (let i = pos.length - 1; i >= 0; i--) pos[i] = Math.min(pos[i], i === pos.length - 1 ? bottom : pos[i + 1] - gap);
+  tags.forEach((t, i) => {
+    const dy = pos[i] - t.y;
+    if (Math.abs(dy) < 0.5) t.g.removeAttribute('transform');
+    else t.g.setAttribute('transform', `translate(0 ${dy.toFixed(1)})`);
+  });
+}
+
 export const sortArrow = (config, key) =>
   config.key === key
     ? (config.direction === 1 ? <span className="ml-0.5 text-blue-400 text-[8px]">▲</span> : <span className="ml-0.5 text-blue-400 text-[8px]">▼</span>)

@@ -578,6 +578,54 @@ if (C) {
     eq('#97n3 가까운 매입가부터 받아들인다(입력 순서 무관)', JSON.stringify(holdingLayout(100, 110, [145, 128], 0.25).pins), JSON.stringify(['top', '']));
     eq('#97n4 시세가 한 값뿐이면 넓힌다(눌릴 모양이 없다)', JSON.stringify(holdingLayout(100, 100, [300], 0.25)), JSON.stringify({ pins: [''], lo: 100, hi: 300 }));
     eq('#97n5 미니차트 기준(40%) — 같은 거리라도 더 일찍 가장자리', JSON.stringify([holdingLayout(100, 110, [127], 0.4).pins[0], holdingLayout(100, 110, [127], 0.25).pins[0]]), JSON.stringify(['top', '']));
+    // ── 계좌 수익률 차트의 비교 종목 매입가(사용자 요청 2026-11-13 — 관심종목 차트 창처럼) ──
+    // ⚠️ 높이의 기준은 App finalChartData의 compBases(조회기간 첫 양수 종가)와 같아야 한다 — 갈리면 점선이 선과 어긋난다.
+    {
+      const { compAvgLines } = C;
+      const HA = buildHoldings([{ name: 'AI', accountType: 'portfolio', portfolio: [
+        { type: 'stock', code: '0177X0', quantity: 399, investAmount: 8418 * 399 },
+        { type: 'stock', code: '005930', quantity: 1, investAmount: 50 },
+        { type: 'fund', code: 'MA:ab123', quantity: 1000, investAmount: 1234560 },
+      ] }]);
+      const comps = [
+        { id: 1, code: '0177x0', active: true },
+        { id: 2, code: '005930', active: false },   // 꺼진 칩 — 번호(comp2)는 먹지만 선 없음
+        { id: 3, code: 'ZZZ', active: true },       // 보유 아님
+        { id: 4, code: '005930', active: true },    // comp4 — 기준 100 · 매입 50 = -50%(시세 범위에서 멀다)
+      ];
+      const rows = [
+        { comp1Point: null, comp4Point: 100, principalReturnRate: 0, comp4Rate: 0, big: -60 },
+        { comp1Point: 0, comp4Point: 90, principalReturnRate: -5, comp4Rate: -10, big: -60 },
+        { comp1Point: 8500, comp4Point: 95, principalReturnRate: -3, comp1Rate: 0, comp4Rate: -5, big: -60 },
+        { comp1Point: 7580, comp4Point: null, principalReturnRate: -2, comp1Rate: (7580 / 8500 - 1) * 100, comp4Rate: null, big: -60 },
+      ];
+      const keys = ['principalReturnRate', 'comp1Rate', 'comp4Rate'];
+      const L = compAvgLines(rows, comps, HA, 'kr', keys);
+      eq('#97p 켜진·보유한 비교 종목만 · 번호는 배열 순서(꺼진 칩도 번호를 먹는다) · 코드 대소문자 무시',
+        JSON.stringify(L.map((l) => l.idx)), JSON.stringify([0, 3]));
+      eq('#97p2 높이 = 조회기간 첫 양수 종가(빈 날·0 건너뜀) 0% 눈금 · 표의 구매단가(투자금액 ÷ 수량)',
+        JSON.stringify(L[0] && [L[0].avg, L[0].qty, L[0].mk, +L[0].v.toFixed(6)]), JSON.stringify([8418, 399, 'kr', +((8418 / 8500 - 1) * 100).toFixed(6)]));
+      eq('#97p3 꼬리표 % = 차트 마지막 양수 종가 대비(7,580 ÷ 8,418 − 1)', L[0] && +L[0].ret.toFixed(6), +((7580 / 8418 - 1) * 100).toFixed(6));
+      eq('#97p4 시세 범위 안은 눈금 안 · 선들이 40% 미만으로 눌릴 만큼 먼 매입가는 가장자리', JSON.stringify(L.map((l) => l.pin)), JSON.stringify(['', 'bottom']));
+      // ⚠️ 눈금 판정은 '지금 보이는 선'만 — 숨긴 선(big)이 범위를 넓혀 준다고 착각하면 먼 매입가가 선들을 납작하게 만든다.
+      eq('#97p5 보이는 선(levelKeys)만 눈금 판정에 — 넣으면 넓혀진 범위 안이라 눈금 안',
+        JSON.stringify(compAvgLines(rows, comps, HA, 'kr', [...keys, 'big']).map((l) => l.pin)), JSON.stringify(['', '']));
+      eq('#97p6 원화 보유분은 달러 차트(해외 계좌)에 긋지 않는다', compAvgLines(rows, comps, HA, 'us', keys).length, 0);
+      const HU = buildHoldings([{ name: '해외', accountType: 'overseas', portfolio: [{ type: 'stock', code: 'goog', quantity: 2, investAmountUsd: 300 }] }]);
+      const LU = compAvgLines([{ comp1Point: 100 }, { comp1Point: 120 }], [{ code: 'GOOG', active: true }], HU, 'us', []);
+      eq('#97p7 해외 계좌 = 달러 매입가(투자금액 USD ÷ 수량) · 시장 us', JSON.stringify(LU.map((l) => [l.avg, l.mk, l.v, +l.ret.toFixed(6)])), JSON.stringify([[150, 'us', 50, -20]]));
+      eq('#97p8 펀드(MA: 접두어) = 시장 fund', JSON.stringify(compAvgLines([{ comp1Point: 1200 }], [{ code: 'ma:AB123', active: true }], HA, 'kr', []).map((l) => [l.avg, l.mk])),
+        JSON.stringify([[1234.56, 'fund']]));
+      eq('#97p9 조회기간에 종가가 하나도 없으면(기준 없음) 긋지 않는다', compAvgLines([{ comp1Point: null }, {}], [comps[0]], HA, 'kr', keys).length, 0);
+      const HM = buildHoldings([
+        { name: 'A', accountType: 'portfolio', portfolio: [{ type: 'stock', code: '005930', quantity: 5, investAmount: 350000 }] },
+        { name: 'B', accountType: 'isa', portfolio: [{ type: 'stock', code: '005930', quantity: 1, investAmount: 60000 }] },
+      ]);
+      eq('#97p10 여러 계좌 보유분을 넘기면 전 계좌 평균 매입가 한 줄(총 투자금액 ÷ 총 수량)',
+        JSON.stringify(compAvgLines([{ comp1Point: 70000 }], [{ code: '005930', active: true }], HM, 'kr', []).map((l) => [l.avg, l.qty])), JSON.stringify([[410000 / 6, 6]]));
+      S('#97p11 손상 입력에도 던지지 않고 빈 배열', () => [compAvgLines(null, null, null, 'kr', null), compAvgLines(rows, [null, 'x', { active: true }, { code: 5, active: true }], HA, 'kr', 'x'), compAvgLines('x', comps, HA, 'kr', keys)],
+        (v) => v.every((a) => Array.isArray(a) && a.length === 0));
+    }
     // ── 앞자리 0이 빠진 국내 코드 복원 후보(사용자 신고 2026-10-30: 0241D0 → 241D0 조회 실패) ──
     const { krCodeWithZeros } = C;
     eq('#98a krCodeWithZeros — 숫자가 든 1~5자 영숫자만 6자로(대문자)',
@@ -1301,6 +1349,35 @@ ok('#G31 관심종목 경로는 stockHistoryMap 을 건드리지 않는다',
     const iLine = CW.indexOf('<Line');
     const iAvg = CW.indexOf('avgLines.map((l, i) => avgLayout.pins[i]');
     ok('#G99c 매입가 선은 시세 선보다 뒤에 선언(태그가 위에 보인다)', iLine > 0 && iAvg > iLine);
+  }
+  // ── 계좌 수익률 차트의 비교 종목 매입가 점선(사용자 요청 2026-11-13) — 이 계좌 보유분 · 계산은 compAvgLines 한 곳 ──
+  {
+    const PCraw = src('src/components/PortfolioChart.tsx');
+    const PC = stripComments(PCraw);
+    const CU = stripComments(src('src/chartUtils.tsx'));
+    ok('#G99d 앱은 이 계좌(activePortfolio)만 buildHoldings 해 계좌 차트에 넘긴다(TEST 계좌도 자기 차트엔 긋는다)',
+      /const activeHoldings = useMemo\(\s*\n\s*\(\) => \(activePortfolio \? buildHoldings\(\[\{ \.\.\.activePortfolio, isTest: false \}\]\) : \{\}\),\s*\n\s*\[activePortfolio\],/.test(A)
+      && /<PortfolioChart[\s\S]*?compHoldings=\{activeHoldings\}[\s\S]*?\/>/.test(A));
+    ok('#G99e 계좌 차트 — compAvgLines(차트 행·비교 종목·이 계좌 보유분·해외면 us) · 비교 종목 선과 같은 표시 조건',
+      /import \{ compAvgLines \} from '\.\.\/watchlistChart';/.test(PCraw)
+      && /const avgLines = showCompLines \? compAvgLines\(finalChartData, compStocks, compHoldings, isOverseas \? 'us' : 'kr', leftLevelKeys\) : \[\];/.test(PC)
+      && /\{showCompLines && compStocks\.map\(\(comp, idx\) =>/.test(PC)
+      && /\.\.\.\(showCompLines \? compStocks\.map\(\(c, i\) => \(c\.active \? `comp\$\{i \+ 1\}Rate` : ''\)\)\.filter\(Boolean\) : \[\]\),/.test(PC));
+    ok('#G99f 계좌 차트 — 눈금 안 선만 ReferenceLine(extendDomain) + 태그 · 범위 밖은 가장자리 표시',
+      /\{avgLines\.map\(\(l\) => l\.pin === '' && \(\s*\n\s*<ReferenceLine key=\{`avg-\$\{l\.idx\}`\} yAxisId="left" y=\{l\.v\}[^>]*ifOverflow="extendDomain"\s*\n\s*label=\{\(\{ viewBox \}\) => <AvgTag viewBox=\{viewBox\} text=\{avgText\(l\)\} color=\{avgColor\(l\)\} \/>\} \/>/.test(PC)
+      && /avgLines\.some\(\(l\) => l\.pin === pin\)/.test(PC));
+    const iComp = PC.indexOf('dataKey={`comp${idx + 1}Rate`}');
+    const iAvgL = PC.indexOf('avgLines.map((l) => l.pin');
+    const iDim = PC.indexOf('CHART_SELECTION.dimFill');
+    ok('#G99g 계좌 차트 — 매입가 선은 비교 종목 선 뒤 · 구간 선택 딤 앞(paint 순서 = 선언 순서)', iComp > 0 && iAvgL > iComp && iDim > iAvgL);
+    // ⚠️ 태그·겹침 풀기는 chartUtils 한 곳 — 두 차트가 각자 사본을 들면 한쪽만 고쳐진다.
+    ok('#G99h 태그(AvgTag)·겹침 풀기(stackAvgTags)는 chartUtils가 export · 두 차트가 import하고 사본이 없다',
+      /export function AvgTag\(/.test(CU) && /export function stackAvgTags\(/.test(CU)
+      && /import \{ AvgTag, stackAvgTags \} from '\.\.\/chartUtils';/.test(CHART)
+      && /import \{ extractLinkLabel, AvgTag, stackAvgTags \} from '\.\.\/chartUtils';/.test(PCraw)
+      && !/function (AvgTag|stackAvgTags)\(/.test(CW) && !/function (AvgTag|stackAvgTags)\(/.test(PC));
+    ok('#G99i 계좌 차트 — 차트 상자(ref)에서 MutationObserver로 태그 겹침을 푼다',
+      /ref=\{chartBoxRef\}/.test(PC) && /const mo = new MutationObserver\(\(\) => stackAvgTags\(box\)\);/.test(PC));
   }
   // ── 자동 '보유종목' 그룹(사용자 요청 2026-10-30) — 전체 계좌 종목, 같은 종목은 계좌마다 한 줄 ──
   // ⚠️ 가상 그룹은 **화면에만** — 저장 그룹(watchlistGroups)에 들어가면 판 종목이 관심종목에 낡은 사본으로 남는다.

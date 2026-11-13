@@ -1,13 +1,14 @@
 ﻿// @ts-nocheck
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Settings, Search, BarChart2, Percent, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
-import { formatShortDate, formatPeriodRange, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates, externalFlowInRange, selectionDimBands } from '../utils';
+import { formatShortDate, formatPeriodRange, formatCurrency, formatNumber, formatFundPrice, buildIndexStatus, recessionBandsForDates, externalFlowInRange, selectionDimBands } from '../utils';
 import { CHART_SELECTION } from '../design';
 import CustomDatePicker from './CustomDatePicker';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
-import { extractLinkLabel } from '../chartUtils';
+import { extractLinkLabel, AvgTag, stackAvgTags } from '../chartUtils';
+import { compAvgLines } from '../watchlistChart';
 import { CHART_NAME_TO_POINT_KEY } from '../constants';
 
 export default function PortfolioChart({
@@ -30,6 +31,7 @@ export default function PortfolioChart({
   goldIndicators, setGoldIndicators,
   goldIndicatorColors, setGoldIndicatorColors,
   compStocks, setCompStocks,
+  compHoldings,
   userFeatures,
   finalChartData,
   effectiveShowIndicators,
@@ -110,6 +112,35 @@ export default function PortfolioChart({
   // ⚠️ 범례·툴팁·정보패널이 반드시 같은 라벨을 써야 한다. chartUtils의 [구간: x%] 태그 매칭도
   //    이 문자열을 보므로, 여기를 바꾸면 chartUtils의 name 비교도 같이 바꿀 것.
   const myReturnLabel = '기간 수익률';
+
+  // 비교 종목 중 이 계좌가 보유한 종목의 매입가 점선(사용자 요청 2026-11-13 — 관심종목 차트 창처럼).
+  // 높이 = 그 종목 조회기간 첫 종가 0% 눈금(holdingPct) · 시세 선이 40% 미만으로 눌릴 만큼 먼 매입가는
+  // 눈금을 넓히지 않고 위·아래 가장자리에 표시만 한다(compAvgLines → holdingLayout, 차트 창과 같은 규칙).
+  // 눈금 판정에 넣는 선 = 아래 렌더에서 왼쪽 % 눈금에 실제로 그리는 선과 같은 조건.
+  const showCompLines = userFeatures.feature1 && activePortfolioAccountType !== 'gold';
+  const leftLevelKeys = [
+    ...(showReturnRate ? ['principalReturnRate'] : []),
+    ...(userFeatures.feature1 && showKospi ? ['kospiRate'] : []),
+    ...(userFeatures.feature1 && showSp500 ? ['sp500Rate'] : []),
+    ...(userFeatures.feature1 && showNasdaq ? ['nasdaqRate'] : []),
+    ...(userFeatures.feature1 ? Object.keys(effectiveShowIndicators || {}).filter(k => effectiveShowIndicators[k] && indicatorHistoryMap[k]).map(k => `${k}RateScaled`) : []),
+    ...(showCompLines ? compStocks.map((c, i) => (c.active ? `comp${i + 1}Rate` : '')).filter(Boolean) : []),
+  ];
+  const avgLines = showCompLines ? compAvgLines(finalChartData, compStocks, compHoldings, isOverseas ? 'us' : 'kr', leftLevelKeys) : [];
+  const avgColor = (l) => compStocks[l.idx]?.color || '#10b981';
+  const fmtAvgPx = (mk, v) => mk === 'us'
+    ? '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : mk === 'fund' ? formatFundPrice(v) : formatNumber(Math.round(v));
+  const avgText = (l) => `매입가 ${fmtAvgPx(l.mk, l.avg)}${Number.isFinite(l.ret) ? ` · ${l.ret > 0 ? '+' : ''}${l.ret.toFixed(2)}%` : ''}`;
+  const chartBoxRef = useRef(null);
+  useEffect(() => {
+    const box = chartBoxRef.current;
+    if (!box || typeof MutationObserver === 'undefined') return;
+    stackAvgTags(box);
+    const mo = new MutationObserver(() => stackAvgTags(box));
+    mo.observe(box, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-avg-y'] });
+    return () => mo.disconnect();
+  }, []);
 
   const fmtMarkerAmt = (amt) => {
     const a = Math.abs(amt);
@@ -661,6 +692,15 @@ export default function PortfolioChart({
                               ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
                             </span>
                           )}
+                          {(() => {
+                            const al = avgLines.find((l) => l.idx === ci);
+                            return al ? (
+                              <span className="text-[10px] font-bold whitespace-nowrap" style={{ color: comp.color || '#10b981' }}
+                                title={`이 계좌 보유 ${formatNumber(al.qty)}${al.mk === 'fund' ? '좌' : '주'} · 평균 매입가(포트폴리오 표의 구매단가) — 차트의 같은 색 점선`}>
+                                · 매입가 {fmtAvgPx(al.mk, al.avg)}
+                              </span>
+                            ) : null;
+                          })()}
                         </div>
                       );
                     })}
@@ -777,6 +817,7 @@ export default function PortfolioChart({
       })()}
 
       <div
+        ref={chartBoxRef}
         className="chart-container-for-drag p-2 sm:p-3 md:p-4 h-[320px] sm:h-[380px] md:h-[440px] xl:h-auto xl:min-h-[400px] xl:flex-1 relative select-none"
       >
         <ResponsiveContainer width="100%" height="100%" minHeight={260}>
@@ -925,9 +966,15 @@ export default function PortfolioChart({
             {isXl && userFeatures.feature1 && effectiveShowIndicators.btc && indicatorHistoryMap.btc && <Line isAnimationActive={false} yAxisId="right-btc" dataKey="btcPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
             {userFeatures.feature1 && effectiveShowIndicators.eth && indicatorHistoryMap.eth && <Line isAnimationActive={false} yAxisId="left" type="monotone" dataKey="ethRateScaled" name="Ethereum" stroke="#627eea" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
             {isXl && userFeatures.feature1 && effectiveShowIndicators.eth && indicatorHistoryMap.eth && <Line isAnimationActive={false} yAxisId="right-eth" dataKey="ethPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
-            {userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks.map((comp, idx) =>
+            {showCompLines && compStocks.map((comp, idx) =>
               comp.active ? <Line key={comp.id} yAxisId="left" type="monotone" dataKey={`comp${idx + 1}Rate`} name={comp.name} stroke={comp.color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} /> : null
             )}
+            {/* 보유 비교 종목 매입가 점선 — 비교 종목 선보다 **뒤**에 선언해 태그가 선 위에 보이게(paint 순서 = 선언 순서).
+                ifOverflow="extendDomain": 눈금을 넓혀 선을 넣는다 — 너무 먼 매입가는 compAvgLines가 가장자리 표시로 돌린다(pin !== ''). */}
+            {avgLines.map((l) => l.pin === '' && (
+              <ReferenceLine key={`avg-${l.idx}`} yAxisId="left" y={l.v} stroke={avgColor(l)} strokeOpacity={0.9} strokeWidth={1.2} strokeDasharray="6 4" ifOverflow="extendDomain"
+                label={({ viewBox }) => <AvgTag viewBox={viewBox} text={avgText(l)} color={avgColor(l)} />} />
+            ))}
             {depositMarkers.map((evt, i) => (
               <ReferenceLine key={`dep-${i}`} yAxisId="left" x={evt.date} stroke="#22c55e" strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.7}
                 label={({ viewBox }) => {
@@ -1007,6 +1054,16 @@ export default function PortfolioChart({
             }
           </ComposedChart>
         </ResponsiveContainer>
+        {/* 매입가가 차트 범위 밖(눈금을 넓히면 선들이 납작해지는 거리) — 그 방향 가장자리에 값만 표시 */}
+        {finalChartData.length > 1 && ['top', 'bottom'].map((pin) => avgLines.some((l) => l.pin === pin) && (
+          <div key={pin} className={`absolute ${(showTotalEval || showPrincipal) ? 'right-20' : 'right-8'} ${pin === 'top' ? 'top-5' : 'bottom-14'} flex flex-col items-end gap-1 pointer-events-none`}>
+            {avgLines.filter((l) => l.pin === pin).map((l) => (
+              <span key={l.idx} className="rounded border px-1.5 py-0.5 text-[10.5px] font-bold tabular-nums bg-[#0b1120]/90" style={{ borderColor: avgColor(l), color: avgColor(l) }}>
+                {pin === 'top' ? '▲' : '▼'} {avgText(l)} <span className="font-normal text-gray-500">— 차트 {pin === 'top' ? '위' : '아래'}쪽 범위 밖</span>
+              </span>
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   );
