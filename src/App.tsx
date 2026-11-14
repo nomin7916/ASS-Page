@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, Suspense } from 'react';
 import {
   ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
@@ -22,8 +22,6 @@ import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
 import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures, fetchUserEmail } from './components/LoginGate';
-import AdminPage from './components/AdminPage';
-import AdminPortal from './components/AdminPortal';
 import AdminNotificationModal, { AdminNotification } from './components/AdminNotificationModal';
 import AdminChoiceModal from './components/AdminChoiceModal';
 import AdminViewBootstrap from './components/AdminViewBootstrap';
@@ -45,7 +43,6 @@ import PortfolioStatsPanel from './components/PortfolioStatsPanel';
 import AccountTabBar from './components/AccountTabBar';
 import UserInfoBar from './components/UserInfoBar';
 import DividendSummaryTable from './components/DividendSummaryTable';
-import DividendTaxPage from './components/DividendTaxPage';
 import ConfirmDialog from './components/ConfirmDialog';
 import LoadingOverlay from './components/LoadingOverlay';
 import IntroVideoOverlay from './components/IntroVideoOverlay';
@@ -57,8 +54,14 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { FX_DEFAULT, FX_MIN_SLOTS, normalizeFxCurrencies, normalizeFxSlotCount } from './fxRates';
 import FlowBoard from './components/FlowBoard';
 import { normalizeFlowMaps, flowFingerprint, flowMapsHaveContent } from './flowMap';
-import BacktestPage from './components/BacktestPage';
-import LedgerPage from './components/LedgerPage';
+import { lazyScreen, ScreenLoading } from './lazyScreen';
+// 앱 안 큰 화면 5개는 열 때 받는다(성능 개선 1-4) — 로딩이 끝나 한가해지면 아래 '미리 받기' 효과가 하나씩 받아 둔다.
+// ⚠️ 쓰는 자리마다 <Suspense fallback={<ScreenLoading />}>로 감쌀 것 — 빠지면 받는 동안 앱 화면 전체가 사라진다(main.tsx 경계까지 올라감).
+const BacktestPage = lazyScreen(() => import('./components/BacktestPage'), { inApp: true });
+const LedgerPage = lazyScreen(() => import('./components/LedgerPage'), { inApp: true });
+const AdminPage = lazyScreen(() => import('./components/AdminPage'), { inApp: true });
+const AdminPortal = lazyScreen(() => import('./components/AdminPortal'), { inApp: true });
+const DividendTaxPage = lazyScreen(() => import('./components/DividendTaxPage'), { inApp: true });
 import { normalizeLedgerBooks, ledgerFingerprint, ledgerBooksHaveContent } from './ledger';
 import { normalizeLedgerSnapshots, ledgerSnapshotsFingerprint, ledgerSnapshotsHaveContent } from './ledger';
 import CardWinFeed from './components/CardWinFeed';
@@ -4767,6 +4770,25 @@ export default function App() {
     };
   }, []);
 
+  // 한가할 때 미리 받기(성능 개선 1-4) — 로딩 화면·인트로가 끝난 뒤, 이 사용자가 열 수 있는 화면만 한 번에 하나씩.
+  // 배포 전에 받아 두므로 열 때 바로 뜨고, 배포 뒤 옛 탭이 사라진 조각을 찾는 일도 막는다(설계서 §3-2 · 1-2 메모의 404 캐시).
+  const prefetchedRef = useRef(false);
+  useEffect(() => {
+    if (prefetchedRef.current || !authUser || isInitialLoading || introPlaying) return;
+    prefetchedRef.current = true;
+    const admin = (authUser.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    const list = [
+      (admin || userFeatures.backtestEnabled) && BacktestPage,
+      (admin || userFeatures.ledgerEnabled) && LedgerPage,
+      (admin || userFeatures.feature2) && DividendTaxPage,
+      admin && AdminPage,
+      admin && AdminPortal,
+    ].filter(Boolean);
+    const idle = (fn) => (window.requestIdleCallback ? window.requestIdleCallback(fn, { timeout: 5000 }) : setTimeout(fn, 1500));
+    const next = () => { const C = list.shift(); if (C) C.preload().then(() => idle(next)); };
+    idle(next);
+  }, [authUser, isInitialLoading, introPlaying, userFeatures]);
+
   // 새 탭 관리자 접속 콜드부팅 — ?adminView 파라미터가 있고 아직 ctx 미구성이면 관리자 무음 인증 진행.
   // 인증 완료 시 setAdminViewUserCtx → 아래 LoginGate가 ctx를 받아 PIN 화면(impersonation)으로 진입.
   if (!authUser && ADMIN_VIEW_EMAIL && !adminViewUserCtx) {
@@ -4839,6 +4861,7 @@ export default function App() {
     return (
       <>
       {cardWinFeeds}
+      <Suspense fallback={<ScreenLoading />}>
       <AdminPortal
         adminEmail={authUser.email}
         onClose={() => {
@@ -4849,16 +4872,17 @@ export default function App() {
         onViewUser={handleAdminViewUser}
         notify={notify}
       />
+      </Suspense>
       </>
     );
   }
 
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return <>{cardWinFeeds}<AdminPage adminEmail={authUser.email} onClose={() => {
+    return <>{cardWinFeeds}<Suspense fallback={<ScreenLoading />}><AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} onMigrationPreview={handleMigrationPreview} onMigrationApply={handleMigrationApply} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportUrl={reportUrl} onSetReportUrl={handleSetReportUrl} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} /></>;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} onMigrationPreview={handleMigrationPreview} onMigrationApply={handleMigrationApply} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportUrl={reportUrl} onSetReportUrl={handleSetReportUrl} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} /></Suspense></>;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨
@@ -4873,6 +4897,7 @@ export default function App() {
     return (
       <>
       {cardWinFeeds}
+      <Suspense fallback={<ScreenLoading />}>
       <DividendTaxPage
         onLoad={async () => {
           const folderId = driveFolderIdRef.current || await ensureDriveFolder(driveTokenRef.current);
@@ -4888,6 +4913,7 @@ export default function App() {
         isAdmin={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()}
         onUpdate={setDividendTaxHistory}
       />
+      </Suspense>
       </>
     );
   }
@@ -5776,6 +5802,7 @@ export default function App() {
              앱 화면 전체가 오류 페이지로 대체된다(FloatingCalculator·FlowBoard와 동일 2차 방어). */}
       {backtestAccess && showBacktestPage && (
         <ErrorBoundary label="백테스트">
+          <Suspense fallback={<ScreenLoading />}>
           <BacktestPage
             open
             variant="overlay"
@@ -5794,6 +5821,7 @@ export default function App() {
             readOnly={!!adminViewingAs}
             notice={btWinBlocked ? '팝업이 차단돼 별도 탭을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''}
           />
+          </Suspense>
         </ErrorBoundary>
       )}
       {/* 가계부 — 기본은 별도 브라우저 창이고, 이 인앱 렌더는 **팝업 차단 시 폴백**이다.
@@ -5802,6 +5830,7 @@ export default function App() {
              앱 화면 전체가 오류 페이지로 대체된다(FlowBoard·BacktestPage와 동일 2차 방어). */}
       {ledgerAccess && showLedgerPage && (
         <ErrorBoundary label="가계부">
+          <Suspense fallback={<ScreenLoading />}>
           <LedgerPage
             open
             variant="overlay"
@@ -5826,6 +5855,7 @@ export default function App() {
                   : ledgerWinBlocked ? '팝업이 차단돼 별도 탭을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''
             }
           />
+          </Suspense>
         </ErrorBoundary>
       )}
     </div>

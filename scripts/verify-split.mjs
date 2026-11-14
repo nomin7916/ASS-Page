@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// 앱 본체·별도 창 8종 나누어 받기(성능 개선 1-3, 2026-11-15)를 지키는 검사.  실행: npm run verify:split
+// 앱 본체·별도 창 8종 나누어 받기(성능 개선 1-3) + 앱 안 큰 화면 5개 열 때 받기·미리 받기(1-4)를 지키는 검사(2026-11-15).  실행: npm run verify:split
 //
 // 지켜야 할 것:
 //   ① main.tsx는 App·창 8종을 lazyScreen(동적 import)으로만 부른다 — 정적 import가 하나라도 생기면 모든 창이 앱 전체를 다시 받는다.
 //   ② 조각 받기 실패는 lazyScreen이 새로고침 안내로 바꾼다(자동 새로고침 금지 — 입력 중 내용 유실).
 //   ③ 로딩 중 어두운 바탕은 html.booting + BootDone(첫 커밋에서 지움)으로만 — 실측한 두 함정 금지:
 //      body:has(#root:empty) = 계좌 전환 약 0.5초 느려짐(문서 전체 스타일 재계산) · #root:empty 덮개 = 백테스트 창(body 포털)에서 덮개가 남음.
+//   ⑤ App의 큰 화면 5개(백테스트·가계부·관리자·관리자 포털·분배금 과표)는 lazyScreen + 쓰는 자리마다 Suspense(빠지면 받는 동안 앱 전체가 사라진다)
+//      + 로딩이 끝난 뒤 미리 받기(권한 있는 화면만).
 //   ④ vite.config.ts의 app-chunk-preload는 `…Window=1` 주소를 건너뛴다 — 창 파라미터가 전부 그 꼴이어야 창이 앱 조각을 미리 받지 않는다.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -41,7 +43,9 @@ ok('#M5 창 부팅 파라미터가 전부 …Window 꼴(앱 조각 미리 받기
 
 console.log('\n── 파트② lazyScreen — 실패는 새로고침 안내 ──');
 const ls = stripComments(read('src/lazyScreen.tsx'));
-ok('#L1 받기 실패를 잡아 ChunkLoadFailed로 바꾼다', /return lazy\(\(\) => load\(\)\.catch\(\(err\) => \{[\s\S]*?return \{ default: ChunkLoadFailed \}/.test(ls));
+ok('#L1 받기 실패를 잡아 ChunkLoadFailed로 바꾼다', /lazy\(\(\) => load\(\)\.catch\(\(err\) => \{[\s\S]*?return \{ default: \(\) => <ChunkLoadFailed inApp=\{inApp\} \/> \}/.test(ls));
+ok('#L3 preload는 같은 load를 부르고 실패를 삼킨다(미리 받기 실패가 앱을 멈추지 않게)', /C\.preload = \(\) => load\(\)\.catch\(\(\) => \{\}\)/.test(ls));
+ok('#L4 앱 안 화면은 실패 안내에 닫기가 있다', /\{inApp && \(\s*<button\s*onClick=\{\(\) => setHidden\(true\)\}/.test(ls));
 ok('#L2 자동 새로고침 없음 — reload는 버튼 클릭에서만', (ls.match(/location\.reload\(\)/g) || []).length === 1 && /onClick=\{\(\) => window\.location\.reload\(\)\}/.test(ls));
 
 console.log('\n── 파트③ index.html — 로딩 중 바탕 ──');
@@ -58,6 +62,26 @@ ok('#V1 appChunkPreload()가 plugins에 있다', /plugins: \[\s*react\(\),\s*app
 ok('#V2 창 주소(…Window=1)는 미리 받기를 건너뛴다', vc.includes('if(/[?&]\\\\w+Window=1(?:&|$)/.test(location.search))return;'));
 ok('#V3 앱 조각을 못 찾으면 빌드를 멈춘다(조용히 빠지지 않게)', /if \(!app \|\| !entry\) throw new Error/.test(vc));
 ok('#V4 React·아이콘 묶음(vendor-react · vendor-icons)', /return 'vendor-react'/.test(vc) && /return 'vendor-icons'/.test(vc));
+
+console.log('\n── 파트⑤ App 안 큰 화면 5개 — 열 때 받기 + 미리 받기 ──');
+const app = stripComments(read('src/App.tsx'));
+const PAGES = ['BacktestPage', 'LedgerPage', 'AdminPage', 'AdminPortal', 'DividendTaxPage'];
+for (const n of PAGES) {
+  ok(`#A1 ${n} = lazyScreen(() => import('./components/${n}'), { inApp: true })`,
+    new RegExp(`const ${n} = lazyScreen\\(\\(\\) => import\\('\\./components/${n}'\\), \\{ inApp: true \\}\\);`).test(app)
+    && !new RegExp(`^import\\s+${n}\\s+from`, 'm').test(app));
+  const uses = (app.match(new RegExp(`<${n}\\b`, 'g')) || []).length;
+  const wrapped = (app.match(new RegExp(`<Suspense fallback=\\{<ScreenLoading \\/>\\}>\\s*<${n}\\b`, 'g')) || []).length;
+  ok(`#A2 ${n}: 쓰는 자리 ${uses}곳 전부 바로 바깥이 <Suspense fallback={<ScreenLoading />}>`, uses > 0 && uses === wrapped, `쓰는 곳 ${uses} · 감싼 곳 ${wrapped}`);
+}
+const pf = app.match(/const prefetchedRef = useRef\(false\);\s*useEffect\(\(\) => \{([\s\S]*?)\n  \}, \[([^\]]*)\]\);/);
+ok('#A3 미리 받기는 로딩 화면·인트로가 끝난 뒤 한 번만', !!pf && /if \(prefetchedRef\.current \|\| !authUser \|\| isInitialLoading \|\| introPlaying\) return;/.test(pf[1]));
+ok('#A4 미리 받기 목록에 5개가 권한 조건과 함께 있다', !!pf
+  && /\(admin \|\| userFeatures\.backtestEnabled\) && BacktestPage/.test(pf[1]) && /\(admin \|\| userFeatures\.ledgerEnabled\) && LedgerPage/.test(pf[1])
+  && /\(admin \|\| userFeatures\.feature2\) && DividendTaxPage/.test(pf[1]) && /admin && AdminPage/.test(pf[1]) && /admin && AdminPortal/.test(pf[1]));
+ok('#A5 한 번에 하나씩(앞 것이 끝나면 다음)', !!pf && /C\.preload\(\)\.then\(\(\) => idle\(next\)\)/.test(pf[1]));
+ok('#A6 미리 받기 효과가 첫 조기 반환보다 위(훅 순서)', app.indexOf('const prefetchedRef = useRef(false);') > 0
+  && app.indexOf('const prefetchedRef = useRef(false);') < app.indexOf('if (!authUser && ADMIN_VIEW_EMAIL && !adminViewUserCtx)'));
 
 console.log(`\n${fail ? '❌' : '✅'} verify:split — 통과 ${pass} · 실패 ${fail}\n`);
 process.exit(fail ? 1 : 0);
