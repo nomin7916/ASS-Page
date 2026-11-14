@@ -1,10 +1,22 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-11-14  
+> 마지막 작업일: 2026-11-15  
 > 브랜치: main  
-> 작업 PC: 클라우드 세션(node 있음 · node_modules 없음 — build 실행 불가)
+> 작업 PC: 맥북 로컬 세션(node · node_modules 있음 — build 실행 가능)
 
 ---
+
+## 2026-11-15 — [성능 1-2] 캐시 설정 + 없는 파일은 404
+
+**대상 파일**: `vercel.json` · `성능개선_설계_2026-11.md` · `CLAUDE.md`
+
+> 다음 진행 해줘
+
+- `vercel.json` ① 대체 규칙을 `/((?!api/|assets/|intro/).*)`로 — `/assets/`·`/intro/`의 없는 파일이 `index.html` 대신 404.
+  ② `/assets/(.*)`에 `Cache-Control: public, max-age=31536000, immutable` — 이름에 내용 지문이 붙는 파일만 1년 캐시.
+- 배포 전 실제 응답: JS·CSS가 `max-age=0`(다시 방문할 때마다 서버에 확인), 없는 자산 요청은 200 + `index.html`이었다.
+- `index.html`은 규칙 밖 — 종전대로 매번 확인하므로 새 배포는 바로 반영된다. 영상(`/intro/`)도 그대로.
+- 1-3(화면 나누어 받기)의 전제: 배포 뒤 옛 조각을 찾는 탭이 `index.html`을 JS로 받아 저장하는 일을 막는다.
 
 ## 2026-11-14 — [성능 1-1] Tailwind 외부 스크립트 제거 (첫 화면 준비 시간 절반 가까이 단축)
 
