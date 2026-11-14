@@ -26,7 +26,8 @@ const formatUSD = (n) => {
 
 // 보유수량 표시 전용. formatNumber(Intl 기본값)는 소수 3자리에서 잘려 해외 소수점 주식의
 // 입력값이 화면에서만 달라 보인다(저장값은 온전) → 직접 입력 칸이므로 8자리까지 그대로 보여준다.
-const formatQty = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 }).format(cleanNum(n));
+const FMT_QTY = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 });
+const formatQty = (n) => (n === '' || n == null) ? '' : FMT_QTY.format(cleanNum(n));
 
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
 const getAssetClass = (cat) => SAFE_CATEGORIES.includes(cat) ? 'S' : 'D';

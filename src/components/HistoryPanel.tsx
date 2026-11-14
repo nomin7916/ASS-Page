@@ -8,7 +8,8 @@ import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
 import CardExpandButton from './CardExpandButton';
 
-const formatUsd = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
+const FMT_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+const formatUsd = (n) => FMT_USD.format(cleanNum(n));
 
 export default function HistoryPanel({
   history,
@@ -279,59 +280,10 @@ export default function HistoryPanel({
     return v != null ? v : (r.evalAmount != null ? r.evalAmount : null);
   };
 
-  return (
-        <>
-          {/* ⚠️ 세그먼트 바(28px)를 thead 위에 추가했으므로 카드 높이를 그만큼 올린다 —
-              카드가 고정 높이 + overflow-hidden이라 안 올리면 바 높이만큼 표 행이 그대로 사라진다. */}
-          <div className={`w-full xl:w-[21%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${activePortfolioAccountType === 'overseas' ? 'h-[552px]' : 'h-[392px]'} flex flex-col overflow-hidden shrink-0`}>
-            <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center justify-between text-sm border-b border-gray-700 shrink-0">
-              <button
-                onClick={() => refreshPrices({ force: true })}
-                disabled={isLoading}
-                className="flex items-center gap-1.5 hover:text-sky-300 transition-colors disabled:opacity-60"
-                title="전체 강제 재수집 — 모든 필터 우회, 전 계좌 모든 종목의 과거 이력을 KIS·Naver·NAV API로 무조건 다시 조회"
-              >
-                <span className="min-w-0 truncate">📈 자산 평가액 추이</span>
-                {isLoading && <span className="inline-block animate-spin text-sky-400 text-base leading-none">↻</span>}
-              </button>
-              <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={14} /></button>
-              <CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="통계·히스토리" />
-            </div>
-            {setHistPeriod && (
-              <div className="px-2 py-1 bg-[#0f172a]/60 border-b border-gray-700/60 flex items-center justify-between gap-1 shrink-0">
-                <span className="text-[9px] text-gray-500 truncate">{isPeriodMode ? periodRangeLabel(viewRows[0], histPeriod) : '기록일별'}</span>
-                <HistPeriodSeg value={histPeriod} onChange={setHistPeriod} note={histPeriodNote} />
-              </div>
-            )}
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              <table className="w-full text-right text-[11px] table-fixed border-collapse">
-                <colgroup>
-                  <col className="w-[30%]" />
-                  <col className="w-[35%]" />
-                  <col className="w-[35%]" />
-                </colgroup>
-                <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
-                  <tr>
-                    <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal">일자</th>
-                    {/* ⚠️ 문구는 periodNoun 공유 포매터로만 만든다 — 모드별로 거짓이 되는 문장을
-                        화면마다 따로 들고 있으면 한 곳만 고쳐지고 나머지가 계속 거짓말을 한다. */}
-                    <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal cursor-help" title={`첫줄: ${isPeriodMode ? `${noun.end} 기준 총평가액` : '그날의 총평가액'} (수량 × 그날 종가로 재계산)
-둘째줄: 투자원금 대비 누적 수익률 = (평가자산 − 투자원금) ÷ 투자원금
-셋째줄: 누적 수익금 = 평가자산 − 투자원금
-시작부터 지금까지 통틀어 벌었는지를 보는 값입니다(투자 요약 패널·수익률 차트와 동일 기준).${isPeriodMode ? `\n\n※ 이 열은 ${noun.span} 마지막 기록 시점의 값입니다(기간 합계가 아닙니다).` : ''}`}>평가자산</th>
-                    <th className="py-1.5 px-1 text-center font-normal cursor-help" title={isPeriodMode
-                      ? `${noun.span} 시장에서 얼마를 벌었는가 (${noun.prev} ${noun.end} → 이번 ${noun.end})
-시작값 = 직전 기간의 대표일 종가 (= 바로 아래 행의 평가자산). 라벨의 첫 날이 아닙니다.
-윗줄 %  = ${noun.span}의 일별 수익률을 곱해 낸 값(누적 TWR 차분)${isOverseasAcct ? '' : ' — 수익률 차트의 구간 수익률과 같은 기준입니다.'}
-아랫줄 ₩ = ${noun.span}의 일별 손익 합계
-입출금은 일별 단계에서 이미 제거되므로, 입금해도 수익으로 잡히지 않습니다.${isOverseasAcct ? '\n※ 해외계좌는 이 표가 원화 기준이라 수익률 차트(USD 기준)와 값이 다를 수 있습니다.' : ''}`
-                      : `그날 하루 시장에서 얼마를 벌었는가 (전일 종가 → 당일 종가)
-윗줄 %  = 일간 수익금 ÷ 그날의 시작 자산(전일 평가자산 + 당일 입금)
-아랫줄 ₩ = 일간 수익금 = 당일 평가자산 − 전일 평가자산 − 당일 순입출금
-입출금이 없던 날은 (당일 − 전일) ÷ 전일 과 정확히 같습니다.
-입출금이 있던 날은 그 금액을 빼므로, 입금해도 수익으로 잡히지 않습니다.`}>{noun.unit} 수익</th>
-                  </tr>
-                </thead>
+  // ⚠️ 표 본문은 아래 의존 값이 바뀔 때만 다시 만든다 — App은 계좌 탭 전환 한 번에 5~12번 다시 그려지고(시세 갱신 상태 등),
+  //    그때마다 전 행(수백 개)의 툴팁 글자를 새로 만들던 것이 전환 지연의 큰 몫이었다(2026-11-15 실측).
+  //    행 안에서 컴포넌트의 새 값을 쓰면 반드시 의존 목록에 넣는다 — 빠뜨리면 표가 옛 값을 보여 준다. 검증: verify:fmt-cache.
+  const historyTbody = useMemo(() => (
                 <tbody>
                   {viewRows.map((h, i) => {
                     const isOverseasAcc = activePortfolioAccountType === 'overseas';
@@ -514,6 +466,62 @@ export default function HistoryPanel({
                     );
                   })}
                 </tbody>
+  ), [viewRows, histPeriod, activePortfolioAccountType, overseasEvalByDate, displayEvalByDate, periodMetrics, dailyMetricsByDate, cumulativeByDate, rowBookByDate, depositHistory, depositHistory2, effectiveDateKey, userModifiedDates, marketIndicators.usdkrw]);
+
+  return (
+        <>
+          {/* ⚠️ 세그먼트 바(28px)를 thead 위에 추가했으므로 카드 높이를 그만큼 올린다 —
+              카드가 고정 높이 + overflow-hidden이라 안 올리면 바 높이만큼 표 행이 그대로 사라진다. */}
+          <div className={`w-full xl:w-[21%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${activePortfolioAccountType === 'overseas' ? 'h-[552px]' : 'h-[392px]'} flex flex-col overflow-hidden shrink-0`}>
+            <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center justify-between text-sm border-b border-gray-700 shrink-0">
+              <button
+                onClick={() => refreshPrices({ force: true })}
+                disabled={isLoading}
+                className="flex items-center gap-1.5 hover:text-sky-300 transition-colors disabled:opacity-60"
+                title="전체 강제 재수집 — 모든 필터 우회, 전 계좌 모든 종목의 과거 이력을 KIS·Naver·NAV API로 무조건 다시 조회"
+              >
+                <span className="min-w-0 truncate">📈 자산 평가액 추이</span>
+                {isLoading && <span className="inline-block animate-spin text-sky-400 text-base leading-none">↻</span>}
+              </button>
+              <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={14} /></button>
+              <CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="통계·히스토리" />
+            </div>
+            {setHistPeriod && (
+              <div className="px-2 py-1 bg-[#0f172a]/60 border-b border-gray-700/60 flex items-center justify-between gap-1 shrink-0">
+                <span className="text-[9px] text-gray-500 truncate">{isPeriodMode ? periodRangeLabel(viewRows[0], histPeriod) : '기록일별'}</span>
+                <HistPeriodSeg value={histPeriod} onChange={setHistPeriod} note={histPeriodNote} />
+              </div>
+            )}
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <table className="w-full text-right text-[11px] table-fixed border-collapse">
+                <colgroup>
+                  <col className="w-[30%]" />
+                  <col className="w-[35%]" />
+                  <col className="w-[35%]" />
+                </colgroup>
+                <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
+                  <tr>
+                    <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal">일자</th>
+                    {/* ⚠️ 문구는 periodNoun 공유 포매터로만 만든다 — 모드별로 거짓이 되는 문장을
+                        화면마다 따로 들고 있으면 한 곳만 고쳐지고 나머지가 계속 거짓말을 한다. */}
+                    <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal cursor-help" title={`첫줄: ${isPeriodMode ? `${noun.end} 기준 총평가액` : '그날의 총평가액'} (수량 × 그날 종가로 재계산)
+둘째줄: 투자원금 대비 누적 수익률 = (평가자산 − 투자원금) ÷ 투자원금
+셋째줄: 누적 수익금 = 평가자산 − 투자원금
+시작부터 지금까지 통틀어 벌었는지를 보는 값입니다(투자 요약 패널·수익률 차트와 동일 기준).${isPeriodMode ? `\n\n※ 이 열은 ${noun.span} 마지막 기록 시점의 값입니다(기간 합계가 아닙니다).` : ''}`}>평가자산</th>
+                    <th className="py-1.5 px-1 text-center font-normal cursor-help" title={isPeriodMode
+                      ? `${noun.span} 시장에서 얼마를 벌었는가 (${noun.prev} ${noun.end} → 이번 ${noun.end})
+시작값 = 직전 기간의 대표일 종가 (= 바로 아래 행의 평가자산). 라벨의 첫 날이 아닙니다.
+윗줄 %  = ${noun.span}의 일별 수익률을 곱해 낸 값(누적 TWR 차분)${isOverseasAcct ? '' : ' — 수익률 차트의 구간 수익률과 같은 기준입니다.'}
+아랫줄 ₩ = ${noun.span}의 일별 손익 합계
+입출금은 일별 단계에서 이미 제거되므로, 입금해도 수익으로 잡히지 않습니다.${isOverseasAcct ? '\n※ 해외계좌는 이 표가 원화 기준이라 수익률 차트(USD 기준)와 값이 다를 수 있습니다.' : ''}`
+                      : `그날 하루 시장에서 얼마를 벌었는가 (전일 종가 → 당일 종가)
+윗줄 %  = 일간 수익금 ÷ 그날의 시작 자산(전일 평가자산 + 당일 입금)
+아랫줄 ₩ = 일간 수익금 = 당일 평가자산 − 전일 평가자산 − 당일 순입출금
+입출금이 없던 날은 (당일 − 전일) ÷ 전일 과 정확히 같습니다.
+입출금이 있던 날은 그 금액을 빼므로, 입금해도 수익으로 잡히지 않습니다.`}>{noun.unit} 수익</th>
+                  </tr>
+                </thead>
+                {historyTbody}
               </table>
             </div>
           </div>

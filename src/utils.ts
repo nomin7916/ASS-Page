@@ -1493,10 +1493,15 @@ export const mergeTransferItem = (targetItem: any, srcItem: any, accountType: st
   return next;
 };
 
-export const formatCurrency = (n) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(cleanNum(n));
+// ⚠️ Intl.NumberFormat은 모듈에서 한 번만 만든다 — 호출마다 새로 만들면 표 한 번 그리는 데 수천 번 생성돼
+//    계좌 탭 전환 시간의 53~64%를 차지했다(2026-11-15 실측). 출력 글자는 같다. 검증: verify:fmt-cache.
+const FMT_KRW = new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' });
+const FMT_NUM = new Intl.NumberFormat('ko-KR');
+const FMT_FUND = new Intl.NumberFormat('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const formatCurrency = (n) => FMT_KRW.format(cleanNum(n));
 export const formatPercent = (n) => cleanNum(n).toFixed(2) + '%';
-export const formatNumber = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR').format(cleanNum(n));
-export const formatFundPrice = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cleanNum(n));
+export const formatNumber = (n) => (n === '' || n == null) ? '' : FMT_NUM.format(cleanNum(n));
+export const formatFundPrice = (n) => (n === '' || n == null) ? '' : FMT_FUND.format(cleanNum(n));
 export const formatChangeRate = (n) => {
   const s = cleanNum(n);
   return (s > 0 ? '▲' : s < 0 ? '▼' : '') + Math.abs(s).toFixed(2) + '%';

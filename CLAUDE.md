@@ -340,6 +340,9 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 - 알림: 반드시 `notify(text, type)` — `window.alert/confirm` · 인라인 토스트 div 금지
 - Tailwind 클래스는 **완성된 글자로만** 쓴다(`bg-${색}-500`·`'w-' + n` 금지) — 꾸밈은 빌드 CSS 하나뿐이다.
   ⚠️ `index.html`에 외부 Tailwind 스크립트(cdn.tailwindcss.com)를 다시 넣지 말 것(첫 화면이 2배 느려진다). 검증: `verify:tw-static`.
+- `Intl.NumberFormat`은 모듈 상수(`const FMT_* = …`)로 한 번만 만든다 — 함수 안에서 매번 만들면 표 렌더가 수천 번 생성한다
+  (계좌 탭 전환 시간의 53~64%였다). `HistoryPanel`의 `historyTbody`(useMemo)는 행 안에서 쓰는 값을 **전부** 의존 목록에 넣는다
+  — 빠지면 오류 없이 옛 값이 보인다. 검증: `verify:fmt-cache`.
 - 빌드 검증: `npm run build` (에러 0개, 약 20초) — `node_modules`가 있으면 **반드시 돌린다**.
   부재한 환경에서만 아래 「검증·리뷰 규약」의 게이트로 대체
 - 불필요한 주석·빈 줄 추가 금지
