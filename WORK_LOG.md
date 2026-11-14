@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-11-15 — [성능 1-3] 별도 창 8종과 앱 본체를 따로 받기
+
+**대상 파일**: `src/main.tsx` · `src/lazyScreen.tsx`(신규) · `vite.config.ts` · `index.html` · `scripts/verify-split.mjs`(신규) ·
+`package.json` · `성능개선_설계_2026-11.md` · `CLAUDE.md`
+
+> 남은 작업 진행 해줘
+
+- 앱 본체와 별도 창 8종을 각자 조각으로 받는다 — 창이 받는 JS 2,657KB → 304~1,131KB(−57~−89%).
+- 첫 화면(CPU 6배): 앱 415 → 329ms, 창 8종 −20~−37%. 계좌 탭 전환 속도는 그대로.
+- 앱 탭은 index.html에서 앱 조각을 미리 받아 한 단계 늦어지지 않게 했다(`vite.config.ts` app-chunk-preload). React·아이콘은 묶음 조각.
+- 조각 받기 실패(배포 뒤 옛 탭 · 연결 끊김) = 그 자리에 새로고침 안내(`lazyScreen`). 자동 새로고침 없음.
+- 로딩 중 흰 화면 대신 어두운 바탕(`html.booting` → 첫 화면 커밋에서 지움).
+  처음 넣은 `body:has(#root:empty)`는 계좌 전환을 약 0.5초 느리게 해서, `#root:empty` 덮개는 백테스트 창에 남아서 버렸다(둘 다 실측).
+- 화면 동일: 로그인 화면 + 창 8종 픽셀 동일 · 가짜 로그인 앱 탭에서 창 5종 연결 확인 · 콘솔 오류 0.
+- 재발 방지: `verify:split` 23건 — 변이 11종 검출 확인.
+
 ## 2026-11-15 — [성능 T-1] 계좌 탭 전환 빠르게 (금액 표시 함수 재사용 + 평가액 추이 표 다시 만들기 줄이기)
 
 **대상 파일**: `src/utils.ts` · `src/components/HistoryPanel.tsx` · `src/components/PortfolioTable.tsx` ·

@@ -1,18 +1,30 @@
-import { StrictMode } from 'react'
+import { StrictMode, Suspense, useLayoutEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './App.tsx'
-import CalendarWindow from './components/CalendarWindow.tsx'
-import FlowWindow from './components/FlowWindow.tsx'
-import BacktestWindow from './components/BacktestWindow.tsx'
-import CardWindow from './components/CardWindow.tsx'
-import LedgerWindow from './components/LedgerWindow.tsx'
-import RateWindow from './components/RateWindow.tsx'
-import WatchlistWindow from './components/WatchlistWindow.tsx'
-import StockChartWindow from './components/StockChartWindow.tsx'
 import ErrorBoundary from './components/ErrorBoundary.tsx'
 import { installApiAuth } from './apiAuth'
 import { installActivityRelay } from './sessionKeepAlive'
+import { lazyScreen } from './lazyScreen'
+
+// 앱 본체와 별도 창 8종은 각자 조각으로 받는다(성능 개선 1-3) — 창은 앱 본체 코드를 받지 않는다.
+// ⚠️ 정적 import로 되돌리지 말 것: 모든 창이 앱 전체(약 2.6MB)를 다시 받는다. 앱 탭은 vite.config.ts의
+//    app-chunk-preload가 index.html에서 앱 조각을 미리 받아 두므로 한 단계 늦어지지 않는다.
+const App = lazyScreen(() => import('./App.tsx'))
+const CalendarWindow = lazyScreen(() => import('./components/CalendarWindow.tsx'))
+const FlowWindow = lazyScreen(() => import('./components/FlowWindow.tsx'))
+const BacktestWindow = lazyScreen(() => import('./components/BacktestWindow.tsx'))
+const CardWindow = lazyScreen(() => import('./components/CardWindow.tsx'))
+const LedgerWindow = lazyScreen(() => import('./components/LedgerWindow.tsx'))
+const RateWindow = lazyScreen(() => import('./components/RateWindow.tsx'))
+const WatchlistWindow = lazyScreen(() => import('./components/WatchlistWindow.tsx'))
+const StockChartWindow = lazyScreen(() => import('./components/StockChartWindow.tsx'))
+
+// 화면 조각이 그려지는 커밋에서(그리기 직전) index.html의 로딩용 어두운 바탕(html.booting)을 지운다.
+// Suspense 안 형제라 화면과 같은 커밋에 들어간다 — 그 전에 지우면 흰 화면이 한 번 비친다.
+function BootDone() {
+  useLayoutEffect(() => { document.documentElement.classList.remove('booting') }, [])
+  return null
+}
 
 // 메모 달력 별도 창(`/?calendarWindow=1`)은 **App을 마운트하지 않는다** — 앱을 통째로 부팅하면
 // 로그인·Drive 로드·자동저장 타이머가 모두 돌아 두 번째 writer가 되고, STATE 파일을 통째로
@@ -47,6 +59,8 @@ if (SEPARATE_WINDOW_BOOT) installActivityRelay(window)
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
+      <Suspense fallback={null}>
+      <BootDone />
       {CALENDAR_WINDOW_BOOT ? <CalendarWindow />
         : FLOW_WINDOW_BOOT ? <FlowWindow />
         : BACKTEST_WINDOW_BOOT ? <BacktestWindow />
@@ -56,6 +70,7 @@ createRoot(document.getElementById('root')!).render(
         : WATCHLIST_WINDOW_BOOT ? <WatchlistWindow />
         : STOCK_CHART_WINDOW_BOOT ? <StockChartWindow />
         : <App />}
+      </Suspense>
     </ErrorBoundary>
   </StrictMode>,
 )
