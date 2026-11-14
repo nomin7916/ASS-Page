@@ -33,7 +33,6 @@ import RebalancingPanel from './components/RebalancingPanel';
 import PinChangeModal from './components/PinChangeModal';
 import ScaleSettingModal from './components/ScaleSettingModal';
 import DriveBackupModal from './components/DriveBackupModal';
-import CalendarModal from './components/CalendarModal';
 import StockTransferModal from './components/StockTransferModal';
 import CashTransferModal from './components/CashTransferModal';
 import UnlockPinModal from './components/UnlockPinModal';
@@ -48,13 +47,11 @@ import LoadingOverlay from './components/LoadingOverlay';
 import IntroVideoOverlay from './components/IntroVideoOverlay';
 import StudyMaterialViewer from './components/StudyMaterialViewer';
 import InactivityModal from './components/InactivityModal';
-import FloatingCalculator from './components/FloatingCalculator';
 import WatchlistPopup from './components/WatchlistPopup';
 import ErrorBoundary from './components/ErrorBoundary';
 import { FX_DEFAULT, FX_MIN_SLOTS, normalizeFxCurrencies, normalizeFxSlotCount } from './fxRates';
-import FlowBoard from './components/FlowBoard';
 import { normalizeFlowMaps, flowFingerprint, flowMapsHaveContent } from './flowMap';
-import { lazyScreen, ScreenLoading } from './lazyScreen';
+import { lazyScreen, ScreenLoading, WindowLoading, KeepAfterOpen } from './lazyScreen';
 // 앱 안 큰 화면 5개는 열 때 받는다(성능 개선 1-4) — 로딩이 끝나 한가해지면 아래 '미리 받기' 효과가 하나씩 받아 둔다.
 // ⚠️ 쓰는 자리마다 <Suspense fallback={<ScreenLoading />}>로 감쌀 것 — 빠지면 받는 동안 앱 화면 전체가 사라진다(main.tsx 경계까지 올라감).
 const BacktestPage = lazyScreen(() => import('./components/BacktestPage'), { inApp: true });
@@ -62,6 +59,14 @@ const LedgerPage = lazyScreen(() => import('./components/LedgerPage'), { inApp: 
 const AdminPage = lazyScreen(() => import('./components/AdminPage'), { inApp: true });
 const AdminPortal = lazyScreen(() => import('./components/AdminPortal'), { inApp: true });
 const DividendTaxPage = lazyScreen(() => import('./components/DividendTaxPage'), { inApp: true });
+// 늘 떠 있는 창 3개도 처음 열 때 받는다(성능 개선 1-5) — 닫혀 있는 동안 하는 일이 없음을 창마다 확인했다.
+// ⚠️ 쓰는 자리는 <KeepAfterOpen open={…}><Suspense fallback={<WindowLoading />}>로 감쌀 것 — KeepAfterOpen이 빠지면
+//    시작하자마자 마운트돼 받게 되고(효과 0), "열려 있는가"로 바꾸면 닫을 때마다 입력·창 위치·흐름도 미승격 편집이 사라진다.
+// ⚠️ 관심종목(WatchlistPopup)은 나누지 않는다 — 닫혀 있어도 종목 차트 창의 매입가 물음(stockchart:ping)에 답하고
+//    이평선 선택(stockchart:ma)을 저장한다. 처음 열 때 마운트하면 새로고침 뒤 열어 둔 차트 창이 답을 못 받는다.
+const FloatingCalculator = lazyScreen(() => import('./components/FloatingCalculator'), { inApp: true });
+const CalendarModal = lazyScreen(() => import('./components/CalendarModal'), { inApp: true });
+const FlowBoard = lazyScreen(() => import('./components/FlowBoard'), { inApp: true });
 import { normalizeLedgerBooks, ledgerFingerprint, ledgerBooksHaveContent } from './ledger';
 import { normalizeLedgerSnapshots, ledgerSnapshotsFingerprint, ledgerSnapshotsHaveContent } from './ledger';
 import CardWinFeed from './components/CardWinFeed';
@@ -4770,7 +4775,8 @@ export default function App() {
     };
   }, []);
 
-  // 한가할 때 미리 받기(성능 개선 1-4) — 로딩 화면·인트로가 끝난 뒤, 이 사용자가 열 수 있는 화면만 한 번에 하나씩.
+  // 한가할 때 미리 받기(성능 개선 1-4 · 1-5) — 로딩 화면·인트로가 끝난 뒤, 이 사용자가 열 수 있는 화면만 한 번에 하나씩.
+  // 늘 떠 있는 창(계산기·메모 달력·흐름도)을 먼저 받는다 — 자주 열고, 받아 두면 lazyScreen이 대기 없이 바로 그린다.
   // 배포 전에 받아 두므로 열 때 바로 뜨고, 배포 뒤 옛 탭이 사라진 조각을 찾는 일도 막는다(설계서 §3-2 · 1-2 메모의 404 캐시).
   const prefetchedRef = useRef(false);
   useEffect(() => {
@@ -4778,6 +4784,9 @@ export default function App() {
     prefetchedRef.current = true;
     const admin = (authUser.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
     const list = [
+      FloatingCalculator,
+      CalendarModal,
+      (admin || userFeatures.flowEnabled) && FlowBoard,
       (admin || userFeatures.backtestEnabled) && BacktestPage,
       (admin || userFeatures.ledgerEnabled) && LedgerPage,
       (admin || userFeatures.feature2) && DividendTaxPage,
@@ -5675,6 +5684,8 @@ export default function App() {
       {/* 계산기는 App 최상위 형제라 렌더 예외가 루트 ErrorBoundary까지 올라가면 앱 화면 전체가
           오류 페이지로 대체된다 → label 지정으로 섹션 모드 격리(2차 방어). */}
       <ErrorBoundary label="계산기">
+        <KeepAfterOpen open={showCalculator}>
+        <Suspense fallback={<WindowLoading />}>
         <FloatingCalculator
           isOpen={showCalculator}
           onClose={() => setShowCalculator(false)}
@@ -5685,6 +5696,8 @@ export default function App() {
             setFxSlotCount(normalizeFxSlotCount(slots));
           }}
         />
+        </Suspense>
+        </KeepAfterOpen>
       </ErrorBoundary>
       <WatchlistPopup
         open={showWatchlist}
@@ -5737,6 +5750,8 @@ export default function App() {
           ⚠️ ErrorBoundary label 지정 = 섹션 모드 격리. 없으면 렌더 예외 하나가 루트 경계까지 올라가
              앱 화면 전체가 오류 페이지로 대체된다(계산기·자금 흐름도와 동일한 2차 방어). */}
       <ErrorBoundary label="메모 달력">
+      <KeepAfterOpen open={showCalendarModal}>
+      <Suspense fallback={<WindowLoading />}>
       <CalendarModal
         open={showCalendarModal}
         onClose={() => setShowCalendarModal(false)}
@@ -5769,6 +5784,8 @@ export default function App() {
         onOpenLedger={ledgerAccess ? openLedgerWindow : null}
         qtyCloses={calQtyCloses}
       />
+      </Suspense>
+      </KeepAfterOpen>
       </ErrorBoundary>
       {/* 자금 흐름도 — App 최상위 형제(계좌 탭/뷰 전환에도 언마운트 안 됨).
           ⚠️ ErrorBoundary label 지정 = 섹션 모드 격리. 없으면 좌표 NaN 하나가 루트 경계까지
@@ -5777,6 +5794,8 @@ export default function App() {
              OFF 사용자가 파생 memo 구독 비용을 그대로 치른다. */}
       {flowAccess && (
         <ErrorBoundary label="자금 흐름도">
+          <KeepAfterOpen open={showFlowBoard}>
+          <Suspense fallback={<WindowLoading />}>
           <FlowBoard
             open={showFlowBoard}
             onClose={() => setShowFlowBoard(false)}
@@ -5794,6 +5813,8 @@ export default function App() {
             readOnly={!!adminViewingAs}
             headerNotice={flowWinBlocked ? '팝업이 차단돼 별도 창을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : null}
           />
+          </Suspense>
+          </KeepAfterOpen>
         </ErrorBoundary>
       )}
       {/* 백테스트 — 기본은 별도 브라우저 창이고, 이 인앱 렌더는 **팝업 차단 시 폴백**이다.

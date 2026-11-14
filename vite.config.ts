@@ -14,13 +14,22 @@ function appChunkPreload() {
         const bundle = ctx.bundle
         if (!bundle) return html
         const chunks: any[] = Object.values(bundle).filter((c: any) => c.type === 'chunk')
-        const app = chunks.find(c => c.facadeModuleId && /[\\/]src[\\/]App\.tsx$/.test(c.facadeModuleId))
+        // ⚠️ facadeModuleId로 찾지 말 것 — 앱만 여는 조각(계산기 등, 1-5)이 앱 조각의 모듈을 가져다 쓰면
+        //    앱 조각은 대표 모듈 없는 조각이 된다(facadeModuleId = null). "App.tsx를 담은 조각"으로 찾는다.
+        const has = (c: any, re: RegExp) => (c.moduleIds || Object.keys(c.modules || {})).some((id: string) => re.test(id))
+        const app = chunks.find(c => has(c, /[\\/]src[\\/]App\.tsx$/))
         const entry = chunks.find(c => c.isEntry)
         if (!app || !entry) throw new Error('app-chunk-preload: 앱 조각 또는 진입 조각을 찾지 못했습니다')
         const closure = (start: string) => {
           const seen = new Set<string>(); const st = [start]
           while (st.length) { const f = st.pop()!; if (seen.has(f)) continue; seen.add(f); st.push(...(bundle[f]?.imports || [])) }
           return seen
+        }
+        // 별도 창이 앱 조각을 끌어오면 1-3의 효과(창은 앱 본체를 받지 않음)가 조용히 사라진다 → 빌드를 멈춘다.
+        const wins = chunks.filter(c => has(c, /[\\/]src[\\/]components[\\/]\w+Window\.tsx$/))
+        if (wins.length < 8) throw new Error(`app-chunk-preload: 별도 창 조각이 ${wins.length}개뿐입니다(8개여야 함)`)
+        for (const w of wins) {
+          if (w === app || closure(w.fileName).has(app.fileName)) throw new Error(`app-chunk-preload: 별도 창 조각 ${w.fileName}이 앱 조각을 끌어옵니다`)
         }
         const have = closure(entry.fileName)
         const files = [...closure(app.fileName)].filter(f => !have.has(f)).map(f => '/' + f)

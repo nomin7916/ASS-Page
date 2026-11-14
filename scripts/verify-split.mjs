@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 앱 본체·별도 창 8종 나누어 받기(성능 개선 1-3) + 앱 안 큰 화면 5개 열 때 받기·미리 받기(1-4)를 지키는 검사(2026-11-15).  실행: npm run verify:split
+// 앱 본체·별도 창 8종 나누어 받기(성능 개선 1-3) + 앱 안 큰 화면 5개 열 때 받기·미리 받기(1-4) + 늘 떠 있는 창 3개 처음 열 때 받기(1-5)를 지키는 검사(2026-11-15).  실행: npm run verify:split
 //
 // 지켜야 할 것:
 //   ① main.tsx는 App·창 8종을 lazyScreen(동적 import)으로만 부른다 — 정적 import가 하나라도 생기면 모든 창이 앱 전체를 다시 받는다.
@@ -8,6 +8,8 @@
 //      body:has(#root:empty) = 계좌 전환 약 0.5초 느려짐(문서 전체 스타일 재계산) · #root:empty 덮개 = 백테스트 창(body 포털)에서 덮개가 남음.
 //   ⑤ App의 큰 화면 5개(백테스트·가계부·관리자·관리자 포털·분배금 과표)는 lazyScreen + 쓰는 자리마다 Suspense(빠지면 받는 동안 앱 전체가 사라진다)
 //      + 로딩이 끝난 뒤 미리 받기(권한 있는 화면만).
+//   ⑥ 늘 떠 있는 창 3개(계산기·메모 달력·자금 흐름도)는 KeepAfterOpen(처음 연 뒤로는 계속 마운트) + Suspense(WindowLoading).
+//      관심종목은 나누지 않는다(닫혀 있어도 종목 차트 창의 물음에 답한다). 받아 둔 화면은 lazyScreen이 Suspense 없이 바로 그린다.
 //   ④ vite.config.ts의 app-chunk-preload는 `…Window=1` 주소를 건너뛴다 — 창 파라미터가 전부 그 꼴이어야 창이 앱 조각을 미리 받지 않는다.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -43,8 +45,16 @@ ok('#M5 창 부팅 파라미터가 전부 …Window 꼴(앱 조각 미리 받기
 
 console.log('\n── 파트② lazyScreen — 실패는 새로고침 안내 ──');
 const ls = stripComments(read('src/lazyScreen.tsx'));
-ok('#L1 받기 실패를 잡아 ChunkLoadFailed로 바꾼다', /lazy\(\(\) => load\(\)\.catch\(\(err\) => \{[\s\S]*?return \{ default: \(\) => <ChunkLoadFailed inApp=\{inApp\} \/> \}/.test(ls));
-ok('#L3 preload는 같은 load를 부르고 실패를 삼킨다(미리 받기 실패가 앱을 멈추지 않게)', /C\.preload = \(\) => load\(\)\.catch\(\(\) => \{\}\)/.test(ls));
+ok('#L1 받기 실패를 잡아 ChunkLoadFailed로 바꾼다', /lazy\(\(\) => loadKeep\(\)\.catch\(\(err\) => \{[\s\S]*?return \{ default: \(\) => <ChunkLoadFailed inApp=\{inApp\} \/> \}/.test(ls));
+ok('#L3 preload는 같은 load를 부르고 실패를 삼킨다(미리 받기 실패가 앱을 멈추지 않게)', /C\.preload = \(\) => loadKeep\(\)\.catch\(\(\) => \{\}\)/.test(ls)
+  && /const loadKeep = \(\) => load\(\)\.then\(\(m\) => \{ mod = m; return m \}\)/.test(ls));
+ok('#L5 받아 둔 화면은 바로 그리고, 어느 쪽으로 그릴지는 마운트 때 한 번만 정한다(바뀌면 다시 마운트돼 입력이 사라진다)',
+  /const \[Impl\] = useState\(\(\) => \(mod \? mod\.default : L\)\)\s*return <Impl \{\.\.\.props\} \/>/.test(ls)
+  && (ls.match(/<L\b/g) || []).length === 0);
+const keep = ls.match(/export function KeepAfterOpen\([^)]*\)[^{]*\{([\s\S]*?)\n\}/);
+ok('#L6 KeepAfterOpen: 처음 열 때부터 마운트하고 닫혀도 되돌리지 않는다',
+  !!keep && /const \[ever, setEver\] = useState\(open\)/.test(keep[1]) && /if \(open && !ever\) setEver\(true\)/.test(keep[1])
+  && /return \(ever \|\| open\) \? children : null/.test(keep[1]) && !/setEver\(false\)/.test(keep[1]));
 ok('#L4 앱 안 화면은 실패 안내에 닫기가 있다', /\{inApp && \(\s*<button\s*onClick=\{\(\) => setHidden\(true\)\}/.test(ls));
 ok('#L2 자동 새로고침 없음 — reload는 버튼 클릭에서만', (ls.match(/location\.reload\(\)/g) || []).length === 1 && /onClick=\{\(\) => window\.location\.reload\(\)\}/.test(ls));
 
@@ -61,6 +71,9 @@ const vc = stripComments(read('vite.config.ts'));
 ok('#V1 appChunkPreload()가 plugins에 있다', /plugins: \[\s*react\(\),\s*appChunkPreload\(\),/.test(vc));
 ok('#V2 창 주소(…Window=1)는 미리 받기를 건너뛴다', vc.includes('if(/[?&]\\\\w+Window=1(?:&|$)/.test(location.search))return;'));
 ok('#V3 앱 조각을 못 찾으면 빌드를 멈춘다(조용히 빠지지 않게)', /if \(!app \|\| !entry\) throw new Error/.test(vc));
+ok('#V5 앱 조각은 App.tsx를 담은 조각으로 찾는다(facadeModuleId는 1-5 뒤 null일 수 있다) + 창이 앱 조각을 끌어오면 빌드 중단',
+  /const app = chunks\.find\(c => has\(c, /.test(vc) && !/c\.facadeModuleId &&/.test(vc)
+  && /closure\(w\.fileName\)\.has\(app\.fileName\)\) throw new Error/.test(vc) && /if \(wins\.length < 8\) throw new Error/.test(vc));
 ok('#V4 React·아이콘 묶음(vendor-react · vendor-icons)', /return 'vendor-react'/.test(vc) && /return 'vendor-icons'/.test(vc));
 
 console.log('\n── 파트⑤ App 안 큰 화면 5개 — 열 때 받기 + 미리 받기 ──');
@@ -82,6 +95,23 @@ ok('#A4 미리 받기 목록에 5개가 권한 조건과 함께 있다', !!pf
 ok('#A5 한 번에 하나씩(앞 것이 끝나면 다음)', !!pf && /C\.preload\(\)\.then\(\(\) => idle\(next\)\)/.test(pf[1]));
 ok('#A6 미리 받기 효과가 첫 조기 반환보다 위(훅 순서)', app.indexOf('const prefetchedRef = useRef(false);') > 0
   && app.indexOf('const prefetchedRef = useRef(false);') < app.indexOf('if (!authUser && ADMIN_VIEW_EMAIL && !adminViewUserCtx)'));
+
+console.log('\n── 파트⑥ 늘 떠 있는 창 3개 — 처음 열 때 받기(관심종목 제외) ──');
+const WINS = [['FloatingCalculator', 'showCalculator'], ['CalendarModal', 'showCalendarModal'], ['FlowBoard', 'showFlowBoard']];
+for (const [n, flag] of WINS) {
+  ok(`#W1 ${n} = lazyScreen(() => import('./components/${n}'), { inApp: true })`,
+    new RegExp(`const ${n} = lazyScreen\\(\\(\\) => import\\('\\./components/${n}'\\), \\{ inApp: true \\}\\);`).test(app)
+    && !new RegExp(`^import\\s+${n}\\s+from`, 'm').test(app));
+  const uses = (app.match(new RegExp(`<${n}\\b`, 'g')) || []).length;
+  const wrapped = (app.match(new RegExp(`<KeepAfterOpen open=\\{${flag}\\}>\\s*<Suspense fallback=\\{<WindowLoading \\/>\\}>\\s*<${n}\\b`, 'g')) || []).length;
+  ok(`#W2 ${n}: 쓰는 자리 ${uses}곳 전부 <KeepAfterOpen open={${flag}}><Suspense fallback={<WindowLoading />}> 바로 안`, uses > 0 && uses === wrapped, `쓰는 곳 ${uses} · 감싼 곳 ${wrapped}`);
+}
+ok('#W3 관심종목(WatchlistPopup)은 정적 import 그대로(닫혀 있어도 차트 창 물음에 답하는 리스너가 있다)',
+  /^import WatchlistPopup from '\.\/components\/WatchlistPopup';/m.test(app) && !/const WatchlistPopup = lazyScreen/.test(app)
+  && !/<KeepAfterOpen open=\{showWatchlist\}>/.test(app));
+ok('#W4 미리 받기 목록에 창 3개(흐름도는 권한 조건과 함께)가 큰 화면보다 먼저 있다', !!pf
+  && /const list = \[\s*FloatingCalculator,\s*CalendarModal,\s*\(admin \|\| userFeatures\.flowEnabled\) && FlowBoard,\s*\(admin \|\| userFeatures\.backtestEnabled\) && BacktestPage/.test(pf[1]));
+ok('#W5 흐름도는 여전히 flowAccess 안에서만 마운트', /\{flowAccess && \(\s*<ErrorBoundary label="자금 흐름도">\s*<KeepAfterOpen open=\{showFlowBoard\}>/.test(app));
 
 console.log(`\n${fail ? '❌' : '✅'} verify:split — 통과 ${pass} · 실패 ${fail}\n`);
 process.exit(fail ? 1 : 0);
