@@ -791,7 +791,7 @@ export default function App() {
     showReturnRate, setShowReturnRate,
     isAvgPriceMode, setIsAvgPriceMode,
     showCalcVerify, setShowCalcVerify,
-    hoveredPoint, setHoveredPoint,
+    hoverStore, setHoveredPoint,
     hoveredPortCatSlice, setHoveredPortCatSlice,
     hoveredPortStkSlice, setHoveredPortStkSlice,
     hoveredIntCatSlice, setHoveredIntCatSlice,
@@ -815,7 +815,7 @@ export default function App() {
     intRefAreaRight, setIntRefAreaRight,
     intSelectionResult, setIntSelectionResult,
     intIsDragging, setIntIsDragging,
-    intHoveredPoint, setIntHoveredPoint,
+    intHoverStore, setIntHoveredPoint,
     intAnchorDate, setIntAnchorDate,
   } = useHistoryChart();
   const prevChartPeriodRef = useRef<string>(chartPeriod);
@@ -5457,7 +5457,7 @@ export default function App() {
             defaultSelectionResult={defaultSelectionResult}
             refAreaLeft={refAreaLeft}
             refAreaRight={refAreaRight}
-            hoveredPoint={hoveredPoint}
+            hoverStore={hoverStore}
             appliedRange={appliedRange}
             stockListingDates={stockListingDates}
             setStockListingDates={setStockListingDates}
@@ -5636,7 +5636,7 @@ export default function App() {
             handleIntChartMouseLeave={handleIntChartMouseLeave}
             handleIntChartDoubleClick={handleIntChartDoubleClick}
             intAnchorDate={intAnchorDate}
-            intHoveredPoint={intHoveredPoint}
+            intHoverStore={intHoverStore}
             handleSave={handleSave}
             allPortfoliosForDividend={allPortfoliosForDividend}
             intAccountSeriesById={intAccountSeriesById}

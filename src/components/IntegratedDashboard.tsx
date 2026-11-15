@@ -1,12 +1,12 @@
 ﻿﻿// @ts-nocheck
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { Plus, Download, Trash2, Maximize2, X, Check, TrendingUp, Settings, BarChart3, RotateCcw, GripVertical } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
 import HistPeriodSeg from './HistPeriodSeg';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
-  YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, ReferenceLine,
+  YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, ReferenceLine, Customized,
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
@@ -113,7 +113,7 @@ export default function IntegratedDashboard({
   handleIntChartMouseLeave,
   handleIntChartDoubleClick,
   intAnchorDate,
-  intHoveredPoint,
+  intHoverStore,
   handleSave,
   allPortfoliosForDividend,
   updatePortfolioDividendHistory,
@@ -1198,39 +1198,8 @@ export default function IntegratedDashboard({
                     </div>
                   )}
                 </div>
-                {/* 호버 정보 패널 */}
-                <div className="px-4 py-2 border-b border-gray-700/40 bg-[#0a1628]/60 min-h-[34px] flex items-center gap-3 overflow-x-auto shrink-0">
-                  {intHoveredPoint ? (
-                    <>
-                      <span className="text-gray-400 text-[11px] font-bold shrink-0 mr-1">{formatShortDate(intHoveredPoint.label)}</span>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
-                        {intHoveredPoint.payload
-                          .filter(entry => entry.dataKey && entry.value != null)
-                          .sort((a, b) => {
-                            const order = { evalAmount: 0, returnRate: 1, costAmount: 2 };
-                            const ak = order[a.dataKey] ?? (/^comp\d+Rate$/.test(a.dataKey) ? 10 + parseInt(a.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
-                            const bk = order[b.dataKey] ?? (/^comp\d+Rate$/.test(b.dataKey) ? 10 + parseInt(b.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
-                            return ak - bk;
-                          })
-                          .map((entry, i) => {
-                            const isRate = entry.dataKey === 'returnRate' || /^comp\d+Rate$/.test(entry.dataKey);
-                            const displayVal = isRate
-                              ? `${Number(entry.value) >= 0 ? '+' : ''}${Number(entry.value).toFixed(2)}%`
-                              : (hideAmounts ? '••••••' : formatCurrency(entry.value));
-                            return (
-                              <div key={i} className="flex items-center gap-1.5 shrink-0">
-                                <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
-                                <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
-                                <span className={`text-[11px] ${isRate ? (Number(entry.value) >= 0 ? 'text-red-400' : 'text-blue-400') : 'text-gray-300'}`}>{displayVal}</span>
-                              </div>
-                            );
-                          })}
-                      </div>
-                    </>
-                  ) : (
-                    <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
-                  )}
-                </div>
+                {/* 호버 정보 패널 — 마우스 위치 저장소를 이 조각만 구독한다(성능 개선 2-2) */}
+                <IntHoverInfoPanel hoverStore={intHoverStore} hideAmounts={hideAmounts} />
                 {/* 드래그 기간 선택 결과 패널 */}
                 {(() => {
                   const displayResult = intSelectionResult ?? intDefaultSelectionResult;
@@ -1369,9 +1338,10 @@ export default function IntegratedDashboard({
                           }}
                         />
                       )}
-                      {intHoveredPoint && !intRefAreaLeft && (
-                        <ReferenceLine yAxisId="left" x={intHoveredPoint.label} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />
-                      )}
+                      {/* 호버 세로선 — <Customized> 안에서 저장소를 구독한다(성능 개선 2-2).
+                          ⚠️ 차트의 직접 자식 ReferenceLine으로 되돌리지 말 것 — 호버마다 자식 비교가 깨져
+                             recharts가 축·모든 선 좌표를 처음부터 다시 계산한다. 선언 위치(딤보다 앞)는 종전 그대로. */}
+                      <Customized component={IntHoverCrosshair} hoverStore={intHoverStore} hideHover={!!intRefAreaLeft} />
                       {/* 드래그 구간 선택 — 선택 '밖'을 어둡게 덮고 선택 창만 원본 밝기로 남긴다.
                           ⚠️ 데이터 선·마커보다 **뒤에 선언**해야 위에 덮인다(recharts는 선언 순서 = paint 순서.
                              ReferenceArea의 isFront prop은 2.x에서 무시되므로 순서가 유일한 수단이다).
@@ -1872,4 +1842,53 @@ export default function IntegratedDashboard({
       )}
     </>
   );
+}
+
+// 총자산현황 차트 호버 정보 패널 — 마우스 위치 저장소를 직접 구독해 **이 조각만** 다시 그린다(성능 개선 2-2).
+// ⚠️ IntegratedDashboard 본문에서 호버 값을 읽지 말 것 — 읽는 순간 대시보드 전체가 마우스 이동마다 다시 그려진다.
+function IntHoverInfoPanel({ hoverStore, hideAmounts }) {
+  const intHoveredPoint = useSyncExternalStore(hoverStore.subscribe, hoverStore.get);
+  return (
+    <div className="px-4 py-2 border-b border-gray-700/40 bg-[#0a1628]/60 min-h-[34px] flex items-center gap-3 overflow-x-auto shrink-0">
+      {intHoveredPoint ? (
+        <>
+          <span className="text-gray-400 text-[11px] font-bold shrink-0 mr-1">{formatShortDate(intHoveredPoint.label)}</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
+            {intHoveredPoint.payload
+              .filter(entry => entry.dataKey && entry.value != null)
+              .sort((a, b) => {
+                const order = { evalAmount: 0, returnRate: 1, costAmount: 2 };
+                const ak = order[a.dataKey] ?? (/^comp\d+Rate$/.test(a.dataKey) ? 10 + parseInt(a.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
+                const bk = order[b.dataKey] ?? (/^comp\d+Rate$/.test(b.dataKey) ? 10 + parseInt(b.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
+                return ak - bk;
+              })
+              .map((entry, i) => {
+                const isRate = entry.dataKey === 'returnRate' || /^comp\d+Rate$/.test(entry.dataKey);
+                const displayVal = isRate
+                  ? `${Number(entry.value) >= 0 ? '+' : ''}${Number(entry.value).toFixed(2)}%`
+                  : (hideAmounts ? '••••••' : formatCurrency(entry.value));
+                return (
+                  <div key={i} className="flex items-center gap-1.5 shrink-0">
+                    <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
+                    <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
+                    <span className={`text-[11px] ${isRate ? (Number(entry.value) >= 0 ? 'text-red-400' : 'text-blue-400') : 'text-gray-300'}`}>{displayVal}</span>
+                  </div>
+                );
+              })}
+          </div>
+        </>
+      ) : (
+        <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
+      )}
+    </div>
+  );
+}
+
+// 총자산현황 차트 호버 세로선 — <Customized component={IntHoverCrosshair}>로 차트 안에 그린다.
+// ReferenceLine은 축을 차트 context에서 읽으므로 직접 자식일 때와 같은 자리에 같은 모양으로 그려진다.
+// (hideHover = 구간 선택 중 — 종전 `!intRefAreaLeft` 조건 그대로)
+function IntHoverCrosshair({ hoverStore, hideHover }) {
+  const intHoveredPoint = useSyncExternalStore(hoverStore.subscribe, hoverStore.get);
+  if (!intHoveredPoint || hideHover) return null;
+  return <ReferenceLine yAxisId="left" x={intHoveredPoint.label} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />;
 }

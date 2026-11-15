@@ -38,6 +38,7 @@ src/
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER
 ├── utils.ts             # 순수 유틸 (generateId, cleanNum, hexToRgba, blendWithDarkBg 등)
 ├── chartUtils.tsx       # 차트 컴포넌트/유틸 (PieLabelOutside, CustomChartTooltip, 매입가 태그 AvgTag·stackAvgTags 등)
+├── chartHover.ts        # 수익률 차트 마우스 위치(호버) 저장소 createHoverStore — App state 아님(성능 2-2) (⚠️ import 0 — verify:chart-sel #H0)
 ├── driveStorage.ts      # Google Drive 저장/불러오기
 ├── flowMap.ts           # 자금 흐름도 타입 + 순수 로직 (⚠️ @ts-nocheck 금지)
 ├── backtest.ts          # 백테스트 엔진: 타입 + 순수 로직 (⚠️ @ts-nocheck 금지, verify-backtest 미러)
@@ -173,7 +174,7 @@ src/
 
 ## 다음 작업 후보 (Phase 11~)
 
-**성능 개선(2026-11-13 설계 · 진행 중 — 1-1 완료 2026-11-14 · 1-2·T-1·1-3·1-4·1-5 배포 2026-11-15 = 1단계 끝 · 2-1 배포 2026-11-15, 다음 2-2)** — 명세·진행 기록은 저장소 루트 `성능개선_설계_2026-11.md`.
+**성능 개선(2026-11-13 설계 · 진행 중 — 1-1 완료 2026-11-14 · 1-2·T-1·1-3·1-4·1-5 배포 2026-11-15 = 1단계 끝 · 2-1·2-2 배포 2026-11-15, 다음 2-3)** — 명세·진행 기록은 저장소 루트 `성능개선_설계_2026-11.md`.
 ⚠️ 사용자가 앞 단계 화면을 확인한 뒤에만 다음 단계로 간다(사용자 확정). 한 세션에 한 단계(1-2 → 1-3 → 1-4 → 1-5 순서 의존),
 단계마다 그 문서의 '오류와 대비'·'확인'을 그대로 따른다. 측정 도구: `scripts/perf/`(저장소 밖 임시 폴더에서 빌드·측정).
 
@@ -346,6 +347,11 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 - 무거운 화면 조각에 넘기는 배열·객체는 JSX 안에서 만들지 않는다(2-1) — App이 다시 그릴 때마다(차트 위 마우스 이동 포함) 새 값이 넘어가
   자식의 useMemo가 전부 다시 돈다(분배금 표 행 계산 5개). App 상단의 `activeDividendPortfolios`·`activeHiddenDivMonths`·
   `mergedIndicatorFetchStatus`처럼 useMemo로 두고, 의존 목록은 안에서 읽는 값 전부. 검증: `verify:fmt-cache` #P.
+- 수익률 차트 위 마우스 위치(호버)는 App state가 아니다(2-2) — `useHistoryChart`의 `hoverStore`·`intHoverStore`(`src/chartHover.ts`)에 담고,
+  읽는 곳은 저장소를 구독하는 작은 조각뿐이다(`HoverInfoPanel`·`AcctHoverCrosshair` / `IntHoverInfoPanel`·`IntHoverCrosshair`).
+  ⚠️ App·차트 본문(`PortfolioChart`·`IntegratedDashboard`)에서 호버 값을 읽지 말 것 — 마우스가 날짜 한 칸 옮길 때마다 전체가 다시 그려진다.
+  ⚠️ 호버 안내선을 차트의 **직접 자식** `ReferenceLine`으로 되돌리지 말 것 — 자식 비교가 깨져 recharts가 축·모든 선 좌표를 처음부터
+  다시 계산한다. `<Customized component={모듈의 고정 함수}>` 안에 두고, 선언 위치(그리는 순서)는 그대로. 검증: `verify:chart-sel` #H.
 - 화면 나누어 받기(1-3): `main.tsx`는 App·별도 창 8종을 `lazyScreen(() => import(…))`로만 부른다(정적 import 금지 — 모든 창이 앱 전체를 받는다).
   새 별도 창의 주소 파라미터는 반드시 `…Window=1` 꼴(앱 조각 미리 받기가 그 주소를 건너뛴다). 로딩 중 바탕은 `html.booting` + `BootDone`만 —
   ⚠️ `body:has(…)`(계좌 전환 0.5초 느려짐)·`#root:empty` 덮개(백테스트 창에 남음) 금지. 검증: `verify:split`.

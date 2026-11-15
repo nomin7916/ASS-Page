@@ -6,6 +6,17 @@
 
 ---
 
+## 2026-11-15 — [성능 2-2] 차트 위 마우스 이동이 앱 전체를 다시 그리지 않게
+
+**대상 파일**: `src/chartHover.ts`(새 파일) · `src/hooks/useHistoryChart.ts` · `src/App.tsx` · `src/components/PortfolioChart.tsx` · `src/components/IntegratedDashboard.tsx` · `scripts/verify-chart-selection.mjs` · `성능개선_설계_2026-11.md` · `CLAUDE.md`
+
+> 다음
+
+- 마우스 위치를 App state에서 작은 저장소로 옮기고, 그 값을 쓰는 정보 줄·안내선 조각만 다시 그리게 함. 안내선은 `<Customized>` 안으로(차트 다시 계산 방지). 드래그·구간 선택 코드는 그대로.
+- 효과(CPU 4배): 마우스 이동 1번당 스크립트 계좌 차트 40.1 → 3.9ms · 총자산현황 58.8 → 2.3ms · 40번 이동 중 App 다시 그리기 35회 → 0회.
+- 확인: 계좌 3개 + 총자산현황에서 호버·선택·Esc·시작점 고정 등 60장면이 2-1과 차트 SVG·정보 줄·안내선 동일 · 콘솔 오류 0.
+- 재발 방지: `verify:chart-sel` 106건(2-2 항목 12건 추가 — 저장소 동작 직접 검사 · App·차트 본문이 호버 값을 읽지 않기 · 안내선은 `<Customized>` 안 · 그리는 순서) — 변이 13종 검출 확인.
+
 ## 2026-11-15 — [성능 2-1] 화면 조각에 넘기는 값 3곳 고정 (분배금 표 행 계산이 다시 그릴 때마다 돌던 것)
 
 **대상 파일**: `src/App.tsx` · `scripts/verify-fmt-cache.mjs` · `성능개선_설계_2026-11.md` · `CLAUDE.md`

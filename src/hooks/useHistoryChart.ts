@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useState } from 'react';
+import { createHoverStore } from '../chartHover';
 
 export function useHistoryChart() {
   // ── 개별 계좌 차트 상태 ──
@@ -17,7 +18,9 @@ export function useHistoryChart() {
   const [showReturnRate, setShowReturnRate] = useState(true);
   const [isAvgPriceMode, setIsAvgPriceMode] = useState(false);
   const [showCalcVerify, setShowCalcVerify] = useState(false);
-  const [hoveredPoint, setHoveredPoint] = useState(null);
+  // 차트 위 마우스 위치 — state가 아니라 저장소(성능 개선 2-2, 이유는 chartHover.ts 머리 주석).
+  //   setHoveredPoint = 저장소의 set(안정 참조) · 읽는 쪽은 hoverStore를 구독한다.
+  const [hoverStore] = useState(createHoverStore);
   const [hoveredPortCatSlice, setHoveredPortCatSlice] = useState(null);
   const [hoveredPortStkSlice, setHoveredPortStkSlice] = useState(null);
   const [hoveredIntCatSlice, setHoveredIntCatSlice] = useState(null);
@@ -53,7 +56,7 @@ export function useHistoryChart() {
   const [intRefAreaRight, setIntRefAreaRight] = useState('');
   const [intSelectionResult, setIntSelectionResult] = useState(null);
   const [intIsDragging, setIntIsDragging] = useState(false);
-  const [intHoveredPoint, setIntHoveredPoint] = useState(null);
+  const [intHoverStore] = useState(createHoverStore);
   const [intAnchorDate, setIntAnchorDate] = useState('');
 
   return {
@@ -70,7 +73,7 @@ export function useHistoryChart() {
     showReturnRate, setShowReturnRate,
     isAvgPriceMode, setIsAvgPriceMode,
     showCalcVerify, setShowCalcVerify,
-    hoveredPoint, setHoveredPoint,
+    hoverStore, setHoveredPoint: hoverStore.set,
     hoveredPortCatSlice, setHoveredPortCatSlice,
     hoveredPortStkSlice, setHoveredPortStkSlice,
     hoveredIntCatSlice, setHoveredIntCatSlice,
@@ -97,7 +100,7 @@ export function useHistoryChart() {
     intRefAreaRight, setIntRefAreaRight,
     intSelectionResult, setIntSelectionResult,
     intIsDragging, setIntIsDragging,
-    intHoveredPoint, setIntHoveredPoint,
+    intHoverStore, setIntHoveredPoint: intHoverStore.set,
     intAnchorDate, setIntAnchorDate,
   };
 }

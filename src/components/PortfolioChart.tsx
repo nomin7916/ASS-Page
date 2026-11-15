@@ -1,7 +1,7 @@
 ﻿// @ts-nocheck
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { Settings, Search, BarChart2, Percent, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
-import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
+import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label, Customized } from 'recharts';
 import { formatShortDate, formatPeriodRange, formatCurrency, formatNumber, formatFundPrice, buildIndexStatus, recessionBandsForDates, externalFlowInRange, selectionDimBands } from '../utils';
 import { CHART_SELECTION } from '../design';
 import CustomDatePicker from './CustomDatePicker';
@@ -37,7 +37,7 @@ export default function PortfolioChart({
   effectiveShowIndicators,
   selectionResult,
   refAreaLeft, refAreaRight,
-  hoveredPoint,
+  hoverStore,
   appliedRange,
   stockListingDates, setStockListingDates,
   autoFetchedCodes,
@@ -74,17 +74,6 @@ export default function PortfolioChart({
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
   }, []);
-
-  const hoveredData = hoveredPoint ? finalChartData.find(d => d.date === hoveredPoint.label) : null;
-  const hoveredReturnRate = hoveredData?.returnRate ?? null;
-
-  // 호버 시 '조회시작일 → 해당일' 병기용: 시리즈 키별 조회기간 첫 유효값(시작값).
-  // 비교종목 등 시작 시점 데이터 없으면 첫 non-null 시점을 base로 사용(rate baseline과 일치).
-  const firstNonNullVal = (key: string) => {
-    if (!key) return null;
-    for (const d of finalChartData) { if (d[key] != null) return d[key]; }
-    return null;
-  };
 
   const chartDateSet = new Set(finalChartData.map(d => d.date));
   // 조회기간에 겹치는 역사적 경기침체(NBER) 구간을 실제 데이터 날짜로 스냅해 음영 표시
@@ -396,100 +385,8 @@ export default function PortfolioChart({
         )}
       </div>
 
-      {/* 호버 정보 패널 */}
-      <div className="px-4 py-2 border-t border-gray-700/40 bg-[#0a1628]/60 min-h-[36px] flex items-center gap-3 overflow-x-auto shrink-0">
-        {hoveredPoint ? (
-          <>
-            <span className="text-gray-400 text-[11px] font-bold shrink-0 mr-1">{formatShortDate(hoveredPoint.label)}</span>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
-              {hoveredPoint.payload
-                .filter(entry => entry.dataKey && !String(entry.dataKey).endsWith('Point') && entry.value != null)
-                .map((entry, i) => {
-                  const dk = entry.dataKey as string;
-                  const rawValue = entry.value;
-                  const value = dk?.endsWith('RateScaled')
-                    ? (entry.payload?.[dk.replace('RateScaled', 'Rate')] ?? rawValue)
-                    : rawValue;
-                  let displayVal: string;
-                  let detailStr = '';
-                  let isMyReturn = false;
-                  if (entry.name === '총자산' || entry.name === '투자원금') {
-                    displayVal = isOverseas
-                      ? '$' + Number(rawValue).toLocaleString('en-US', { maximumFractionDigits: 0 })
-                      : formatNumber(rawValue);
-                  } else {
-                    const pointKey = CHART_NAME_TO_POINT_KEY[entry.name];
-                    const inlineCompMatch = dk?.match(/^comp(\d+)Rate$/);
-                    const compPointKey = inlineCompMatch ? `comp${inlineCompMatch[1]}Point` : null;
-                    let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
-                    if (pointVal == null && compPointKey && entry.payload) {
-                      pointVal = entry.payload[compPointKey];
-                    }
-                    const sign = Number(value) >= 0 ? '+' : '';
-                    const rateStr = `${sign}${Number(value).toFixed(2)}%`;
-                    // 조회시작일 → 해당일 병기. 가격 있는 시리즈(비교종목·지수·금)는 시작가→해당일가,
-                    // 가격 없는 시리즈(나의 수익률 등)는 시작 %→해당일 %.
-                    if (pointVal != null) {
-                      const isComp = !!inlineCompMatch;
-                      const isKrwPoint = ['국내금', 'USDKRW', 'KOSPI'].includes(entry.name);
-                      const fmtPrice = (v: any) => (isComp || isKrwPoint)
-                        ? Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 })
-                        : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                      const startPrice = firstNonNullVal(compPointKey || pointKey);
-                      displayVal = startPrice != null
-                        ? `${rateStr} (${fmtPrice(startPrice)} → ${fmtPrice(pointVal)})`
-                        : `${rateStr} (${fmtPrice(pointVal)})`;
-                    } else if (dk === 'principalReturnRate') {
-                      isMyReturn = true;
-                      const dayPrin = entry.payload?.principalAmount;
-                      const dayEval = entry.payload?.evalAmount;
-                      const fmtEval = (v: any) => isOverseas
-                        ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
-                        : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
-                      // 총수익률(displayVal)은 크게·적색, 조회기간 상세(detailStr)는 작게·회색으로 분리 렌더.
-                      // 조회시작 0%(TWR) 모드: 조회시작 평가 ~ 해당일 평가 + '입출금 보정' 명시.
-                      // ⚠️ 이 모드의 %는 평가액 비율이 아니라 누적 TWR이다 — 두 평가액만 나란히 두면
-                      //    "12.5M→106M인데 −5%?"로 읽히므로 '입출금 보정' 문구를 반드시 함께 낸다.
-                      // 일반(투자원금 기준) 모드: 해당일 원금 → 평가.
-                      const ymd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[0].slice(2)}/${p[1]}/${p[2]}` : s; };
-                      const mmdd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[1]}/${p[2]}` : s; };
-                      const rateParen = `(${Number(value).toFixed(2)}%)`;
-                      displayVal = rateStr;
-                      {
-                        const startEntry = finalChartData.find(d => d.evalAmount != null);
-                        const startEval = startEntry?.evalAmount;
-                        const startDate = startEntry?.date;
-                        if (dayEval != null && startEval != null && startDate)
-                          detailStr = `${ymd(startDate)}~${mmdd(hoveredPoint.label)} : 평가 ${fmtEval(startEval)} → ${fmtEval(dayEval)} · 입출금 보정 ${rateParen}`;
-                      }
-                    } else {
-                      const startRate = firstNonNullVal(dk);
-                      displayVal = startRate != null
-                        ? `${rateStr} (시작 ${Number(startRate) >= 0 ? '+' : ''}${Number(startRate).toFixed(2)}% → ${rateStr})`
-                        : rateStr;
-                    }
-                  }
-                  return (
-                    <div key={i} className="flex items-center gap-1.5 shrink-0">
-                      <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
-                      <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
-                      {isMyReturn ? (
-                        <>
-                          <span className={`text-[14px] font-black ${Number(value) >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{displayVal}</span>
-                          {detailStr && <span className="text-[10px] text-gray-400">{detailStr}</span>}
-                        </>
-                      ) : (
-                        <span className="text-[11px] text-gray-300">{displayVal}</span>
-                      )}
-                    </div>
-                  );
-                })}
-            </div>
-          </>
-        ) : (
-          <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
-        )}
-      </div>
+      {/* 호버 정보 패널 — 마우스 위치 저장소를 이 조각만 구독한다(성능 개선 2-2) */}
+      <HoverInfoPanel hoverStore={hoverStore} finalChartData={finalChartData} isOverseas={isOverseas} />
 
       {/* 드래그 기간 선택 결과 패널 */}
       {(() => {
@@ -1019,39 +916,11 @@ export default function PortfolioChart({
                 return <text x={lx} y={ly} textAnchor="start" fill={CHART_SELECTION.anchorStroke} fontSize={9} fontWeight={700}>시작</text>;
               }}
             />}
-            {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
-            {hoveredPoint && !refAreaLeft && hoveredPoint.payload
-              .filter(p =>
-                p.value != null &&
-                typeof p.value === 'number' &&
-                !String(p.dataKey ?? '').endsWith('Point') &&
-                p.dataKey !== 'evalAmount' &&
-                (!p.yAxisId || p.yAxisId === 'left')
-              )
-              .map((entry, i) => {
-                const yVal = entry.value;
-                const labelText = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
-                const color = entry.stroke || entry.color || '#ef4444';
-                return (
-                  <ReferenceLine
-                    key={i}
-                    yAxisId="left"
-                    y={yVal}
-                    stroke={color}
-                    strokeOpacity={0.6}
-                    strokeWidth={1}
-                    label={({ viewBox }) => {
-                      const { x, y } = viewBox;
-                      return (
-                        <text x={x - 4} y={y + 3.5} textAnchor="end" fill={color} fontSize={10} fontWeight={700}>
-                          {labelText}
-                        </text>
-                      );
-                    }}
-                  />
-                );
-              })
-            }
+            {/* 호버 안내선(세로선 + 시리즈별 가로선·% 글자) — <Customized> 안에서 저장소를 구독한다(성능 개선 2-2).
+                ⚠️ 차트의 직접 자식 ReferenceLine으로 되돌리지 말 것 — 호버마다 자식 비교(isChildrenEqual)가 깨져
+                   recharts가 축·모든 선 좌표를 처음부터 다시 계산한다. component·hoverStore는 안정 참조라 비교를 통과한다.
+                ⚠️ 선택 딤·앵커보다 **뒤**(맨 위에 그려짐) — 종전 선언 위치 그대로 둘 것. */}
+            <Customized component={AcctHoverCrosshair} hoverStore={hoverStore} hideHover={!!refAreaLeft} />
           </ComposedChart>
         </ResponsiveContainer>
         {/* 매입가가 차트 범위 밖(눈금을 넓히면 선들이 납작해지는 거리) — 그 방향 가장자리에 값만 표시 */}
@@ -1066,5 +935,160 @@ export default function PortfolioChart({
         ))}
       </div>
     </div>
+  );
+}
+
+// 호버 정보 패널 — 마우스 위치 저장소를 직접 구독해 **이 조각만** 다시 그린다(성능 개선 2-2).
+// ⚠️ PortfolioChart 본문에서 호버 값을 읽지 말 것 — 읽는 순간 차트 전체가 마우스 이동마다 다시 그려진다.
+function HoverInfoPanel({ hoverStore, finalChartData, isOverseas }) {
+  const hoveredPoint = useSyncExternalStore(hoverStore.subscribe, hoverStore.get);
+
+  // 호버 시 '조회시작일 → 해당일' 병기용: 시리즈 키별 조회기간 첫 유효값(시작값).
+  // 비교종목 등 시작 시점 데이터 없으면 첫 non-null 시점을 base로 사용(rate baseline과 일치).
+  const firstNonNullVal = (key: string) => {
+    if (!key) return null;
+    for (const d of finalChartData) { if (d[key] != null) return d[key]; }
+    return null;
+  };
+
+  return (
+    <div className="px-4 py-2 border-t border-gray-700/40 bg-[#0a1628]/60 min-h-[36px] flex items-center gap-3 overflow-x-auto shrink-0">
+      {hoveredPoint ? (
+        <>
+          <span className="text-gray-400 text-[11px] font-bold shrink-0 mr-1">{formatShortDate(hoveredPoint.label)}</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
+            {hoveredPoint.payload
+              .filter(entry => entry.dataKey && !String(entry.dataKey).endsWith('Point') && entry.value != null)
+              .map((entry, i) => {
+                const dk = entry.dataKey as string;
+                const rawValue = entry.value;
+                const value = dk?.endsWith('RateScaled')
+                  ? (entry.payload?.[dk.replace('RateScaled', 'Rate')] ?? rawValue)
+                  : rawValue;
+                let displayVal: string;
+                let detailStr = '';
+                let isMyReturn = false;
+                if (entry.name === '총자산' || entry.name === '투자원금') {
+                  displayVal = isOverseas
+                    ? '$' + Number(rawValue).toLocaleString('en-US', { maximumFractionDigits: 0 })
+                    : formatNumber(rawValue);
+                } else {
+                  const pointKey = CHART_NAME_TO_POINT_KEY[entry.name];
+                  const inlineCompMatch = dk?.match(/^comp(\d+)Rate$/);
+                  const compPointKey = inlineCompMatch ? `comp${inlineCompMatch[1]}Point` : null;
+                  let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
+                  if (pointVal == null && compPointKey && entry.payload) {
+                    pointVal = entry.payload[compPointKey];
+                  }
+                  const sign = Number(value) >= 0 ? '+' : '';
+                  const rateStr = `${sign}${Number(value).toFixed(2)}%`;
+                  // 조회시작일 → 해당일 병기. 가격 있는 시리즈(비교종목·지수·금)는 시작가→해당일가,
+                  // 가격 없는 시리즈(나의 수익률 등)는 시작 %→해당일 %.
+                  if (pointVal != null) {
+                    const isComp = !!inlineCompMatch;
+                    const isKrwPoint = ['국내금', 'USDKRW', 'KOSPI'].includes(entry.name);
+                    const fmtPrice = (v: any) => (isComp || isKrwPoint)
+                      ? Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 })
+                      : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    const startPrice = firstNonNullVal(compPointKey || pointKey);
+                    displayVal = startPrice != null
+                      ? `${rateStr} (${fmtPrice(startPrice)} → ${fmtPrice(pointVal)})`
+                      : `${rateStr} (${fmtPrice(pointVal)})`;
+                  } else if (dk === 'principalReturnRate') {
+                    isMyReturn = true;
+                    const dayPrin = entry.payload?.principalAmount;
+                    const dayEval = entry.payload?.evalAmount;
+                    const fmtEval = (v: any) => isOverseas
+                      ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
+                      : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
+                    // 총수익률(displayVal)은 크게·적색, 조회기간 상세(detailStr)는 작게·회색으로 분리 렌더.
+                    // 조회시작 0%(TWR) 모드: 조회시작 평가 ~ 해당일 평가 + '입출금 보정' 명시.
+                    // ⚠️ 이 모드의 %는 평가액 비율이 아니라 누적 TWR이다 — 두 평가액만 나란히 두면
+                    //    "12.5M→106M인데 −5%?"로 읽히므로 '입출금 보정' 문구를 반드시 함께 낸다.
+                    // 일반(투자원금 기준) 모드: 해당일 원금 → 평가.
+                    const ymd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[0].slice(2)}/${p[1]}/${p[2]}` : s; };
+                    const mmdd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[1]}/${p[2]}` : s; };
+                    const rateParen = `(${Number(value).toFixed(2)}%)`;
+                    displayVal = rateStr;
+                    {
+                      const startEntry = finalChartData.find(d => d.evalAmount != null);
+                      const startEval = startEntry?.evalAmount;
+                      const startDate = startEntry?.date;
+                      if (dayEval != null && startEval != null && startDate)
+                        detailStr = `${ymd(startDate)}~${mmdd(hoveredPoint.label)} : 평가 ${fmtEval(startEval)} → ${fmtEval(dayEval)} · 입출금 보정 ${rateParen}`;
+                    }
+                  } else {
+                    const startRate = firstNonNullVal(dk);
+                    displayVal = startRate != null
+                      ? `${rateStr} (시작 ${Number(startRate) >= 0 ? '+' : ''}${Number(startRate).toFixed(2)}% → ${rateStr})`
+                      : rateStr;
+                  }
+                }
+                return (
+                  <div key={i} className="flex items-center gap-1.5 shrink-0">
+                    <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
+                    <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
+                    {isMyReturn ? (
+                      <>
+                        <span className={`text-[14px] font-black ${Number(value) >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{displayVal}</span>
+                        {detailStr && <span className="text-[10px] text-gray-400">{detailStr}</span>}
+                      </>
+                    ) : (
+                      <span className="text-[11px] text-gray-300">{displayVal}</span>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </>
+      ) : (
+        <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
+      )}
+    </div>
+  );
+}
+
+// 호버 안내선 — <Customized component={AcctHoverCrosshair}>로 차트 안에 그린다. ReferenceLine은 축을
+// 차트 context에서 읽으므로 직접 자식일 때와 같은 자리에 같은 모양으로 그려진다.
+// (hideHover = 구간 선택 중 — 종전 `!refAreaLeft` 조건 그대로)
+function AcctHoverCrosshair({ hoverStore, hideHover }) {
+  const hoveredPoint = useSyncExternalStore(hoverStore.subscribe, hoverStore.get);
+  if (!hoveredPoint || hideHover) return null;
+  return (
+    <>
+      <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />
+      {hoveredPoint.payload
+        .filter(p =>
+          p.value != null &&
+          typeof p.value === 'number' &&
+          !String(p.dataKey ?? '').endsWith('Point') &&
+          p.dataKey !== 'evalAmount' &&
+          (!p.yAxisId || p.yAxisId === 'left')
+        )
+        .map((entry, i) => {
+          const yVal = entry.value;
+          const labelText = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
+          const color = entry.stroke || entry.color || '#ef4444';
+          return (
+            <ReferenceLine
+              key={i}
+              yAxisId="left"
+              y={yVal}
+              stroke={color}
+              strokeOpacity={0.6}
+              strokeWidth={1}
+              label={({ viewBox }) => {
+                const { x, y } = viewBox;
+                return (
+                  <text x={x - 4} y={y + 3.5} textAnchor="end" fill={color} fontSize={10} fontWeight={700}>
+                    {labelText}
+                  </text>
+                );
+              }}
+            />
+          );
+        })
+      }
+    </>
   );
 }

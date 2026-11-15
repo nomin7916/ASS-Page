@@ -7,6 +7,8 @@
 // 구성 ②  소스 텍스트 가드 — 배선·paint 순서는 산술로 표현할 수 없다.
 //        **선언이 아니라 사용부**를 단언한다. 실패 시 먼저 정규식이 낡았는지 확인하고,
 //        계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+// 구성 ③  호버 위치 = 저장소(성능 개선 2-2) — src/chartHover.ts를 직접 import해 동작을 보고,
+//        '마우스 이동이 App·차트 본문을 다시 그리지 않는' 배선을 소스 텍스트로 단언한다(파트④).
 
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -404,6 +406,71 @@ ok('#G17 통합 차트 날짜 필터가 Set 조회(O(n))다',
   /const dateSet = new Set\(intFilteredDates\);/.test(intData)
   && /intSortedHistory\.filter\(h => dateSet\.has\(h\.date\)\)/.test(intData)
   && !/intSortedHistory\.filter\(h => intFilteredDates\.includes\(/.test(stripComments(intData)));
+
+console.log('\n── 파트④ 호버 위치 = 저장소 (성능 개선 2-2 — 마우스 이동이 App·차트 전체를 다시 그리지 않게) ──');
+
+// ⚠️ 종전엔 hoveredPoint/intHoveredPoint가 App state라 날짜 한 칸 이동마다 App 전체가 다시 그려졌고,
+//    안내선이 차트의 **직접 자식** ReferenceLine이라 자식 비교(isChildrenEqual)가 깨져 recharts가
+//    축·모든 선 좌표를 처음부터 다시 계산했다. 지금은 저장소를 구독하는 작은 조각만 다시 그린다.
+let HV = null;
+try {
+  HV = await import(pathToFileURL(join(ROOT, 'src/chartHover.ts')).href);
+} catch (e) {
+  console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 #H0을 건너뜁니다 (${e.code || e.message}).`);
+}
+if (HV) {
+  const st = HV.createHoverStore();
+  let n = 0;
+  const un = st.subscribe(() => { n++; });
+  const p1 = { label: 'd1', payload: [] };
+  st.set(null);            // 처음부터 null → 알림 없음
+  st.set(p1); st.set(p1);  // 같은 값 두 번 → 알림 1번
+  const got = st.get();
+  st.set({ label: 'd2', payload: [] }); st.set(null); st.set(null); // 바뀜 2번 + 같은 null
+  un(); st.set(p1);        // 해제 뒤 → 알림 없음
+  ok('#H0 저장소: 바뀔 때만 알리고(같은 값·같은 null은 조용), 해제 뒤엔 알리지 않으며 get은 최신 값',
+    got === p1 && n === 3 && st.get() === p1);
+}
+const hcRaw = read('src/hooks/useHistoryChart.ts');
+const storeRaw = read('src/chartHover.ts');
+const hc = stripComments(hcRaw);
+ok('#H1 chartHover.ts는 import 없는 순수 파일(#H0 직접 import가 가능해야 한다)',
+  !/^\s*import\s/m.test(stripComments(storeRaw)) && /export function createHoverStore\(/.test(storeRaw));
+ok('#H2 useHistoryChart: 호버 위치를 useState가 아니라 저장소로 만들고, setter = 저장소 set',
+  /const \[hoverStore\] = useState\(createHoverStore\);/.test(hc)
+  && /const \[intHoverStore\] = useState\(createHoverStore\);/.test(hc)
+  && /setHoveredPoint: hoverStore\.set/.test(hc) && /setIntHoveredPoint: intHoverStore\.set/.test(hc)
+  && !/\bhoveredPoint\b/.test(hc) && !/\bintHoveredPoint\b/.test(hc));
+ok('#H3 App은 호버 값을 읽지 않고 저장소만 넘긴다',
+  !/\bhoveredPoint\b/.test(app) && !/\bintHoveredPoint\b/.test(app)
+  && /hoverStore=\{hoverStore\}/.test(app) && /intHoverStore=\{intHoverStore\}/.test(app));
+for (const [name, src, store, panelFn, crossFn, hide] of [
+  ['개별', pc, 'hoverStore', 'HoverInfoPanel', 'AcctHoverCrosshair', 'refAreaLeft'],
+  ['통합', id, 'intHoverStore', 'IntHoverInfoPanel', 'IntHoverCrosshair', 'intRefAreaLeft'],
+]) {
+  const cut = src.indexOf(`\nfunction ${panelFn}(`);
+  const main = cut > 0 ? src.slice(0, cut) : src;
+  ok(`#H4 ${name}: 차트 본문 조각은 호버 값을 읽지 않는다(구독은 작은 조각에서만)`,
+    cut > 0 && !/useSyncExternalStore\(/.test(main) && !/\bhoveredPoint\b/.test(main) && !/\bintHoveredPoint\b/.test(main));
+  ok(`#H5 ${name}: 정보 줄 조각(${panelFn})이 저장소를 구독하고, 본문이 그 조각에 저장소를 넘긴다`,
+    new RegExp(`function ${panelFn}\\(\\{ hoverStore[^}]*\\}\\) \\{\\s*const \\w+ = useSyncExternalStore\\(hoverStore\\.subscribe, hoverStore\\.get\\);`).test(src)
+    && new RegExp(`<${panelFn} hoverStore=\\{${store}\\}`).test(main));
+  ok(`#H6 ${name}: 안내선은 <Customized component={${crossFn}}>(안정 참조) 안 — 차트의 직접 자식이 아니다`,
+    new RegExp(`<Customized component=\\{${crossFn}\\} hoverStore=\\{${store}\\} hideHover=\\{!!${hide}\\} />`).test(main)
+    && new RegExp(`function ${crossFn}\\(\\{ hoverStore, hideHover \\}\\) \\{\\s*const (\\w+) = useSyncExternalStore\\(hoverStore\\.subscribe, hoverStore\\.get\\);\\s*if \\(!\\1 \\|\\| hideHover\\) return null;`).test(src));
+}
+// ⚠️ paint 순서 = 선언 순서. 개별 차트 안내선은 앵커보다 뒤(맨 끝), 통합 차트 세로선은 '앱 기록 시작' 선 뒤·딤 앞 — 종전 자리.
+{
+  const at = pc.indexOf('<Customized component={AcctHoverCrosshair}');
+  ok('#H7 개별 차트: 안내선이 앵커 표시선 뒤, 차트의 마지막 자식(종전 자리)',
+    at > pc.indexOf('CHART_SELECTION.anchorStroke') && /^<Customized[^\n]*\/>\s*<\/ComposedChart>/.test(pc.slice(at)));
+  const ia = id.indexOf('<Customized component={IntHoverCrosshair}');
+  const rec = id.lastIndexOf('>앱 기록 시작</text>', ia);
+  const dim = id.indexOf('{selectionDim?.before &&', ia);
+  ok('#H7b 통합 차트: 세로선이 \'앱 기록 시작\' 선 뒤, 선택 딤 앞(종전 자리)',
+    ia > 0 && rec > 0 && dim > ia && !/<(ReferenceLine|ReferenceArea|Area|Line)\b/.test(id.slice(id.indexOf('/>', rec), ia).replace(/^\/>/, ''))
+    && !/<(ReferenceLine|ReferenceArea|Area|Line)\b/.test(id.slice(ia + 10, dim)));
+}
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:chart-sel — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
