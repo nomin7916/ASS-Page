@@ -1321,6 +1321,11 @@ export default function RebalancingPanel({
                                     const curEval = p.type === 'savings' ? savingsEval(p) : isManualCashRow(p, activePortfolioAccountType) ? manualCashEval(p) : (p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty);
                                     return totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
                                   };
+                                  // 구매 비중 = 투자비중(usePortfolioData가 행마다 계산한 buyRatio — 종목 표의 파란 '투자비중'과 같은 값)
+                                  const buyRatioOf = (p) => {
+                                    const row = (rebalanceData || []).find(d => d.id === p.id);
+                                    return row ? (row.buyRatio || 0) : 0;
+                                  };
                                   const rows = mirrorRows(['stock', 'fund', 'savings']);
                                   if (mirrorState === 'off') {
                                     writeTargets(
@@ -1330,11 +1335,17 @@ export default function RebalancingPanel({
                                     writeTargets(
                                       rows.map(p => ({ id: p.id, fields: { [overrideField]: false } })),
                                       { [mirrorField]: 'on' });
+                                  } else if (mirrorState === 'on') {
+                                    // 3번째 클릭: 구매 비중 미러(파란색) — 목표비중이 투자비중(매입 원가 기준)을 따라간다.
+                                    writeTargets(
+                                      rows.map(p => ({ id: p.id, fields: { [overrideField]: false } })),
+                                      { [mirrorField]: 'buy' });
                                   } else {
+                                    // 4번째 클릭: 해제 — 추종하던 구매 비중을 목표값에 박제한다(수동 편집한 종목은 그 값 유지).
                                     writeTargets(
                                       rows.map(p => p[overrideField]
                                         ? { id: p.id, fields: { [overrideField]: false } }
-                                        : { id: p.id, fields: { [slotField]: curRatioOf(p), [overrideField]: false } }),
+                                        : { id: p.id, fields: { [slotField]: buyRatioOf(p), [overrideField]: false } }),
                                       { [mirrorField]: 'off' });
                                   }
                                   reportAdminChange();
@@ -1343,6 +1354,8 @@ export default function RebalancingPanel({
                                   ? 'text-gray-700 cursor-not-allowed'
                                   : isFixedLocked
                                   ? 'text-gray-600 hover:text-amber-400'
+                                  : mirrorState === 'buy'
+                                    ? 'text-blue-400 hover:text-blue-300 drop-shadow-[0_0_4px_rgba(59,130,246,0.7)]'
                                   : mirrorState === 'on'
                                     ? 'text-green-400 hover:text-green-300 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]'
                                     : mirrorState === 'seeded'
@@ -1352,8 +1365,10 @@ export default function RebalancingPanel({
                                   ? "투자선택이 '목표금액'이라 목표비중 편집이 잠겨 있습니다"
                                   : isFixedLocked
                                   ? '잠금 — 클릭하여 비밀번호 입력'
+                                  : mirrorState === 'buy'
+                                    ? '구매 비중 ON — 목표비중이 투자비중(매입 원가 기준)을 따라갑니다. 클릭하여 해제 (구매 비중 박제)'
                                   : mirrorState === 'on'
-                                    ? '라이브 미러 ON — 클릭하여 해제 (현재 비중 박제)'
+                                    ? '라이브 미러 ON — 클릭: 구매 비중(파란색)으로 전환'
                                     : mirrorState === 'seeded'
                                       ? '시드 완료 — 클릭하여 라이브 미러 시작'
                                       : `클릭 1: 현재 비중을 ${targetMode === 'variable' ? '수시변경' : '고정'} 목표값에 복사 | 다음 클릭: 라이브 미러`;
@@ -1657,19 +1672,20 @@ export default function RebalancingPanel({
                           const targetSlots = resolveTargetSlots(settings);
                           const { slotField, overrideField, mirrorField } = targetSlots;
                           const mirrorState = settings[mirrorField] || 'off';
-                          const isLiveMirror = mirrorState === 'on' && !item[overrideField];
+                          const isBuyMirror = mirrorState === 'buy';
+                          const isLiveMirror = (mirrorState === 'on' || isBuyMirror) && !item[overrideField];
                           // ⚠️ 읽기는 readTargetRatio(폴백 포함) — 현재 슬롯이 미설정이면 이웃 슬롯에서
                           //    이어받는다. raw item[slotField]로 되돌리면 슬롯 축이 바뀐 순간 살아 있는
                           //    목표가 0%로 보이고, 아래 changed 판정이 항상 true가 되어 칸을 클릭했다
                           //    나가기만 해도 달력 기록이 덮인다. 쓰기는 여전히 slotField 하나뿐이다.
                           const slotRead = readTargetRatio(item, targetSlots);
                           const slotVal = slotRead.value;
-                          const baseVal = isLiveMirror ? itemCurRatio : slotVal;
+                          const baseVal = isLiveMirror ? (isBuyMirror ? (item.buyRatio || 0) : itemCurRatio) : slotVal;
                           const displayVal = editingRatio[item.id] !== undefined
                             ? editingRatio[item.id]
                             : baseVal.toFixed(2);
                           const textColor = isLiveMirror
-                            ? 'text-emerald-300/80 italic'
+                            ? (isBuyMirror ? 'text-blue-300 italic' : 'text-emerald-300/80 italic')
                             : targetMode === 'variable'
                               ? (isDifferent ? 'text-red-400' : 'text-amber-300')
                               : (isDifferent ? 'text-red-400' : 'text-green-400');
@@ -1682,7 +1698,7 @@ export default function RebalancingPanel({
                           const showResetIcon = !isLiveMirror && (item[overrideField] || Math.abs(baseVal - itemCurRatio) > threshold);
                           const alwaysShowReset = !!item[overrideField];
                           const applyReset = () => {
-                            writeTargets([{ id: item.id, fields: { [slotField]: itemCurRatio, [overrideField]: false } }]);
+                            writeTargets([{ id: item.id, fields: { [slotField]: isBuyMirror ? (item.buyRatio || 0) : itemCurRatio, [overrideField]: false } }]);
                             setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
                             reportAdminChange();
                           };
@@ -1714,7 +1730,7 @@ export default function RebalancingPanel({
                                   // 한 글자도 안 쳤는데 '변경'으로 오판된다. 반대로 미러 이탈(override 최초
                                   // 박제)은 값이 같아도 명백한 목표 변경이므로 무조건 변경으로 친다.
                                   // (slotVal은 폴백까지 반영한 값이라 '이어받은 목표'도 변경으로 오판하지 않는다)
-                                  const mirrorDetach = mirrorState === 'on' && !item[overrideField];
+                                  const mirrorDetach = (mirrorState === 'on' || isBuyMirror) && !item[overrideField];
                                   const changed = Math.round(cleanNum(e.target.value) * 100) !== Math.round(slotVal * 100) || mirrorDetach;
                                   // ⚠️ 값이 그대로면 아무것도 쓰지 않는다(목표금액 셀 commitAmt와 같은 규약).
                                   //    무조건 쓰면 칸을 Tab으로 지나가기만 해도 이어받은 값이 현재 슬롯에
@@ -1722,7 +1738,7 @@ export default function RebalancingPanel({
                                   //    저장이 헛돈다.
                                   if (changed) {
                                     handleUpdate(item.id, slotField, e.target.value);
-                                    if (mirrorState === 'on') {
+                                    if (mirrorState === 'on' || isBuyMirror) {
                                       writeTargets([{ id: item.id, fields: { [overrideField]: true } }]);
                                     }
                                   }
@@ -1743,7 +1759,7 @@ export default function RebalancingPanel({
                                   if (e.key === 'Enter') e.target.blur();
                                   handleTableKeyDown(e, 'targetRatio');
                                 }}
-                                title={draftPreview?.id === item.id && draftPreview.col === 'targetRatio' ? undefined : ratioDisabled ? "투자선택이 '목표금액'이라 목표비중은 비활성입니다 (수량은 목표금액으로 계산)" : cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : slotRead.inherited ? `'${RATIO_SLOT_LABEL[slotRead.field] || slotRead.field}'에서 이어받은 목표비중입니다 — 이 칸에 직접 입력하면 현재 투자선택 전용 값으로 고정됩니다` : undefined}
+                                title={draftPreview?.id === item.id && draftPreview.col === 'targetRatio' ? undefined : ratioDisabled ? "투자선택이 '목표금액'이라 목표비중은 비활성입니다 (수량은 목표금액으로 계산)" : cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? (isBuyMirror ? '구매 비중 추종 중 — 편집 시 이 종목만 수동 고정' : '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정') : slotRead.inherited ? `'${RATIO_SLOT_LABEL[slotRead.field] || slotRead.field}'에서 이어받은 목표비중입니다 — 이 칸에 직접 입력하면 현재 투자선택 전용 값으로 고정됩니다` : undefined}
                               />
                               {showResetIcon && !ratioDisabled && (
                                 <button
@@ -1759,7 +1775,7 @@ export default function RebalancingPanel({
                                     }
                                   }}
                                   className={`absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-gray-500 hover:text-emerald-300 hover:bg-emerald-900/20 transition-all ${alwaysShowReset ? 'opacity-80' : 'opacity-0 group-hover:opacity-60'} hover:!opacity-100`}
-                                  title={alwaysShowReset ? '수동 편집됨 — 클릭하여 현재 비중으로 복원' : '현재 비중으로 복원'}
+                                  title={isBuyMirror ? '수동 편집됨 — 클릭하여 구매 비중으로 복원' : alwaysShowReset ? '수동 편집됨 — 클릭하여 현재 비중으로 복원' : '현재 비중으로 복원'}
                                 >
                                   <RotateCcw size={11} />
                                 </button>

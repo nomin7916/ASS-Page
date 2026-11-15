@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-11-15 — 리밸런싱 목표비중 (%) 버튼에 4번째 단계 '구매 비중'(파란색)
+
+**대상 파일**: `src/components/RebalancingPanel.tsx` · `src/hooks/usePortfolioData.ts` · `scripts/verify-card-window.mjs`
+
+- (%) 버튼 순서: ① 현재 비중 복사 → ② 현재 비중 추종(초록) → ③ **구매 비중 추종(파랑, 새로 추가)** → ④ 해제(구매 비중을 목표값에 박제).
+- 구매 비중 = 종목 표의 파란 '투자비중'(투자금액 ÷ 총투자금액, 예수금 포함)과 같은 값. 미러 상태 값 `'buy'`(settings의 mirrorField).
+- 추종 중 한 종목을 직접 고치면 그 종목만 수동 고정(기존 미러와 같은 규약). 재발 방지: `verify:card-window #G18d`(4전이).
+
 ## 2026-11-15 — [성능 2-2] 차트 위 마우스 이동이 앱 전체를 다시 그리지 않게
 
 **대상 파일**: `src/chartHover.ts`(새 파일) · `src/hooks/useHistoryChart.ts` · `src/App.tsx` · `src/components/PortfolioChart.tsx` · `src/components/IntegratedDashboard.tsx` · `scripts/verify-chart-selection.mjs` · `성능개선_설계_2026-11.md` · `CLAUDE.md`

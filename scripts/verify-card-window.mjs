@@ -349,10 +349,11 @@ ok('#G16b 활성 경로는 위임이라 App 배선이 그대로다 (verify:ladde
   };
   const pctBody = cycleBody('const cycleMirror = () => {');
   const amtBody = cycleBody('const cycleAmtMirror = () => {');
-  ok('#G18d ⚠️ (%) 미러 3전이 = writeTargets 3회 (항목 patch와 미러 상태를 한 번에)',
+  ok('#G18d ⚠️ (%) 미러 4전이(off→seeded→on→buy→off) = writeTargets 4회 (항목 patch와 미러 상태를 한 번에)',
     pctBody.length > 300
-    && (pctBody.match(/writeTargets\(/g) || []).length === 3
-    && (pctBody.match(/\[mirrorField\]: '(?:seeded|on|off)'/g) || []).length === 3
+    && (pctBody.match(/writeTargets\(/g) || []).length === 4
+    && (pctBody.match(/\[mirrorField\]: '(?:seeded|on|buy|off)'/g) || []).length === 4
+    && /\[mirrorField\]: 'buy'/.test(pctBody)
     && !/updateSettingsForType\(/.test(pctBody));
   ok('#G18d2 ⚠️ (₩) 미러 3전이 = writeTargets 3회',
     amtBody.length > 300

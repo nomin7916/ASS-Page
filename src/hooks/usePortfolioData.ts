@@ -128,6 +128,13 @@ export function usePortfolioData({
     // ⚠️ 'on'인 행은 저장값과 무관하게 목표금액 = 현재 평가금 → action이 항상 0(매매 없음)이다.
     //    라이브 재계산이라 시세 미로드 종목도 안전하다(0을 박제하는 건 시드·해제 write뿐 — RebalancingPanel).
     const amtMirrorState = settings.targetAmountMirror || 'off';
+    // ── 구매 비중 미러(mirrorState 'buy') — 목표비중 = 투자비중(투자금액 ÷ 총투자금액, 종목 표의 파란 '투자비중'과 같은 값) ──
+    // ⚠️ 시세가 아니라 매입 원가를 따른다 — 수량·매입가가 바뀔 때만 움직인다. 분모에 예수금이 들어 있어
+    //    현재 비중 미러처럼 합이 100% 미만(현금 몫)일 수 있다.
+    const buyRatioById = {};
+    (totals.calcPortfolio || []).forEach(c => { if (c && c.id != null) buyRatioById[c.id] = c.investRatio || 0; });
+    const mirrorLive = mirrorState === 'on' || mirrorState === 'buy';
+    const liveOf = (item, curRatio) => (mirrorState === 'buy' ? (buyRatioById[item.id] || 0) : curRatio);
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund' || p.type === 'savings').map(item => {
       // 예적금(savings): 시세·수량이 없어 리밸런싱 매매 대상이 아님 — 고정 참고 행.
       // 평가금은 savingsEval(단리 누적)로 산출, 평가금 그대로 예상평가금에 이월(매매 0).
@@ -136,16 +143,16 @@ export function usePortfolioData({
         const curEval = savingsEval(item);
         const invForReturn = savingsInvest(item);
         const returnRate = invForReturn > 0 ? ((curEval - invForReturn) / invForReturn) * 100 : 0;
-        const isLiveMirror = mirrorState === 'on' && !item[overrideField];
+        const isLiveMirror = mirrorLive && !item[overrideField];
         const liveRatio = totals.totalEval > 0 ? (curEval / totals.totalEval * 100) : 0;
-        const effectiveTargetRatio = isLiveMirror ? liveRatio : readTargetRatio(item, targetSlots).value;
+        const effectiveTargetRatio = isLiveMirror ? liveOf(item, liveRatio) : readTargetRatio(item, targetSlots).value;
         const expEval = curEval;
         const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
         // 목표금액 힌트는 '비중대로 매매했을 때 도달하는 평가금액'인데, 예적금은 매매 자체가 없어
         // 어떤 모드에서도 도달값이 현재 평가금(=expEval 이월)이다. 목표비중을 곱해 보여주면
         // 닿을 수 없는 금액이 Σ목표금액에 섞여 합계가 과대 표시된다.
         // 예적금은 목표금액 셀 자체가 읽기 전용이고 도달값이 항상 현재 평가금이라 (₩) 미러 대상이 아니다.
-        return { ...item, curEval, action: 0, cost: 0, expEval, expRatio, effectiveTargetRatio, returnRate, isSavings: true, hasTargetAmount: false, isAmtLiveMirror: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
+        return { ...item, buyRatio: buyRatioById[item.id] || 0, curEval, action: 0, cost: 0, expEval, expRatio, effectiveTargetRatio, returnRate, isSavings: true, hasTargetAmount: false, isAmtLiveMirror: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
       }
       // 수동 현금 행: 시세가 없어 매매 대상이 아니다 — 예적금처럼 평가금(=투자금액)을 그대로 이월하는
       // 고정 참고 행. 목표비중은 편집·합계(100%)에 그대로 포함된다.
@@ -153,11 +160,11 @@ export function usePortfolioData({
       //    결과에서 통째로 사라진다.
       if (isManualCashRow(item, activePortfolioAccountType)) {
         const curEval = manualCashEval(item);
-        const isLiveMirror = mirrorState === 'on' && !item[overrideField];
+        const isLiveMirror = mirrorLive && !item[overrideField];
         const liveRatio = totals.totalEval > 0 ? (curEval / totals.totalEval * 100) : 0;
-        const effectiveTargetRatio = isLiveMirror ? liveRatio : readTargetRatio(item, targetSlots).value;
+        const effectiveTargetRatio = isLiveMirror ? liveOf(item, liveRatio) : readTargetRatio(item, targetSlots).value;
         const expRatio = overallExp > 0 ? (curEval / overallExp * 100) : 0;
-        return { ...item, curEval, action: 0, cost: 0, expEval: curEval, expRatio, effectiveTargetRatio, returnRate: 0, isManualCash: true, hasTargetAmount: false, isAmtLiveMirror: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
+        return { ...item, buyRatio: buyRatioById[item.id] || 0, curEval, action: 0, cost: 0, expEval: curEval, expRatio, effectiveTargetRatio, returnRate: 0, isManualCash: true, hasTargetAmount: false, isAmtLiveMirror: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
       }
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
@@ -170,10 +177,10 @@ export function usePortfolioData({
           ? cleanNum(item.purchasePrice) * qty
           : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * qty);
       const returnRate = invForReturn > 0 ? ((curEval - invForReturn) / invForReturn) * 100 : 0;
-      const isLiveMirror = mirrorState === 'on' && !item[overrideField];
+      const isLiveMirror = mirrorLive && !item[overrideField];
       const liveRatio = totals.totalEval > 0 ? (curEval * rebalFxRate / totals.totalEval * 100) : 0;
       const effectiveTargetRatio = isLiveMirror
-        ? liveRatio
+        ? liveOf(item, liveRatio)
         : readTargetRatio(item, targetSlots).value;
       const tRatio = effectiveTargetRatio / 100;
       // ── 목표금액(targetAmount) — 입력된 행은 비중이 아니라 금액이 수량을 만든다 ──
@@ -217,7 +224,7 @@ export function usePortfolioData({
         ratio: effectiveTargetRatio,
         amount: effectiveTargetAmount,
       });
-      return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio, returnRate, hasTargetAmount, isAmtLiveMirror, targetAmountHint, effectiveTargetAmount };
+      return { ...item, buyRatio: buyRatioById[item.id] || 0, curEval, action, cost, expEval, expRatio, effectiveTargetRatio, returnRate, hasTargetAmount, isAmtLiveMirror, targetAmountHint, effectiveTargetAmount };
     });
     if (rebalanceSortConfig.key === 'code-global') {
       data.sort((a, b) => (a.code || '').localeCompare(b.code || '') * rebalanceSortConfig.direction);
@@ -234,7 +241,7 @@ export function usePortfolioData({
       });
     }
     return data;
-  }, [portfolio, totals.totalEval, settings, rebalanceSortConfig, activePortfolioAccountType, marketIndicators.usdkrw, rebalExtraQty]);
+  }, [portfolio, totals.totalEval, totals.calcPortfolio, settings, rebalanceSortConfig, activePortfolioAccountType, marketIndicators.usdkrw, rebalExtraQty]);
 
   const allPortfoliosForDividend = useMemo(() =>
     portfolios.map(p =>
