@@ -7,6 +7,8 @@
 //   ① 자주 쓰는 숫자 포매터는 모듈에서 한 번만 만든다(FMT_* 상수) — 함수 안에서 new Intl.NumberFormat 금지.
 //   ② HistoryPanel 표 본문(historyTbody)은 useMemo — 행 안에서 쓰는 컴포넌트 값이 전부 의존 목록에 있어야 한다.
 //      빠지면 표가 **오류 없이 옛 값을 보여 준다**(조용한 오류). 그래서 존재가 아니라 '쓰는 값 ⊆ 의존 목록'을 잰다.
+//   ③ App이 화면 조각에 넘기는 값 3곳은 useMemo(성능 개선 2-1) — 렌더 안에서 만들면 다시 그릴 때마다 새 값이 넘어가
+//      분배금 표의 행 계산 5개가 전부 다시 돈다. 의존 목록은 정확히 고정(빠지면 옛 값, 넘치면 고정 효과 없음).
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -96,6 +98,27 @@ if (m) {
     && /const isOverseasAcct = activePortfolioAccountType === 'overseas';/.test(hp)
     && /const shownEvalOf = \(r\) => \{\n    if \(!r \|\| !r\.date\) return null;\n    const o = isOverseasAcct && overseasEvalByDate \? overseasEvalByDate\.get\(r\.date\) : null;\n    if \(o\) return o\.krw;\n    const v = displayEvalByDate\?\.get\(r\.date\);\n    return v != null \? v : \(r\.evalAmount != null \? r\.evalAmount : null\);\n  \};/.test(hp)
     && /const \[verifyRecord, setVerifyRecord\] = useState\(null\);/.test(hp));
+}
+
+console.log('\n── 파트③ App이 넘기는 값 3곳 고정(2-1) ──');
+{
+  const app = stripComments(read('src/App.tsx'));
+  const MEMOS = [
+    ['activeDividendPortfolios', /const activeDividendPortfolios = useMemo\(\s*\(\) => allPortfoliosForDividend\.filter\(p => p\.id === activePortfolioId\),\s*\[allPortfoliosForDividend, activePortfolioId\]\);/],
+    ['activeHiddenDivMonths', /const activeHiddenDivMonths = useMemo\(\(\) => normalizeHiddenDivMonths\(\{\s*expected: activePortfolio\?\.hiddenDivMonthsExpected,\s*actual: activePortfolio\?\.hiddenDivMonthsActual,\s*\}\), \[activePortfolio\?\.hiddenDivMonthsExpected, activePortfolio\?\.hiddenDivMonthsActual\]\);/],
+    ['mergedIndicatorFetchStatus', /const mergedIndicatorFetchStatus = useMemo\(\s*\(\) => \(\{ \.\.\.indicatorFetchStatus, \.\.\.indexFetchStatus \}\),\s*\[indicatorFetchStatus, indexFetchStatus\]\);/],
+  ];
+  const early = app.indexOf('if (!authUser && ADMIN_VIEW_EMAIL && !adminViewUserCtx)');
+  for (const [n, re] of MEMOS) {
+    const m = app.match(re);
+    ok(`#P1 ${n} = useMemo(…, 정확한 의존 목록)`, !!m);
+    ok(`#P2 ${n}은 첫 조기 반환보다 위(훅 순서)`, !!m && m.index > 0 && m.index < early);
+  }
+  const div = app.slice(app.indexOf('<DividendSummaryTable'), app.indexOf('/>', app.indexOf('<DividendSummaryTable')));
+  ok('#P3 분배금 표: portfolios={activeDividendPortfolios} · hiddenMonths={activeHiddenDivMonths}',
+    /\bportfolios=\{activeDividendPortfolios\}/.test(div) && /\bhiddenMonths=\{activeHiddenDivMonths\}/.test(div));
+  ok('#P4 시장 지표: indicatorFetchStatus={mergedIndicatorFetchStatus}',
+    /indicatorFetchStatus=\{mergedIndicatorFetchStatus\}/.test(app) && !/indicatorFetchStatus=\{\{/.test(app));
 }
 
 console.log(`\n${fail ? '❌' : '✅'} verify:fmt-cache — 통과 ${pass} · 실패 ${fail}\n`);

@@ -4798,6 +4798,21 @@ export default function App() {
     idle(next);
   }, [authUser, isInitialLoading, introPlaying, userFeatures]);
 
+  // 화면 조각에 넘기는 값 고정(성능 개선 2-1) — 렌더 안에서 만들면 App이 다시 그려질 때마다(시세 갱신·차트 위 마우스 이동 등)
+  // 새 배열·객체가 넘어간다. 분배금 표는 portfolios로 행 계산 5개(useMemo)를 하므로 그때마다 전부 다시 돈다.
+  // ⚠️ 의존 목록은 안에서 읽는 값 전부 — 빠지면 오류 없이 옛 값이 보인다(verify:fmt-cache #P).
+  //    세 원본은 바꿀 때마다 새 배열·객체로 교체된다(제자리 수정 없음 — 2026-11-15 확인).
+  const activeDividendPortfolios = useMemo(
+    () => allPortfoliosForDividend.filter(p => p.id === activePortfolioId),
+    [allPortfoliosForDividend, activePortfolioId]);
+  const activeHiddenDivMonths = useMemo(() => normalizeHiddenDivMonths({
+    expected: activePortfolio?.hiddenDivMonthsExpected,
+    actual: activePortfolio?.hiddenDivMonthsActual,
+  }), [activePortfolio?.hiddenDivMonthsExpected, activePortfolio?.hiddenDivMonthsActual]);
+  const mergedIndicatorFetchStatus = useMemo(
+    () => ({ ...indicatorFetchStatus, ...indexFetchStatus }),
+    [indicatorFetchStatus, indexFetchStatus]);
+
   // 새 탭 관리자 접속 콜드부팅 — ?adminView 파라미터가 있고 아직 ctx 미구성이면 관리자 무음 인증 진행.
   // 인증 완료 시 setAdminViewUserCtx → 아래 LoginGate가 ctx를 받아 PIN 화면(impersonation)으로 진입.
   if (!authUser && ADMIN_VIEW_EMAIL && !adminViewUserCtx) {
@@ -5329,7 +5344,7 @@ export default function App() {
 
         {(authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.feature3) && activePortfolioAccountType !== 'gold' && !sectionCollapsed.dividend && (
           <DividendSummaryTable
-            portfolios={allPortfoliosForDividend.filter(p => p.id === activePortfolioId)}
+            portfolios={activeDividendPortfolios}
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
             updatePortfolioActualDividend={updatePortfolioActualDividend}
             updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd}
@@ -5350,10 +5365,7 @@ export default function App() {
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
             updateTaxBaseAvgAdj={updateTaxBaseAvgAdj}
             onToggleTaxMonth={toggleHiddenTaxMonth}
-            hiddenMonths={normalizeHiddenDivMonths({
-              expected: activePortfolio?.hiddenDivMonthsExpected,
-              actual: activePortfolio?.hiddenDivMonthsActual,
-            })}
+            hiddenMonths={activeHiddenDivMonths}
             onToggleHiddenMonth={(tab, monthIndex) => toggleHiddenDividendMonth(activePortfolioId, tab, monthIndex)}
             deletePortfolioDividendData={deletePortfolioDividendData}
             deletePortfolioTaxData={deletePortfolioTaxData}
@@ -5381,7 +5393,7 @@ export default function App() {
               marketIndices={marketIndices}
               indicatorHistoryMap={indicatorHistoryMap}
               indicatorLoading={indicatorLoading}
-              indicatorFetchStatus={{ ...indicatorFetchStatus, ...indexFetchStatus }}
+              indicatorFetchStatus={mergedIndicatorFetchStatus}
               showIndicatorVerify={showIndicatorVerify}
               setShowIndicatorVerify={setShowIndicatorVerify}
               fetchMarketIndicators={fetchMarketIndicators}
