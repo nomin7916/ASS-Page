@@ -120,6 +120,7 @@ import { buildHoldings } from './watchlistChart';
 import { groupCategoryOf, sharedCategoryOf } from './userCategory';
 import { registerApiAuth } from './apiAuth';
 import { ACTIVITY_EVENTS, LOGIN_SCOPE, TOKEN_WANTED_MSG, isActivityMessage, freshTokenOf } from './sessionKeepAlive';
+import { isUiThemeEligible, resolveUiTheme, initialUiThemePref, writeUiThemePref, applyUiThemeToDocument } from './uiTheme';
 
 // 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
@@ -663,6 +664,19 @@ export default function App() {
   // 금리 모니터링 접근 권한(N열 rateEnabled, 2026-10) — ledgerAccess와 같은 근거·같은 자리(브릿지 effect에서 참조).
   const rateAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.rateEnabled;
   const rateIsAdmin = (authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  // 새 디자인(인디고 나이트) 시범 — 관리자 계정만. 규칙·저장·되돌리기(?ui=classic)는 src/uiTheme.ts 한 곳.
+  const [uiThemePref, setUiThemePref] = useState(() => {
+    try { return initialUiThemePref(window.localStorage, window.location.search); } catch { return false; }
+  });
+  const newUiOn = resolveUiTheme(isUiThemeEligible(authUser?.email, ADMIN_EMAIL), uiThemePref, '');
+  useEffect(() => { applyUiThemeToDocument(document, newUiOn); }, [newUiOn]);
+  const toggleNewUi = useCallback(() => {
+    setUiThemePref(prev => {
+      const next = !prev;
+      try { writeUiThemePref(window.localStorage, next); } catch {}
+      return next;
+    });
+  }, []);
   // ⚠️ 백테스트용으로 조회한 종가는 **여기에만** 담는다. stockHistoryMap에 병합하면
   //    buildCloseEvalSeries(보유 평가액 재계산)·useAutoConfirmHistory 데이터완비 가드의 권위
   //    소스가 오염돼 보유+백테스트 중복 코드의 과거 평가액이 영구히 틀어진다(WatchlistPopup 불변식).
@@ -5073,6 +5087,8 @@ export default function App() {
           adminAccessAllowed={adminAccessAllowed}
           onOpenAdmin={undefined}
           onOpenAdminPortal={undefined}
+          newUiOn={newUiOn}
+          onToggleNewUi={toggleNewUi}
           onOpenPinChange={openPinChange}
           onToggleAdminAccess={() => {
             const newVal = !adminAccessAllowed;

@@ -33,6 +33,7 @@ src/
 ├── introVideo.ts        # 인트로 영상(public/intro) 목록 INTRO_VIDEOS(⚠️ 최신이 맨 앞 — 새 영상은 맨 앞 한 줄 = 버튼 하나)·처음 영상 pickIntroVideo(INTRO_PICK_MODE 'latest'·나중에 'random')·진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro · 영상 음량은 −22.3 LUFS로 맞춰 INTRO_VOLUME 하나)
 ├── apiAuth.ts           # /api/… fetch 관문(로그인 토큰 탑재·401 재발급 1회·별도 창 토큰 전달) (⚠️ import 0 — verify:api-auth)
 ├── sessionKeepAlive.ts  # 로그인 유지: 비활동 로그아웃(4시간)·조작 목록·토큰 미리 받기(40분) 판정·별도 창 활동/토큰 중계 (⚠️ import 0 — verify:session)
+├── uiTheme.ts           # 새 디자인(인디고 나이트) 시범: 관리자만 켬(UserInfoBar '새 디자인' 버튼)·이 기기 저장소 한 칸·?ui=classic 탈출 · 켜면 html.ui-indigo → index.css가 색만 바꿔 칠함(클래스는 그대로) (⚠️ import 0 — verify:ui-theme)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
 ├── design.ts            # 디자인 토큰: BG, NOTIFY_CLASS, RULED_BG_STYLE, Z, BORDER

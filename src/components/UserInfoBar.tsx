@@ -85,6 +85,9 @@ export default function UserInfoBar({
   adminAccessAllowed,
   onOpenAdmin,
   onOpenAdminPortal,
+  // 새 디자인(인디고 나이트) 시범 — 관리자만 버튼이 보인다(규칙은 src/uiTheme.ts). 미전달 시 버튼 없음.
+  newUiOn = false,
+  onToggleNewUi,
   onOpenPinChange,
   onToggleAdminAccess,
   onLogout,
@@ -475,6 +478,18 @@ export default function UserInfoBar({
           </span>
         ))}
         <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
+        {isAdmin && onToggleNewUi && (
+          <button
+            onClick={onToggleNewUi}
+            aria-pressed={newUiOn}
+            className={newUiOn
+              ? 'text-[11px] font-bold px-2 py-1 rounded-full border border-violet-400 bg-violet-400 text-gray-900 transition-colors'
+              : 'text-[11px] font-bold px-2 py-1 rounded-full border border-violet-400/60 text-violet-300 hover:bg-violet-400/10 transition-colors'}
+            title={newUiOn ? '새 디자인 끄기 — 이전 화면으로 되돌리기 (관리자만 보임)' : '새 디자인(인디고 나이트) 켜기 — 관리자만 보임, 언제든 끌 수 있음'}
+          >
+            {newUiOn ? '새 디자인 ON' : '새 디자인'}
+          </button>
+        )}
         {isAdmin && onOpenAdminPortal && (
           <button
             onClick={onOpenAdminPortal}
