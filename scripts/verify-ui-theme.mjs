@@ -62,5 +62,15 @@ const lines = css.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter(l => /\[cl
 ok('#W8 index.css의 새 디자인 규칙은 전부 html.ui-indigo 아래', lines.length > 20 && lines.every(l => /^html\.ui-indigo\s/.test(l.trim())));
 ok('#W9 클래스 이름 UI_THEME_CLASS = ui-indigo 와 index.css가 일치', /UI_THEME_CLASS = 'ui-indigo'/.test(theme));
 
+console.log('\n── 파트③ 디자인이 바뀌어도 기능은 그대로(사용자 확정 2026-11-22) ──');
+const ALLOWED = new Set(['font-family', 'background-color', 'background', 'border-color', 'color', 'box-shadow', 'border-radius']);
+const cssNoComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+const rules = [...cssNoComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m => /html\.ui-indigo/.test(m[1]));
+const props = rules.flatMap(m => m[2].split(';').map(d => d.split(':')[0].trim().toLowerCase()).filter(Boolean));
+const bad = [...new Set(props.filter(p => !ALLOWED.has(p)))];
+ok(`#W10 새 디자인 규칙은 모양 속성만(색·배경·테두리 색·그림자·글꼴·모서리) — 숨김·크기·클릭 막기 금지${bad.length ? ' · 위반: ' + bad.join(', ') : ''}`, rules.length > 20 && bad.length === 0);
+ok('#W11 html 클래스는 ui-indigo 하나만 넣고 뺀다(다른 클래스·className 덮어쓰기 금지)', /classList\.toggle\(UI_THEME_CLASS,/.test(theme) && !/className\s*=/.test(theme) && !/classList\.(remove|add)\(/.test(theme));
+ok('#W12 켜고 끄기는 App 상태 하나만 바꾼다(다시 마운트·새로고침·데이터 다시 받기 없음)', !/location\.reload|window\.location\s*=/.test(theme) && /setUiThemePref\(prev =>/.test(app));
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
