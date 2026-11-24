@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState, useRef, useCallback } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Eye } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Eye, ClipboardPaste } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency, formatPercent, resolveHoldings, buildHeldNameMap } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import {
@@ -22,6 +22,7 @@ import {
   monthEndOfYm,
 } from '../krEtfTaxHelpers';
 import { taxRowMonth, groupTaxRowsByMonth, taxMonthOpen, showTaxMonthHeads, taxMonthLabel, taxMonthSummary } from '../taxCalcMonths';
+import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts } from '../taxCalcPaste';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
@@ -87,6 +88,20 @@ const fmtTaxBase = (v) => {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+const PASTE_PLACEHOLDER = [
+  '주문내역 사진을 Claude에게 주고 받은 글을 붙여넣으세요. 예)',
+  '2026-11-23 매수 5주 6,960원',
+  '2026-11-24 매도 50주 7,490원 과표 1,234.56',
+  '2026-11-24 과표 1,234.56   ← 과표기준가만 (그날 행의 빈칸을 채움)',
+  '11.17 매수 7,100 30 7,090   ← 미래에셋 표 그대로(주문단가 체결수량 평균체결가)도 됩니다',
+].join('\n');
+const PASTE_STATUS = {
+  add: { label: '추가', cls: 'text-emerald-400' },
+  fill: { label: '빈칸 채움', cls: 'text-sky-300' },
+  same: { label: '이미 있음', cls: 'text-gray-500' },
+};
+const fmtPastePrice = (v) => (safeNum(v) > 0 ? safeNum(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '-');
+
 // 최저가 우선 매칭으로 그 매도에 배정된 매수 로트를 사람이 읽는 줄로. 툴팁 전용(셀 폭 128px에
 // 다 넣을 수 없다). ⚠️ 배정 내역은 이 기능의 근거 그 자체라 화면 어딘가에 반드시 노출해야 한다 —
 // 기준단가 숫자 하나만 보이면 "왜 7,227원인가"를 사용자가 추적할 수 없다.
@@ -126,6 +141,9 @@ export default function KrEtfTaxMatrix({
   // 평균 과표 계산기 월별 접기 — `${code}|${ym}` → 펼침 여부. 누른 적 없는 달은 taxMonthOpen 기본값(지난 달만 접힘).
   // ⚠️ 세션 로컬이다(showTaxHelp와 같은 근거) — 기본값이 '지난 달 접힘'이라 저장하지 않아도 다시 열면 같은 모양이다.
   const [calcMonthOpen, setCalcMonthOpen] = useState({});
+  // 계산기 '붙여넣기'(주문내역 사진 → Claude가 옮긴 글) — 열린 종목 코드와 입력 글. 세션 로컬(넣기 전 초안).
+  const [pasteFor, setPasteFor] = useState(null);
+  const [pasteText, setPasteText] = useState('');
 
   // 가로 스크롤 시 '평균 과표 계산기'(확장 행)를 왼쪽에 고정(엑셀 틀 고정)하기 위해, 스크롤
   // 컨테이너의 가시 폭을 측정해 sticky 패널 너비로 사용한다. 콜백 ref + ResizeObserver로
@@ -491,6 +509,21 @@ export default function KrEtfTaxMatrix({
     persistEvents(stock.code, events.map(e => e.id !== evt.id ? e : { ...e, prevQty }));
   };
 
+  // 붙여넣기 적용 — 새 행은 '행 추가'와 같은 모양(전일 수량은 자산검증 조회), 기존 행은 빈칸만 채운다.
+  // 넣은 행이 접힌 지난 달에 있으면 그 달을 펼친다(handleEventDateChange와 같은 이유).
+  const applyPaste = (stock, events, plan) => {
+    persistEvents(stock.code, applyTaxCalcPaste(events, plan, {
+      newId: generateId,
+      prevQtyOf: (date) => lookupPrevQty(date, stock.code),
+    }));
+    plan.forEach(r => {
+      const ym = taxRowMonth(r.date);
+      if (ym && ym < currentYm && r.status !== 'same') toggleCalcMonth(stock.code, ym, true);
+    });
+    setPasteText('');
+    setPasteFor(null);
+  };
+
   return (
     <div className="overflow-x-auto" ref={setScrollRef}>
       <div className="px-3 py-2 bg-[#0f172a]/60 border-b border-gray-700/50 flex items-center gap-3 flex-wrap text-[10px]">
@@ -731,6 +764,15 @@ export default function KrEtfTaxMatrix({
                           >
                             <Plus size={10} /> 행 추가
                           </button>
+                          <button
+                            onClick={() => { setPasteFor(pasteFor === stock.code ? null : stock.code); setPasteText(''); }}
+                            className={'text-[10px] px-2 py-0.5 rounded border inline-flex items-center gap-1 ' + (pasteFor === stock.code
+                              ? 'border-violet-500 text-violet-200 bg-violet-900/30'
+                              : 'border-violet-700/60 text-violet-300 hover:text-violet-200 hover:border-violet-500')}
+                            title="주문내역 사진을 Claude가 옮긴 글을 붙여넣어 날짜별 매수·매도 행과 과표기준가를 넣습니다"
+                          >
+                            <ClipboardPaste size={10} /> 붙여넣기
+                          </button>
                           {monthHeads && pastGroups.length > 0 && (
                             <button
                               onClick={() => setCalcMonthsOpen(stock.code, pastGroups, pastClosed > 0)}
@@ -742,6 +784,75 @@ export default function KrEtfTaxMatrix({
                             </button>
                           )}
                         </div>
+                        {pasteFor === stock.code && (() => {
+                          const parsed = parseTaxCalcPaste(pasteText, getTodayKST());
+                          const plan = planTaxCalcPaste(parsed, events);
+                          const counts = pasteCounts(plan);
+                          return (
+                            <div className="px-3 py-2 border-b border-gray-800 space-y-2">
+                              <textarea
+                                value={pasteText}
+                                onChange={e => setPasteText(e.target.value)}
+                                rows={5}
+                                placeholder={PASTE_PLACEHOLDER}
+                                className="w-full max-w-[720px] bg-gray-950 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200 font-mono placeholder:text-gray-600 focus:outline-none focus:border-violet-500"
+                              />
+                              {plan.length > 0 && (
+                                <table className="text-[10px] border-collapse">
+                                  <thead className="text-gray-500 border-b border-gray-700/50">
+                                    <tr>
+                                      <th className="text-left py-0.5 pr-3 font-normal">일자</th>
+                                      <th className="text-left py-0.5 pr-3 font-normal">구분</th>
+                                      <th className="text-right py-0.5 pr-3 font-normal">수량</th>
+                                      <th className="text-right py-0.5 pr-3 font-normal">단가</th>
+                                      <th className="text-right py-0.5 pr-3 font-normal">과표기준가</th>
+                                      <th className="text-left py-0.5 pr-3 font-normal">처리</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {plan.map((r, i) => (
+                                      <tr key={i} className="border-b border-gray-800/40 last:border-0">
+                                        <td className="py-0.5 pr-3 tabular-nums text-gray-300">{r.date}</td>
+                                        <td className={'py-0.5 pr-3 ' + (r.side === 'sell' ? 'text-rose-400' : r.side === 'buy' ? 'text-emerald-400' : 'text-gray-500')}>
+                                          {r.side === 'sell' ? '매도' : r.side === 'buy' ? '매수' : '-'}
+                                          {r.fills > 1 && <span className="text-gray-500 ml-1">({r.fills}건 합침)</span>}
+                                        </td>
+                                        <td className="py-0.5 pr-3 text-right tabular-nums text-gray-200">{r.qty > 0 ? r.qty.toLocaleString() : '-'}</td>
+                                        <td className="py-0.5 pr-3 text-right tabular-nums text-orange-300">{fmtPastePrice(r.price)}</td>
+                                        <td className="py-0.5 pr-3 text-right tabular-nums text-sky-300">{fmtPastePrice(r.taxBase)}</td>
+                                        <td className="py-0.5 pr-3">
+                                          <span className={PASTE_STATUS[r.status].cls}>{PASTE_STATUS[r.status].label}</span>
+                                          {r.note && <span className="text-amber-400/80 ml-1.5">{r.note}</span>}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                              {parsed.skipped.length > 0 && (
+                                <div className="text-[10px] text-gray-500">
+                                  읽지 못한 줄 {parsed.skipped.length}개 — {parsed.skipped.slice(0, 3).map(s => `"${s.line}"(${s.reason})`).join(', ')}{parsed.skipped.length > 3 ? ' …' : ''}
+                                </div>
+                              )}
+                              <div className="flex items-center gap-2">
+                                <button
+                                  disabled={counts.add + counts.fill === 0}
+                                  onClick={() => applyPaste(stock, events, plan)}
+                                  className="text-[10px] px-2.5 py-0.5 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                  넣기 · 추가 {counts.add}행{counts.fill > 0 ? ` · 빈칸 채움 ${counts.fill}행` : ''}
+                                </button>
+                                <button
+                                  onClick={() => { setPasteFor(null); setPasteText(''); }}
+                                  className="text-[10px] px-2 py-0.5 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500"
+                                >
+                                  닫기
+                                </button>
+                                <span className="text-[10px] text-gray-600">같은 날·같은 수량 행은 새로 만들지 않고 빈 단가·과표기준가만 채웁니다 · 이미 입력된 값은 덮지 않습니다</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
                         {events.length === 0 ? (
                           <div className="text-[10px] text-gray-600 text-center py-4">
                             이벤트가 없습니다. '행 추가'로 매입/매도를 입력하세요.

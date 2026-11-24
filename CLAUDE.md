@@ -28,6 +28,7 @@ src/
 ├── brazilNotes.ts       # 브라질 정치 메모 기본값(빈 배열) + readBrazilNotes 읽기 함수
 ├── dividendQty.ts       # 공시된 분배금 수량 = 공시일(배당락 전 영업일) 장 마감 보유(자산검증) · 월중 15일 일정 · 국내만 (⚠️ import 0 — verify:dividend-qty)
 ├── taxCalcMonths.ts     # 평균 과표 계산기 월별 접기(지난 달 접힘 기본·세션 로컬·일자 미입력은 늘 펼침) (⚠️ import 0 — verify:tax-months)
+├── taxCalcPaste.ts      # 평균 과표 계산기 '붙여넣기': Claude가 옮긴 주문내역 글 → 날짜·구분별 합친 행(가중평균 단가)·같은 날 같은 수량은 빈칸만 채움·`과표 N` (⚠️ import 0 — verify:tax-paste)
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
 ├── introVideo.ts        # 인트로 영상(public/intro) 목록 INTRO_VIDEOS(⚠️ 최신이 맨 앞 — 새 영상은 맨 앞 한 줄 = 버튼 하나)·처음 영상 pickIntroVideo(INTRO_PICK_MODE 'latest'·나중에 'random')·진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro · 영상 음량은 −22.3 LUFS로 맞춰 INTRO_VOLUME 하나)

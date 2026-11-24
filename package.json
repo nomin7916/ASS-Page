@@ -10,6 +10,7 @@
     "verify:calendar": "node scripts/verify-market-calendar.mjs",
     "verify:tax": "node scripts/verify-kretf-tax.mjs",
     "verify:tax-months": "node scripts/verify-tax-months.mjs",
+    "verify:tax-paste": "node scripts/verify-tax-paste.mjs",
     "verify:dividend": "node scripts/verify-dividend-slots.mjs",
     "verify:dividend-qty": "node scripts/verify-dividend-qty.mjs",
     "verify:excel": "node scripts/verify-excel.mjs",
