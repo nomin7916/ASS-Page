@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState, useRef, useCallback } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Eye, ClipboardPaste } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Eye, ClipboardPaste, ImagePlus, Share2, X } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency, formatPercent, resolveHoldings, buildHeldNameMap } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import {
@@ -22,7 +22,7 @@ import {
   monthEndOfYm,
 } from '../krEtfTaxHelpers';
 import { taxRowMonth, groupTaxRowsByMonth, taxMonthOpen, showTaxMonthHeads, taxMonthLabel, taxMonthSummary } from '../taxCalcMonths';
-import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts, buildPastePrompt } from '../taxCalcPaste';
+import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts, buildPastePrompt, mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT } from '../taxCalcPaste';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
@@ -146,6 +146,14 @@ export default function KrEtfTaxMatrix({
   const [pasteText, setPasteText] = useState('');
   // 'AI 부탁 문장 복사' 결과 — 'copied'(버튼 글씨로 확인) | 'manual'(클립보드 거부 → 문장을 보여 주고 직접 복사).
   const [promptCopy, setPromptCopy] = useState('');
+  // 붙여넣기 ① 주문내역 사진 — 휴대폰 사진첩에서 고른 사진 [{file,url}](url=미리보기용 object URL). 세션 로컬·메모리만.
+  // ⚠️ 사진은 사이트에 올리지 않는다 — ② 보내기(navigator.share)로 사용자가 고른 AI 앱에만 넘긴다.
+  const [pastePhotos, setPastePhotos] = useState([]);
+  // ② 보내기 결과 'sent'|'cancel'|'fail'|'nosupport' · ③ 클립보드 읽기 결과 'empty'|'fail' · 사진 고르기에서 뺀 것 안내
+  const [photoNote, setPhotoNote] = useState('');
+  const [clipNote, setClipNote] = useState('');
+  const [pickNote, setPickNote] = useState('');
+  const pasteBoxRef = useRef(null);
 
   // 가로 스크롤 시 '평균 과표 계산기'(확장 행)를 왼쪽에 고정(엑셀 틀 고정)하기 위해, 스크롤
   // 컨테이너의 가시 폭을 측정해 sticky 패널 너비로 사용한다. 콜백 ref + ResizeObserver로
@@ -522,9 +530,78 @@ export default function KrEtfTaxMatrix({
       const ym = taxRowMonth(r.date);
       if (ym && ym < currentYm && r.status !== 'same') toggleCalcMonth(stock.code, ym, true);
     });
+    resetPaste(null);
+  };
+
+  // 붙여넣기 패널을 열고 닫을 때 — 초안 글·사진·안내를 모두 비운다(사진 미리보기 주소도 돌려준다).
+  const resetPaste = (code) => {
+    pastePhotos.forEach(p => URL.revokeObjectURL(p.url));
+    setPastePhotos([]);
     setPasteText('');
-    setPasteFor(null);
     setPromptCopy('');
+    setPhotoNote('');
+    setClipNote('');
+    setPickNote('');
+    setPasteFor(code);
+  };
+
+  const pickPastePhotos = (e) => {
+    const list = Array.from(e.target.files || []);
+    e.target.value = '';   // 같은 사진을 지웠다 다시 고를 수 있게
+    const { add, notImage, dup, over } = mergePastePhotos(pastePhotos.map(p => p.file), list);
+    if (add.length > 0) setPastePhotos(prev => [...prev, ...add.map(f => ({ file: f, url: URL.createObjectURL(f) }))]);
+    setPhotoNote('');
+    setPickNote([
+      notImage > 0 ? `사진이 아닌 파일 ${notImage}개는 뺐습니다` : '',
+      dup > 0 ? `이미 고른 사진 ${dup}장은 뺐습니다` : '',
+      over > 0 ? `한 번에 ${PASTE_PHOTO_MAX}장까지라 ${over}장은 뺐습니다` : '',
+    ].filter(Boolean).join(' · '));
+  };
+
+  const removePastePhoto = (url) => {
+    URL.revokeObjectURL(url);
+    setPastePhotos(prev => prev.filter(p => p.url !== url));
+    setPhotoNote('');
+  };
+
+  // ② 고른 사진 + 부탁 문장을 기기의 '공유' 창으로 AI 앱에 보낸다.
+  // ⚠️ navigator.share 는 누른 바로 그 순간에만 열린다(아이폰 사파리) — await 보다 먼저, 클립보드보다도 먼저 부른다.
+  //    부탁 문장은 그 뒤에 클립보드로도 복사한다(AI 앱이 함께 보낸 글을 받지 않으면 붙여넣기만 하면 되게). 누를 때마다 새로
+  //    복사한다 — 그 사이 AI 답을 복사했을 수 있어 '복사됨' 표시만 믿으면 다른 글이 붙는다.
+  const sendPhotosToAI = async (prompt) => {
+    const share = photoShareData(navigator, pastePhotos.map(p => p.file), prompt);
+    let sharing = null;
+    if (share) { try { sharing = navigator.share(share.data); } catch (err) { sharing = Promise.reject(err); } }
+    const copying = navigator.clipboard && navigator.clipboard.writeText
+      ? navigator.clipboard.writeText(prompt).then(() => true, () => false)
+      : Promise.resolve(false);
+    if (!sharing) {
+      const copied = await copying;
+      setPromptCopy(copied ? 'copied' : 'manual');
+      setPhotoNote('nosupport');
+      return;
+    }
+    let result = 'sent';
+    try { await sharing; }
+    catch (err) { result = err && err.name === 'AbortError' ? 'cancel' : 'fail'; }
+    const copied = await copying;
+    setPromptCopy(copied ? 'copied' : (share.withText ? '' : 'manual'));
+    setPhotoNote(result);
+  };
+
+  // ③ AI가 준 글을 클립보드에서 바로 칸에 넣는다 — 휴대폰에서 칸을 길게 눌러 붙여넣기가 번거로워서.
+  //    아이폰은 '붙여넣기' 말풍선이 한 번 더 뜬다(누르면 들어온다). 막히면 칸에 초점을 주고 직접 붙여넣기를 안내한다.
+  const pasteFromClipboard = async () => {
+    try {
+      const t = navigator.clipboard && navigator.clipboard.readText ? await navigator.clipboard.readText() : null;
+      if (t == null) throw new Error('unsupported');
+      if (!String(t).trim()) { setClipNote('empty'); return; }
+      setPasteText(String(t));
+      setClipNote('');
+    } catch {
+      setClipNote('fail');
+      if (pasteBoxRef.current) pasteBoxRef.current.focus();
+    }
   };
 
   const copyPastePrompt = async (prompt) => {
@@ -777,11 +854,11 @@ export default function KrEtfTaxMatrix({
                             <Plus size={10} /> 행 추가
                           </button>
                           <button
-                            onClick={() => { setPasteFor(pasteFor === stock.code ? null : stock.code); setPasteText(''); setPromptCopy(''); }}
+                            onClick={() => resetPaste(pasteFor === stock.code ? null : stock.code)}
                             className={'text-[10px] px-2 py-0.5 rounded border inline-flex items-center gap-1 ' + (pasteFor === stock.code
                               ? 'border-violet-500 text-violet-200 bg-violet-900/30'
                               : 'border-violet-700/60 text-violet-300 hover:text-violet-200 hover:border-violet-500')}
-                            title="주문내역 사진을 쓰시는 AI(Claude·Gemini·ChatGPT 등)가 옮긴 글을 붙여넣어 날짜별 매수·매도 행과 과표기준가를 넣습니다"
+                            title="휴대폰 사진첩의 주문내역 사진을 쓰시는 AI(Claude·Gemini·ChatGPT 등) 앱에 보내고, AI가 옮긴 글을 붙여넣어 날짜별 매수·매도 행과 과표기준가를 넣습니다"
                           >
                             <ClipboardPaste size={10} /> 붙여넣기
                           </button>
@@ -802,17 +879,72 @@ export default function KrEtfTaxMatrix({
                           const counts = pasteCounts(plan);
                           const prompt = buildPastePrompt({ name: stock.name || '', code: stock.code, year: Number(getTodayKST().slice(0, 4)) });
                           return (
-                            <div className="px-3 py-2 border-b border-gray-800 space-y-2">
-                              <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                            <div className="px-3 py-2 border-b border-gray-800 space-y-2 text-left">
+                              <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                                <label
+                                  className="px-2.5 py-1 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 inline-flex items-center gap-1 cursor-pointer"
+                                  title="휴대폰은 사진 보관함·사진 찍기·파일에서 고릅니다. 사진은 이 사이트에 올라가지 않습니다."
+                                >
+                                  <ImagePlus size={12} /> ① 주문내역 사진 고르기
+                                  <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple onChange={pickPastePhotos} className="sr-only" />
+                                </label>
+                                <button
+                                  disabled={pastePhotos.length === 0}
+                                  onClick={() => sendPhotosToAI(prompt)}
+                                  className="px-2.5 py-1 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title="고른 사진과 부탁 문장을 휴대폰의 '공유' 창으로 쓰시는 AI 앱(Claude·ChatGPT·Gemini)에 보냅니다"
+                                >
+                                  <Share2 size={12} /> ② AI 앱으로 보내기{pastePhotos.length > 0 ? ` (${pastePhotos.length}장)` : ''}
+                                </button>
+                                <button
+                                  onClick={pasteFromClipboard}
+                                  className="px-2.5 py-1 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 inline-flex items-center gap-1"
+                                  title="AI가 준 답을 길게 눌러 복사한 뒤 누르면 아래 칸에 들어갑니다"
+                                >
+                                  <ClipboardPaste size={12} /> ③ AI 답 붙여넣기
+                                </button>
                                 <button
                                   onClick={() => copyPastePrompt(prompt)}
-                                  className="px-2 py-0.5 rounded border border-violet-700/60 text-violet-300 hover:text-violet-200 hover:border-violet-500"
+                                  className="px-2 py-1 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500"
                                   title={prompt}
                                 >
-                                  {promptCopy === 'copied' ? '✓ 복사됨' : '① AI 부탁 문장 복사'}
+                                  {promptCopy === 'copied' ? '✓ 부탁 문장 복사됨' : 'AI 부탁 문장만 복사'}
                                 </button>
-                                <span className="text-gray-500">② 쓰시는 AI(Claude·Gemini·ChatGPT 등)에 주문내역 사진과 함께 붙여넣기 → ③ AI가 준 글을 아래 칸에 붙여넣기</span>
                               </div>
+                              <div className="text-[10px] text-gray-500 leading-relaxed">
+                                ① 휴대폰 사진첩에서 주문내역(체결내역) 사진을 고르고 → ② 공유 창에서 쓰시는 AI 앱(Claude·ChatGPT·Gemini)을 누르면 사진과 부탁 문장이 함께 갑니다
+                                → AI가 답하면 그 글을 길게 눌러 복사 → 이 화면으로 돌아와 ③ 을 누르세요. 사진은 이 사이트에 올라가지 않습니다.
+                              </div>
+                              {pastePhotos.length > 0 && (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {pastePhotos.map(p => (
+                                    <div key={p.url} className="relative">
+                                      <img src={p.url} alt={p.file.name || '주문내역 사진'} className="h-16 w-16 object-cover rounded border border-gray-700" />
+                                      <button
+                                        onClick={() => removePastePhoto(p.url)}
+                                        className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-gray-900 border border-gray-600 text-gray-300 hover:text-white inline-flex items-center justify-center"
+                                        title="이 사진 빼기"
+                                        aria-label="이 사진 빼기"
+                                      >
+                                        <X size={11} />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {pickNote && <div className="text-[10px] text-amber-400/90">{pickNote}</div>}
+                              {photoNote === 'sent' && (
+                                <div className="text-[10px] text-emerald-400">
+                                  ✓ AI 앱으로 보냈습니다 — AI 앱에 부탁 문장이 안 보이면 입력 칸을 길게 눌러 붙여넣기 하세요{promptCopy === 'copied' ? '(복사해 두었습니다)' : ''}. 답을 받으면 복사해서 ③ 을 누르세요.
+                                </div>
+                              )}
+                              {photoNote === 'cancel' && <div className="text-[10px] text-gray-400">보내기를 취소했습니다 — 다시 보내려면 ② 를 누르세요.</div>}
+                              {photoNote === 'fail' && <div className="text-[10px] text-amber-400">보내지 못했습니다 — ② 를 한 번 더 눌러 주세요.</div>}
+                              {photoNote === 'nosupport' && (
+                                <div className="text-[10px] text-amber-400">
+                                  이 브라우저는 사진을 다른 앱으로 바로 보내지 못합니다 — 쓰시는 AI 앱이나 사이트(claude.ai 등)를 열어 같은 사진을 직접 올리고, 부탁 문장을 붙여넣으세요{promptCopy === 'copied' ? '(부탁 문장은 복사했습니다)' : '(아래 칸의 부탁 문장을 복사하세요)'}.
+                                </div>
+                              )}
                               {promptCopy === 'manual' && (
                                 <textarea
                                   readOnly
@@ -823,9 +955,12 @@ export default function KrEtfTaxMatrix({
                                   title="이 브라우저가 자동 복사를 막았습니다 — 눌러서 전체 선택 후 직접 복사하세요"
                                 />
                               )}
+                              {clipNote === 'empty' && <div className="text-[10px] text-amber-400">복사된 글이 없습니다 — AI 답을 길게 눌러 복사한 뒤 ③ 을 다시 누르세요.</div>}
+                              {clipNote === 'fail' && <div className="text-[10px] text-amber-400">이 브라우저가 바로 붙여넣기를 막았습니다 — 아래 칸을 길게 눌러 '붙여넣기'를 누르세요.</div>}
                               <textarea
+                                ref={pasteBoxRef}
                                 value={pasteText}
-                                onChange={e => setPasteText(e.target.value)}
+                                onChange={e => { setPasteText(e.target.value); setClipNote(''); }}
                                 rows={5}
                                 placeholder={PASTE_PLACEHOLDER}
                                 className="w-full max-w-[720px] bg-gray-950 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200 font-mono placeholder:text-gray-600 focus:outline-none focus:border-violet-500"
@@ -876,7 +1011,7 @@ export default function KrEtfTaxMatrix({
                                   넣기 · 추가 {counts.add}행{counts.fill > 0 ? ` · 빈칸 채움 ${counts.fill}행` : ''}
                                 </button>
                                 <button
-                                  onClick={() => { setPasteFor(null); setPasteText(''); setPromptCopy(''); }}
+                                  onClick={() => resetPaste(null)}
                                   className="text-[10px] px-2 py-0.5 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500"
                                 >
                                   닫기

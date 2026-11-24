@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-11-24 — 평균 과표 계산기 '붙여넣기': 휴대폰 사진첩에서 사진 고르기 → AI 앱으로 보내기 → AI 답 붙여넣기
+
+**대상 파일**: `src/taxCalcPaste.ts` · `src/components/KrEtfTaxMatrix.tsx` · `scripts/verify-tax-paste.mjs` · `CLAUDE.md`
+
+- 사용자 신고(휴대폰 화면 녹화): 붙여넣기 패널에 사진을 올리는 곳이 없어 어떻게 쓰는지 모르겠다 → 사진첩의 사진을 불러올 수 있게.
+- 패널 첫 줄을 ① 주문내역 사진 고르기(사진 보관함·사진 찍기·파일, 여러 장·10장까지, 미리보기와 ×) → ② AI 앱으로 보내기
+  (기기 '공유' 창 = navigator.share 로 사진 + 부탁 문장을 Claude·ChatGPT·Gemini 앱에) → ③ AI 답 붙여넣기(클립보드에서 바로 칸에)로.
+  'AI 부탁 문장만 복사'는 그대로 남김. 공유 창이 없는 브라우저는 부탁 문장을 복사하고 직접 올리라고 안내.
+- 사진은 사이트에 올리지 않는다(서버·Drive 저장 0, 메모리의 미리보기만 — 닫으면 버림). 사이트는 여전히 AI를 부르지 않는다.
+- 아이폰 사파리는 누른 순간에만 공유 창을 연다 → share 를 첫 await·클립보드보다 먼저 부른다(verify #S9).
+- `image/*` 를 소스에 붙여 쓰면 주석을 걷는 검사 도구들이 `/*` 를 주석 시작으로 읽어 뒤 코드를 놓친다 → `PASTE_PHOTO_ACCEPT` 로 나눠 적음.
+- 검증: verify:tax-paste 43항목 · gate 통과 · 저장소 밖 임시 폴더 vite build 통과 · iPhone 13 크기 브라우저(공유 창·클립보드는 흉내) 22항목.
+  실제 아이폰의 공유 창·AI 앱이 부탁 문장을 함께 받는지는 확인 못 함.
+
 ## 2026-11-24 — 평균 과표 계산기 '붙여넣기'(주문내역 사진 → Claude가 옮긴 글 → 행)
 
 **대상 파일**: `src/taxCalcPaste.ts`(신규) · `src/components/KrEtfTaxMatrix.tsx` · `scripts/verify-tax-paste.mjs`(신규) · `package.json` · `CLAUDE.md`

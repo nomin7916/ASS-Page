@@ -118,19 +118,62 @@ if (T) {
   ]);
   const whole = parseTaxCalcPaste(prompt, TODAY);
   eq('#P8 부탁 문장을 통째로 붙이면 아무것도 넣지 않는다(예시가 진짜 매매로 들어가지 않게)', [whole.trades.length, Object.keys(whole.taxBaseByDate).length, whole.skipped.length], [0, 0, 1]);
+
+  // #P9 사진 고르기(사용자 요청 2026-11-24 — 휴대폰 사진첩의 주문내역 사진) — 사진만·같은 사진 한 번·10장까지
+  const { mergePastePhotos, photoShareData, isPastePhoto, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT } = T;
+  eq('#P9 사진 칸 accept = 모든 사진(아이폰 HEIC→JPEG 변환)', PASTE_PHOTO_ACCEPT, ['image', '*'].join('/'));
+  const ph = (name, type, size = 100, lastModified = 1) => ({ name, type, size, lastModified });
+  eq('#P9 사진 판별 — 종류 또는 확장자(안드로이드는 종류가 빈 파일이 있다)', [
+    isPastePhoto(ph('a.jpg', 'image/jpeg')), isPastePhoto(ph('IMG_1.HEIC', '')), isPastePhoto(ph('b.png', '')),
+    isPastePhoto(ph('c.pdf', 'application/pdf')), isPastePhoto(ph('d.txt', 'text/plain')), isPastePhoto(null),
+  ], [true, true, true, false, false, false]);
+  const m1 = mergePastePhotos([], [ph('a.jpg', 'image/jpeg'), ph('x.pdf', 'application/pdf'), ph('b.png', 'image/png')]);
+  eq('#P9 처음 고르기 — 사진 2장 넣고 PDF 1개 뺌', [m1.add.map(f => f.name), m1.notImage, m1.dup, m1.over], [['a.jpg', 'b.png'], 1, 0, 0]);
+  const m2 = mergePastePhotos(m1.add, [ph('a.jpg', 'image/jpeg'), ph('a.jpg', 'image/jpeg', 200)]);
+  eq('#P9 같은 사진(이름·크기·날짜)은 빼고 이름만 같은 다른 사진은 넣는다', [m2.add.map(f => f.size), m2.dup], [[200], 1]);
+  const many = Array.from({ length: 12 }, (_, i) => ph(`p${i}.jpg`, 'image/jpeg', 100 + i));
+  const m3 = mergePastePhotos([ph('z.jpg', 'image/jpeg')], many);
+  eq(`#P9 ${PASTE_PHOTO_MAX}장까지 — 이미 1장이면 9장만 더하고 3장은 뺀다`, [m3.add.length, m3.over], [PASTE_PHOTO_MAX - 1, 3]);
+
+  // #P10 공유 창에 넘길 것 — 사진+문장 → 사진만(문장은 클립보드) → 못 보냄(null, 직접 올리기 안내)
+  const files = [ph('a.jpg', 'image/jpeg')];
+  const navAll = { share() {}, canShare: () => true };
+  const navFilesOnly = { share() {}, canShare: (d) => !('text' in d) };
+  const navNoFiles = { share() {}, canShare: () => false };
+  const navOld = { share() {} };   // canShare 없는 옛 브라우저 — 파일 공유를 못 한다고 본다
+  const navThrow = { share() {}, canShare: () => { throw new Error('x'); } };
+  eq('#P10 사진+부탁 문장을 함께', [photoShareData(navAll, files, 'P')?.withText, photoShareData(navAll, files, 'P')?.data.text], [true, 'P']);
+  eq('#P10 문장을 못 받는 곳은 사진만', [photoShareData(navFilesOnly, files, 'P')?.withText, 'text' in (photoShareData(navFilesOnly, files, 'P')?.data || {})], [false, false]);
+  eq('#P10 파일 공유가 안 되는 브라우저·옛 브라우저·오류·사진 없음 → null', [
+    photoShareData(navNoFiles, files, 'P'), photoShareData(navOld, files, 'P'), photoShareData(navThrow, files, 'P'),
+    photoShareData(navAll, [], 'P'), photoShareData(undefined, files, 'P'),
+  ], [null, null, null, null, null]);
 }
 
 // ── 소스 가드: 계산기가 이 모듈을 실제로 쓰는가 ──
 const mod = read('src/taxCalcPaste.ts');
 ok('#S1 taxCalcPaste.ts에 import 0줄(Node가 직접 실행)', !/^\s*import\s/m.test(stripComments(mod)));
 const mx = stripComments(read('src/components/KrEtfTaxMatrix.tsx'));
-ok('#S2 KrEtfTaxMatrix가 다섯 함수를 import', /import\s*\{\s*parseTaxCalcPaste,\s*planTaxCalcPaste,\s*applyTaxCalcPaste,\s*pasteCounts,\s*buildPastePrompt\s*\}\s*from\s*'\.\.\/taxCalcPaste'/.test(mx));
+ok('#S2 KrEtfTaxMatrix가 다섯 함수 + 사진 함수·값 넷을 import', /import\s*\{\s*parseTaxCalcPaste,\s*planTaxCalcPaste,\s*applyTaxCalcPaste,\s*pasteCounts,\s*buildPastePrompt,\s*mergePastePhotos,\s*photoShareData,\s*PASTE_PHOTO_MAX,\s*PASTE_PHOTO_ACCEPT\s*\}\s*from\s*'\.\.\/taxCalcPaste'/.test(mx));
 ok('#S6 부탁 문장 = 종목 이름·코드·올해로 만들고 클립보드 복사(실패하면 직접 복사 칸)', /buildPastePrompt\(\{ name: stock\.name \|\| '', code: stock\.code, year: Number\(getTodayKST\(\)\.slice\(0, 4\)\) \}\)/.test(mx)
   && /navigator\.clipboard\.writeText\(prompt\)/.test(mx) && /promptCopy === 'manual'/.test(mx));
 ok('#S7 사이트는 AI를 부르지 않는다(키·요금 0 — 각자 쓰는 AI에 사진을 준다)', !/fetch\(/.test(stripComments(mod)) && !/anthropic|openai|generativelanguage/i.test(mx));
 ok('#S3 ClipboardPaste 아이콘 import + 사용', /import\s*\{[^}]*\bClipboardPaste\b[^}]*\}\s*from\s*'lucide-react'/.test(mx) && /<ClipboardPaste\b/.test(mx));
 ok('#S4 적용은 persistEvents(=updateTaxBaseEvents) 경유 + 전일 수량은 자산검증 조회', /const applyPaste = [\s\S]{0,200}persistEvents\(stock\.code, applyTaxCalcPaste\(events, plan,[\s\S]{0,120}lookupPrevQty\(date, stock\.code\)/.test(mx));
 ok('#S5 미리보기는 오늘(KST) 기준 해석', /parseTaxCalcPaste\(pasteText, getTodayKST\(\)\)/.test(mx));
+// 사진 고르기 → AI 앱으로 보내기 → AI 답 붙여넣기(휴대폰)
+ok('#S8 ① 사진 고르기 = 사진 파일 칸(여러 장) + 고른 것 미리보기', /<input type="file" accept=\{PASTE_PHOTO_ACCEPT\} multiple onChange=\{pickPastePhotos\}/.test(mx)
+  && /mergePastePhotos\(pastePhotos\.map\(p => p\.file\), list\)/.test(mx) && /URL\.createObjectURL\(f\)/.test(mx) && /<img src=\{p\.url\}/.test(mx));
+const sendFn = (mx.match(/const sendPhotosToAI = async \(prompt\) => \{[\s\S]*?\n  \};/) || [''])[0];
+ok('#S9 ② 공유 창은 누른 순간에 연다 — navigator.share 가 첫 await 보다 앞', /navigator\.share\(share\.data\)/.test(sendFn)
+  && sendFn.indexOf('navigator.share(') >= 0 && sendFn.indexOf('navigator.share(') < sendFn.indexOf('await'));
+ok('#S10 ③ AI 답은 클립보드에서 바로 칸에(막히면 칸에 초점·직접 붙여넣기 안내)', /navigator\.clipboard\.readText\(\)/.test(mx) && /pasteBoxRef\.current\.focus\(\)/.test(mx) && /ref=\{pasteBoxRef\}/.test(mx));
+ok('#S11 사진은 사이트에 올리지 않는다(보내기·고르기에 fetch·Drive·FormData 없음) + 닫을 때 미리보기 주소 돌려줌', sendFn
+  && !/fetch\(|FormData|saveDriveFile|uploadDrive/.test(sendFn + ((mx.match(/const pickPastePhotos = [\s\S]*?\n  \};/) || [''])[0]))
+  && /const resetPaste = [\s\S]{0,120}URL\.revokeObjectURL\(p\.url\)/.test(mx));
+ok('#S12 열기·닫기·넣기 모두 resetPaste 경유(사진이 다른 종목 패널에 남지 않게)', /onClick=\{\(\) => resetPaste\(pasteFor === stock\.code \? null : stock\.code\)\}/.test(mx)
+  && /onClick=\{\(\) => resetPaste\(null\)\}/.test(mx) && /const applyPaste = [\s\S]{0,600}resetPaste\(null\)/.test(mx));
+ok('#S13 아이콘 import(ImagePlus·Share2·X) + 사용', /import\s*\{[^}]*\bImagePlus\b[^}]*\bShare2\b[^}]*\bX\b[^}]*\}\s*from\s*'lucide-react'/.test(mx) && /<ImagePlus\b/.test(mx) && /<Share2\b/.test(mx) && /<X\b/.test(mx));
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:tax-paste — ${pass} 통과, ${fail} 실패`);
 process.exit(fail === 0 ? 0 : 1);

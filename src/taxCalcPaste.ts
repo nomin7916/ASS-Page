@@ -244,3 +244,47 @@ export function pasteCounts(plan: PastePlanRow[]): { add: number; fill: number }
     fill: plan.filter(r => r.status === 'fill').length,
   };
 }
+
+// ── 사진 고르기 → 쓰시는 AI 앱으로 보내기(사용자 요청 2026-11-24 — 휴대폰 사진첩의 주문내역 사진) ──
+// ⚠️ 사진은 이 사이트에 올리지 않는다(서버·Drive 저장 없음). 기기의 '공유' 창(navigator.share)으로 사용자가 고른
+//    AI 앱(Claude·ChatGPT·Gemini)에 사진과 부탁 문장을 넘길 뿐이다 — 사이트는 AI를 부르지 않는다(키·요금 0).
+export const PASTE_PHOTO_MAX = 10;
+// 사진 고르기 칸의 accept 값(모든 사진 — 아이폰은 HEIC를 JPEG로 바꿔 준다). 슬래시와 별표를 나눠 적는다 — 붙여 쓰면
+// 주석 시작으로 보여, 주석을 걷어 내고 소스를 읽는 검사 도구들(importcheck·verify:*)이 그 뒤 코드를 통째로 놓친다.
+export const PASTE_PHOTO_ACCEPT = 'image/' + '*';
+const IMG_EXT = /\.(jpe?g|png|heic|heif|webp|gif|bmp)$/i;
+
+interface PhotoLike { name?: string; size?: number; type?: string; lastModified?: number }
+
+export function isPastePhoto(f: PhotoLike): boolean {
+  if (!f) return false;
+  return /^image\//.test(String(f.type || '')) || IMG_EXT.test(String(f.name || ''));
+}
+
+// 이미 고른 사진(prev)에 새로 고른 것(incoming)을 더할 때 넣을 것만 고른다 — 사진 아닌 파일·같은 사진·10장 넘는 것은 뺀다.
+export function mergePastePhotos<T extends PhotoLike>(prev: T[], incoming: T[]): { add: T[]; notImage: number; dup: number; over: number } {
+  const key = (f: PhotoLike) => `${f.name || ''}|${f.size || 0}|${f.lastModified || 0}`;
+  const seen = new Set((prev || []).map(key));
+  const add: T[] = [];
+  let notImage = 0, dup = 0, over = 0;
+  for (const f of incoming || []) {
+    if (!isPastePhoto(f)) { notImage++; continue; }
+    const k = key(f);
+    if (seen.has(k)) { dup++; continue; }
+    if ((prev || []).length + add.length >= PASTE_PHOTO_MAX) { over++; continue; }
+    seen.add(k);
+    add.push(f);
+  }
+  return { add, notImage, dup, over };
+}
+
+// 공유 창에 넘길 것 — 사진+부탁 문장이 되면 그것, 사진만 되면 사진만(부탁 문장은 클립보드로), 둘 다 안 되면 null(직접 올리기 안내).
+export function photoShareData(nav: any, files: unknown[], prompt: string): { data: { files: unknown[]; text?: string }; withText: boolean } | null {
+  if (!nav || typeof nav.share !== 'function' || typeof nav.canShare !== 'function') return null;
+  if (!files || files.length === 0) return null;
+  const full = { files, text: prompt };
+  try { if (nav.canShare(full)) return { data: full, withText: true }; } catch { /* 아래로 */ }
+  const bare = { files };
+  try { if (nav.canShare(bare)) return { data: bare, withText: false }; } catch { /* 아래로 */ }
+  return null;
+}
