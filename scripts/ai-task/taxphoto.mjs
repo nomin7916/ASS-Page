@@ -7,8 +7,10 @@
 //   node scripts/ai-task/taxphoto.mjs check <글 파일>
 //   node scripts/ai-task/taxphoto.mjs put <글 파일> [메모 파일]
 //   node scripts/ai-task/taxphoto.mjs fail "<까닭>"
-// Node 18+ (fetch). 다른 패키지를 쓰지 않는다.
+// Node 18+ (fetch). 다른 패키지를 쓰지 않는다. 클라우드 작업 환경은 바깥 연결이 프록시(HTTPS_PROXY)를 지나야 하는데
+// Node fetch는 그것을 따르지 않는다(ENOTFOUND) → fetch가 닿지 못하면 curl(프록시·인증서 설정을 따른다)로 다시 보낸다.
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const SITE = 'https://14ass-page-eea5.vercel.app';
@@ -16,6 +18,7 @@ const DIR = '/tmp/aitax';
 const CFG = `${DIR}/cfg.json`;
 const KEYF = `${DIR}/key`;
 const JOBF = `${DIR}/job.json`;
+const HDRF = `${DIR}/hdr`;
 const RID_RE = /^t[0-9a-z]{12,20}$/;
 const KEY_RE = /^[A-Za-z0-9_-]{43}$/;
 
@@ -26,20 +29,42 @@ const cfg = () => {
   return { ...c, key: readFileSync(KEYF, 'utf8').trim() };
 };
 
+// → { status, text } · 닿지 못하면 { status: 0, why }
+async function http(url, { key = '', body } = {}) {
+  const headers = {};
+  if (key) headers['x-job-key'] = key;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  try {
+    const res = await fetch(url, { method: body === undefined ? 'GET' : 'POST', headers, body, signal: AbortSignal.timeout(60000) });
+    return { status: res.status, text: await res.text() };
+  } catch (e) {
+    const why = e?.cause?.code || e?.name || 'net';
+    try {
+      const args = ['-sS', '--max-time', '60', '-w', '\n%{http_code}'];
+      if (key) {
+        mkdirSync(DIR, { recursive: true, mode: 0o700 });
+        writeFileSync(HDRF, `x-job-key: ${key}\n`, { mode: 0o600 });
+        args.push('-H', `@${HDRF}`);
+      }
+      if (body !== undefined) args.push('-X', 'POST', '-H', 'Content-Type: application/json', '--data-binary', '@-');
+      args.push(url);
+      const out = execFileSync('curl', args, { input: body ?? '', maxBuffer: 32 * 1024 * 1024, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+      const cut = out.lastIndexOf('\n');
+      const status = Number(out.slice(cut + 1)) || 0;
+      return status ? { status, text: out.slice(0, cut) } : { status: 0, why: `${why} · curl 답 없음` };
+    } catch (e2) {
+      return { status: 0, why: `${why} · curl ${String(e2?.stderr || e2?.message || '').trim().slice(0, 120)}` };
+    }
+  }
+}
+
 async function call(op, body) {
   const c = cfg();
-  const url = `${SITE}/api/ai-job?op=${op}&rid=${encodeURIComponent(c.rid)}`;
-  const init = { headers: { 'x-job-key': c.key }, signal: AbortSignal.timeout(30000) };
-  if (body !== undefined) {
-    init.method = 'POST';
-    init.headers['Content-Type'] = 'application/json';
-    init.body = JSON.stringify(body);
-  }
-  let res;
-  try { res = await fetch(url, init); } catch (e) { die(`사이트에 닿지 못했습니다(${e?.cause?.code || e?.name || 'net'})`, 3); }
+  const r = await http(`${SITE}/api/ai-job?op=${op}&rid=${encodeURIComponent(c.rid)}`, { key: c.key, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (!r.status) die(`사이트에 닿지 못했습니다(${r.why})`, 3);
   let j = {};
-  try { j = await res.json(); } catch { j = {}; }
-  return { status: res.status, j };
+  try { j = JSON.parse(r.text); } catch { j = {}; }
+  return { status: r.status, j };
 }
 
 // 글 검사 — 과표 계산기 '붙여넣기'가 읽는 모양(src/taxCalcPaste.ts)보다 좁게: 한 줄에 하나, 정해진 꼴만
@@ -91,10 +116,8 @@ async function main() {
   }
   if (cmd === 'test') {
     if (a !== SITE) die('사이트 주소가 다릅니다');
-    let res;
-    try { res = await fetch(`${SITE}/api/ai-job?op=take&rid=t000000000000`, { signal: AbortSignal.timeout(20000) }); } catch (e) {
-      die(`사이트에 닿지 못했습니다(${e?.cause?.code || e?.name || 'net'}) — 이 작업 환경의 네트워크 허용에 14ass-page-eea5.vercel.app 을 넣어 주세요`, 3);
-    }
+    const res = await http(`${SITE}/api/ai-job?op=take&rid=t000000000000`);
+    if (!res.status) die(`사이트에 닿지 못했습니다(${res.why}) — 이 작업 환경의 네트워크 허용에 14ass-page-eea5.vercel.app 을 넣어 주세요`, 3);
     die(res.status === 401 ? '연결 시험 성공 — 사이트에 닿았고 열쇠 없는 요청은 막혔습니다' : `사이트가 예상과 다르게 답했습니다(HTTP ${res.status})`, res.status === 401 ? 0 : 2);
   }
   if (cmd === 'take') {

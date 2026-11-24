@@ -15,7 +15,11 @@
 - 사용자 요청: 관리자 본인 구독으로만 — 사진을 사이트에서 맡기면 Claude가 읽어 계산기에 넣을 글을 돌려주게(학습 사이트 블로그 「작가에게 맡기기」와 같은 길).
 - 흐름·한도·지킬 것은 CLAUDE.md '과표 사진 맡기기' 절. 예약 작업은 사용자가 claude.ai/code/routines에서 만들고 토큰을 화면에 넣어야 돈다(Claude는 API 트리거를 만들 수 없다).
 - 과표기준가는 작업이 웹에서 그 날짜 값을 직접 본 것만 넣는다(funetf·운용사). 못 찾으면 메모로 알린다.
-- 확인: verify:ai-tax 84(가짜 구글·Redis·Claude로 처리부 끝까지) · verify:api-auth 118 · tsc(api, strict) 새 파일 오류 0. 실제 사이트·실제 작업은 아직 못 돌림.
+- 확인: verify:ai-tax 85(가짜 구글·Redis·Claude로 처리부 끝까지) · verify:api-auth 118 · tsc(api, strict) 새 파일 오류 0 ·
+  저장소 밖 임시 폴더 vite build 통과 · 크로미움에서 화면 조각(연결 → 맡기기 → 완료 글 자동 입력 · 휴대폰 폭 넘침 0).
+- 배포 뒤 실제 사이트: /api/ai-tax 토큰 없음 401 · /api/ai-job 열쇠 없음 401·없는 일 404(Redis 닿음) · 도구 `test` 성공.
+  클라우드 작업 환경은 Node fetch가 프록시를 안 따라(ENOTFOUND) 도구가 curl로 다시 보낸다. 환경 "ASS-Page"에 사이트 주소 허용(사용자 승인).
+  실제 예약 작업은 사용자가 만들고 토큰을 넣은 뒤 처음 돈다.
 
 ---
 

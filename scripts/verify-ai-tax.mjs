@@ -262,6 +262,7 @@ const toolSrc = read('scripts/ai-task/taxphoto.mjs');
 const libSrc = read('api/_aiTax.ts');
 const pureSrc = read('src/taxPhotoJob.ts');
 ok('도구: 사이트 주소를 하나로 고정', toolSrc.includes(`const SITE = '${SITE}';`) && pureSrc.includes(`SITE_ORIGIN = '${SITE}'`));
+ok('도구: fetch가 닿지 못하면 curl(프록시 환경) · 열쇠는 헤더 파일(0600)로 — 명령줄에 싣지 않음', /execFileSync\('curl', args/.test(toolSrc) && /args\.push\('-H', `@\$\{HDRF\}`\)/.test(toolSrc) && /writeFileSync\(HDRF, [^)]*\{ mode: 0o600 \}\)/.test(toolSrc));
 ok('도구: 열쇠는 0600 파일에만', /writeFileSync\(KEYF, key, \{ mode: 0o600 \}\)/.test(toolSrc) && !/console\.log\([^)]*key/.test(toolSrc));
 ok('_aiTax.ts · taxPhotoJob.ts import 0건', !/^import /m.test(libSrc) && !/^import /m.test(pureSrc));
 ok('서버: 열쇠는 해시로만 저장 · 다시 부를 때 새 열쇠', /j\.kh = await sha256Hex\(key\)/.test(libSrc) && /const key = newKey\(\);/.test(libSrc));
