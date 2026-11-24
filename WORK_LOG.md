@@ -6,6 +6,13 @@
 
 ---
 
+## 2026-11-25 — 사진 맡기기: 운영 주소(nominfi1.vercel.app)에서 연결이 안 되던 것
+
+- 사용자는 nominfi1.vercel.app 으로 쓰는데, 서버가 요청 주소를 예약 작업에 "사이트="로 보내 작업 지침(14ass-page-eea5 만 받음)·환경 네트워크에 막힐 뻔했다 → `JOB_SITE` 하나로 고정(같은 Vercel 프로젝트).
+- 연결 칸: 안내 글(placeholder)이 입력한 글처럼 보여 실행 URL 칸이 빈 줄 모르고 「연결」이 눌리지 않았다 → 안내 글을 흐리게, 빈 칸을 노란 글로 알림.
+- 사용자가 claude.ai에서 예약 작업을 새로 만듦(trig_01AQQB2NUD9mda8dz1fMNNKE · API 토큰 있음 · Sonnet 5.5). 채팅에서 만든 옛 작업(trig_01VVW5reUeagieW1BEQXtKZ3)은 이름을 바꾸고 꺼 둠.
+- verify:ai-tax 86(운영 주소로 불러도 사이트=기본 주소 · 소스 가드 — 옛 코드로는 3가지 실패 확인).
+
 ## 2026-11-24 — 과표 계산기 「📷 사진 맡기기」(관리자 전용 · Claude 예약 작업 API)
 
 **대상 파일**: `api/_aiTax.ts`·`api/ai-tax.ts`·`api/ai-job.ts`(신규) · `api/_auth.ts`(callerEmail) · `src/taxPhotoJob.ts`·`src/components/TaxPhotoJobs.tsx`(신규) ·

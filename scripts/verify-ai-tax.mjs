@@ -22,6 +22,7 @@ const eq = (name, got, want) => {
 const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
 
 const SITE = 'https://14ass-page-eea5.vercel.app';
+const APP_HOST = 'https://nominfi1.vercel.app'; // 사용자가 여는 운영 주소 — 예약 작업에는 늘 SITE를 알려야 한다(2026-11-25)
 const ADMIN_TOK = 'ya29.admin-token-0123456789abcdef';
 const USER_TOK = 'ya29.user-token-0123456789abcdefgh';
 const ROUTINE = 'trig_01AbCdEfGhIjKlMnOp';
@@ -98,7 +99,7 @@ try {
 }
 
 const tax = (op, { tok = ADMIN_TOK, body, rid } = {}) => H.T.default(new Request(
-  `${SITE}/api/ai-tax?op=${op}${rid ? `&rid=${rid}` : ''}`,
+  `${APP_HOST}/api/ai-tax?op=${op}${rid ? `&rid=${rid}` : ''}`,
   { method: body === undefined ? 'GET' : 'POST', headers: { 'x-app-token': tok, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }));
 const job = (op, rid, key, body) => H.J.default(new Request(
   `${SITE}/api/ai-job?op=${op}&rid=${rid}`,
@@ -125,7 +126,7 @@ if (H) {
   eq('연결: 실행 URL 모양이 아님 → 400', (await J(await tax('connect', { body: { url: 'https://evil.example/x', token: RT_TOKEN } }))).j.error, 'url');
   eq('연결: 토큰 모양이 아님 → 400', (await J(await tax('connect', { body: { url: ROUTINE, token: 'abc' } }))).j.error, 'token');
   const c2 = await J(await tax('connect', { body: { url: `https://api.anthropic.com/v1/claude_code/routines/${ROUTINE}/fire`, token: RT_TOKEN } }));
-  eq('연결: 시험으로 한 번 부름 → ok', [c2.j.ok, fires.length, fireVal(fires[0], '종류')], [true, 1, 'test']);
+  eq('연결: 시험으로 한 번 부름 → ok · 운영 주소로 열어도 사이트=기본 주소', [c2.j.ok, fires.length, fireVal(fires[0], '종류'), fireVal(fires[0], '사이트')], [true, 1, 'test', SITE]);
   eq('연결: 부르기 머리(Bearer·beta)', [fires[0].auth, fires[0].beta, fires[0].url], [`Bearer ${RT_TOKEN}`, 'experimental-cc-routine-2026-04-01', `https://api.anthropic.com/v1/claude_code/routines/${ROUTINE}/fire`]);
   const sealed = store.get('ait:routine') || '';
   ok('연결: 토큰은 암호화해 보관(원문 없음)', /^v1\./.test(sealed) && !sealed.includes(RT_TOKEN) && !sealed.includes(ROUTINE));
@@ -262,6 +263,7 @@ const toolSrc = read('scripts/ai-task/taxphoto.mjs');
 const libSrc = read('api/_aiTax.ts');
 const pureSrc = read('src/taxPhotoJob.ts');
 ok('도구: 사이트 주소를 하나로 고정', toolSrc.includes(`const SITE = '${SITE}';`) && pureSrc.includes(`SITE_ORIGIN = '${SITE}'`));
+ok('서버: 예약 작업에 알리는 주소는 요청 주소가 아니라 JOB_SITE 하나', read('api/_aiTax.ts').includes(`JOB_SITE = '${SITE}'`) && /const origin = JOB_SITE;/.test(read('api/ai-tax.ts')) && !/url\.origin/.test(read('api/ai-tax.ts')));
 ok('도구: fetch가 닿지 못하면 curl(프록시 환경) · 열쇠는 헤더 파일(0600)로 — 명령줄에 싣지 않음', /execFileSync\('curl', args/.test(toolSrc) && /args\.push\('-H', `@\$\{HDRF\}`\)/.test(toolSrc) && /writeFileSync\(HDRF, [^)]*\{ mode: 0o600 \}\)/.test(toolSrc));
 ok('도구: 열쇠는 0600 파일에만', /writeFileSync\(KEYF, key, \{ mode: 0o600 \}\)/.test(toolSrc) && !/console\.log\([^)]*key/.test(toolSrc));
 ok('_aiTax.ts · taxPhotoJob.ts import 0건', !/^import /m.test(libSrc) && !/^import /m.test(pureSrc));

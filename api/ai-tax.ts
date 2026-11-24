@@ -12,7 +12,7 @@ import { requireAuth, callerEmail, ADMIN_EMAIL } from './_auth.js';
 import {
   json, storeOn, CODE_RE, cleanText, imgOk, newRid, putJob, putImg, addToList, getJob, delJob, listJobs,
   summaryOf, refireBlock, activeCount, dayOk, fireJob, routineOf, trigOf, ROUTINE_TOKEN_RE, saveRoutine,
-  dropRoutine, fireRoutine, testText, ACTIVE_MAX, DAY_MAX, type Job,
+  dropRoutine, fireRoutine, testText, ACTIVE_MAX, DAY_MAX, JOB_SITE, type Job,
 } from './_aiTax.js';
 
 export default async function handler(request: Request): Promise<Response> {
@@ -24,7 +24,7 @@ export default async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const op = url.searchParams.get('op') || '';
   const rid = url.searchParams.get('rid') || '';
-  const origin = url.origin;
+  const origin = JOB_SITE;
   const now = Date.now();
   const post = request.method === 'POST';
   const body = async () => { try { return await request.json(); } catch { return {}; } };

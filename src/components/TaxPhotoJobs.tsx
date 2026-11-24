@@ -203,7 +203,7 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
               value={cUrl}
               onChange={e => setCUrl(e.target.value)}
               placeholder="실행 URL (https://api.anthropic.com/v1/claude_code/routines/trig_…/fire)"
-              className="flex-1 min-w-[260px] bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] text-gray-200 focus:outline-none focus:border-violet-500"
+              className="flex-1 min-w-[260px] bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-violet-500"
             />
             <input
               value={cTok}
@@ -211,7 +211,7 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
               type="password"
               autoComplete="off"
               placeholder="토큰 (sk-ant-…)"
-              className="w-[200px] bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] text-gray-200 focus:outline-none focus:border-violet-500"
+              className="w-[200px] bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-violet-500"
             />
             <button
               disabled={busy === 'connect' || !cUrl.trim() || !cTok.trim()}
@@ -220,6 +220,9 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
             >
               {busy === 'connect' ? '시험 중…' : '연결 (시험으로 한 번 부름)'}
             </button>
+            {(!cUrl.trim() || !cTok.trim()) && (
+              <span className="text-amber-300">{!cUrl.trim() ? '← 실행 URL 칸이 비어 있습니다' : '← 토큰 칸이 비어 있습니다'}</span>
+            )}
             {connected && st?.src === 'store' && (
               <button onClick={disconnect} className="px-1.5 py-0.5 rounded border border-gray-700/60 text-gray-400 hover:text-rose-300">연결 끊기</button>
             )}
