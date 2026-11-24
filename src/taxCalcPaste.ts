@@ -51,6 +51,7 @@ const QTY_RE = /([\d,]*\d(?:\.\d+)?)\s*주(?!문)/;
 const PRICE_RE = /([\d,]*\d(?:\.\d+)?)\s*원/;
 const NUM_RE = /[\d,]*\d(?:\.\d+)?/g;
 const KEYWORD_RE = /매수|매도|과표/;
+const PROMPT_MARK = '첨부한 사진을 아래 형식의 글로만 바꿔 주세요.';
 
 function readDate(line: string, today: string): { date: string; rest: string } | null {
   const full = line.match(DATE_FULL);
@@ -73,8 +74,13 @@ export function parseTaxCalcPaste(text: string, today: string): PasteParsed {
   const groups = new Map<string, { date: string; side: PasteSide; qty: number; amount: number; fills: number; taxBase: number }>();
   const taxBaseByDate: Record<string, number> = {};
   const skipped: PasteSkip[] = [];
+  // 부탁 문장을 통째로 붙이면 그 안의 '예)' 줄이 진짜 매매로 읽힌다 → 아무것도 넣지 않는다.
+  if (String(text || '').includes(PROMPT_MARK)) {
+    return { trades: [], taxBaseByDate, skipped: [{ line: PROMPT_MARK, reason: 'AI 부탁 문장입니다 — AI가 준 답을 붙여넣으세요' }] };
+  }
   for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.trim();
+    // AI 답에 흔한 꾸밈(글머리표 `- `·`• `·`1) `, 백틱, 굵게 `**`)은 걷어 낸다. ⚠️ `1.` 꼴 번호는 걷지 않는다 — `11.24` 날짜와 구분이 안 된다.
+    const line = raw.replace(/[`*]/g, '').trim().replace(/^[-•·>]+\s*/, '').replace(/^\d{1,2}\)\s+/, '');
     if (!line) continue;
     const dated = readDate(line, today);
     if (!dated) {
@@ -205,6 +211,31 @@ export function applyTaxCalcPaste(
     });
   }
   return next;
+}
+
+// 사용자가 쓰는 AI(Claude·Gemini·ChatGPT 등, 각자 구독)에 사진과 함께 줄 부탁 문장. 사이트는 AI를 부르지 않는다 —
+// 키·요금 없이 누구나 자기 AI로 쓴다(사용자 요청 2026-11-24). ⚠️ 예시 줄은 parseTaxCalcPaste가 그대로 읽어야 한다(verify:tax-paste #P8).
+export function buildPastePrompt({ name, code, year }: { name: string; code: string; year: number }): string {
+  const stock = [name, code ? `(${code})` : ''].filter(Boolean).join(' ');
+  return [
+    `${PROMPT_MARK} 설명·표·코드블록 없이 결과 줄만 주세요.`,
+    `종목: ${stock} — 다른 종목 줄은 빼 주세요.`,
+    ``,
+    `[주문내역·체결내역 사진일 때] 한 줄에 체결 하나`,
+    `YYYY-MM-DD 매수(또는 매도) 수량주 평균체결가원`,
+    `- 날짜에 연도가 없으면 ${year}년으로 쓰세요(오늘보다 뒤 날짜면 ${year - 1}년).`,
+    `- 체결수량이 0인 주문(미체결·취소)은 빼세요.`,
+    `- 같은 날 여러 번 체결됐으면 줄을 나눠 그대로 쓰세요(합치지 마세요).`,
+    `- 사진에 과표기준가가 있으면 줄 끝에 '과표 숫자'를 붙이세요.`,
+    ``,
+    `[기준가·과표기준가 표 사진일 때] 한 줄에 날짜 하나`,
+    `YYYY-MM-DD 과표 과표기준가`,
+    ``,
+    `예)`,
+    `${year}-11-23 매수 5주 6,960원`,
+    `${year}-11-24 매도 50주 7,490원`,
+    `${year}-11-24 과표 1,234.56`,
+  ].join('\n');
 }
 
 export function pasteCounts(plan: PastePlanRow[]): { add: number; fill: number } {

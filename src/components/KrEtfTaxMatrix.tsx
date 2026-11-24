@@ -22,7 +22,7 @@ import {
   monthEndOfYm,
 } from '../krEtfTaxHelpers';
 import { taxRowMonth, groupTaxRowsByMonth, taxMonthOpen, showTaxMonthHeads, taxMonthLabel, taxMonthSummary } from '../taxCalcMonths';
-import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts } from '../taxCalcPaste';
+import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts, buildPastePrompt } from '../taxCalcPaste';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
@@ -89,7 +89,7 @@ const fmtTaxBase = (v) => {
 };
 
 const PASTE_PLACEHOLDER = [
-  '주문내역 사진을 Claude에게 주고 받은 글을 붙여넣으세요. 예)',
+  '쓰시는 AI가 사진을 옮겨 준 글을 붙여넣으세요. 예)',
   '2026-11-23 매수 5주 6,960원',
   '2026-11-24 매도 50주 7,490원 과표 1,234.56',
   '2026-11-24 과표 1,234.56   ← 과표기준가만 (그날 행의 빈칸을 채움)',
@@ -141,9 +141,11 @@ export default function KrEtfTaxMatrix({
   // 평균 과표 계산기 월별 접기 — `${code}|${ym}` → 펼침 여부. 누른 적 없는 달은 taxMonthOpen 기본값(지난 달만 접힘).
   // ⚠️ 세션 로컬이다(showTaxHelp와 같은 근거) — 기본값이 '지난 달 접힘'이라 저장하지 않아도 다시 열면 같은 모양이다.
   const [calcMonthOpen, setCalcMonthOpen] = useState({});
-  // 계산기 '붙여넣기'(주문내역 사진 → Claude가 옮긴 글) — 열린 종목 코드와 입력 글. 세션 로컬(넣기 전 초안).
+  // 계산기 '붙여넣기'(주문내역 사진 → 사용자가 쓰는 AI가 옮긴 글) — 열린 종목 코드와 입력 글. 세션 로컬(넣기 전 초안).
   const [pasteFor, setPasteFor] = useState(null);
   const [pasteText, setPasteText] = useState('');
+  // 'AI 부탁 문장 복사' 결과 — 'copied'(버튼 글씨로 확인) | 'manual'(클립보드 거부 → 문장을 보여 주고 직접 복사).
+  const [promptCopy, setPromptCopy] = useState('');
 
   // 가로 스크롤 시 '평균 과표 계산기'(확장 행)를 왼쪽에 고정(엑셀 틀 고정)하기 위해, 스크롤
   // 컨테이너의 가시 폭을 측정해 sticky 패널 너비로 사용한다. 콜백 ref + ResizeObserver로
@@ -522,6 +524,16 @@ export default function KrEtfTaxMatrix({
     });
     setPasteText('');
     setPasteFor(null);
+    setPromptCopy('');
+  };
+
+  const copyPastePrompt = async (prompt) => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setPromptCopy('copied');
+    } catch {
+      setPromptCopy('manual');
+    }
   };
 
   return (
@@ -765,11 +777,11 @@ export default function KrEtfTaxMatrix({
                             <Plus size={10} /> 행 추가
                           </button>
                           <button
-                            onClick={() => { setPasteFor(pasteFor === stock.code ? null : stock.code); setPasteText(''); }}
+                            onClick={() => { setPasteFor(pasteFor === stock.code ? null : stock.code); setPasteText(''); setPromptCopy(''); }}
                             className={'text-[10px] px-2 py-0.5 rounded border inline-flex items-center gap-1 ' + (pasteFor === stock.code
                               ? 'border-violet-500 text-violet-200 bg-violet-900/30'
                               : 'border-violet-700/60 text-violet-300 hover:text-violet-200 hover:border-violet-500')}
-                            title="주문내역 사진을 Claude가 옮긴 글을 붙여넣어 날짜별 매수·매도 행과 과표기준가를 넣습니다"
+                            title="주문내역 사진을 쓰시는 AI(Claude·Gemini·ChatGPT 등)가 옮긴 글을 붙여넣어 날짜별 매수·매도 행과 과표기준가를 넣습니다"
                           >
                             <ClipboardPaste size={10} /> 붙여넣기
                           </button>
@@ -788,8 +800,29 @@ export default function KrEtfTaxMatrix({
                           const parsed = parseTaxCalcPaste(pasteText, getTodayKST());
                           const plan = planTaxCalcPaste(parsed, events);
                           const counts = pasteCounts(plan);
+                          const prompt = buildPastePrompt({ name: stock.name || '', code: stock.code, year: Number(getTodayKST().slice(0, 4)) });
                           return (
                             <div className="px-3 py-2 border-b border-gray-800 space-y-2">
+                              <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                                <button
+                                  onClick={() => copyPastePrompt(prompt)}
+                                  className="px-2 py-0.5 rounded border border-violet-700/60 text-violet-300 hover:text-violet-200 hover:border-violet-500"
+                                  title={prompt}
+                                >
+                                  {promptCopy === 'copied' ? '✓ 복사됨' : '① AI 부탁 문장 복사'}
+                                </button>
+                                <span className="text-gray-500">② 쓰시는 AI(Claude·Gemini·ChatGPT 등)에 주문내역 사진과 함께 붙여넣기 → ③ AI가 준 글을 아래 칸에 붙여넣기</span>
+                              </div>
+                              {promptCopy === 'manual' && (
+                                <textarea
+                                  readOnly
+                                  value={prompt}
+                                  rows={6}
+                                  onFocus={e => e.target.select()}
+                                  className="w-full max-w-[720px] bg-gray-950 border border-amber-700/50 rounded px-2 py-1 text-[10px] text-gray-300 font-mono"
+                                  title="이 브라우저가 자동 복사를 막았습니다 — 눌러서 전체 선택 후 직접 복사하세요"
+                                />
+                              )}
                               <textarea
                                 value={pasteText}
                                 onChange={e => setPasteText(e.target.value)}
@@ -843,7 +876,7 @@ export default function KrEtfTaxMatrix({
                                   넣기 · 추가 {counts.add}행{counts.fill > 0 ? ` · 빈칸 채움 ${counts.fill}행` : ''}
                                 </button>
                                 <button
-                                  onClick={() => { setPasteFor(null); setPasteText(''); }}
+                                  onClick={() => { setPasteFor(null); setPasteText(''); setPromptCopy(''); }}
                                   className="text-[10px] px-2 py-0.5 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500"
                                 >
                                   닫기

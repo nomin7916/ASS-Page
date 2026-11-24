@@ -101,13 +101,33 @@ if (T) {
   eq('#P7 같은 글을 다시 넣으면 추가 0행(두 번 눌러도 중복 없음)', pasteCounts(planTaxCalcPaste(p1, next)), { add: 0, fill: 0 });
   const filled = applyTaxCalcPaste(existing, plan2, { newId: () => 'z', prevQtyOf: () => 0 });
   eq('#P7 빈칸 채움은 그 행만 바꾼다', filled.map(e => e.taxBasePrice), [0, 3900.12, '4000']);
+
+  // #P8 AI 부탁 문장(각자 쓰는 AI에 사진과 함께) — 예시 줄은 이 해석기가 그대로 읽는 형식이어야 한다
+  const { buildPastePrompt } = T;
+  const prompt = buildPastePrompt({ name: 'TIGER 반도체TOP10커버드콜액티브', code: '0177R0', year: 2026 });
+  ok('#P8 종목 이름·코드가 문장에 들어간다', prompt.includes('TIGER 반도체TOP10커버드콜액티브 (0177R0)'));
+  ok('#P8 연도 규칙(올해·오늘보다 뒤면 작년)', prompt.includes('2026년으로') && prompt.includes('2025년'));
+  const exampleLines = prompt.split('\n').slice(prompt.split('\n').indexOf('예)') + 1).join('\n');
+  const ex = parseTaxCalcPaste(exampleLines, TODAY);
+  eq('#P8 예시 줄 = 해석기 형식', [brief(ex.trades), ex.taxBaseByDate, ex.skipped.length], [
+    [['2026-11-23', 'buy', 5, 6960, 1, 0], ['2026-11-24', 'sell', 50, 7490, 1, 1234.56]], { '2026-11-24': 1234.56 }, 0,
+  ]);
+  const decorated = parseTaxCalcPaste('```\n- 2026-11-23 매수 5주 6,960원\n• `2026-11-24 매도 50주 7,490원`\n2) **2026-11-24 과표 1,234.56**\n```', TODAY);
+  eq('#P8 AI 답 꾸밈(글머리표·백틱·굵게·번호) 걷어 냄', [brief(decorated.trades), decorated.taxBaseByDate, decorated.skipped.length], [
+    [['2026-11-23', 'buy', 5, 6960, 1, 0], ['2026-11-24', 'sell', 50, 7490, 1, 1234.56]], { '2026-11-24': 1234.56 }, 0,
+  ]);
+  const whole = parseTaxCalcPaste(prompt, TODAY);
+  eq('#P8 부탁 문장을 통째로 붙이면 아무것도 넣지 않는다(예시가 진짜 매매로 들어가지 않게)', [whole.trades.length, Object.keys(whole.taxBaseByDate).length, whole.skipped.length], [0, 0, 1]);
 }
 
 // ── 소스 가드: 계산기가 이 모듈을 실제로 쓰는가 ──
 const mod = read('src/taxCalcPaste.ts');
 ok('#S1 taxCalcPaste.ts에 import 0줄(Node가 직접 실행)', !/^\s*import\s/m.test(stripComments(mod)));
 const mx = stripComments(read('src/components/KrEtfTaxMatrix.tsx'));
-ok('#S2 KrEtfTaxMatrix가 네 함수를 import', /import\s*\{\s*parseTaxCalcPaste,\s*planTaxCalcPaste,\s*applyTaxCalcPaste,\s*pasteCounts\s*\}\s*from\s*'\.\.\/taxCalcPaste'/.test(mx));
+ok('#S2 KrEtfTaxMatrix가 다섯 함수를 import', /import\s*\{\s*parseTaxCalcPaste,\s*planTaxCalcPaste,\s*applyTaxCalcPaste,\s*pasteCounts,\s*buildPastePrompt\s*\}\s*from\s*'\.\.\/taxCalcPaste'/.test(mx));
+ok('#S6 부탁 문장 = 종목 이름·코드·올해로 만들고 클립보드 복사(실패하면 직접 복사 칸)', /buildPastePrompt\(\{ name: stock\.name \|\| '', code: stock\.code, year: Number\(getTodayKST\(\)\.slice\(0, 4\)\) \}\)/.test(mx)
+  && /navigator\.clipboard\.writeText\(prompt\)/.test(mx) && /promptCopy === 'manual'/.test(mx));
+ok('#S7 사이트는 AI를 부르지 않는다(키·요금 0 — 각자 쓰는 AI에 사진을 준다)', !/fetch\(/.test(stripComments(mod)) && !/anthropic|openai|generativelanguage/i.test(mx));
 ok('#S3 ClipboardPaste 아이콘 import + 사용', /import\s*\{[^}]*\bClipboardPaste\b[^}]*\}\s*from\s*'lucide-react'/.test(mx) && /<ClipboardPaste\b/.test(mx));
 ok('#S4 적용은 persistEvents(=updateTaxBaseEvents) 경유 + 전일 수량은 자산검증 조회', /const applyPaste = [\s\S]{0,200}persistEvents\(stock\.code, applyTaxCalcPaste\(events, plan,[\s\S]{0,120}lookupPrevQty\(date, stock\.code\)/.test(mx));
 ok('#S5 미리보기는 오늘(KST) 기준 해석', /parseTaxCalcPaste\(pasteText, getTodayKST\(\)\)/.test(mx));
