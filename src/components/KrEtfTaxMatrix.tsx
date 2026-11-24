@@ -22,7 +22,7 @@ import {
   monthEndOfYm,
 } from '../krEtfTaxHelpers';
 import { taxRowMonth, groupTaxRowsByMonth, taxMonthOpen, showTaxMonthHeads, taxMonthLabel, taxMonthSummary } from '../taxCalcMonths';
-import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts, buildPastePrompt, mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT } from '../taxCalcPaste';
+import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts, buildPastePrompt, mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoFitSize, PHOTO_TRIES, photoReadInit, photoReadStep, photoErrorText, photoOutcome } from '../taxCalcPaste';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
@@ -102,6 +102,46 @@ const PASTE_STATUS = {
 };
 const fmtPastePrice = (v) => (safeNum(v) > 0 ? safeNum(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '-');
 
+// 사진으로 넣기 — 고른 사진을 기기에서 JPEG로 줄인다(서버 요청 크기 안에 들게, 글자는 읽히게). 저장하지 않는다.
+const loadPhotoImage = (file) => new Promise((resolve, reject) => {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => resolve({ img, url });
+  img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode')); };
+  img.src = url;
+});
+const photoToJpegB64 = (img, w, h, q) => new Promise((resolve, reject) => {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  if (!g) { reject(new Error('decode')); return; }
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, w, h);
+  g.drawImage(img, 0, 0, w, h);
+  const fromUrl = () => { try { resolve(String(c.toDataURL('image/jpeg', q)).split(',')[1] || ''); } catch { reject(new Error('decode')); } };
+  if (!c.toBlob) { fromUrl(); return; }
+  c.toBlob((blob) => {
+    if (!blob) { fromUrl(); return; }
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || '').split(',')[1] || '');
+    fr.onerror = () => reject(new Error('decode'));
+    fr.readAsDataURL(blob);
+  }, 'image/jpeg', q);
+});
+async function shrinkPhoto(file, budget) {
+  const { img, url } = await loadPhotoImage(file);
+  try {
+    for (const t of PHOTO_TRIES) {
+      const { w, h } = photoFitSize(img.naturalWidth, img.naturalHeight, t.scale);
+      const b64 = await photoToJpegB64(img, w, h, t.q);
+      if (b64 && b64.length <= budget) return b64;
+    }
+    throw new Error('big');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 // 최저가 우선 매칭으로 그 매도에 배정된 매수 로트를 사람이 읽는 줄로. 툴팁 전용(셀 폭 128px에
 // 다 넣을 수 없다). ⚠️ 배정 내역은 이 기능의 근거 그 자체라 화면 어딘가에 반드시 노출해야 한다 —
 // 기준단가 숫자 하나만 보이면 "왜 7,227원인가"를 사용자가 추적할 수 없다.
@@ -141,19 +181,28 @@ export default function KrEtfTaxMatrix({
   // 평균 과표 계산기 월별 접기 — `${code}|${ym}` → 펼침 여부. 누른 적 없는 달은 taxMonthOpen 기본값(지난 달만 접힘).
   // ⚠️ 세션 로컬이다(showTaxHelp와 같은 근거) — 기본값이 '지난 달 접힘'이라 저장하지 않아도 다시 열면 같은 모양이다.
   const [calcMonthOpen, setCalcMonthOpen] = useState({});
-  // 계산기 '붙여넣기'(주문내역 사진 → 사용자가 쓰는 AI가 옮긴 글) — 열린 종목 코드와 입력 글. 세션 로컬(넣기 전 초안).
+  // 계산기 '사진으로 넣기'(주문내역 사진 → AI가 읽어 바로 넣음 · 다른 방법 = AI 답 직접 붙여넣기) — 열린 종목 코드와 붙여넣은 글. 세션 로컬.
   const [pasteFor, setPasteFor] = useState(null);
   const [pasteText, setPasteText] = useState('');
   // 'AI 부탁 문장 복사' 결과 — 'copied'(버튼 글씨로 확인) | 'manual'(클립보드 거부 → 문장을 보여 주고 직접 복사).
   const [promptCopy, setPromptCopy] = useState('');
-  // 붙여넣기 ① 주문내역 사진 — 휴대폰 사진첩에서 고른 사진 [{file,url}](url=미리보기용 object URL). 세션 로컬·메모리만.
-  // ⚠️ 사진은 사이트에 올리지 않는다 — ② 보내기(navigator.share)로 사용자가 고른 AI 앱에만 넘긴다.
+  // 올린 주문내역 사진 [{file,url}](url=미리보기용 object URL). 세션 로컬·메모리만 — 줄여서 /api/tax-photo로 읽힐 뿐 저장하지 않는다.
+  // 읽기에 실패하면 남겨 둔다(다시 읽기 · '다른 방법'의 AI 앱으로 보내기에 쓴다).
   const [pastePhotos, setPastePhotos] = useState([]);
-  // ② 보내기 결과 'sent'|'cancel'|'fail'|'nosupport' · ③ 클립보드 읽기 결과 'empty'|'fail' · 사진 고르기에서 뺀 것 안내
+  // AI 앱으로 보내기 결과 'sent'|'cancel'|'fail'|'nosupport' · 클립보드 읽기 결과 'empty'|'fail' · 사진 고르기에서 뺀 것 안내
   const [photoNote, setPhotoNote] = useState('');
   const [clipNote, setClipNote] = useState('');
   const [pickNote, setPickNote] = useState('');
   const pasteBoxRef = useRef(null);
+  // 사진으로 넣기(사용자 요청 2026-11-24 — 사진만 올리면 AI가 읽고 바로 넣는다). 세션 로컬.
+  // phase: 'idle'|'shrink'|'read'|'apply'|'same'|'none'|'error'|'undone' · undo = 넣기 전 이벤트(되돌리기용)
+  const [photoRun, setPhotoRun] = useState({ phase: 'idle' });
+  const [pasteMore, setPasteMore] = useState(false);
+  const photoRunId = useRef(0);
+  const photoAbort = useRef(null);
+  // 읽는 사이(10~30초) 사용자가 다른 행을 고쳤을 수 있다 — 넣을 때는 그 순간의 이벤트로 계획을 다시 세운다.
+  const portfolioRef = useRef(portfolio);
+  portfolioRef.current = portfolio;
 
   // 가로 스크롤 시 '평균 과표 계산기'(확장 행)를 왼쪽에 고정(엑셀 틀 고정)하기 위해, 스크롤
   // 컨테이너의 가시 폭을 측정해 sticky 패널 너비로 사용한다. 콜백 ref + ResizeObserver로
@@ -521,7 +570,7 @@ export default function KrEtfTaxMatrix({
 
   // 붙여넣기 적용 — 새 행은 '행 추가'와 같은 모양(전일 수량은 자산검증 조회), 기존 행은 빈칸만 채운다.
   // 넣은 행이 접힌 지난 달에 있으면 그 달을 펼친다(handleEventDateChange와 같은 이유).
-  const applyPaste = (stock, events, plan) => {
+  const commitPastePlan = (stock, events, plan) => {
     persistEvents(stock.code, applyTaxCalcPaste(events, plan, {
       newId: generateId,
       prevQtyOf: (date) => lookupPrevQty(date, stock.code),
@@ -530,11 +579,18 @@ export default function KrEtfTaxMatrix({
       const ym = taxRowMonth(r.date);
       if (ym && ym < currentYm && r.status !== 'same') toggleCalcMonth(stock.code, ym, true);
     });
+  };
+  const applyPaste = (stock, events, plan) => {
+    commitPastePlan(stock, events, plan);
     resetPaste(null);
   };
 
   // 붙여넣기 패널을 열고 닫을 때 — 초안 글·사진·안내를 모두 비운다(사진 미리보기 주소도 돌려준다).
   const resetPaste = (code) => {
+    photoRunId.current += 1;
+    if (photoAbort.current) { try { photoAbort.current.abort(); } catch { /* 이미 끝남 */ } photoAbort.current = null; }
+    setPhotoRun({ phase: 'idle' });
+    setPasteMore(false);
     pastePhotos.forEach(p => URL.revokeObjectURL(p.url));
     setPastePhotos([]);
     setPasteText('');
@@ -545,17 +601,110 @@ export default function KrEtfTaxMatrix({
     setPasteFor(code);
   };
 
-  const pickPastePhotos = (e) => {
+  // 사진 올리기 = 한 번 고른 사진이 한 묶음(겹친 화면은 AI가 한 번만 쓴다). 고르자마자 읽고 넣는다 — 버튼을 더 누르지 않는다.
+  const pickAndReadPhotos = (stock, e) => {
     const list = Array.from(e.target.files || []);
-    e.target.value = '';   // 같은 사진을 지웠다 다시 고를 수 있게
-    const { add, notImage, dup, over } = mergePastePhotos(pastePhotos.map(p => p.file), list);
-    if (add.length > 0) setPastePhotos(prev => [...prev, ...add.map(f => ({ file: f, url: URL.createObjectURL(f) }))]);
-    setPhotoNote('');
+    e.target.value = '';   // 같은 사진을 다시 고를 수 있게
+    const { add, notImage, over } = mergePastePhotos([], list);
     setPickNote([
       notImage > 0 ? `사진이 아닌 파일 ${notImage}개는 뺐습니다` : '',
-      dup > 0 ? `이미 고른 사진 ${dup}장은 뺐습니다` : '',
       over > 0 ? `한 번에 ${PASTE_PHOTO_MAX}장까지라 ${over}장은 뺐습니다` : '',
     ].filter(Boolean).join(' · '));
+    if (add.length === 0) return;
+    pastePhotos.forEach(p => URL.revokeObjectURL(p.url));
+    const photos = add.map(f => ({ file: f, url: URL.createObjectURL(f) }));
+    setPastePhotos(photos);
+    setPhotoNote('');
+    readPhotosAndApply(stock, photos.map(p => p.file));
+  };
+
+  // 사진 → 기기에서 줄이기 → /api/tax-photo(구글 Gemini가 읽음) → 해석 → 바로 넣기(규칙은 붙여넣기와 같다 — 같은 날·같은
+  // 수량 행은 빈칸만 채우고 입력된 값은 덮지 않는다). 넣은 뒤 '되돌리기'로 넣기 전으로 돌릴 수 있다.
+  // ⚠️ 답을 끝까지 받은({d:1}) 때만 넣는다 — 중간에 끊긴 글을 넣으면 체결이 빠진 채 들어간다.
+  const readPhotosAndApply = async (stock, files) => {
+    const id = ++photoRunId.current;
+    const live = () => photoRunId.current === id;
+    if (photoAbort.current) { try { photoAbort.current.abort(); } catch { /* 이미 끝남 */ } }
+    const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    photoAbort.current = ac;
+    const n = files.length;
+    setPhotoRun({ phase: 'shrink', n });
+    let images = [];
+    try {
+      const budget = photoBudget(n);
+      for (const f of files) {
+        images.push({ mime: 'image/jpeg', data: await shrinkPhoto(f, budget) });
+        if (!live()) return;
+      }
+    } catch (err) {
+      if (live()) setPhotoRun({ phase: 'error', n, code: err && err.message === 'big' ? 'big' : 'decode' });
+      return;
+    }
+    if (!live()) return;
+    setPhotoRun({ phase: 'read', n, got: 0 });
+    const today = getTodayKST();
+    let st = photoReadInit();
+    try {
+      const res = await fetch('/api/tax-photo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: stock.name || '', code: stock.code, year: Number(today.slice(0, 4)), images }),
+        signal: ac ? ac.signal : undefined,
+      });
+      images = [];
+      if (!res.ok) {
+        let msg = '';
+        try { msg = String((await res.json()).error || ''); } catch { /* 글 아님 */ }
+        const code = res.status === 401 || res.status === 403 ? 'auth' : (res.status === 400 || res.status === 413 ? 'bad' : 'gemini');
+        if (live()) setPhotoRun({ phase: 'error', n, code, msg: msg || `HTTP ${res.status}` });
+        return;
+      }
+      if (res.body && res.body.getReader) {
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          st = photoReadStep(st, dec.decode(value, { stream: true }));
+          if (!live()) { try { reader.cancel(); } catch { /* 무시 */ } return; }
+          const got = st.text.length;
+          setPhotoRun(r => (r.phase === 'read' ? { ...r, got } : r));
+        }
+        st = photoReadStep(st, dec.decode(), true);
+      } else {
+        st = photoReadStep(st, await res.text(), true);
+      }
+    } catch (err) {
+      if (!live() || (err && err.name === 'AbortError')) return;
+      setPhotoRun({ phase: 'error', n, code: 'net' });
+      return;
+    }
+    if (!live()) return;
+    if (st.error || !st.done) {
+      setPhotoRun({ phase: 'error', n, code: st.error || 'cut', msg: st.msg, text: st.text });
+      return;
+    }
+    const text = st.text.trim();
+    const before = getCodeTaxBase(portfolioRef.current, stock.code).events || [];
+    const parsed = parseTaxCalcPaste(text, today);
+    const plan = planTaxCalcPaste(parsed, before);
+    const kind = photoOutcome(parsed, plan);
+    if (kind === 'apply') commitPastePlan(stock, before, plan);
+    if (kind !== 'none') {
+      setPastePhotos(prev => { prev.forEach(p => URL.revokeObjectURL(p.url)); return []; });
+    }
+    setPhotoRun({
+      phase: kind, n, text, plan, counts: pasteCounts(plan), skipped: parsed.skipped, model: st.model,
+      undo: kind === 'apply' ? { code: stock.code, prev: before } : null,
+    });
+  };
+
+  // 사진으로 넣은 것을 넣기 전으로 — 넣기 직전의 이벤트를 그대로 되돌려 쓴다.
+  const undoPhotoApply = () => {
+    const u = photoRun.undo;
+    if (!u) return;
+    persistEvents(u.code, u.prev);
+    setPhotoRun(r => ({ ...r, phase: 'undone', undo: null }));
   };
 
   const removePastePhoto = (url) => {
@@ -564,7 +713,7 @@ export default function KrEtfTaxMatrix({
     setPhotoNote('');
   };
 
-  // ② 고른 사진 + 부탁 문장을 기기의 '공유' 창으로 AI 앱에 보낸다.
+  // '다른 방법' — 올린 사진 + 부탁 문장을 기기의 '공유' 창으로 AI 앱에 보낸다.
   // ⚠️ navigator.share 는 누른 바로 그 순간에만 열린다(아이폰 사파리) — await 보다 먼저, 클립보드보다도 먼저 부른다.
   //    부탁 문장은 그 뒤에 클립보드로도 복사한다(AI 앱이 함께 보낸 글을 받지 않으면 붙여넣기만 하면 되게). 누를 때마다 새로
   //    복사한다 — 그 사이 AI 답을 복사했을 수 있어 '복사됨' 표시만 믿으면 다른 글이 붙는다.
@@ -589,7 +738,7 @@ export default function KrEtfTaxMatrix({
     setPhotoNote(result);
   };
 
-  // ③ AI가 준 글을 클립보드에서 바로 칸에 넣는다 — 휴대폰에서 칸을 길게 눌러 붙여넣기가 번거로워서.
+  // '다른 방법' — AI가 준 글을 클립보드에서 바로 칸에 넣는다 — 휴대폰에서 칸을 길게 눌러 붙여넣기가 번거로워서.
   //    아이폰은 '붙여넣기' 말풍선이 한 번 더 뜬다(누르면 들어온다). 막히면 칸에 초점을 주고 직접 붙여넣기를 안내한다.
   const pasteFromClipboard = async () => {
     try {
@@ -858,9 +1007,9 @@ export default function KrEtfTaxMatrix({
                             className={'text-[10px] px-2 py-0.5 rounded border inline-flex items-center gap-1 ' + (pasteFor === stock.code
                               ? 'border-violet-500 text-violet-200 bg-violet-900/30'
                               : 'border-violet-700/60 text-violet-300 hover:text-violet-200 hover:border-violet-500')}
-                            title="휴대폰 사진첩의 주문내역 사진을 쓰시는 AI(Claude·Gemini·ChatGPT 등) 앱에 보내고, AI가 옮긴 글을 붙여넣어 날짜별 매수·매도 행과 과표기준가를 넣습니다"
+                            title="주문내역(체결내역) 사진을 올리면 AI가 읽어 날짜별 매수·매도 수량, 평균 단가, 과표기준가를 바로 넣습니다"
                           >
-                            <ClipboardPaste size={10} /> 붙여넣기
+                            <ImagePlus size={10} /> 사진으로 넣기
                           </button>
                           {monthHeads && pastGroups.length > 0 && (
                             <button
@@ -878,145 +1027,233 @@ export default function KrEtfTaxMatrix({
                           const plan = planTaxCalcPaste(parsed, events);
                           const counts = pasteCounts(plan);
                           const prompt = buildPastePrompt({ name: stock.name || '', code: stock.code, year: Number(getTodayKST().slice(0, 4)) });
+                          const pr = photoRun;
+                          const busy = pr.phase === 'shrink' || pr.phase === 'read';
+                          const planTable = (rows) => (
+                            <table className="text-[10px] border-collapse">
+                              <thead className="text-gray-500 border-b border-gray-700/50">
+                                <tr>
+                                  <th className="text-left py-0.5 pr-3 font-normal">일자</th>
+                                  <th className="text-left py-0.5 pr-3 font-normal">구분</th>
+                                  <th className="text-right py-0.5 pr-3 font-normal">수량</th>
+                                  <th className="text-right py-0.5 pr-3 font-normal">단가</th>
+                                  <th className="text-right py-0.5 pr-3 font-normal">과표기준가</th>
+                                  <th className="text-left py-0.5 pr-3 font-normal">처리</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((r, i) => (
+                                  <tr key={i} className="border-b border-gray-800/40 last:border-0">
+                                    <td className="py-0.5 pr-3 tabular-nums text-gray-300">{r.date}</td>
+                                    <td className={'py-0.5 pr-3 ' + (r.side === 'sell' ? 'text-rose-400' : r.side === 'buy' ? 'text-emerald-400' : 'text-gray-500')}>
+                                      {r.side === 'sell' ? '매도' : r.side === 'buy' ? '매수' : '-'}
+                                      {r.fills > 1 && <span className="text-gray-500 ml-1">({r.fills}건 합침)</span>}
+                                    </td>
+                                    <td className="py-0.5 pr-3 text-right tabular-nums text-gray-200">{r.qty > 0 ? r.qty.toLocaleString() : '-'}</td>
+                                    <td className="py-0.5 pr-3 text-right tabular-nums text-orange-300">{fmtPastePrice(r.price)}</td>
+                                    <td className="py-0.5 pr-3 text-right tabular-nums text-sky-300">{fmtPastePrice(r.taxBase)}</td>
+                                    <td className="py-0.5 pr-3">
+                                      <span className={PASTE_STATUS[r.status].cls}>{PASTE_STATUS[r.status].label}</span>
+                                      {r.note && <span className="text-amber-400/80 ml-1.5">{r.note}</span>}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          );
+                          const skippedLine = (list) => list && list.length > 0 && (
+                            <div className="text-[10px] text-gray-500">
+                              읽지 못한 줄 {list.length}개 — {list.slice(0, 3).map(s => `"${s.line}"(${s.reason})`).join(', ')}{list.length > 3 ? ' …' : ''}
+                            </div>
+                          );
+                          const readText = (t) => t && (
+                            <details className="text-[10px] text-gray-500">
+                              <summary className="cursor-pointer select-none hover:text-gray-300">AI가 사진에서 읽은 글 보기</summary>
+                              <pre className="mt-1 max-w-[720px] whitespace-pre-wrap bg-gray-950 border border-gray-800 rounded px-2 py-1 text-gray-300 font-mono">{t}</pre>
+                            </details>
+                          );
                           return (
                             <div className="px-3 py-2 border-b border-gray-800 space-y-2 text-left">
                               <div className="flex items-center gap-2 flex-wrap text-[11px]">
                                 <label
-                                  className="px-2.5 py-1 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 inline-flex items-center gap-1 cursor-pointer"
-                                  title="휴대폰은 사진 보관함·사진 찍기·파일에서 고릅니다. 사진은 이 사이트에 올라가지 않습니다."
+                                  className={'px-3 py-1.5 rounded border border-violet-400 text-white bg-violet-700/70 hover:bg-violet-600/80 inline-flex items-center gap-1.5 font-medium '
+                                    + (busy ? 'opacity-50 pointer-events-none' : 'cursor-pointer')}
+                                  title="휴대폰은 사진 보관함·사진 찍기·파일에서 고릅니다. 고르면 AI가 바로 읽어 넣습니다. 사진은 저장하지 않습니다."
                                 >
-                                  <ImagePlus size={12} /> ① 주문내역 사진 고르기
-                                  <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple onChange={pickPastePhotos} className="sr-only" />
+                                  <ImagePlus size={13} /> 주문내역 사진 올리기
+                                  <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy} onChange={e => pickAndReadPhotos(stock, e)} className="sr-only" />
                                 </label>
-                                <button
-                                  disabled={pastePhotos.length === 0}
-                                  onClick={() => sendPhotosToAI(prompt)}
-                                  className="px-2.5 py-1 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                                  title="고른 사진과 부탁 문장을 휴대폰의 '공유' 창으로 쓰시는 AI 앱(Claude·ChatGPT·Gemini)에 보냅니다"
-                                >
-                                  <Share2 size={12} /> ② AI 앱으로 보내기{pastePhotos.length > 0 ? ` (${pastePhotos.length}장)` : ''}
-                                </button>
-                                <button
-                                  onClick={pasteFromClipboard}
-                                  className="px-2.5 py-1 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 inline-flex items-center gap-1"
-                                  title="AI가 준 답을 길게 눌러 복사한 뒤 누르면 아래 칸에 들어갑니다"
-                                >
-                                  <ClipboardPaste size={12} /> ③ AI 답 붙여넣기
-                                </button>
-                                <button
-                                  onClick={() => copyPastePrompt(prompt)}
-                                  className="px-2 py-1 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500"
-                                  title={prompt}
-                                >
-                                  {promptCopy === 'copied' ? '✓ 부탁 문장 복사됨' : 'AI 부탁 문장만 복사'}
-                                </button>
-                              </div>
-                              <div className="text-[10px] text-gray-500 leading-relaxed">
-                                ① 휴대폰 사진첩에서 주문내역(체결내역) 사진을 고르고 → ② 공유 창에서 쓰시는 AI 앱(Claude·ChatGPT·Gemini)을 누르면 사진과 부탁 문장이 함께 갑니다
-                                → AI가 답하면 그 글을 길게 눌러 복사 → 이 화면으로 돌아와 ③ 을 누르세요. 사진은 이 사이트에 올라가지 않습니다.
+                                <span className="text-[10px] text-gray-500">
+                                  사진을 고르면 AI가 읽어 날짜별 매수·매도 수량, 평균 단가, 과표기준가를 바로 넣습니다 · 여러 장은 한 번에 고르세요(최대 {PASTE_PHOTO_MAX}장)
+                                </span>
                               </div>
                               {pastePhotos.length > 0 && (
                                 <div className="flex items-center gap-2 flex-wrap">
                                   {pastePhotos.map(p => (
                                     <div key={p.url} className="relative">
-                                      <img src={p.url} alt={p.file.name || '주문내역 사진'} className="h-16 w-16 object-cover rounded border border-gray-700" />
-                                      <button
-                                        onClick={() => removePastePhoto(p.url)}
-                                        className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-gray-900 border border-gray-600 text-gray-300 hover:text-white inline-flex items-center justify-center"
-                                        title="이 사진 빼기"
-                                        aria-label="이 사진 빼기"
-                                      >
-                                        <X size={11} />
-                                      </button>
+                                      <img src={p.url} alt={p.file.name || '주문내역 사진'} className={'h-16 w-16 object-cover rounded border border-gray-700' + (busy ? ' opacity-60' : '')} />
+                                      {!busy && (
+                                        <button
+                                          onClick={() => removePastePhoto(p.url)}
+                                          className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-gray-900 border border-gray-600 text-gray-300 hover:text-white inline-flex items-center justify-center"
+                                          title="이 사진 빼기"
+                                          aria-label="이 사진 빼기"
+                                        >
+                                          <X size={11} />
+                                        </button>
+                                      )}
                                     </div>
                                   ))}
                                 </div>
                               )}
                               {pickNote && <div className="text-[10px] text-amber-400/90">{pickNote}</div>}
-                              {photoNote === 'sent' && (
-                                <div className="text-[10px] text-emerald-400">
-                                  ✓ AI 앱으로 보냈습니다 — AI 앱에 부탁 문장이 안 보이면 입력 칸을 길게 눌러 붙여넣기 하세요{promptCopy === 'copied' ? '(복사해 두었습니다)' : ''}. 답을 받으면 복사해서 ③ 을 누르세요.
+                              {busy && (
+                                <div className="text-[11px] text-violet-200 inline-flex items-center gap-2" role="status">
+                                  <span className="inline-block h-3 w-3 rounded-full border-2 border-violet-300 border-t-transparent animate-spin" />
+                                  {pr.phase === 'shrink' ? `사진 ${pr.n}장을 보낼 크기로 줄이는 중…` : `AI가 사진 ${pr.n}장을 읽는 중… 보통 10~30초 걸립니다`}
                                 </div>
                               )}
-                              {photoNote === 'cancel' && <div className="text-[10px] text-gray-400">보내기를 취소했습니다 — 다시 보내려면 ② 를 누르세요.</div>}
-                              {photoNote === 'fail' && <div className="text-[10px] text-amber-400">보내지 못했습니다 — ② 를 한 번 더 눌러 주세요.</div>}
-                              {photoNote === 'nosupport' && (
-                                <div className="text-[10px] text-amber-400">
-                                  이 브라우저는 사진을 다른 앱으로 바로 보내지 못합니다 — 쓰시는 AI 앱이나 사이트(claude.ai 등)를 열어 같은 사진을 직접 올리고, 부탁 문장을 붙여넣으세요{promptCopy === 'copied' ? '(부탁 문장은 복사했습니다)' : '(아래 칸의 부탁 문장을 복사하세요)'}.
+                              {pr.phase === 'apply' && (
+                                <div className="space-y-1.5">
+                                  <div className="text-[11px] text-emerald-400 flex items-center gap-2 flex-wrap">
+                                    <span>✓ 넣었습니다 — 추가 {pr.counts.add}행{pr.counts.fill > 0 ? ` · 빈칸 채움 ${pr.counts.fill}행` : ''}</span>
+                                    {pr.undo && (
+                                      <button
+                                        onClick={undoPhotoApply}
+                                        className="text-[10px] px-2 py-0.5 rounded border border-gray-600 text-gray-300 hover:text-white hover:border-gray-400 inline-flex items-center gap-1"
+                                        title="방금 사진으로 넣은 것을 넣기 전으로 되돌립니다"
+                                      >
+                                        <RotateCcw size={10} /> 되돌리기
+                                      </button>
+                                    )}
+                                  </div>
+                                  {planTable(pr.plan)}
+                                  {skippedLine(pr.skipped)}
+                                  {readText(pr.text)}
                                 </div>
                               )}
-                              {promptCopy === 'manual' && (
-                                <textarea
-                                  readOnly
-                                  value={prompt}
-                                  rows={6}
-                                  onFocus={e => e.target.select()}
-                                  className="w-full max-w-[720px] bg-gray-950 border border-amber-700/50 rounded px-2 py-1 text-[10px] text-gray-300 font-mono"
-                                  title="이 브라우저가 자동 복사를 막았습니다 — 눌러서 전체 선택 후 직접 복사하세요"
-                                />
-                              )}
-                              {clipNote === 'empty' && <div className="text-[10px] text-amber-400">복사된 글이 없습니다 — AI 답을 길게 눌러 복사한 뒤 ③ 을 다시 누르세요.</div>}
-                              {clipNote === 'fail' && <div className="text-[10px] text-amber-400">이 브라우저가 바로 붙여넣기를 막았습니다 — 아래 칸을 길게 눌러 '붙여넣기'를 누르세요.</div>}
-                              <textarea
-                                ref={pasteBoxRef}
-                                value={pasteText}
-                                onChange={e => { setPasteText(e.target.value); setClipNote(''); }}
-                                rows={5}
-                                placeholder={PASTE_PLACEHOLDER}
-                                className="w-full max-w-[720px] bg-gray-950 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200 font-mono placeholder:text-gray-600 focus:outline-none focus:border-violet-500"
-                              />
-                              {plan.length > 0 && (
-                                <table className="text-[10px] border-collapse">
-                                  <thead className="text-gray-500 border-b border-gray-700/50">
-                                    <tr>
-                                      <th className="text-left py-0.5 pr-3 font-normal">일자</th>
-                                      <th className="text-left py-0.5 pr-3 font-normal">구분</th>
-                                      <th className="text-right py-0.5 pr-3 font-normal">수량</th>
-                                      <th className="text-right py-0.5 pr-3 font-normal">단가</th>
-                                      <th className="text-right py-0.5 pr-3 font-normal">과표기준가</th>
-                                      <th className="text-left py-0.5 pr-3 font-normal">처리</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {plan.map((r, i) => (
-                                      <tr key={i} className="border-b border-gray-800/40 last:border-0">
-                                        <td className="py-0.5 pr-3 tabular-nums text-gray-300">{r.date}</td>
-                                        <td className={'py-0.5 pr-3 ' + (r.side === 'sell' ? 'text-rose-400' : r.side === 'buy' ? 'text-emerald-400' : 'text-gray-500')}>
-                                          {r.side === 'sell' ? '매도' : r.side === 'buy' ? '매수' : '-'}
-                                          {r.fills > 1 && <span className="text-gray-500 ml-1">({r.fills}건 합침)</span>}
-                                        </td>
-                                        <td className="py-0.5 pr-3 text-right tabular-nums text-gray-200">{r.qty > 0 ? r.qty.toLocaleString() : '-'}</td>
-                                        <td className="py-0.5 pr-3 text-right tabular-nums text-orange-300">{fmtPastePrice(r.price)}</td>
-                                        <td className="py-0.5 pr-3 text-right tabular-nums text-sky-300">{fmtPastePrice(r.taxBase)}</td>
-                                        <td className="py-0.5 pr-3">
-                                          <span className={PASTE_STATUS[r.status].cls}>{PASTE_STATUS[r.status].label}</span>
-                                          {r.note && <span className="text-amber-400/80 ml-1.5">{r.note}</span>}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-                              {parsed.skipped.length > 0 && (
-                                <div className="text-[10px] text-gray-500">
-                                  읽지 못한 줄 {parsed.skipped.length}개 — {parsed.skipped.slice(0, 3).map(s => `"${s.line}"(${s.reason})`).join(', ')}{parsed.skipped.length > 3 ? ' …' : ''}
+                              {pr.phase === 'same' && (
+                                <div className="space-y-1.5">
+                                  <div className="text-[11px] text-gray-300">사진의 체결은 모두 이미 들어 있습니다 — 바꾼 것이 없습니다.</div>
+                                  {planTable(pr.plan)}
+                                  {skippedLine(pr.skipped)}
+                                  {readText(pr.text)}
                                 </div>
                               )}
-                              <div className="flex items-center gap-2">
-                                <button
-                                  disabled={counts.add + counts.fill === 0}
-                                  onClick={() => applyPaste(stock, events, plan)}
-                                  className="text-[10px] px-2.5 py-0.5 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 disabled:opacity-40 disabled:cursor-not-allowed"
-                                >
-                                  넣기 · 추가 {counts.add}행{counts.fill > 0 ? ` · 빈칸 채움 ${counts.fill}행` : ''}
-                                </button>
+                              {pr.phase === 'none' && (
+                                <div className="space-y-1.5">
+                                  <div className="text-[11px] text-amber-400">사진에서 이 종목({stock.name || stock.code})의 체결·과표기준가를 찾지 못했습니다 — 주문내역(체결내역) 화면인지 확인해 주세요.</div>
+                                  {skippedLine(pr.skipped)}
+                                  {readText(pr.text)}
+                                </div>
+                              )}
+                              {pr.phase === 'undone' && <div className="text-[11px] text-gray-300">되돌렸습니다 — 사진으로 넣기 전으로 돌아갔습니다.</div>}
+                              {pr.phase === 'error' && (
+                                <div className="space-y-1.5">
+                                  <div className="text-[11px] text-amber-400 flex items-center gap-2 flex-wrap">
+                                    <span>{pr.code === 'bad' && pr.msg ? `${pr.msg} — 사진을 다시 골라 주세요.` : photoErrorText(pr.code)}</span>
+                                    {pastePhotos.length > 0 && (
+                                      <button
+                                        onClick={() => readPhotosAndApply(stock, pastePhotos.map(p => p.file))}
+                                        className="text-[10px] px-2 py-0.5 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50"
+                                      >
+                                        다시 읽기
+                                      </button>
+                                    )}
+                                  </div>
+                                  {pr.msg && pr.code !== 'bad' && <div className="text-[10px] text-gray-600 break-all">({pr.msg})</div>}
+                                </div>
+                              )}
+                              <button
+                                onClick={() => setPasteMore(v => !v)}
+                                className="text-[10px] text-gray-500 hover:text-gray-300 inline-flex items-center gap-1"
+                                aria-expanded={pasteMore}
+                              >
+                                {pasteMore ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                                다른 방법 — 사진을 쓰시는 AI 앱으로 보내기 · AI 답 직접 붙여넣기
+                              </button>
+                              {pasteMore && (
+                                <div className="pl-3 border-l border-gray-800 space-y-2">
+                                  <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                                    <button
+                                      disabled={pastePhotos.length === 0}
+                                      onClick={() => sendPhotosToAI(prompt)}
+                                      className="px-2.5 py-1 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                                      title="올린 사진과 부탁 문장을 휴대폰의 '공유' 창으로 쓰시는 AI 앱(Claude·ChatGPT·Gemini)에 보냅니다"
+                                    >
+                                      <Share2 size={12} /> AI 앱으로 보내기{pastePhotos.length > 0 ? ` (${pastePhotos.length}장)` : ''}
+                                    </button>
+                                    <button
+                                      onClick={pasteFromClipboard}
+                                      className="px-2.5 py-1 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 inline-flex items-center gap-1"
+                                      title="AI가 준 답을 길게 눌러 복사한 뒤 누르면 아래 칸에 들어갑니다"
+                                    >
+                                      <ClipboardPaste size={12} /> AI 답 붙여넣기
+                                    </button>
+                                    <button
+                                      onClick={() => copyPastePrompt(prompt)}
+                                      className="px-2 py-1 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500"
+                                      title={prompt}
+                                    >
+                                      {promptCopy === 'copied' ? '✓ 부탁 문장 복사됨' : 'AI 부탁 문장만 복사'}
+                                    </button>
+                                  </div>
+                                  <div className="text-[10px] text-gray-500 leading-relaxed">
+                                    사진 읽기가 안 될 때 — 위에서 올린 사진을 'AI 앱으로 보내기'로 쓰시는 AI 앱에 보내고, AI 답을 복사해 'AI 답 붙여넣기'를 누른 뒤 '넣기'를 누르세요.
+                                  </div>
+                                  {photoNote === 'sent' && (
+                                    <div className="text-[10px] text-emerald-400">
+                                      ✓ AI 앱으로 보냈습니다 — AI 앱에 부탁 문장이 안 보이면 입력 칸을 길게 눌러 붙여넣기 하세요{promptCopy === 'copied' ? '(복사해 두었습니다)' : ''}. 답을 받으면 복사해서 'AI 답 붙여넣기'를 누르세요.
+                                    </div>
+                                  )}
+                                  {photoNote === 'cancel' && <div className="text-[10px] text-gray-400">보내기를 취소했습니다.</div>}
+                                  {photoNote === 'fail' && <div className="text-[10px] text-amber-400">보내지 못했습니다 — 한 번 더 눌러 주세요.</div>}
+                                  {photoNote === 'nosupport' && (
+                                    <div className="text-[10px] text-amber-400">
+                                      이 브라우저는 사진을 다른 앱으로 바로 보내지 못합니다 — 쓰시는 AI 앱이나 사이트(claude.ai 등)에 같은 사진을 직접 올리고, 부탁 문장을 붙여넣으세요{promptCopy === 'copied' ? '(부탁 문장은 복사했습니다)' : '(아래 칸의 부탁 문장을 복사하세요)'}.
+                                    </div>
+                                  )}
+                                  {promptCopy === 'manual' && (
+                                    <textarea
+                                      readOnly
+                                      value={prompt}
+                                      rows={6}
+                                      onFocus={e => e.target.select()}
+                                      className="w-full max-w-[720px] bg-gray-950 border border-amber-700/50 rounded px-2 py-1 text-[10px] text-gray-300 font-mono"
+                                      title="이 브라우저가 자동 복사를 막았습니다 — 눌러서 전체 선택 후 직접 복사하세요"
+                                    />
+                                  )}
+                                  {clipNote === 'empty' && <div className="text-[10px] text-amber-400">복사된 글이 없습니다 — AI 답을 길게 눌러 복사한 뒤 다시 누르세요.</div>}
+                                  {clipNote === 'fail' && <div className="text-[10px] text-amber-400">이 브라우저가 바로 붙여넣기를 막았습니다 — 아래 칸을 길게 눌러 '붙여넣기'를 누르세요.</div>}
+                                  <textarea
+                                    ref={pasteBoxRef}
+                                    value={pasteText}
+                                    onChange={e => { setPasteText(e.target.value); setClipNote(''); }}
+                                    rows={5}
+                                    placeholder={PASTE_PLACEHOLDER}
+                                    className="w-full max-w-[720px] bg-gray-950 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200 font-mono placeholder:text-gray-600 focus:outline-none focus:border-violet-500"
+                                  />
+                                  {plan.length > 0 && planTable(plan)}
+                                  {skippedLine(parsed.skipped)}
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <button
+                                      disabled={counts.add + counts.fill === 0}
+                                      onClick={() => applyPaste(stock, events, plan)}
+                                      className="text-[10px] px-2.5 py-0.5 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                      넣기 · 추가 {counts.add}행{counts.fill > 0 ? ` · 빈칸 채움 ${counts.fill}행` : ''}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <button
                                   onClick={() => resetPaste(null)}
                                   className="text-[10px] px-2 py-0.5 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500"
                                 >
                                   닫기
                                 </button>
-                                <span className="text-[10px] text-gray-600">같은 날·같은 수량 행은 새로 만들지 않고 빈 단가·과표기준가만 채웁니다 · 이미 입력된 값은 덮지 않습니다</span>
+                                <span className="text-[10px] text-gray-600">같은 날·같은 수량 행은 새로 만들지 않고 빈 단가·과표기준가만 채웁니다 · 이미 입력된 값은 덮지 않습니다 · 사진은 저장하지 않습니다</span>
                               </div>
                             </div>
                           );

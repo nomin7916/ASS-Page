@@ -1,4 +1,4 @@
-// 평균 과표 계산기 '붙여넣기' — 증권사 주문내역 사진을 Claude가 글로 옮긴 것을 붙이면 날짜별 매수·매도 행을 만든다.
+// 평균 과표 계산기 '사진으로 넣기·붙여넣기' — 증권사 주문내역 사진을 AI가 글로 옮긴 것으로 날짜별 매수·매도 행을 만든다.
 // `verify:tax-paste`가 직접 import한다. ⚠️ 이 파일에는 import를 두지 말 것 — Node가 타입만 벗겨 그대로 실행한다.
 //
 // 규칙(사용자 요청 2026-11-24):
@@ -213,8 +213,8 @@ export function applyTaxCalcPaste(
   return next;
 }
 
-// 사용자가 쓰는 AI(Claude·Gemini·ChatGPT 등, 각자 구독)에 사진과 함께 줄 부탁 문장. 사이트는 AI를 부르지 않는다 —
-// 키·요금 없이 누구나 자기 AI로 쓴다(사용자 요청 2026-11-24). ⚠️ 예시 줄은 parseTaxCalcPaste가 그대로 읽어야 한다(verify:tax-paste #P8).
+// '다른 방법'(사진 읽기가 안 될 때) — 사용자가 쓰는 AI(Claude·Gemini·ChatGPT 등)에 사진과 함께 줄 부탁 문장.
+// 기본 길은 아래 '사진으로 넣기'(사이트가 /api/tax-photo로 읽는다, 2026-11-24 사용자 요청). ⚠️ 예시 줄은 parseTaxCalcPaste가 그대로 읽어야 한다(verify:tax-paste #P8).
 export function buildPastePrompt({ name, code, year }: { name: string; code: string; year: number }): string {
   const stock = [name, code ? `(${code})` : ''].filter(Boolean).join(' ');
   return [
@@ -245,9 +245,8 @@ export function pasteCounts(plan: PastePlanRow[]): { add: number; fill: number }
   };
 }
 
-// ── 사진 고르기 → 쓰시는 AI 앱으로 보내기(사용자 요청 2026-11-24 — 휴대폰 사진첩의 주문내역 사진) ──
-// ⚠️ 사진은 이 사이트에 올리지 않는다(서버·Drive 저장 없음). 기기의 '공유' 창(navigator.share)으로 사용자가 고른
-//    AI 앱(Claude·ChatGPT·Gemini)에 사진과 부탁 문장을 넘길 뿐이다 — 사이트는 AI를 부르지 않는다(키·요금 0).
+// ── '다른 방법' — 사진을 쓰시는 AI 앱으로 보내기(사진 읽기가 안 될 때 · 휴대폰 사진첩의 주문내역 사진) ──
+// 기기의 '공유' 창(navigator.share)으로 사용자가 고른 AI 앱(Claude·ChatGPT·Gemini)에 사진과 부탁 문장을 넘긴다.
 export const PASTE_PHOTO_MAX = 10;
 // 사진 고르기 칸의 accept 값(모든 사진 — 아이폰은 HEIC를 JPEG로 바꿔 준다). 슬래시와 별표를 나눠 적는다 — 붙여 쓰면
 // 주석 시작으로 보여, 주석을 걷어 내고 소스를 읽는 검사 도구들(importcheck·verify:*)이 그 뒤 코드를 통째로 놓친다.
@@ -287,4 +286,73 @@ export function photoShareData(nav: any, files: unknown[], prompt: string): { da
   const bare = { files };
   try { if (nav.canShare(bare)) return { data: bare, withText: false }; } catch { /* 아래로 */ }
   return null;
+}
+
+// ── 사진으로 넣기(사용자 요청 2026-11-24 "사진만 올리면 AI가 읽고 평균 단가·수량을 바로 적용 — 붙여넣는 과정 없이") ──
+// 사이트가 /api/tax-photo(구글 Gemini)로 사진을 읽게 한다. 사진은 기기에서 줄여 보내기만 하고 서버·Drive에 저장하지 않는다.
+// 받은 글은 위 parseTaxCalcPaste → planTaxCalcPaste → applyTaxCalcPaste 그대로 거친다(같은 규칙: 같은 날·같은 수량은 빈칸만).
+// 요청 본문 상한(서버 Edge 함수가 받는 크기) 안에 들게 사진 base64 합계를 이만큼으로 맞춘다.
+export const PHOTO_BODY_BUDGET = 3_000_000;
+export const PHOTO_ONE_MAX = 900_000;
+export const PHOTO_LONG_MAX = 2400;
+export const PHOTO_SHORT_MAX = 1400;
+// 줄이는 차례 — 앞에서부터 해 보고 사진 한 장 몫(photoBudget) 안에 들면 그것을 쓴다.
+export const PHOTO_TRIES = [
+  { scale: 1, q: 0.85 }, { scale: 1, q: 0.72 }, { scale: 0.85, q: 0.7 },
+  { scale: 0.7, q: 0.65 }, { scale: 0.55, q: 0.6 }, { scale: 0.45, q: 0.55 },
+];
+
+export function photoBudget(n: number): number {
+  return Math.max(60_000, Math.min(PHOTO_ONE_MAX, Math.floor(PHOTO_BODY_BUDGET / Math.max(1, n || 1))));
+}
+
+// 긴 변·짧은 변을 상한 안으로(키우지는 않는다). scale<1이면 상한도 그만큼 줄인다.
+export function photoFitSize(w: number, h: number, scale = 1): { w: number; h: number } {
+  const W = Math.max(1, Math.round(w || 1)), H = Math.max(1, Math.round(h || 1));
+  const long = Math.max(W, H), short = Math.min(W, H);
+  const r = Math.min(1, (PHOTO_LONG_MAX * scale) / long, (PHOTO_SHORT_MAX * scale) / short);
+  return { w: Math.max(1, Math.round(W * r)), h: Math.max(1, Math.round(H * r)) };
+}
+
+// /api/tax-photo의 응답(줄마다 JSON 하나)을 조금씩 받아 모은다 — api/tax-photo.ts 머리 주석의 형식.
+export interface PhotoReadState { text: string; done: boolean; error: string; msg: string; model: string; rest: string }
+export const photoReadInit = (): PhotoReadState => ({ text: '', done: false, error: '', msg: '', model: '', rest: '' });
+export function photoReadStep(st: PhotoReadState, chunk: string, end = false): PhotoReadState {
+  const next = { ...st };
+  const lines = (st.rest + String(chunk || '')).split('\n');
+  next.rest = end ? '' : (lines.pop() ?? '');
+  for (const line of lines) {
+    const s = line.trim();
+    if (!s) continue;
+    let o: any;
+    try { o = JSON.parse(s); } catch { continue; }
+    if (!o || typeof o !== 'object') continue;
+    if (typeof o.t === 'string') next.text += o.t;
+    if (typeof o.m === 'string') next.model = o.m;
+    if (typeof o.e === 'string' && !next.error) { next.error = o.e; next.msg = String(o.msg || ''); }
+    if (o.d) next.done = true;
+  }
+  return next;
+}
+
+// 실패 까닭 → 사용자에게 보일 글.
+export function photoErrorText(code: string): string {
+  switch (code) {
+    case 'nokey': return '사이트에 사진 읽기 AI 키가 아직 들어 있지 않습니다 — 관리자에게 알려 주세요(Vercel 환경 변수 GEMINI_API_KEY).';
+    case 'rate': return 'AI 무료 사용량을 다 썼습니다 — 잠시 뒤(오래 걸리면 내일) 다시 올려 주세요.';
+    case 'block': return 'AI가 이 사진을 읽지 않았습니다 — 주문내역 화면만 보이게 다시 찍어 올려 주세요.';
+    case 'cut': return 'AI 답이 중간에 끊겼습니다 — 같은 사진으로 다시 읽어 주세요.';
+    case 'auth': return '로그인이 확인되지 않았습니다 — 화면을 새로고침한 뒤 다시 올려 주세요.';
+    case 'net': return '인터넷 연결이 끊겨 사진을 보내지 못했습니다 — 다시 읽어 주세요.';
+    case 'decode': return '이 사진을 열지 못했습니다(HEIC 등) — 휴대폰 화면 캡처나 JPG 사진으로 올려 주세요.';
+    case 'big': return '사진이 너무 커서 줄이지 못했습니다 — 장수를 줄여 다시 올려 주세요.';
+    default: return 'AI가 사진을 읽지 못했습니다 — 다시 읽어 보거나, 아래 \'다른 방법\'으로 넣어 주세요.';
+  }
+}
+
+// 읽은 결과를 어떻게 할지 — 'apply' 넣기 · 'same' 모두 이미 있음 · 'none' 이 종목 체결·과표를 못 찾음.
+export function photoOutcome(parsed: PasteParsed, plan: PastePlanRow[]): 'apply' | 'same' | 'none' {
+  if (parsed.trades.length === 0 && Object.keys(parsed.taxBaseByDate).length === 0) return 'none';
+  const c = pasteCounts(plan);
+  return c.add + c.fill > 0 ? 'apply' : 'same';
 }

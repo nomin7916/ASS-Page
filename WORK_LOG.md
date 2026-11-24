@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-11-24 — 평균 과표 계산기 '사진으로 넣기': 사진만 올리면 AI가 읽고 바로 넣는다
+
+**대상 파일**: `api/tax-photo.ts`(신규) · `api/_taxPhoto.ts`(신규) · `src/taxCalcPaste.ts` · `src/components/KrEtfTaxMatrix.tsx` · `scripts/verify-tax-paste.mjs` · `CLAUDE.md`
+
+- 사용자 요청: "사진만 올리고 그 다음에 AI가 문자를 해석하고 평균 단가·구매 수량을 바로 적용 — 중간에 내가 붙여 넣는 과정 없이".
+  → 앞 단계의 ① 고르기 → ② AI 앱으로 보내기 → ③ 답 붙여넣기를 **'주문내역 사진 올리기' 한 번**으로 바꿈. 앞의 길은 '다른 방법'(접힘)에 남김.
+- 흐름: 사진 고르기 → 기기에서 JPEG로 줄이기(긴 변 2400·짧은 변 1400, 합계 base64 3MB 안) → `/api/tax-photo`(Edge · requireAuth 첫 줄 ·
+  POST만 · 다른 사이트 거절) → 구글 Gemini(`gemini-flash-latest` → `2.5-flash` → `flash-lite-latest`, 한도·틀린 키는 다음 키) →
+  NDJSON으로 바로 흘려보냄(Edge 25초) → 끝 표시({d:1})까지 받은 답만 → 기존 해석·계획·넣기 그대로 → '되돌리기'(넣기 전 이벤트).
+- 부탁 문장은 서버가 만든다(화면이 보낸 글을 AI에 넘기지 않는다) — 체결수량·평균체결가 · 겹친 사진은 한 번 · 다른 종목 빼기 · 읽을 줄 없으면 '없음'.
+- 사진은 저장하지 않는다(서버 메모리에서 Gemini로 넘길 뿐). Gemini 무료 등급은 구글이 받은 자료를 서비스 개선에 쓸 수 있다(사용자에게 알림).
+- **키가 있어야 돈다**: Vercel 환경 변수 `GEMINI_API_KEY`(AI 스튜디오 무료 등급 프로젝트의 키) → 재배포. 없으면 화면에 '관리자에게 알려 주세요'.
+- 검증: verify:tax-paste 73항목(#G — 사진 몫·크기, 서버 부탁 문장 예시 = 해석기 형식, 요청 검사, SSE·NDJSON 조각 받기,
+  **서버 처리부를 가짜 Gemini로 끝까지**: 키 없음·한도→다음 키·없는 모델→다음 모델·400·틀린 키·차단·거절 6가지) · gate 통과 ·
+  저장소 밖 임시 폴더 vite build 통과 · api 경로 esbuild 묶기 통과 · 실제 크로미움에서 사진 줄이기(1179×2556 → 1107×2400 418KB / 10장 몫 941×2040 269KB · HEIC는 '열지 못함').
+  진짜 Gemini 키·실제 아이폰·실제 사이트에서는 확인 못 함.
+
 ## 2026-11-24 — 평균 과표 계산기 '붙여넣기': 휴대폰 사진첩에서 사진 고르기 → AI 앱으로 보내기 → AI 답 붙여넣기
 
 **대상 파일**: `src/taxCalcPaste.ts` · `src/components/KrEtfTaxMatrix.tsx` · `scripts/verify-tax-paste.mjs` · `CLAUDE.md`
