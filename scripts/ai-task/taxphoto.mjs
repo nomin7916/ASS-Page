@@ -67,15 +67,31 @@ async function call(op, body) {
   return { status: r.status, j };
 }
 
-// 글 검사 — 과표 계산기 '붙여넣기'가 읽는 모양(src/taxCalcPaste.ts)보다 좁게: 한 줄에 하나, 정해진 꼴만
+// 글 검사 — 과표 계산기 '붙여넣기'가 읽는 모양(src/taxCalcPaste.ts)보다 좁게: 한 줄에 하나, 정해진 꼴만.
+// `종목 <코드>` 줄 = 그 아래 줄들의 종목. 종목을 정하지 않은 일(code '')은 매매 줄 앞에 꼭 있어야 하고 코드는 cands 안이어야 한다.
+// 종목을 정한 일은 없어도 되고, 있으면 그 코드여야 한다.
 export function checkText(text, job) {
   const rows = [];
   const bad = [];
   const today = String(job?.today || '9999-12-31');
   const years = [Number(job?.year), Number(job?.year) - 1];
+  const fixed = String(job?.code || '').toUpperCase();
+  const allow = new Set(fixed ? [fixed] : (Array.isArray(job?.cands) ? job.cands.map(c => String(c?.code || '').toUpperCase()) : []));
+  const needStock = !fixed && allow.size > 0;   // 종목을 정하지 않고 후보로 맡긴 일 — 매매 줄 앞에 `종목` 줄이 꼭 있어야 한다
+  let cur = fixed;
+  const stocks = new Set();
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
+    if (/^종목(\s|$)/.test(line)) {
+      const sm = /^종목 ([0-9A-Z]{6})$/.exec(line);
+      if (!sm) { bad.push(`종목 줄 꼴이 다름(예: 종목 0177R0): ${line}`); cur = null; continue; }
+      if (allow.size && !allow.has(sm[1])) { bad.push(`이 계좌에 없는 종목(cands 밖): ${line}`); cur = null; continue; }
+      cur = sm[1];
+      continue;
+    }
+    if (cur === null) { bad.push(`위 종목 줄이 틀려 어느 종목인지 모름: ${line}`); continue; }
+    if (needStock && !cur) { bad.push(`어느 종목인지 없음(앞에 「종목 <코드>」 줄): ${line}`); continue; }
     const m = /^(\d{4})-(\d{2})-(\d{2}) (?:(매수|매도) ([\d,]+)주 ([\d,]+(?:\.\d+)?)원|과표 ([\d,]+(?:\.\d+)?))$/.exec(line);
     if (!m) { bad.push(`꼴이 다름: ${line}`); continue; }
     const date = `${m[1]}-${m[2]}-${m[3]}`;
@@ -89,14 +105,16 @@ export function checkText(text, job) {
       const p = num(m[6]);
       if (!(Number.isInteger(q) && q > 0)) { bad.push(`수량: ${line}`); continue; }
       if (!(p > 0)) { bad.push(`단가: ${line}`); continue; }
-      rows.push({ date, side: m[4], qty: q, price: p });
+      rows.push({ code: cur, date, side: m[4], qty: q, price: p });
+      stocks.add(cur);
     } else {
       const t = num(m[7]);
       if (!(t > 0)) { bad.push(`과표: ${line}`); continue; }
-      rows.push({ date, side: '과표', taxBase: t });
+      rows.push({ code: cur, date, side: '과표', taxBase: t });
+      stocks.add(cur);
     }
   }
-  return { rows, bad, trades: rows.filter(r => r.side !== '과표').length, taxBases: rows.filter(r => r.side === '과표').length };
+  return { rows, bad, trades: rows.filter(r => r.side !== '과표').length, taxBases: rows.filter(r => r.side === '과표').length, stocks: stocks.size };
 }
 
 const readJob = () => (existsSync(JOBF) ? JSON.parse(readFileSync(JOBF, 'utf8')) : null);
@@ -135,13 +153,13 @@ async function main() {
     if (!a || !existsSync(a)) die('글 파일이 없습니다');
     const text = readFileSync(a, 'utf8');
     const c = checkText(text, readJob());
-    console.log(`매매 ${c.trades}줄 · 과표 ${c.taxBases}줄${c.bad.length ? ` · 문제 ${c.bad.length}줄` : ''}`);
+    console.log(`종목 ${c.stocks}개 · 매매 ${c.trades}줄 · 과표 ${c.taxBases}줄${c.bad.length ? ` · 문제 ${c.bad.length}줄` : ''}`);
     for (const x of c.bad) console.log(`  - ${x}`);
     if (c.bad.length || c.trades + c.taxBases === 0) die(cmd === 'put' ? '보내지 않았습니다 — 글을 고친 뒤 다시' : '고칠 곳이 있습니다', 2);
     if (cmd === 'check') return;
     const note = b && existsSync(b) ? readFileSync(b, 'utf8').trim() : '';
     const r = await call('put', { text: text.trim(), note });
-    die(r.status === 200 ? '보냈습니다 — 사이트의 과표 계산기에 미리 보기로 들어갑니다' : `보내지 못했습니다(HTTP ${r.status} ${r.j?.error || ''})`, r.status === 200 ? 0 : 2);
+    die(r.status === 200 ? '보냈습니다 — 사이트가 종목마다 과표 계산기에 넣습니다(이미 매매가 있는 날은 빼고)' : `보내지 못했습니다(HTTP ${r.status} ${r.j?.error || ''})`, r.status === 200 ? 0 : 2);
   }
   if (cmd === 'fail') {
     const r = await call('fail', { why: String(a || '').slice(0, 1500) });

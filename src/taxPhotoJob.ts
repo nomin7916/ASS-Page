@@ -1,4 +1,5 @@
-// 과표 계산기 「📷 사진 맡기기」(관리자 전용, 2026-11-24) — 화면 쪽 순수 도구. 서버는 api/ai-tax.ts · api/_aiTax.ts.
+// 과표 계산기 「📷 사진 맡기기」(관리자 전용, 2026-11-24 · 2026-11-25 과표 계산 머리줄로 옮김) — 화면 쪽 순수 도구. 서버는 api/ai-tax.ts · api/_aiTax.ts.
+// 종목을 정하지 않고 맡기면 Claude가 사진에서 종목을 찾아 `종목 <코드>` 줄로 나눠 돌려준다 → splitByStock으로 나눠 종목마다 바로 넣는다.
 // 상태 글·오류 글·다시 부르기 판단·사진 줄이기 배율·예약 작업 지침(사용자가 claude.ai에 붙여 넣는 글).
 // ⚠️ import 0건 — scripts/verify-ai-tax.mjs가 직접 import한다. 숫자(3분·40분)는 api/_aiTax.ts와 같아야 한다(검사가 대조).
 
@@ -12,12 +13,12 @@ export const ROUTINES_URL = 'https://claude.ai/code/routines';
 export interface JobSummary {
   rid: string; code: string; name: string; st: 'ask' | 'run' | 'done' | 'err';
   at: number; fa: number; fn: number; fe: string; ses: string; ta: number; da: number;
-  note: string; why: string; hasText: boolean; stale: boolean;
+  note: string; why: string; hasText: boolean; stale: boolean; ap: number; auto: boolean;
 }
 
 const ERR: Record<string, string> = {
   noconn: 'Claude 연결이 아직 없습니다 — 아래 「⚙ Claude 연결」을 먼저 해 주세요',
-  busy: '기다리는 사진이 3장입니다 — 끝난 뒤 맡겨 주세요',
+  busy: '기다리는 사진이 6장입니다 — 끝난 뒤 맡겨 주세요',
   day: '오늘 맡길 수 있는 30장을 다 썼습니다',
   img: '사진을 읽지 못했습니다(JPEG·PNG만, 자동으로 줄여 보냅니다)',
   code: '종목 코드가 이상합니다',
@@ -58,8 +59,31 @@ export function canRefire(j: JobSummary, now = Date.now()): boolean {
   return !!j.fe || j.stale;
 }
 
-// 이 화면을 연 뒤에 끝난 일이면 글을 스스로 채운다(그 전에 끝난 것은 「가져오기」로)
-export const autoPull = (j: JobSummary, openedAt: number) => j.st === 'done' && j.hasText && j.da >= openedAt;
+// 끝났고 아직 계산기에 넣지 않은 일이면 스스로 넣는다(넣은 뒤 서버에 seen — 다른 탭·다음에 다시 넣지 않게)
+export const autoPull = (j: JobSummary) => j.st === 'done' && j.hasText && !j.ap;
+
+// Claude가 돌려준 글을 종목별로 — `종목 <코드>` 줄 아래가 그 종목. 그 줄이 없는 앞부분은 fallback 종목(정해서 맡긴 일).
+// 코드 모양이 아닌 `종목` 줄 아래 줄은 아무 종목에도 넣지 않는다(lost).
+export const STOCK_LINE = /^종목\s+([0-9A-Za-z]{6})\s*$/;
+export function splitByStock(text: string, fallback = ''): { sections: { code: string; text: string }[]; lost: number } {
+  const order: string[] = [];
+  const buf: Record<string, string[]> = {};
+  let cur = String(fallback || '').toUpperCase();
+  let lost = 0;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^종목(\s|$)/.test(line)) {
+      const m = STOCK_LINE.exec(line);
+      cur = m ? m[1].toUpperCase() : '';
+      continue;
+    }
+    if (!cur) { lost++; continue; }
+    if (!buf[cur]) { buf[cur] = []; order.push(cur); }
+    buf[cur].push(line);
+  }
+  return { sections: order.map(code => ({ code, text: buf[code].join('\n') })), lost };
+}
 
 export function ageText(ms: number): string {
   if (!(ms >= 0)) return '';

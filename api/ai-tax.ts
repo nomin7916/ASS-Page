@@ -1,7 +1,8 @@
 // Vercel Edge Function — 과표 계산기 「📷 사진 맡기기」(관리자 전용, 2026-11-24). 공용 도구·흐름은 api/_aiTax.ts 머리 주석.
 //   GET  ?op=status            연결 여부 · 최근 일 목록(글 없이)
 //   GET  ?op=job&rid=          일 하나(끝났으면 Claude가 돌려준 글·메모 포함)
-//   POST ?op=job   {code,name,year,img}  사진 맡기기 → 예약 작업 부르기
+//   POST ?op=job   {code,name,year,img} 또는 {code:'',cands:[{code,name}],year,img}  사진 맡기기 → 예약 작업 부르기
+//   POST ?op=seen&rid=        화면이 계산기에 넣었음(다음에 다시 넣지 않게)
 //   POST ?op=fire&rid=         다시 부르기(새 열쇠)
 //   POST ?op=del&rid=          일 지우기(사진 포함)
 //   POST ?op=connect {url,token}  예약 작업 연결 — 시험으로 한 번 불러 통한 것만 암호화해 둔다
@@ -12,7 +13,7 @@ import { requireAuth, callerEmail, ADMIN_EMAIL } from './_auth.js';
 import {
   json, storeOn, CODE_RE, cleanText, imgOk, newRid, putJob, putImg, addToList, getJob, delJob, listJobs,
   summaryOf, refireBlock, activeCount, dayOk, fireJob, routineOf, trigOf, ROUTINE_TOKEN_RE, saveRoutine,
-  dropRoutine, fireRoutine, testText, ACTIVE_MAX, DAY_MAX, JOB_SITE, type Job,
+  dropRoutine, fireRoutine, testText, ACTIVE_MAX, DAY_MAX, JOB_SITE, cleanCands, type Job,
 } from './_aiTax.js';
 
 export default async function handler(request: Request): Promise<Response> {
@@ -47,7 +48,8 @@ export default async function handler(request: Request): Promise<Response> {
     const name = cleanText(b?.name, 60).replace(/\n/g, ' ');
     const year = Number(b?.year);
     const img = String(b?.img || '');
-    if (!CODE_RE.test(code)) return json(400, { error: 'code' });
+    const cands = code ? [] : cleanCands(b?.cands);
+    if (code ? !CODE_RE.test(code) : cands.length === 0) return json(400, { error: 'code' });
     if (!(year >= 2000 && year <= 2100)) return json(400, { error: 'year' });
     if (!imgOk(img)) return json(400, { error: 'img' });
     if (!(await routineOf())) return json(409, { error: 'noconn' });
@@ -55,7 +57,7 @@ export default async function handler(request: Request): Promise<Response> {
     if (!(await dayOk(now))) return json(429, { error: 'day', max: DAY_MAX });
     const j: Job = {
       v: 1, rid: newRid(now), code, name, year, kh: '', st: 'ask', at: now, fa: 0, fn: 0, fe: '', ses: '', ta: 0, da: 0,
-      text: '', note: '', why: '',
+      text: '', note: '', why: '', cands, ap: 0,
     };
     if (!(await putImg(j.rid, img)) || !(await putJob(j))) return json(503, { error: 'store' });
     await addToList(j.rid);
@@ -70,6 +72,15 @@ export default async function handler(request: Request): Promise<Response> {
     if (why) return json(409, { error: why, job: summaryOf(j, now) });
     const f = await fireJob(j, origin, now);
     return json(200, { job: summaryOf(j, now), fired: f.ok, err: f.err });
+  }
+
+  if (op === 'seen' && post) {
+    const j = await getJob(rid);
+    if (!j) return json(404, { error: 'no job' });
+    if (j.st !== 'done') return json(409, { error: 'closed' });
+    j.ap = now;
+    if (!(await putJob(j))) return json(503, { error: 'store' });
+    return json(200, { ok: true });
   }
 
   if (op === 'del' && post) {

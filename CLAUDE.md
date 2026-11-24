@@ -162,13 +162,17 @@ src/
   최대 시간, 토큰 캐시도 이 시각을 넘지 않는다) · 미승인 5분. 스크립트 무응답일 때만 24시간 안 승인 기록으로 통과, 그 외 503.
   ⚠️ `SCRIPT_URL`·`ADMIN_EMAIL`·`CLIENT_ID`는 src/config.ts 사본이다(verify:api-auth가 대조). 검증: `verify:api-auth`.
 
-## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24)
+## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 
-- 관리자(관리자 접속 아님)만 '사진으로 넣기' 패널의 '다른 방법' 위에 「📷 사진 맡기기 (Claude)」: 사진(JPEG, 850,000자 이하) → Redis 우편함(3일) → Claude 예약 작업
+- 관리자(관리자 접속 아님)만 분배금 현황 「과표 계산」 **머리줄**의 「사진 맡기기」(처음엔 접힘 — 누르면 칸이 펼쳐짐): 사진 여러 장(한 장 = 일 하나,
+  JPEG 850,000자 이하) + 이 계좌 국내 ETF 목록(`cands` — 코드·이름, 종목은 정하지 않음) → Redis 우편함(3일) → Claude 예약 작업
   **"[ASS-PAGE-과표 사진 읽기 · API]"**(claude.ai Code · API 트리거) 부르기 → 작업이 `docs/ai-task/TAX-PHOTO.md`대로 `scripts/ai-task/taxphoto.mjs`로
-  사진을 받아 읽고 글만 돌려줌 → 화면이 '다른 방법'을 펼쳐 붙여넣기 칸에 넣음 → **사용자가 「넣기」를 눌러야 저장**(Gemini '사진으로 넣기'와 달리 바로 넣지 않는다 — 1~3분 뒤 도착). ⚠️ 서버·작업은 사용자 데이터·Drive에 쓰지 않는다.
+  사진을 받아 **어느 ETF인지 찾아** `종목 <코드>` 줄로 나눈 글만 돌려줌 → 화면이 `splitByStock`으로 나눠 **종목마다 바로 넣음**(붙여넣기와 같은
+  `planTaxCalcPaste`·`commitPastePlan` 길) + 「되돌리기」 → `op=seen`(다시 넣지 않음). ⚠️ `TaxPhotoJobs`는 칸이 닫혀도 떠 있다(끝난 일을 넣으려고).
+  ⚠️ 서버·작업은 사용자 데이터·Drive에 쓰지 않는다 — 넣기는 화면(관리자 브라우저)만.
+- **이미 매수·매도가 있는 날은 넣지 않고 없는 날만 넣는다**(사용자 확정 2026-11-25 — `planTaxCalcPaste`, 붙여넣기·Gemini 사진에도 같다). 같은 날·같은 수량 행은 빈 단가·과표만 채운다.
 - 부를 때 본문 = 종류·사이트·번호·열쇠뿐(종목·사진·토큰 없음). 다시 부르면 새 열쇠(앞 실행 무효). 끝난 일은 열쇠 닫힘·사진 지움.
-  한도: 동시 3 · 하루 30 · 한 시간 10번 · 같은 일 3분 · 이틀 지난 일 안 부름. 토큰은 화면 「⚙ Claude 연결」(시험으로 한 번 불러 통한 것만, 서버 비밀값 키로 AES-GCM) —
+  한도: 동시 6 · 하루 30 · 한 시간 10번 · 같은 일 3분 · 이틀 지난 일 안 부름. 토큰은 화면 「⚙ Claude 연결」(시험으로 한 번 불러 통한 것만, 서버 비밀값 키로 AES-GCM) —
   없으면 Vercel 변수 `AI_TAX_ROUTINE_URL`·`AI_TAX_ROUTINE_TOKEN`. 서버 비밀값이 바뀌면 다시 연결. 다른 사용자는 '사진으로 넣기'(Gemini)·붙여넣기만.
 - ⚠️ 예약 작업에 알리는 사이트 주소는 요청 주소가 아니라 `JOB_SITE`(14ass-page-eea5.vercel.app) 하나 — 운영 주소 nominfi1.vercel.app 로 열어도 같은 서버·Redis. 요청 주소를 쓰면 작업 지침·환경 네트워크에 막힌다(2026-11-25). 검증: `verify:ai-tax`.
 

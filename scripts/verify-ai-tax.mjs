@@ -2,7 +2,8 @@
 // verify:ai-tax — 과표 계산기 「📷 사진 맡기기」(관리자 전용, 2026-11-24). CLAUDE.md '과표 사진 맡기기' 절.
 //   파트① 실제 처리부(api/ai-tax.ts · api/ai-job.ts)를 직접 import해 가짜 구글·Redis·Claude로 끝까지 돌린다 —
 //          관리자만 · 사진 맡기기 → 예약 작업 부르기(본문은 번호·열쇠뿐) → 열쇠로 받기·보내기 → 화면이 글을 받아 붙여넣기 미리 보기 →
-//          다시 부르면 앞 열쇠 무효 · 끝난 일 닫힘 · 사진 지움 · 한도(동시 3 · 시간 10) · 연결(시험 부르기 · 암호화 보관).
+//          다시 부르면 앞 열쇠 무효 · 끝난 일 닫힘 · 사진 지움 · 한도(동시 6 · 시간 10) · 연결(시험 부르기 · 암호화 보관) ·
+//          종목을 정하지 않은 일(cands — Claude가 사진에서 종목을 찾음) · 넣은 뒤 seen(다시 넣지 않음).
 //   파트② 순수 도구(src/taxPhotoJob.ts · scripts/ai-task/taxphoto.mjs checkText)와 소스 가드(관리자·관리자 접속 아님만 켬,
 //          화면 조각은 저장하지 않음·알림 없음, 지침 글 = 문서, 숫자·주소가 서버·화면·도구에서 같음).
 // .ts 직접 import(타입 스트리핑) + './x.js' → './x.ts' 해석 훅. 런타임이 못 하면 파트①을 건너뛰고 파트②의 소스 가드만 돈다.
@@ -190,15 +191,38 @@ if (H) {
   eq('PNG도 받는다 · 받기 mime png', (await J(await job('take', rid2, key3))).j.mime, 'image/png');
   eq('못 함 → 200 · 사진 지움 · 상태 err · 까닭', [(await job('fail', rid2, key3, { why: '주문내역 화면이 아닙니다' })).status, store.has(`ait:img:${rid2}`), (await J(await tax('job', { rid: rid2 }))).j.job.why], [200, false, '주문내역 화면이 아닙니다']);
 
+  // 종목을 정하지 않은 일(머리줄 「📷 사진 맡기기」, 2026-11-25) — Claude가 사진에서 종목을 찾는다
+  eq('종목도 후보(cands)도 없음 → 400 code', (await J(await tax('job', { body: { code: '', year: 2026, img: JPEG } }))).j.error, 'code');
+  eq('후보가 모두 이상한 코드 → 400 code', (await J(await tax('job', { body: { code: '', cands: [{ code: 'x;1' }], year: 2026, img: JPEG } }))).j.error, 'code');
+  fires = [];
+  const ma = await J(await tax('job', { body: { code: '', year: 2026, img: JPEG, cands: [
+    { code: '0177r0', name: 'TIGER 반도체TOP10커버드콜액티브' }, { code: '0177R0', name: '중복' }, { code: 'bad!' }, { code: '458730', name: 'TIGER 미국배당다우존스\n타겟' },
+  ] } }));
+  const ridA = ma.j.job?.rid, keyA = fireVal(fires[0], '열쇠');
+  eq('후보로 맡기기 → 200 · 종목 없음 · auto · 넣지 않음(ap 0)', [ma.s, ma.j.job?.code, ma.j.job?.auto, ma.j.job?.ap], [200, '', true, 0]);
+  ok('후보로 맡겨도 부를 때 본문에 종목 이름이 없다', fires.length === 1 && !/TIGER|0177R0|458730/.test(fires[0].body.text));
+  const ta = await J(await job('take', ridA, keyA));
+  eq('받기 → 후보(대문자·중복 빠짐·이상한 코드 빠짐·줄바꿈 없음) · ISIN', [ta.j.code, ta.j.isin, ta.j.cands], ['', '', [
+    { code: '0177R0', name: 'TIGER 반도체TOP10커버드콜액티브', isin: 'KR70177R0000' }, { code: '458730', name: 'TIGER 미국배당다우존스 타겟', isin: 'KR7458730009' },
+  ]]);
+  eq('끝나기 전 seen → 409 closed', (await J(await tax('seen', { rid: ridA, body: {} }))).j.error, 'closed');
+  const textA = '종목 0177R0\n2026-11-24 매도 50주 7,490원\n종목 458730\n2026-11-23 매수 5주 12,000원';
+  eq('종목 줄이 든 글 보내기 → 200', (await job('put', ridA, keyA, { text: textA })).status, 200);
+  const ga = await J(await tax('job', { rid: ridA }));
+  eq('화면이 받는 글 그대로 · 아직 넣지 않음', [ga.j.text, ga.j.job.ap], [textA, 0]);
+  eq('넣은 뒤 seen → 200 · 상태에 넣은 때', [(await tax('seen', { rid: ridA, body: {} })).status, (await J(await tax('status'))).j.jobs.find(j => j.rid === ridA).ap > 0], [200, true]);
+  ok('seen 뒤에는 스스로 다시 넣지 않는다', !H.C.autoPull((await J(await tax('status'))).j.jobs.find(j => j.rid === ridA)));
+  eq('없는 일 seen → 404', (await tax('seen', { rid: 'tzzzzzzzzzzzz', body: {} })).status, 404);
+
   // 한도
   fireMode = '404';
   const m3 = await J(await tax('job', { body: { code: '0177R0', name: 'T', year: 2026, img: JPEG } }));
   eq('예약 작업 없음(404) → 맡기되 fired false · err trigger · 화면에 못 부름', [m3.j.fired, m3.j.err, H.C.jobState(m3.j.job).label], [false, 'trigger', '못 부름']);
   ok('못 부른 일은 바로 다시 부르기 단추(3분 지나면)', H.C.canRefire({ ...m3.j.job, fa: Date.now() - 200_000 }) && !H.C.canRefire(m3.j.job));
   fireMode = 'ok';
-  await tax('job', { body: { code: '0177R0', name: 'T', year: 2026, img: JPEG } });
-  await tax('job', { body: { code: '0177R0', name: 'T', year: 2026, img: JPEG } });
-  eq('기다리는 일이 3개면(못 부른 일 포함) → 429 busy', (await J(await tax('job', { body: { code: '0177R0', name: 'T', year: 2026, img: JPEG } }))).j.error, 'busy');
+  for (let i = 1; i < A.ACTIVE_MAX; i++) await tax('job', { body: { code: '0177R0', name: 'T', year: 2026, img: JPEG } });
+  eq(`기다리는 일이 ${A.ACTIVE_MAX}개면(못 부른 일 포함) → 429 busy`, (await J(await tax('job', { body: { code: '0177R0', name: 'T', year: 2026, img: JPEG } }))).j.error, 'busy');
+  ok('동시 한도: 사진 여러 장(한 장 = 일 하나)을 한 번에 맡길 만큼 · 화면 글과 같은 수', A.ACTIVE_MAX >= 5 && H.C.jobErrText('busy').includes(`${A.ACTIVE_MAX}장`));
   const hourKey = `ait:fh:${new Date().toISOString().slice(0, 13)}`;
   store.set(hourKey, '10');
   const st0 = (await J(await tax('status'))).j.jobs;
@@ -229,11 +253,15 @@ if (H) {
 console.log('\n[파트②] 화면·도구·소스 가드');
 const C = H?.C || (await import(pathToFileURL(join(ROOT, 'src/taxPhotoJob.ts')).href).catch(() => null));
 if (C) {
-  const base = { rid: 'tabc', code: '0177R0', name: '', st: 'ask', at: 0, fa: 0, fn: 1, fe: '', ses: '', ta: 0, da: 0, note: '', why: '', hasText: false, stale: false };
+  const base = { rid: 'tabc', code: '0177R0', name: '', st: 'ask', at: 0, fa: 0, fn: 1, fe: '', ses: '', ta: 0, da: 0, note: '', why: '', hasText: false, stale: false, ap: 0, auto: false };
   eq('상태 글', ['ask', 'run', 'done', 'err'].map(st => C.jobState({ ...base, st }).label), ['기다리는 중', 'Claude가 읽는 중', '완료', '못 읽음']);
   eq('멈춘 일 · 못 부른 일 글', [C.jobState({ ...base, st: 'run', stale: true }).label, C.jobState({ ...base, fe: 'token' }).label], ['멈춘 듯', '못 부름']);
   eq('새로 받아 볼 일', [C.jobPending(base), C.jobPending({ ...base, st: 'run' }), C.jobPending({ ...base, fe: 'net' }), C.jobPending({ ...base, st: 'done' }), C.jobPending({ ...base, stale: true })], [true, true, false, false, false]);
-  eq('스스로 채움 — 화면을 연 뒤 끝난 글만', [C.autoPull({ ...base, st: 'done', hasText: true, da: 200 }, 100), C.autoPull({ ...base, st: 'done', hasText: true, da: 50 }, 100), C.autoPull({ ...base, st: 'done', hasText: false, da: 200 }, 100)], [true, false, false]);
+  eq('스스로 넣기 — 끝났고 글이 있고 아직 넣지 않은 일만', [C.autoPull({ ...base, st: 'done', hasText: true }), C.autoPull({ ...base, st: 'done', hasText: true, ap: 5 }), C.autoPull({ ...base, st: 'done', hasText: false }), C.autoPull({ ...base, st: 'run', hasText: true })], [true, false, false, false]);
+  eq('종목별로 나누기 — 종목 줄 아래가 그 종목 · 같은 종목은 모음', C.splitByStock('종목 0177r0\n2026-11-24 매도 50주 7,490원\n\n종목 458730\n2026-11-23 매수 5주 12,000원\n종목 0177R0\n2026-11-24 과표 1,234'), {
+    sections: [{ code: '0177R0', text: '2026-11-24 매도 50주 7,490원\n2026-11-24 과표 1,234' }, { code: '458730', text: '2026-11-23 매수 5주 12,000원' }], lost: 0 });
+  eq('종목 줄 없는 앞부분은 정해서 맡긴 종목(fallback) · 없으면 버림', [C.splitByStock('2026-11-24 매도 1주 1원', '0177R0').sections.map(x => x.code), C.splitByStock('2026-11-24 매도 1주 1원').lost], [['0177R0'], 1]);
+  eq('꼴이 다른 종목 줄 아래는 어느 종목에도 넣지 않음', C.splitByStock('종목 0177R0\n2026-11-01 매수 1주 1원\n종목 TIGER반도체\n2026-11-02 매수 1주 1원').lost, 1);
   eq('ageText', [C.ageText(10_000), C.ageText(5 * 60_000), C.ageText(3 * 3_600_000), C.ageText(50 * 3_600_000)], ['방금', '5분 전', '3시간 전', '2일 전']);
   eq('fitScale: 키우지 않음 · 긴 변 맞춤', [C.fitScale(1000, 500, 2000), C.fitScale(1170, 2532, 2000), C.fitScale(0, 0, 10)], [1, 2000 / 2532, 0]);
   ok('오류 글: 아는 코드는 우리말, 모르는 코드는 코드를 보여 줌', C.jobErrText('noconn').includes('Claude 연결') && C.jobErrText('zzz').includes('zzz'));
@@ -253,6 +281,13 @@ const tool = await import(pathToFileURL(join(ROOT, 'scripts/ai-task/taxphoto.mjs
   eq('도구 check: 바른 글', [good.trades, good.taxBases, good.bad.length], [2, 1, 0]);
   const bad = tool.checkText('11.24 매도 50 7490\n2026-11-25 매수 1주 1원\n2024-01-02 매수 1주 1원\n2026-02-30 매수 1주 1원\n2026-11-02 매수 1.5주 100원\n2026-11-02 매수 0주 100원', job);
   eq('도구 check: 꼴·앞날·연도·없는 날·소수 수량·0주 모두 거절', [bad.trades, bad.bad.length], [0, 6]);
+  const auto = { year: 2026, today: '2026-11-24', code: '', cands: [{ code: '0177R0' }, { code: '458730' }] };
+  const ga = tool.checkText('종목 0177R0\n2026-11-24 매도 50주 7,490원\n종목 458730\n2026-11-23 매수 5주 12,000원\n2026-11-23 과표 12,100.5', auto);
+  eq('도구 check: 후보로 맡긴 일 — 종목 줄로 나눈 글', [ga.stocks, ga.trades, ga.taxBases, ga.bad.length, ga.rows.map(r => r.code)], [2, 2, 1, 0, ['0177R0', '458730', '458730']]);
+  const ba = tool.checkText('2026-11-24 매도 50주 7,490원\n종목 069500\n2026-11-24 매도 1주 1원\n종목 TIGER\n2026-11-24 매도 1주 1원', auto);
+  eq('도구 check: 종목 줄 없음 · 후보 밖 종목 · 꼴이 다른 종목 줄 → 그 아래 줄까지 거절', [ba.trades, ba.bad.length], [0, 5]);
+  const fx = tool.checkText('2026-11-24 매도 50주 7,490원\n종목 0177R0\n2026-11-23 매수 1주 1원\n종목 458730\n2026-11-23 매수 1주 1원', { year: 2026, today: '2026-11-24', code: '0177R0' });
+  eq('도구 check: 종목을 정한 일 — 종목 줄은 없어도 되고, 있으면 그 종목만', [fx.trades, fx.bad.length], [2, 2]);
   if (H) {
     const P = H.P.parseTaxCalcPaste('2026-11-24 매도 50주 7,490원\n2025-12-30 매수 1,000주 10,385.5원\n2026-11-24 과표 1,234.56', '2026-11-24');
     eq('도구가 통과시킨 글 = 붙여넣기가 읽는 글', [P.trades.length, P.taxBaseByDate['2026-11-24'], P.skipped.length], [2, 1234.56, 0]);
@@ -275,13 +310,20 @@ ok('ai-tax · ai-job: 사용자 데이터·Drive에 닿지 않음', !/googleapis
 
 const comp = read('src/components/TaxPhotoJobs.tsx');
 const compCode = stripComments(comp);
-ok('화면 조각: 저장하지 않음(onText로 붙여넣기 칸에만)', /onText\(r\.j\.text\)/.test(compCode) && !/updateTaxBase|persistEvents|saveDriveFile/.test(compCode));
+ok('화면 조각: 직접 저장하지 않음(onApply = 계산기의 넣기 길) · 넣은 뒤 seen', /onApply\(r\.j\.text, j\)/.test(compCode) && /op=seen/.test(compCode) && !/updateTaxBase|persistEvents|saveDriveFile/.test(compCode));
+ok('화면 조각: 종목 대신 후보(cands)로 맡김 · 여러 장', /code: '', cands,/.test(compCode) && /\bmultiple\b/.test(compCode));
 ok('화면 조각: 알림(notify) 없음', !/\bnotify\(/.test(compCode));
 ok('화면 조각: /api/ai-tax만 부른다', (compCode.match(/['`]\/api\/[\w-]+/g) || []).every(s => s.includes('/api/ai-tax')));
 ok('화면 조각: 토큰 칸은 password · 자동완성 끔', /type="password"\s+autoComplete="off"/.test(comp));
 const mx = read('src/components/KrEtfTaxMatrix.tsx');
 ok('계산기: TaxPhotoJobs import · aiPhoto 기본 false', /^import TaxPhotoJobs from '\.\/TaxPhotoJobs';$/m.test(mx) && /\n  aiPhoto = false,\n\}\) \{/.test(mx));
-ok('계산기: aiPhoto일 때만 · 글은 붙여넣기 칸으로(미리 보기 펼침 — 「넣기」는 사용자가)', /\{aiPhoto && \(\s*<TaxPhotoJobs code=\{stock\.code\} name=\{stock\.name \|\| ''\} canAuto=\{!pasteText\.trim\(\)\} onText=\{\(t\) => \{ setPasteText\(t\); setPasteMore\(true\); \}\} \/>/.test(mx));
+ok('계산기: 머리줄 「사진 맡기기」 — aiPhoto일 때만 · 처음엔 접힘', /\{aiPhoto && \(\s*<button\s+onClick=\{\(\) => setPhotoJobsOpen\(v => !v\)\}/.test(mx) && /const \[photoJobsOpen, setPhotoJobsOpen\] = useState\(false\);/.test(mx));
+ok('계산기: TaxPhotoJobs는 머리줄 아래 한 곳(종목 패널 안에는 없음) · 닫혀도 떠 있다', (mx.match(/<TaxPhotoJobs\b/g) || []).length === 1 && /\{aiPhoto && \(\s*<TaxPhotoJobs\s+cands=\{photoCands\}\s+open=\{photoJobsOpen\}/.test(mx));
+ok('계산기: 사진 결과는 종목마다 붙여넣기와 같은 길로 넣고 되돌리기', /^import \{ splitByStock \} from '\.\.\/taxPhotoJob';$/m.test(mx) && (() => {
+  const f = (mx.match(/const applyPhotoJobText = [\s\S]*?\n  \};\n/) || [''])[0];
+  return /splitByStock\(text, job && job\.code\)/.test(f) && /getCodeTaxBase\(portfolioRef\.current, stock\.code\)/.test(f) && /planTaxCalcPaste\(parsed, before\)/.test(f)
+    && /commitPastePlan\(stock, before, plan\)/.test(f) && /persistEvents\(u\.code, u\.prev\)/.test(f) && /krStocks\.find/.test(f);
+})());
 const dst = read('src/components/DividendSummaryTable.tsx');
 ok('분배금 표: aiPhoto 받아서 넘김(기본 false)', /cardWindowOpen, aiPhoto = false \}\) \{/.test(dst) && /aiPhoto=\{aiPhoto\}/.test(dst));
 ok('App: 관리자 · 관리자 접속(impersonation) 아님만 켬', /aiPhoto=\{isAdminUser && !ADMIN_VIEW_EMAIL\}/.test(read('src/App.tsx')));

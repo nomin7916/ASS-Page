@@ -1,7 +1,8 @@
 // 과표 계산기 「📷 사진 맡기기」(관리자 전용, 2026-11-24) — 서버 공용 도구. CLAUDE.md '과표 사진 맡기기' 절.
 // 흐름: 관리자 화면이 주문내역 사진(JPEG)을 /api/ai-tax에 올림 → 이 서버가 Redis 우편함에 맡기고 Claude 예약 작업
 //   "[ASS-PAGE-과표 사진 읽기 · API]"를 부름(본문 = 번호·열쇠뿐) → 그 작업이 /api/ai-job으로 사진을 받아 읽고 글을 돌려줌
-//   → 관리자 화면이 그 글을 '붙여넣기' 미리 보기에 넣음 → 사용자가 「넣기」를 눌러야 저장된다(작업은 데이터에 직접 쓰지 않는다).
+//   → 관리자 화면(과표 계산 머리줄)이 그 글을 종목별로 나눠 계산기에 바로 넣고 「되돌리기」를 보인다(작업은 데이터에 직접 쓰지 않는다).
+//   종목을 정하지 않고 맡기면(code '') 이 계좌의 국내 ETF 목록(cands)을 함께 두고 — Claude가 사진에서 종목을 찾아 `종목 <코드>` 줄로 나눈다(2026-11-25).
 // ⚠️ 열쇠: 일마다 새로 만든 32바이트 — Redis에는 해시만 둔다. 다시 부르면 새 열쇠(앞 실행의 열쇠는 무효).
 //    끝난(done·err) 일의 열쇠는 더 쓸 수 없고 사진은 그때 지운다.
 // ⚠️ 예약 작업 토큰은 관리자가 화면의 「⚙ Claude 연결」로 넣은 것(서버 비밀값에서 만든 키로 AES-GCM 암호화해 Redis) —
@@ -26,8 +27,9 @@ export const FIRE_MAX_AGE = 2 * 86_400_000; // 이틀 지난 일은 부르지 �
 export const STALE_RUN = 40 * 60_000;  // 읽는 중 40분이 지나면 멈춘 것으로 본다(다시 부르기 가능)
 export const HOUR_MAX = 10;            // 한 시간에 부르는 수(시험 포함)
 export const DAY_MAX = 30;             // 하루에 맡기는 수
-export const ACTIVE_MAX = 3;           // 동시에 기다리는 일
+export const ACTIVE_MAX = 6;           // 동시에 기다리는 일(사진 한 장 = 일 하나 — 주문내역 몇 장을 한 번에 맡긴다)
 export const LIST_MAX = 20;
+export const CANDS_MAX = 80;           // 종목을 찾을 후보(이 계좌의 국내 ETF) 수
 
 const K_JOB = (rid: string) => `ait:job:${rid}`;
 const K_IMG = (rid: string) => `ait:img:${rid}`;
@@ -39,6 +41,8 @@ export interface Job {
   v: 1; rid: string; code: string; name: string; year: number; kh: string; st: JobState;
   at: number; fa: number; fn: number; fe: string; ses: string; ta: number; da: number;
   text: string; note: string; why: string;
+  cands?: { c: string; n: string }[];   // code ''(사진에서 종목 찾기)일 때의 후보 — 코드·이름
+  ap?: number;                           // 화면이 계산기에 넣은 때(0이면 아직 — 화면이 열리면 스스로 넣는다)
 }
 
 function env(name: string): string {
@@ -211,6 +215,20 @@ export const testText = (origin: string) =>
   `종류=test\n사이트=${origin}`;
 
 // ── 입력 검사 ───────────────────────────────────────────────
+// 종목 후보 — [{code,name}] → [{c,n}] (모양이 맞는 국내 코드만 · 같은 코드는 하나 · CANDS_MAX까지)
+export function cleanCands(v: unknown): { c: string; n: string }[] {
+  const out: { c: string; n: string }[] = [];
+  const seen = new Set<string>();
+  for (const x of Array.isArray(v) ? v : []) {
+    const c = String((x as any)?.code || '').toUpperCase();
+    if (!CODE_RE.test(c) || seen.has(c)) continue;
+    seen.add(c);
+    out.push({ c, n: cleanText((x as any)?.name, 60).replace(/\n/g, ' ') });
+    if (out.length >= CANDS_MAX) break;
+  }
+  return out;
+}
+
 export function cleanText(v: unknown, max: number): string {
   return String(v ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim().slice(0, max);
 }
@@ -298,6 +316,7 @@ export function summaryOf(j: Job, now = Date.now()) {
   return {
     rid: j.rid, code: j.code, name: j.name, st: j.st, at: j.at, fa: j.fa, fn: j.fn, fe: j.fe, ses: j.ses,
     ta: j.ta, da: j.da, note: j.note, why: j.why, hasText: !!j.text, stale: stale || waiting,
+    ap: j.ap || 0, auto: !j.code,
   };
 }
 

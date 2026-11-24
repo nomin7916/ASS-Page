@@ -85,13 +85,17 @@ if (T) {
     ['2026-11-09', 'same', null, '그날 매매 행 없음'],
   ]);
 
-  // #P6 겹치는 행의 빈 단가 채움 · 같은 날 다른 수량은 추가하되 경고
+  // #P6 겹치는 행의 빈 단가 채움 · 이미 매매가 있는 날은 수량이 달라도 넣지 않는다(없는 날만 — 사용자 확정 2026-11-25)
   const plan3 = planTaxCalcPaste(parseTaxCalcPaste('2026-11-10 매도 5주 7,000원 과표 10\n2026-11-10 매수 7주 6,000원', TODAY),
     [{ id: 'x', date: '2026-11-10', change: '-5', sellPrice: '', taxBasePrice: '' }, { id: 'y', date: '2026-11-10', change: '3', purchasePrice: '6000' }]);
-  eq('#P6 빈 매도단가·과표 채움 + 수량 다른 매수는 추가(경고)', plan3.map(r => [r.side, r.status, r.patch || null, r.note]), [
-    ['buy', 'add', null, '같은 날 수량이 다른 행이 있음 — 겹치지 않는지 확인'],
+  eq('#P6 빈 매도단가·과표 채움 + 그날 매매가 있으면 수량 다른 매수는 넣지 않음', plan3.map(r => [r.side, r.status, r.patch || null, r.note]), [
+    ['buy', 'same', null, '그날 매매가 이미 있어 넣지 않음'],
     ['sell', 'fill', { sellPrice: 7000, taxBasePrice: 10 }, ''],
   ]);
+  const plan3b = planTaxCalcPaste(parseTaxCalcPaste('2026-11-17 매도 7주 7,300원\n2026-11-17 매수 30주 7,090원\n2026-11-18 매수 4주 7,000원', TODAY), existing);
+  eq('#P6 11-17처럼 매수가 있는 날은 사진의 매도·다른 수량 매수도 넣지 않고, 없는 날(11-18)만 추가',
+    plan3b.map(r => [r.date, r.side, r.status]), [['2026-11-17', 'buy', 'same'], ['2026-11-17', 'sell', 'same'], ['2026-11-18', 'buy', 'add']]);
+  eq('#P6 그 경우 넣기 버튼 숫자', pasteCounts(plan3b), { add: 1, fill: 0 });
 
   // #P7 적용 — '행 추가'와 같은 모양(매도는 음수·sellPrice), 전일 수량은 주입 함수, 기존 행 id 유지
   let n = 0;

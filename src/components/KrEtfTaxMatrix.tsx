@@ -24,6 +24,7 @@ import {
 import { taxRowMonth, groupTaxRowsByMonth, taxMonthOpen, showTaxMonthHeads, taxMonthLabel, taxMonthSummary } from '../taxCalcMonths';
 import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts, buildPastePrompt, mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoFitSize, PHOTO_TRIES, photoReadInit, photoReadStep, photoErrorText, photoOutcome } from '../taxCalcPaste';
 import TaxPhotoJobs from './TaxPhotoJobs';
+import { splitByStock } from '../taxPhotoJob';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
@@ -205,6 +206,9 @@ export default function KrEtfTaxMatrix({
   // 읽는 사이(10~30초) 사용자가 다른 행을 고쳤을 수 있다 — 넣을 때는 그 순간의 이벤트로 계획을 다시 세운다.
   const portfolioRef = useRef(portfolio);
   portfolioRef.current = portfolio;
+  // 머리줄 「📷 사진 맡기기」(관리자 — Claude 예약 작업이 사진에서 종목을 찾아 읽음) 칸 펼침과 읽는 중 수. 세션 로컬.
+  const [photoJobsOpen, setPhotoJobsOpen] = useState(false);
+  const [photoJobsBadge, setPhotoJobsBadge] = useState({ waiting: 0, connected: false });
 
   // 가로 스크롤 시 '평균 과표 계산기'(확장 행)를 왼쪽에 고정(엑셀 틀 고정)하기 위해, 스크롤
   // 컨테이너의 가시 폭을 측정해 sticky 패널 너비로 사용한다. 콜백 ref + ResizeObserver로
@@ -232,6 +236,8 @@ export default function KrEtfTaxMatrix({
       .map(([code]) => ({ code, name: nameMap[code] || '', quantity: 0, type: 'stock', __orphan: true }));
     return [...base, ...orphans];
   }, [portfolio?.portfolio, portfolio?.taxBaseHistory, portfolio?.holdingSnapshots]);
+  // 사진 맡기기의 종목 후보 — Claude가 사진 속 종목 이름을 이 목록에서 찾는다(이 계좌의 국내 ETF · 과표 이력이 남은 삭제 종목 포함).
+  const photoCands = useMemo(() => krStocks.map(s => ({ code: String(s.code), name: s.name || '' })), [krStocks]);
 
   if (!portfolio) return null;
 
@@ -709,6 +715,45 @@ export default function KrEtfTaxMatrix({
     setPhotoRun(r => ({ ...r, phase: 'undone', undo: null }));
   };
 
+  // 머리줄 「📷 사진 맡기기」 — Claude가 돌려준 글(`종목 <코드>` 줄로 나뉨)을 종목마다 바로 넣는다(규칙은 붙여넣기와 같다 —
+  // 이미 매매가 있는 날은 넣지 않고 없는 날만 · 같은 날·같은 수량 행은 빈칸만). → { lines: 종목마다 한 줄, undo: 넣기 전으로 }
+  const applyPhotoJobText = (text, job) => {
+    const today = getTodayKST();
+    const { sections, lost } = splitByStock(text, job && job.code);
+    const lines = [];
+    const undos = [];
+    for (const sec of sections) {
+      const stock = krStocks.find(s => String(s.code).toUpperCase() === sec.code);
+      if (!stock) { lines.push(`${sec.code} — 이 계좌에 없는 종목이라 넣지 않았습니다`); continue; }
+      const label = stock.name || stock.code;
+      const before = getCodeTaxBase(portfolioRef.current, stock.code).events || [];
+      const parsed = parseTaxCalcPaste(sec.text, today);
+      const plan = planTaxCalcPaste(parsed, before);
+      const kind = photoOutcome(parsed, plan);
+      const kept = plan.filter(r => r.note === '그날 매매가 이미 있어 넣지 않음').length;
+      const tail = [
+        kept > 0 ? `이미 매매가 있는 날 ${kept}건은 넣지 않음` : '',
+        parsed.skipped.length > 0 ? `읽지 못한 줄 ${parsed.skipped.length}개` : '',
+      ].filter(Boolean).join(' · ');
+      if (kind === 'apply') {
+        commitPastePlan(stock, before, plan);
+        undos.push({ code: stock.code, prev: before });
+        const c = pasteCounts(plan);
+        lines.push(`${label} — 추가 ${c.add}행${c.fill > 0 ? ` · 빈칸 채움 ${c.fill}행` : ''}${tail ? ` · ${tail}` : ''}`);
+      } else if (kind === 'same') {
+        lines.push(`${label} — 넣을 것 없음(모두 이미 있음)${tail ? ` · ${tail}` : ''}`);
+      } else {
+        lines.push(`${label} — 매매·과표 줄을 찾지 못했습니다${tail ? ` · ${tail}` : ''}`);
+      }
+    }
+    if (lost > 0) lines.push(`어느 종목인지 없는 줄 ${lost}개는 넣지 않았습니다`);
+    if (sections.length === 0 && lost === 0) lines.push('넣을 줄이 없습니다');
+    return {
+      lines,
+      undo: undos.length > 0 ? () => undos.forEach(u => persistEvents(u.code, u.prev)) : null,
+    };
+  };
+
   const removePastePhoto = (url) => {
     URL.revokeObjectURL(url);
     setPastePhotos(prev => prev.filter(p => p.url !== url));
@@ -789,8 +834,27 @@ export default function KrEtfTaxMatrix({
         )}
         <span className="ml-auto flex items-center gap-2">
           <span className="text-gray-600">월 상단 클릭 → 숨기기 · 종목명 클릭 → 평균 과표 계산기</span>
+          {aiPhoto && (
+            <button
+              onClick={() => setPhotoJobsOpen(v => !v)}
+              aria-expanded={photoJobsOpen}
+              className={'inline-flex items-center gap-1 px-2 py-0.5 rounded border transition-colors ' + (photoJobsOpen ? 'border-violet-500 text-violet-100 bg-violet-800/40' : 'border-violet-700/60 text-violet-300 hover:text-violet-100 hover:bg-violet-900/30')}
+              title="주문내역 사진을 맡기면 Claude가 어느 ETF인지 찾아 매매 수량·단가·과표기준가를 그 종목 계산기에 넣습니다(관리자)"
+            >
+              <ImagePlus size={10} /> 사진 맡기기{photoJobsBadge.waiting > 0 ? ` · 읽는 중 ${photoJobsBadge.waiting}` : ''} {photoJobsOpen ? '▴' : '▾'}
+            </button>
+          )}
         </span>
       </div>
+      {aiPhoto && (
+        <TaxPhotoJobs
+          cands={photoCands}
+          open={photoJobsOpen}
+          onOpen={() => setPhotoJobsOpen(true)}
+          onApply={applyPhotoJobText}
+          onBadge={setPhotoJobsBadge}
+        />
+      )}
       <table className="w-full text-[11px] text-center">
         <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
           <tr>
@@ -1166,9 +1230,6 @@ export default function KrEtfTaxMatrix({
                                   {pr.msg && pr.code !== 'bad' && <div className="text-[10px] text-gray-600 break-all">({pr.msg})</div>}
                                 </div>
                               )}
-                              {aiPhoto && (
-                                <TaxPhotoJobs code={stock.code} name={stock.name || ''} canAuto={!pasteText.trim()} onText={(t) => { setPasteText(t); setPasteMore(true); }} />
-                              )}
                               <button
                                 onClick={() => setPasteMore(v => !v)}
                                 className="text-[10px] text-gray-500 hover:text-gray-300 inline-flex items-center gap-1"
@@ -1258,7 +1319,7 @@ export default function KrEtfTaxMatrix({
                                 >
                                   닫기
                                 </button>
-                                <span className="text-[10px] text-gray-600">같은 날·같은 수량 행은 새로 만들지 않고 빈 단가·과표기준가만 채웁니다 · 이미 입력된 값은 덮지 않습니다 · 사진은 저장하지 않습니다</span>
+                                <span className="text-[10px] text-gray-600">이미 매수·매도가 있는 날은 넣지 않고 없는 날만 넣습니다 · 같은 날·같은 수량 행은 빈 단가·과표기준가만 채웁니다 · 이미 입력된 값은 덮지 않습니다 · 사진은 저장하지 않습니다</span>
                               </div>
                             </div>
                           );

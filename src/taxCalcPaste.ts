@@ -146,12 +146,16 @@ export function planTaxCalcPaste(parsed: PasteParsed, events: any[]): PastePlanR
   const list = Array.isArray(events) ? events : [];
   const used = new Set<string>();
   const rows: PastePlanRow[] = [];
+  // 계산기에 이미 매수·매도가 있는 날은 사진·글의 매매를 새 행으로 넣지 않는다(사용자 확정 2026-11-25 — 없는 날만 넣는다).
+  // 같은 날·같은 쪽·같은 수량 행이면 전처럼 그 행의 빈 단가·과표만 채운다.
+  const tradedDays = new Set(list.filter(e => num(e?.change) !== 0).map(e => String(e?.date || '')));
   for (const t of parsed.trades) {
     const sign = t.side === 'sell' ? -1 : 1;
     const sameSide = list.filter(e => String(e?.date || '') === t.date && Math.sign(num(e?.change)) === sign);
     const match = sameSide.find(e => Math.abs(num(e.change)) === t.qty && !used.has(e.id));
     if (!match) {
-      rows.push({ ...t, status: 'add', note: sameSide.length > 0 ? '같은 날 수량이 다른 행이 있음 — 겹치지 않는지 확인' : '' });
+      if (tradedDays.has(t.date)) rows.push({ ...t, status: 'same', note: '그날 매매가 이미 있어 넣지 않음' });
+      else rows.push({ ...t, status: 'add', note: '' });
       continue;
     }
     used.add(match.id);

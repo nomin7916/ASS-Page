@@ -1,7 +1,8 @@
 // @ts-nocheck
-// 과표 계산기 '붙여넣기' 안의 「📷 사진 맡기기 (Claude)」 — 관리자 전용(2026-11-24). 흐름은 api/_aiTax.ts 머리 주석.
-// 사진을 줄여(JPEG) /api/ai-tax로 맡기면 서버가 Claude 예약 작업을 부르고, 끝난 글은 onText로 '붙여넣기' 칸에 들어간다.
-// ⚠️ 여기서는 저장하지 않는다 — 사용자가 미리 보기를 보고 「넣기」를 눌러야 계산기에 들어간다(작업은 데이터에 쓰지 않는다).
+// 분배금 현황 「과표 계산」 머리줄의 「📷 사진 맡기기」 칸 — 관리자 전용(2026-11-24 · 2026-11-25 머리줄로 옮김). 흐름은 api/_aiTax.ts 머리 주석.
+// 사진을 줄여(JPEG) 이 계좌의 국내 ETF 목록(cands)과 함께 /api/ai-tax로 맡기면 서버가 Claude 예약 작업을 부르고,
+// Claude가 사진에서 종목을 찾아 돌려준 글은 onApply가 종목마다 계산기에 바로 넣는다(「되돌리기」로 넣기 전으로).
+// ⚠️ 칸이 닫혀 있어도(open=false) 이 부품은 떠 있다 — 끝난 일을 스스로 넣고(seen) 결과를 보이려 칸을 연다(onOpen).
 // ⚠️ 알림(notify)을 쓰지 않는다 — 진행·오류는 이 칸 안의 한 줄로만(알림 최소화 정책).
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getTodayKST } from '../hooks/useMarketCalendar';
@@ -9,6 +10,7 @@ import {
   IMG_LIMIT, POLL_MS, SHRINK_STEPS, ROUTINE_NAME, ROUTINES_URL, ROUTINE_PROMPT, SITE_ORIGIN,
   jobErrText, jobState, jobPending, canRefire, autoPull, ageText, fitScale,
 } from '../taxPhotoJob';
+import { PASTE_PHOTO_ACCEPT } from '../taxCalcPaste';
 
 async function photoToJpegB64(file) {
   const url = URL.createObjectURL(file);
@@ -53,7 +55,7 @@ async function callApi(path, body) {
   }
 }
 
-export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
+export default function TaxPhotoJobs({ cands, open, onOpen, onApply, onBadge }) {
   const [st, setSt] = useState(null);
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
@@ -61,8 +63,8 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
   const [cUrl, setCUrl] = useState('');
   const [cTok, setCTok] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
+  const [results, setResults] = useState({});   // rid → { lines:[글], undo:fn|null, undone:bool } — 이 화면에서 넣은 것(세션 메모리)
   const fileRef = useRef(null);
-  const openedAt = useRef(Date.now());
   const pulled = useRef(new Set());
 
   const load = useCallback(async () => {
@@ -72,46 +74,68 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const mine = (st?.jobs || []).filter(j => j.code === code);
-  const pending = mine.some(jobPending);
+  const jobs = st?.jobs || [];
+  const pending = jobs.some(jobPending);
   useEffect(() => {
     if (!pending) return undefined;
     const t = setInterval(load, POLL_MS);
     return () => clearInterval(t);
   }, [pending, load]);
 
+  const waiting = jobs.filter(jobPending).length;
+  useEffect(() => { if (onBadge) onBadge({ waiting, connected: !!st?.connected }); }, [waiting, st?.connected]);
+
+  // 끝난 글 → 종목마다 계산기에 넣기 → 서버에 seen(다시 넣지 않게)
   const pull = useCallback(async (j) => {
     const r = await callApi(`/api/ai-tax?op=job&rid=${encodeURIComponent(j.rid)}`);
     if (!r.ok) { setMsg(jobErrText(r.j.error)); return; }
     if (!r.j.text) { setMsg('Claude가 돌려준 글이 비어 있습니다'); return; }
-    onText(r.j.text);
-    setMsg(r.j.job?.note ? `Claude 메모: ${r.j.job.note}` : '');
-  }, [onText]);
+    const res = onApply(r.j.text, j) || { lines: [], undo: null };
+    setResults(prev => ({ ...prev, [j.rid]: { lines: res.lines || [], undo: res.undo || null, undone: false } }));
+    await callApi(`/api/ai-tax?op=seen&rid=${encodeURIComponent(j.rid)}`, {});
+    if (onOpen) onOpen();
+    load();
+  }, [onApply, onOpen, load]);
 
   useEffect(() => {
-    if (!canAuto) return;
-    const j = mine.find(x => autoPull(x, openedAt.current) && !pulled.current.has(x.rid));
+    const j = jobs.find(x => autoPull(x) && !pulled.current.has(x.rid));
     if (j) { pulled.current.add(j.rid); pull(j); }
-  }, [st, canAuto]);
+  }, [st]);
 
-  const send = async (file) => {
-    if (!file) return;
+  const undo = (rid) => {
+    const r = results[rid];
+    if (!r || !r.undo) return;
+    r.undo();
+    setResults(prev => ({ ...prev, [rid]: { ...prev[rid], undo: null, undone: true } }));
+  };
+
+  const send = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (fileRef.current) fileRef.current.value = '';
+    if (files.length === 0) return;
     setMsg('');
     setBusy('send');
+    const notes = [];
     try {
-      const img = await photoToJpegB64(file);
-      if (!img) { setMsg('사진을 열거나 줄이지 못했습니다 — JPEG·PNG 사진으로 다시 해 주세요'); return; }
-      const r = await callApi('/api/ai-tax?op=job', { code, name, year: Number(getTodayKST().slice(0, 4)), img });
-      if (!r.ok) {
-        setMsg(jobErrText(r.j.error));
-        if (r.j.error === 'noconn') setSetup(true);
-        return;
+      for (let i = 0; i < files.length; i++) {
+        setBusy(`send:${i + 1}/${files.length}`);
+        const img = await photoToJpegB64(files[i]);
+        if (!img) { notes.push(`${i + 1}번째 사진을 열거나 줄이지 못했습니다(JPEG·PNG)`); continue; }
+        const r = await callApi('/api/ai-tax?op=job', { code: '', cands, year: Number(getTodayKST().slice(0, 4)), img });
+        if (!r.ok) {
+          if (r.j.error === 'noconn') setSetup(true);
+          notes.push(r.j.error === 'busy' || r.j.error === 'day'
+            ? `${files.length - i}장은 맡기지 못했습니다 — ${jobErrText(r.j.error)}`
+            : `${i + 1}번째 사진 — ${jobErrText(r.j.error)}`);
+          if (r.j.error === 'busy' || r.j.error === 'day' || r.j.error === 'noconn') break;
+          continue;
+        }
+        if (!r.j.fired) notes.push(`${i + 1}번째 사진은 맡겼지만 Claude를 부르지 못했습니다 — ${jobErrText(r.j.err)}`);
       }
-      if (!r.j.fired) setMsg(`사진은 맡겼지만 Claude를 부르지 못했습니다 — ${jobErrText(r.j.err)}`);
+      setMsg(notes.join(' · '));
       await load();
     } finally {
       setBusy('');
-      if (fileRef.current) fileRef.current.value = '';
     }
   };
 
@@ -129,6 +153,7 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
     setBusy(j.rid);
     await callApi(`/api/ai-tax?op=del&rid=${encodeURIComponent(j.rid)}`, {});
     setBusy('');
+    setResults(prev => { const n = { ...prev }; delete n[j.rid]; return n; });
     load();
   };
 
@@ -157,28 +182,32 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
     try { await navigator.clipboard.writeText(ROUTINE_PROMPT); setPromptCopied(true); } catch { setPromptCopied(false); }
   };
 
+  if (!open) return null;
+
   const now = Date.now();
   const connected = !!st?.connected;
+  const sending = busy.startsWith('send');
 
   return (
-    <div className="border border-violet-800/40 rounded px-2 py-1.5 space-y-1.5 max-w-[720px] bg-violet-950/10">
-      <div className="flex items-center gap-2 flex-wrap text-[10px]">
+    <div className="px-3 py-2 bg-violet-950/20 border-b border-violet-800/40 space-y-1.5 text-[10px]">
+      <div className="flex items-center gap-2 flex-wrap">
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          accept={PASTE_PHOTO_ACCEPT}
+          multiple
           className="hidden"
-          onChange={e => send(e.target.files && e.target.files[0])}
+          onChange={e => send(e.target.files)}
         />
         <button
           disabled={!!busy || !st}
           onClick={() => (connected ? fileRef.current && fileRef.current.click() : setSetup(true))}
           className="px-2 py-0.5 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 disabled:opacity-40 disabled:cursor-not-allowed"
-          title="주문내역 사진을 Claude(관리자 구독)에게 맡깁니다 — 읽은 글이 아래 칸에 들어오면 미리 보기를 보고 「넣기」를 누르세요"
+          title="주문내역 사진을 고르면 Claude가 어느 ETF인지 찾아 매매 수량·단가·과표기준가를 그 종목의 계산기에 넣습니다"
         >
-          {busy === 'send' ? '사진 보내는 중…' : '📷 사진 맡기기 (Claude)'}
+          {sending ? `사진 보내는 중… ${busy.slice(5)}` : '📷 주문내역 사진 고르기'}
         </button>
-        <span className="text-gray-500">관리자 전용 · Claude가 날짜·매수/매도·수량·평균단가를 읽고 과표기준가도 찾아봅니다(1~3분)</span>
+        <span className="text-gray-500">Claude가 사진에서 ETF를 찾아 매매 수량·단가·과표기준가를 그 종목 계산기에 바로 넣습니다(1~3분 · 여러 장 가능)</span>
         <button
           onClick={() => setSetup(!setup)}
           className={'ml-auto px-1.5 py-0.5 rounded border ' + (connected ? 'border-gray-700/60 text-gray-400 hover:text-gray-200' : 'border-amber-600/60 text-amber-300 hover:text-amber-200')}
@@ -188,7 +217,7 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
       </div>
 
       {setup && (
-        <div className="text-[10px] text-gray-400 space-y-1 border-t border-violet-900/40 pt-1.5">
+        <div className="text-gray-400 space-y-1 border-t border-violet-900/40 pt-1.5">
           <div>① <a href={ROUTINES_URL} target="_blank" rel="noopener noreferrer" className="text-sky-300 underline">claude.ai/code/routines</a> → 「새 작업」 · 이름 <span className="text-gray-200">{ROUTINE_NAME}</span> · 저장소 ASS-Page</div>
           <div className="flex items-center gap-2 flex-wrap">
             ② 지침 칸에 붙여 넣기:
@@ -230,27 +259,39 @@ export default function TaxPhotoJobs({ code, name, canAuto, onText }) {
         </div>
       )}
 
-      {msg && <div className="text-[10px] text-amber-300">{msg}</div>}
+      {msg && <div className="text-amber-300">{msg}</div>}
 
-      {mine.length > 0 && (
+      {jobs.length > 0 && (
         <div className="space-y-0.5">
-          {mine.slice(0, 5).map(j => {
+          {jobs.slice(0, 8).map(j => {
             const s = jobState(j);
+            const res = results[j.rid];
             return (
-              <div key={j.rid} className="flex items-center gap-2 flex-wrap text-[10px]">
-                <span className={s.cls}>{s.label}</span>
-                <span className="text-gray-500">{ageText(now - j.at)} 맡김{j.fn > 1 ? ` · ${j.fn}번 부름` : ''}</span>
-                {j.fe && <span className="text-rose-400/80">{jobErrText(j.fe)}</span>}
-                {j.st === 'err' && j.why && <span className="text-rose-400/80">{j.why}</span>}
-                {j.st === 'done' && j.note && <span className="text-gray-400 truncate max-w-[360px]" title={j.note}>메모: {j.note}</span>}
-                {j.st === 'done' && j.hasText && (
-                  <button onClick={() => pull(j)} className="px-1.5 py-0 rounded border border-emerald-700/60 text-emerald-300 hover:text-emerald-200">가져오기</button>
+              <div key={j.rid} className="space-y-0.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={s.cls}>{j.st === 'done' && j.ap ? '넣음' : s.label}</span>
+                  <span className="text-gray-500">{ageText(now - j.at)} 맡김{j.fn > 1 ? ` · ${j.fn}번 부름` : ''}{j.code ? ` · ${j.name || j.code}` : ''}</span>
+                  {j.fe && <span className="text-rose-400/80">{jobErrText(j.fe)}</span>}
+                  {j.st === 'err' && j.why && <span className="text-rose-400/80">{j.why}</span>}
+                  {j.st === 'done' && j.note && <span className="text-gray-400 truncate max-w-[420px]" title={j.note}>Claude 메모: {j.note}</span>}
+                  {j.st === 'done' && j.hasText && !res && (
+                    <button onClick={() => pull(j)} className="px-1.5 py-0 rounded border border-emerald-700/60 text-emerald-300 hover:text-emerald-200">{j.ap ? '다시 넣기' : '넣기'}</button>
+                  )}
+                  {res && res.undo && (
+                    <button onClick={() => undo(j.rid)} className="px-1.5 py-0 rounded border border-amber-700/60 text-amber-300 hover:text-amber-200">되돌리기</button>
+                  )}
+                  {res && res.undone && <span className="text-gray-500">되돌렸습니다</span>}
+                  {canRefire(j, now) && (
+                    <button disabled={busy === j.rid} onClick={() => refire(j)} className="px-1.5 py-0 rounded border border-amber-700/60 text-amber-300 hover:text-amber-200 disabled:opacity-40">다시 부르기</button>
+                  )}
+                  {j.ses && <a href={j.ses} target="_blank" rel="noopener noreferrer" className="text-sky-400/80 underline">Claude 작업 보기</a>}
+                  <button disabled={busy === j.rid} onClick={() => drop(j)} className="text-gray-600 hover:text-rose-300 disabled:opacity-40">지우기</button>
+                </div>
+                {res && res.lines.length > 0 && (
+                  <div className="pl-3 text-emerald-300/90 space-y-0.5">
+                    {res.lines.map((t, i) => <div key={i}>· {t}</div>)}
+                  </div>
                 )}
-                {canRefire(j, now) && (
-                  <button disabled={busy === j.rid} onClick={() => refire(j)} className="px-1.5 py-0 rounded border border-amber-700/60 text-amber-300 hover:text-amber-200 disabled:opacity-40">다시 부르기</button>
-                )}
-                {j.ses && <a href={j.ses} target="_blank" rel="noopener noreferrer" className="text-sky-400/80 underline">Claude 작업 보기</a>}
-                <button disabled={busy === j.rid} onClick={() => drop(j)} className="text-gray-600 hover:text-rose-300 disabled:opacity-40">지우기</button>
               </div>
             );
           })}

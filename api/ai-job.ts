@@ -2,7 +2,7 @@
 // ⚠️ 구글 로그인 토큰이 아니라 일마다의 열쇠로 연다(requireJobKey) — verify:api-auth의 JOB_ROUTES 목록에 있는 유일한 경로.
 //   열쇠는 예약 작업을 부를 때 본문에만 실리고 Redis에는 해시만 있다. 이 경로는 그 일의 사진을 주고 글을 받는 일만 한다
 //   (사용자 데이터·Drive·다른 키에 닿지 않는다).
-//   GET  ?op=take&rid=   사진(base64)·종목·연도·오늘(KST) — 읽는 중으로 바뀐다
+//   GET  ?op=take&rid=   사진(base64)·종목(code ''이면 cands에서 찾기)·연도·오늘(KST) — 읽는 중으로 바뀐다
 //   POST ?op=put&rid=  {text,note}  읽은 글(과표 계산기 '붙여넣기' 형식)·메모 — 끝, 사진 지움
 //   POST ?op=fail&rid= {why}        못 함 — 끝, 사진 지움
 export const config = { runtime: 'edge' };
@@ -26,7 +26,8 @@ export default async function handler(request: Request): Promise<Response> {
     j.ta = now;
     if (!(await putJob(j))) return json(503, { error: 'store' });
     return json(200, {
-      rid: j.rid, code: j.code, isin: tickerToIsin(j.code), name: j.name, year: j.year, today: kstToday(now),
+      rid: j.rid, code: j.code, isin: j.code ? tickerToIsin(j.code) : '', name: j.name, year: j.year, today: kstToday(now),
+      cands: (j.cands || []).map(x => ({ code: x.c, name: x.n, isin: tickerToIsin(x.c) })),
       mime: imgMime(img), img,
     });
   }
