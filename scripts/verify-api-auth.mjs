@@ -34,15 +34,25 @@ const eq = (name, got, want) => {
 const OPEN_ROUTES = ['market-calendar'];
 // 서버 내부 호출(내부 키)을 받는 경로
 const INTERNAL_ROUTES = ['fred'];
+// 구글 토큰 대신 일마다의 열쇠(requireJobKey)로 여는 경로 — Claude 예약 작업 전용(과표 사진 맡기기, api/_aiTax.ts)
+const JOB_ROUTES = ['ai-job'];
 
 // ── 파트① 소스 가드 ─────────────────────────────────────────
 console.log('\n[파트①] 소스 가드');
 
 const HANDLER_RE = /export default async function handler\((\w+): Request\): Promise<Response> \{\n\s*const denied = await requireAuth\(\1(, \{ allowInternal: true \})?\);\n\s*if \(denied\) return denied;\n/;
 const IMPORT_RE = /^import \{[^}]*\brequireAuth\b[^}]*\} from '\.\/_auth\.js';$/m;
+const JOB_HANDLER_RE = /export default async function handler\((\w+): Request\): Promise<Response> \{\n\s*const denied = await requireJobKey\(\1\);\n\s*if \(denied\) return denied;\n/;
 
 function routeProblems(name, src) {
   const out = [];
+  if (JOB_ROUTES.includes(name)) {
+    if (/requireAuth/.test(src)) out.push('열쇠 경로인데 requireAuth를 부른다(목록과 어긋남)');
+    if (!/^import \{[^}]*\brequireJobKey\b[^}]*\} from '\.\/_aiTax\.js';$/m.test(src)) out.push("import { requireJobKey } from './_aiTax.js' 없음");
+    if (!JOB_HANDLER_RE.test(src)) out.push('처리부 첫 줄이 requireJobKey가 아니다');
+    if ((src.match(/export default/g) || []).length !== 1) out.push('export default가 하나가 아니다');
+    return out;
+  }
   if (OPEN_ROUTES.includes(name)) {
     if (/requireAuth/.test(src)) out.push('열린 경로인데 requireAuth를 부른다(목록과 어긋남)');
     return out;
@@ -64,7 +74,7 @@ for (const f of routeFiles) {
   const name = f.replace(/\.ts$/, '');
   SRC[name] = read(`api/${f}`);
   const probs = routeProblems(name, SRC[name]);
-  ok(`api/${f} ${OPEN_ROUTES.includes(name) ? '열린 경로' : '처리부 첫 줄 requireAuth'}${probs.length ? ' — ' + probs.join(' · ') : ''}`, probs.length === 0);
+  ok(`api/${f} ${OPEN_ROUTES.includes(name) ? '열린 경로' : JOB_ROUTES.includes(name) ? '처리부 첫 줄 requireJobKey' : '처리부 첫 줄 requireAuth'}${probs.length ? ' — ' + probs.join(' · ') : ''}`, probs.length === 0);
 }
 
 // 서버끼리 부르는 같은 배포의 /api/… — 내부 키를 실어야 /api/fred가 받는다
@@ -130,6 +140,9 @@ ok('App.tsx 재발급이 진행 중인 대기자를 덮지 않는다', /register
   const internal = s.replace('await requireAuth(request);', 'await requireAuth(request, { allowInternal: true });');
   ok('변이: 내부 키 허용 확대를 잡는다', routeProblems('history', internal).length > 0);
   ok('변이: 열린 경로 목록 밖 경로가 확인을 빼면 잡는다', routeProblems('proxy', SRC['proxy'].replace('const denied = await requireAuth(request);', '')).length > 0);
+  for (const name of JOB_ROUTES) ok(`열쇠 경로 ${name}가 실제로 있다`, routeNames.includes(name));
+  ok('변이: 열쇠 경로가 requireJobKey를 빼면 잡는다', routeProblems('ai-job', SRC['ai-job'].replace('const denied = await requireJobKey(request);', '')).length > 0);
+  ok('변이: 다른 경로가 requireJobKey로 바꾸면 잡는다', routeProblems('proxy', SRC['proxy'].replace(/requireAuth/g, 'requireJobKey').replace("'./_auth.js'", "'./_aiTax.js'")).length > 0);
 }
 
 // ── 파트② api/_auth.ts 실행 ─────────────────────────────────
@@ -265,6 +278,13 @@ try {
 
   const ADM = mk('admin', A.ADMIN_EMAIL.toUpperCase());
   eq('관리자 → 스크립트 없이 통과', [await A.requireAuth(reqWith({ [AUTH]: ADM })), scriptCalls], [null, 2]);
+  {
+    const t0 = tokeninfoCalls;
+    eq('callerEmail: 관리자 토큰 → 소문자 관리자 이메일 · 구글 다시 안 부름',
+      [await A.callerEmail(reqWith({ [AUTH]: ADM })), tokeninfoCalls - t0], [A.ADMIN_EMAIL.toLowerCase(), 0]);
+    eq('callerEmail: 미승인 계정 → 빈 값', await A.callerEmail(reqWith({ [AUTH]: N1 })), '');
+    eq('callerEmail: 헤더 없음 → 빈 값', await A.callerEmail(reqWith({})), '');
+  }
 
   for (const mode of ['500', 'throw', 'authError']) {
     const email = `down-${mode.toLowerCase()}@example.com`;

@@ -28,6 +28,7 @@ src/
 ├── brazilNotes.ts       # 브라질 정치 메모 기본값(빈 배열) + readBrazilNotes 읽기 함수
 ├── dividendQty.ts       # 공시된 분배금 수량 = 공시일(배당락 전 영업일) 장 마감 보유(자산검증) · 월중 15일 일정 · 국내만 (⚠️ import 0 — verify:dividend-qty)
 ├── taxCalcMonths.ts     # 평균 과표 계산기 월별 접기(지난 달 접힘 기본·세션 로컬·일자 미입력은 늘 펼침) (⚠️ import 0 — verify:tax-months)
+├── taxPhotoJob.ts       # 과표 계산기 「📷 사진 맡기기」(관리자 전용) 화면 도구: 상태·오류 글·다시 부르기 판단·예약 작업 지침 글(ROUTINE_PROMPT = docs/ai-task/ROUTINE-PROMPT.md) (⚠️ import 0 — verify:ai-tax)
 ├── taxCalcPaste.ts      # 평균 과표 계산기 '사진으로 넣기'(모든 사용자, 2026-11-24 둘째 요청 — 사진만 올리면 끝): 사진 고르자마자 기기에서 JPEG로 줄여(photoBudget·photoFitSize — 합계 3MB) `api/tax-photo.ts`(Edge, 구글 Gemini · 키 = Vercel `GEMINI_API_KEY`(2~9) · 부탁 문장은 서버 `api/_taxPhoto.ts`가 만든다 · 응답 NDJSON을 바로 흘림) → 끝까지 받은 답({d:1})만 parseTaxCalcPaste → plan(그 순간의 이벤트) → 바로 넣기 + '되돌리기' · 날짜·구분별 합친 행(가중평균 단가)·같은 날 같은 수량은 빈칸만 채움·`과표 N` · '다른 방법'(접힘) = AI 앱으로 공유(navigator.share 는 첫 await 보다 먼저) · AI 답 붙여넣기 — ⚠️ 사진은 저장하지 않는다(서버·Drive·기록 0) · 화면은 AI를 직접 부르지 않는다(fetch는 /api/tax-photo 하나) · accept 값은 PASTE_PHOTO_ACCEPT(슬래시·별표를 붙여 쓰면 검사 도구가 주석으로 읽는다) (⚠️ import 0 — verify:tax-paste · #G가 서버 처리부를 가짜 Gemini로 끝까지)
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
@@ -149,6 +150,7 @@ src/
 
 - 모든 `api/*.ts` 경로는 처리부 **첫 줄**이 `const denied = await requireAuth(req); if (denied) return denied;`(새 경로도).
   예외는 `market-calendar`뿐(로그인 화면에서 부름·비밀 키 없음 — 대신 연도 범위를 작년-4~+10년으로 묶는다).
+  그리고 `ai-job`(Claude 예약 작업 전용) — 첫 줄이 `requireJobKey`(일마다의 열쇠, Redis엔 해시만). verify:api-auth `JOB_ROUTES`.
 - 헤더 `X-App-Token`(구글 로그인 액세스 토큰) → tokeninfo `aud`=GOOGLE_CLIENT_ID·`email_verified`(인스턴스 메모리 캐시: 통과 ≤10분·거부 1분).
   ⚠️ `Authorization`으로 바꾸지 말 것 — Vercel CDN이 그 요청은 캐시하지 않는다. CDN 캐시 적중은 토큰 없이 나간다(공개 시세·함수 미실행 = 키 한도 0).
 - 서버끼리(`history`·`indicators` → `fred`)는 `internalAuthHeaders()`(서버 비밀값 해시). `allowInternal`은 `fred`만.
@@ -159,6 +161,15 @@ src/
   미승인은 **403**(401이면 앱이 재발급을 반복한다). 이메일별 메모리 + Redis(이메일 해시 키): 승인 **1시간**(사용자 확정 — 취소 반영
   최대 시간, 토큰 캐시도 이 시각을 넘지 않는다) · 미승인 5분. 스크립트 무응답일 때만 24시간 안 승인 기록으로 통과, 그 외 503.
   ⚠️ `SCRIPT_URL`·`ADMIN_EMAIL`·`CLIENT_ID`는 src/config.ts 사본이다(verify:api-auth가 대조). 검증: `verify:api-auth`.
+
+## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24)
+
+- 관리자(관리자 접속 아님)만 '사진으로 넣기' 패널의 '다른 방법' 위에 「📷 사진 맡기기 (Claude)」: 사진(JPEG, 850,000자 이하) → Redis 우편함(3일) → Claude 예약 작업
+  **"[ASS-PAGE-과표 사진 읽기 · API]"**(claude.ai Code · API 트리거) 부르기 → 작업이 `docs/ai-task/TAX-PHOTO.md`대로 `scripts/ai-task/taxphoto.mjs`로
+  사진을 받아 읽고 글만 돌려줌 → 화면이 '다른 방법'을 펼쳐 붙여넣기 칸에 넣음 → **사용자가 「넣기」를 눌러야 저장**(Gemini '사진으로 넣기'와 달리 바로 넣지 않는다 — 1~3분 뒤 도착). ⚠️ 서버·작업은 사용자 데이터·Drive에 쓰지 않는다.
+- 부를 때 본문 = 종류·사이트·번호·열쇠뿐(종목·사진·토큰 없음). 다시 부르면 새 열쇠(앞 실행 무효). 끝난 일은 열쇠 닫힘·사진 지움.
+  한도: 동시 3 · 하루 30 · 한 시간 10번 · 같은 일 3분 · 이틀 지난 일 안 부름. 토큰은 화면 「⚙ Claude 연결」(시험으로 한 번 불러 통한 것만, 서버 비밀값 키로 AES-GCM) —
+  없으면 Vercel 변수 `AI_TAX_ROUTINE_URL`·`AI_TAX_ROUTINE_TOKEN`. 서버 비밀값이 바뀌면 다시 연결. 다른 사용자는 '사진으로 넣기'(Gemini)·붙여넣기만. 검증: `verify:ai-tax`.
 
 ## 상세 문서 위치 (⚠️ 자동 로드 금지 — 이 절이 생긴 이유: 2026-10-18 CLAUDE.md가 916KB까지 커져 모든 세션이 시작과 동시에 작업 기억 한계에 걸려 압축만 반복했다)
 

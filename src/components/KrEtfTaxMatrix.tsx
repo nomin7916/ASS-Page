@@ -23,6 +23,7 @@ import {
 } from '../krEtfTaxHelpers';
 import { taxRowMonth, groupTaxRowsByMonth, taxMonthOpen, showTaxMonthHeads, taxMonthLabel, taxMonthSummary } from '../taxCalcMonths';
 import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts, buildPastePrompt, mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoFitSize, PHOTO_TRIES, photoReadInit, photoReadStep, photoErrorText, photoOutcome } from '../taxCalcPaste';
+import TaxPhotoJobs from './TaxPhotoJobs';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
@@ -172,6 +173,7 @@ export default function KrEtfTaxMatrix({
   deletePortfolioTaxData,
   confirmDialog,
   notify,
+  aiPhoto = false,
 }) {
   const [expandedCode, setExpandedCode] = useState(null);
   // 계산 규약·각주 펼침 — 기본은 접힘(사용자 요청 2026-08 "평소에는 숨기고 확인이 필요할 때만").
@@ -1163,6 +1165,9 @@ export default function KrEtfTaxMatrix({
                                   </div>
                                   {pr.msg && pr.code !== 'bad' && <div className="text-[10px] text-gray-600 break-all">({pr.msg})</div>}
                                 </div>
+                              )}
+                              {aiPhoto && (
+                                <TaxPhotoJobs code={stock.code} name={stock.name || ''} canAuto={!pasteText.trim()} onText={(t) => { setPasteText(t); setPasteMore(true); }} />
                               )}
                               <button
                                 onClick={() => setPasteMore(v => !v)}

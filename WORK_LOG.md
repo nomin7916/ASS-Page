@@ -6,6 +6,19 @@
 
 ---
 
+## 2026-11-24 — 과표 계산기 「📷 사진 맡기기」(관리자 전용 · Claude 예약 작업 API)
+
+**대상 파일**: `api/_aiTax.ts`·`api/ai-tax.ts`·`api/ai-job.ts`(신규) · `api/_auth.ts`(callerEmail) · `src/taxPhotoJob.ts`·`src/components/TaxPhotoJobs.tsx`(신규) ·
+`src/components/KrEtfTaxMatrix.tsx` · `src/components/DividendSummaryTable.tsx` · `src/App.tsx` · `scripts/ai-task/taxphoto.mjs`·`scripts/verify-ai-tax.mjs`(신규) ·
+`scripts/verify-api-auth.mjs` · `docs/ai-task/TAX-PHOTO.md`·`ROUTINE-PROMPT.md`(신규) · `package.json` · `CLAUDE.md`
+
+- 사용자 요청: 관리자 본인 구독으로만 — 사진을 사이트에서 맡기면 Claude가 읽어 계산기에 넣을 글을 돌려주게(학습 사이트 블로그 「작가에게 맡기기」와 같은 길).
+- 흐름·한도·지킬 것은 CLAUDE.md '과표 사진 맡기기' 절. 예약 작업은 사용자가 claude.ai/code/routines에서 만들고 토큰을 화면에 넣어야 돈다(Claude는 API 트리거를 만들 수 없다).
+- 과표기준가는 작업이 웹에서 그 날짜 값을 직접 본 것만 넣는다(funetf·운용사). 못 찾으면 메모로 알린다.
+- 확인: verify:ai-tax 84(가짜 구글·Redis·Claude로 처리부 끝까지) · verify:api-auth 118 · tsc(api, strict) 새 파일 오류 0. 실제 사이트·실제 작업은 아직 못 돌림.
+
+---
+
 ## 2026-11-24 — 평균 과표 계산기 '사진으로 넣기': 사진만 올리면 AI가 읽고 바로 넣는다
 
 **대상 파일**: `api/tax-photo.ts`(신규) · `api/_taxPhoto.ts`(신규) · `src/taxCalcPaste.ts` · `src/components/KrEtfTaxMatrix.tsx` · `scripts/verify-tax-paste.mjs` · `CLAUDE.md`

@@ -33,7 +33,7 @@ export const APPROVAL_KEEP = 86_400_000;
 const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL ?? process.env.KV_REST_API_URL ?? '';
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN ?? process.env.KV_REST_API_TOKEN ?? '';
 
-type Verdict = { status: 0 | 401 | 403; until: number };
+type Verdict = { status: 0 | 401 | 403; until: number; email?: string };
 type Approval = { ok: boolean; at: number };
 const cache = new Map<string, Verdict>();
 const inflight = new Map<string, Promise<Verdict | null>>();
@@ -139,7 +139,7 @@ async function check(token: string): Promise<Verdict | null> {
   const tokenUntil = now + Math.min(OK_TTL_MAX, (left - 30) * 1000);
   const appr = await approvalOf(email, token);
   if (!appr) return null;
-  return { status: appr.ok ? 0 : 403, until: Math.min(tokenUntil, appr.ok ? appr.until : now + BAD_TTL) };
+  return { status: appr.ok ? 0 : 403, until: Math.min(tokenUntil, appr.ok ? appr.until : now + BAD_TTL), email };
 }
 
 function remember(key: string, v: Verdict): void {
@@ -205,4 +205,13 @@ export async function requireAuth(req: Request, opts: { allowInternal?: boolean 
   }
   if (v.status === 403) return deny(403, 'not approved');
   return v.status === 0 ? null : deny(401, 'auth required');
+}
+
+// requireAuth를 통과한 요청의 로그인 이메일(소문자) — 관리자 전용 경로가 고르려고 쓴다. 통과하지 못하면 ''.
+// 토큰 확인 결과는 requireAuth가 이미 캐시했으므로 구글을 다시 부르지 않는다.
+export async function callerEmail(req: Request): Promise<string> {
+  const token = (req.headers.get(AUTH_HEADER) || '').trim();
+  if (!TOKEN_RE.test(token)) return '';
+  const v = await verifyToken(token);
+  return v && v.status === 0 ? v.email || '' : '';
 }

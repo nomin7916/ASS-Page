@@ -5396,6 +5396,7 @@ export default function App() {
             dividendLinksNote={dividendLinksNote}
             onExpand={() => openCardWindow('dividend', activePortfolioId)}
             cardWindowOpen={cardWinOpenSet.has(`dividend:${activePortfolioId}`)}
+            aiPhoto={isAdminUser && !ADMIN_VIEW_EMAIL}
           />
         )}
 

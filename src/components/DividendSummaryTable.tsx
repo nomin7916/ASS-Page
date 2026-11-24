@@ -403,7 +403,7 @@ function DividendLinkBar({ links, onChange, note }) {
   );
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, updateTaxBaseAvgAdj, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks, dividendLinksNote = null, onExpand, cardWindowOpen }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, updateTaxBaseAvgAdj, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks, dividendLinksNote = null, onExpand, cardWindowOpen, aiPhoto = false }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -2611,6 +2611,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             deletePortfolioTaxData={whenEditable(deletePortfolioTaxData)}
             confirmDialog={confirmDialog}
             notify={notify || (() => {})}
+            aiPhoto={aiPhoto}
           />
         </ErrorBoundary>
       )}
