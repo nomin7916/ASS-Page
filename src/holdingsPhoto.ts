@@ -146,7 +146,8 @@ export function matchHolding(row: HoldRow, items: any[], used: Set<string>): any
   return null;
 }
 
-export function planHoldingsSync(parsed: HoldParsed, items: any[]): HoldPlan {
+// opts.keepUnseen — 프로그램 글자 인식(AI 없이, src/tradeOcr.ts)으로 읽었을 때: 한 줄을 놓쳤을 수 있으니 사진에 안 보인 종목을 0으로 하지 않는다.
+export function planHoldingsSync(parsed: HoldParsed, items: any[], opts?: { keepUnseen?: boolean }): HoldPlan {
   const rows: HoldPlanRow[] = [];
   const used = new Set<string>();
   const targets = syncTargets(items);
@@ -167,13 +168,14 @@ export function planHoldingsSync(parsed: HoldParsed, items: any[]): HoldPlan {
     if (r.cut || r.unread) { rows.push({ kind: 'bad', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: 0, invest: 0 }, note: r.unread ? `이 계좌에 없는 종목인데 숫자를 읽지 못해(${r.unread}) 넣지 않음` : '이 계좌에 없는 종목인데 숫자가 잘려 넣지 않음 — 그 종목이 다 보이게 한 장 더 찍어 주세요' }); continue; }
     rows.push({ kind: 'add', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: r.qty, invest: r.invest }, note: '새 종목 — 종목코드는 다른 계좌의 같은 이름 종목 → 이름 검색 순으로 찾아 넣습니다' });
   }
-  const listContinues = parsed.rows.some(r => r.cut);
+  const keepUnseen = !!(opts && opts.keepUnseen);
+  const listContinues = parsed.rows.some(r => r.cut) || keepUnseen;
   for (const it of targets) {
     if (used.has(it.id)) continue;
     const before = { qty: num(it.quantity), invest: num(it.investAmount) };
     if (!(before.qty > 0)) continue;
     if (listContinues) {
-      rows.push({ kind: 'keep', itemId: it.id, name: String(it.name || it.code || ''), code: String(it.code || ''), before, after: before, note: '사진에 안 보임 — 목록이 사진 아래로 이어져(잘린 종목) 0으로 하지 않음' });
+      rows.push({ kind: 'keep', itemId: it.id, name: String(it.name || it.code || ''), code: String(it.code || ''), before, after: before, note: keepUnseen && !parsed.rows.some(r => r.cut) ? '사진에 안 보임 — 프로그램 읽기(AI 없이)는 안 보인 종목을 0으로 하지 않음(판 종목이면 직접 0으로)' : '사진에 안 보임 — 목록이 사진 아래로 이어져(잘린 종목) 0으로 하지 않음' });
       continue;
     }
     rows.push({ kind: 'zero', itemId: it.id, name: String(it.name || it.code || ''), code: String(it.code || ''), before, after: { qty: 0, invest: 0 }, note: '사진에 없음 — 판 종목으로 보고 0으로' });

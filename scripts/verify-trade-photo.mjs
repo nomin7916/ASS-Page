@@ -212,9 +212,9 @@ ok('#W15 내 PC의 Claude로 읽기 — pcAsk 도구 import · 사진은 target 
 ok('#W16 PC 읽기는 관리자만 — 칸(isAdmin) · 상태 조회도 관리자만 · 서버도 403(사진 든 질문)',
   /if \(!open \|\| viewingAs \|\| !isAdmin\) return;\s*let alive = true;\s*fetch\('\/api\/pc-ask'/.test(win)
   && /c\.imgs\.length > 0 && email\.toLowerCase\(\) !== ADMIN_EMAIL\.toLowerCase\(\)\) return json\(403/.test(stripComments(read('api/pc-ask.ts'))));
-ok('#W17 다른 사용자 = 「내 AI로 읽기」가 맨 위·펼침 · 관리자는 아래 — 무료 AI 목록(PHOTO_AI_IDS) · 휴대폰 공유(share는 await 전)',
-  /useState\(!isAdmin\)/.test(win) && /\{!isAdmin && subSection\}/.test(win) && /\{isAdmin && subSection\}/.test(win)
-  && win.indexOf('{!isAdmin && subSection}') < win.indexOf('{viewingAs ? (') && /PHOTO_AI_IDS\.map\(id =>/.test(win)
+ok('#W17 맨 위 = 프로그램 읽기(사진 올리기) · AI 방법(내 AI·Gemini 키·내 PC)은 「AI로 읽기·검수」 접힘 안 — 무료 AI 목록(PHOTO_AI_IDS) · 휴대폰 공유(share는 await 전)',
+  /const \[showAi, setShowAi\] = useState\(false\)/.test(win) && /\{showAi && \(\s*<div[^>]*>\s*\{subSection\}/.test(win)
+  && win.indexOf('onChange={readByOcr}') < win.indexOf('{showAi && (') && /PHOTO_AI_IDS\.map\(id =>/.test(win)
   && /const share = photoShareData\(navigator, sharePhotos, prompt\);\s*let sharing = null;\s*if \(share\) \{ try \{ sharing = navigator\.share\(share\.data\)/.test(win));
 ok('#W11 package.json에 verify:trade-photo 등록', pkg.scripts['verify:trade-photo'] === 'node scripts/verify-trade-photo.mjs');
 

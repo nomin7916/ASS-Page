@@ -5,12 +5,14 @@
 // 키: 사진으로 보유 맞추기와 같다(관리자 = 사이트 키 · 다른 사용자 = 내 Gemini 키 — App의 keyApi가 내 Drive ai_settings.json에서 읽고 쓴다).
 // ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 patchAccount(앱 탭이 최신 계좌 위에서 다시 계산)로만.
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, Copy, ClipboardPaste, Bot, Monitor } from 'lucide-react';
+import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, Copy, ClipboardPaste, Bot, Monitor, ScanText } from 'lucide-react';
 import { formatNumber, formatShortDate } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
 import { syncCandidates, holdErrorText, looksLikeGeminiKey, maskKey } from '../holdingsPhoto';
-import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, tradeAskPrompt, TRADE_STATUS_TEXT, PHOTO_AI_IDS } from '../tradePhoto';
+import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, tradeAskPrompt, anchorToHoldings, skippedResult, TRADE_STATUS_TEXT, PHOTO_AI_IDS } from '../tradePhoto';
+import { classifyOcr, parseOcrTrades, parseOcrHoldings, mergeOcrPhotos, checkOcrTrades, splitOcrTrades, ocrHoldBad, OCR_FLAG_TEXT } from '../tradeOcr';
+import { loadOcrEngine, ocrFile } from '../screenOcr';
 import { aiHandById } from '../aiProviders';
 import { pcOnline, pcSeenText, pcWaitText, pcAskErrorText, pcTooLate, pcModelLabel, pcPhotoAddendum, PC_POLL_FAST, PC_POLL_SLOW, PC_FAST_FOR, PC_PHOTO_N, PC_PHOTO_CHARS } from '../pcAsk';
 import { shrinkPhotoToB64 } from '../photoShrink';
@@ -26,7 +28,7 @@ const SHARE_NOTE = {
 const canShareFiles = (() => { try { return typeof navigator !== 'undefined' && typeof navigator.share === 'function' && typeof navigator.canShare === 'function'; } catch { return false; } })();
 const fmtQty = (n) => (Number(n) || 0).toLocaleString('ko-KR', { maximumFractionDigits: 4 });
 
-export default function TradePhotoSync({ open, onClose, account = null, isAdmin = false, viewingAs = false, keyApi = null, patchAccount }) {
+export default function TradePhotoSync({ open, onClose, account = null, isAdmin = false, viewingAs = false, keyApi = null, patchAccount, stockHistoryMap = null }) {
   const [run, setRun] = useState({ phase: 'idle' });
   const [cashOn, setCashOn] = useState(false);
   const [keyState, setKeyState] = useState({ loaded: false, key: '', canSave: false, error: '' });
@@ -37,7 +39,11 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
   const [pickNote, setPickNote] = useState('');
   const [keyEdit, setKeyEdit] = useState(false);
   // 구독 AI로 읽기(API 키 없이) — 사진을 Gemini·Claude 앱에 직접 올리고 답 줄을 붙여 넣는다.
-  const [showSub, setShowSub] = useState(!isAdmin);
+  const [showSub, setShowSub] = useState(false);
+  // AI 방법들(내 AI·Gemini 키·내 PC)은 접어 둔다 — 기본은 프로그램 읽기(글자 인식), AI는 최종 검수가 필요할 때(사용자 확정 2026-11-26).
+  const [showAi, setShowAi] = useState(false);
+  const shmRef = useRef(stockHistoryMap);
+  shmRef.current = stockHistoryMap;
   const [sharePhotos, setSharePhotos] = useState([]);
   const [shareNote, setShareNote] = useState('');
   const [pasteText, setPasteText] = useState('');
@@ -222,6 +228,68 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
       return;
     }
     applyText(st.text, n, st.model, cash);
+  };
+
+  // ── 프로그램 읽기(AI 없이 · 무료 · 사진은 이 기기에서만): 글자 인식(screenOcr) → 화면 종류(주문내역·잔고) → 표 구조 해석(tradeOcr)
+  //    → 프로그램 검수(글자 확신·머리줄·그날 종가) → 잔고 사진이 있으면 그 수량에 맞는 매매만 → 같은 넣기(runTradePhoto) + 되돌리기.
+  //    확인 필요한 줄은 넣지 않고 「AI로 읽기·검수」의 붙여넣기 칸에 넣어 둔다(고친 뒤 「넣기」 또는 AI로 검수).
+  const readByOcr = async (e) => {
+    const list = Array.from(e.target.files || []);
+    e.target.value = '';
+    const { add, notImage, over } = mergePastePhotos([], list);
+    setPickNote([
+      notImage > 0 ? `사진이 아닌 파일 ${notImage}개는 뺐습니다` : '',
+      over > 0 ? `한 번에 ${PASTE_PHOTO_MAX}장까지라 ${over}장은 뺐습니다` : '',
+    ].filter(Boolean).join(' · '));
+    if (add.length === 0) return;
+    const id = ++runId.current;
+    const live = () => runId.current === id;
+    const n = add.length;
+    const cash = cashOn;
+    setRun({ phase: 'ocr', stage: 'load', n, f: 0 });
+    try { await loadOcrEngine(f => { if (live()) setRun(r => (r.phase === 'ocr' && r.stage === 'load' ? { ...r, f } : r)); }); }
+    catch (err) {
+      if (live()) setRun({ phase: 'error', n, code: 'ocr', msg: err && err.message === 'old' ? '이 브라우저는 너무 오래되어 글자 인식을 할 수 없습니다 — 크롬·사파리 최신판에서 열어 주세요.' : '글자 인식 엔진을 받지 못했습니다 — 인터넷 연결을 확인하고 다시 눌러 주세요.' });
+      return;
+    }
+    const today = getTodayKST();
+    const acct = accountRef.current;
+    const cands = syncCandidates(acct?.portfolio || []);
+    const perTrades = [];
+    const holds = [];
+    let unknown = 0;
+    for (let i = 0; i < n; i++) {
+      if (!live()) return;
+      setRun({ phase: 'ocr', stage: 'read', n, i: i + 1, f: 0 });
+      let lines = [];
+      try { lines = await ocrFile(add[i], f => { if (live()) setRun(r => (r.phase === 'ocr' && r.stage === 'read' ? { ...r, f } : r)); }); }
+      catch { unknown++; continue; }
+      const kind = classifyOcr(lines);
+      if (kind === 'orders') perTrades.push(parseOcrTrades(lines, cands, today).trades);
+      else if (kind === 'holdings') holds.push(...parseOcrHoldings(lines, cands).holds);
+      else unknown++;
+    }
+    if (!live() || !acct) return;
+    const closeOf = (code, date) => { const m = shmRef.current && shmRef.current[code]; const v = m ? m[date] : 0; return Number(v && typeof v === 'object' ? v.close : v) || 0; };
+    const { okText, checks } = splitOcrTrades(checkOcrTrades(mergeOcrPhotos(perTrades), closeOf));
+    const groups = groupTrades(parseTradeText(okText, today).rows);
+    const goodHolds = holds.filter(h => !ocrHoldBad(h));
+    const anc = goodHolds.length ? anchorToHoldings(acct, groups, goodHolds) : { apply: groups, skipped: [], anchors: [] };
+    const opts = { accountType: acct.accountType, cashOn: cash, today };
+    const out = runTradePhoto(acct, anc.apply, opts);
+    let undo = null;
+    if (out.applied > 0 && patchAccount) {
+      undo = tradePhotoUndo(acct);
+      patchAccount(p => runTradePhoto(p, anc.apply, { ...opts, accountType: p.accountType }).next);
+    }
+    const extra = [
+      ...anc.skipped.map(x => skippedResult(x.g, x.status, x.itemName)),
+      ...checks.map(t => skippedResult({ date: t.date, rawDate: t.rawDate, code: t.code, name: t.name, side: t.side, qty: t.qty, price: t.price, fills: 1 }, 'check', t.name)),
+    ];
+    const results = [...out.results, ...extra].sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+    setRun({ phase: 'done', n, parsed: { rows: [], skipped: [] }, out: { ...out, results }, undo, model: '프로그램 글자 인식(AI 없이)',
+      ocr: { anchors: anc.anchors, checks, unknown, holds: holds.length, orderPhotos: perTrades.length } });
+    if (checks.length) { setPasteText(checks.map(t => `매매 | ${t.date || t.rawDate || '-'} | ${t.code || '-'} | ${t.name || '-'} | ${t.side === 'buy' ? '매수' : '매도'} | ${t.qty} | ${t.price > 0 ? t.price : '-'}`).join('\n')); setShowAi(true); setShowSub(true); }
   };
 
   // 읽은 글(사이트 AI의 답 · 구독 AI 답 붙여넣기) → 해석 → 넣기. 두 길이 같은 함수를 지난다.
@@ -410,7 +478,27 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
             </span>
           </label>
 
-          {!isAdmin && subSection}
+          <div className="rounded-lg border border-sky-600/60 bg-sky-950/30 px-3 py-2.5 space-y-1.5">
+            <div className="flex items-center gap-1.5 text-gray-100 font-semibold"><ScanText size={15} className="text-sky-300" />사진 올리기 <span className="font-normal text-gray-400">— 프로그램이 읽어 넣습니다 · AI 없이 · 무료</span></div>
+            <p className="text-[11.5px] text-gray-400">주문내역(체결내역) 사진과 <b className="text-gray-200">잔고 사진(MY자산·보유종목)</b>을 함께 고르면, 잔고 수량을 기준으로 <b className="text-gray-200">아직 표에 없는 매매만</b> 넣습니다. 사진은 이 기기 밖으로 나가지 않습니다(처음 한 번 글자 인식 엔진 약 17MB를 받습니다).</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || run.phase === 'ocr' ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'}`}
+                title="주문내역·잔고 사진을 고르면 이 기기에서 글자를 읽어 바로 넣습니다">
+                <Camera size={14} />{run.phase === 'ocr' ? '읽는 중…' : '주문내역·잔고 사진 고르기'}
+                <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy || run.phase === 'ocr'} onChange={readByOcr} className="sr-only" />
+              </label>
+              <span className="text-[11px] text-gray-500">한 번에 {PASTE_PHOTO_MAX}장까지</span>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-700/70 bg-gray-900/30">
+            <button onClick={() => setShowAi(v => !v)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left">
+              <span className="flex items-center gap-1.5 text-gray-300 font-semibold"><Bot size={14} className="text-violet-300" />AI로 읽기·검수 <span className="font-normal text-gray-500">— 필요할 때만(프로그램이 못 읽었거나 확인이 필요할 때)</span></span>
+              <span className="text-gray-500 text-[11px]">{showAi ? '▲' : '▼'}</span>
+            </button>
+            {showAi && (
+            <div className="px-3 pb-3 pt-1 space-y-3 border-t border-gray-800">
+          {subSection}
 
           {viewingAs ? (
             <p className="text-[11.5px] text-emerald-300/90">관리자 접속 중 — 사이트 키로 읽습니다(사용자의 키는 읽거나 저장하지 않습니다).</p>
@@ -499,14 +587,21 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
             </div>
           )}
 
-          {isAdmin && subSection}
+            </div>
+            )}
+          </div>
 
+          {run.phase === 'ocr' && (
+            <p className="text-sky-200 animate-pulse">{run.stage === 'load'
+              ? `글자 인식 엔진을 받는 중… ${Math.round((run.f || 0) * 100)}% (처음 한 번만)`
+              : `사진 ${run.i}/${run.n}장 글자를 읽는 중… ${Math.round((run.f || 0) * 100)}%`}</p>
+          )}
           {run.phase === 'shrink' && <p className="text-sky-200">사진 {run.n}장을 줄이는 중…</p>}
           {run.phase === 'read' && <p className="text-sky-200 animate-pulse">AI가 사진 {run.n}장을 읽는 중…{run.got > 0 ? ` (${run.got}자 받음)` : ''}</p>}
           {run.phase === 'error' && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 space-y-1">
-              <p className="text-red-200">{holdErrorText(run.code)}</p>
-              {run.msg && <p className="text-[11px] text-red-300/70 break-all">{run.msg}</p>}
+              <p className="text-red-200">{run.code === 'ocr' ? run.msg : holdErrorText(run.code)}</p>
+              {run.msg && run.code !== 'ocr' && <p className="text-[11px] text-red-300/70 break-all">{run.msg}</p>}
               {['needkey', 'nokey', 'badkey', 'credit', 'quota0', 'rate', 'rate1m'].includes(run.code) && !viewingAs && (
                 <div className="flex items-center gap-3 flex-wrap pt-0.5">
                   <button onClick={() => setShowGuide(true)} className="text-[11.5px] text-amber-200 underline">무료 Gemini 키 받는 법 보기</button>
@@ -548,7 +643,7 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
                           <td className={`py-1 px-2 text-right whitespace-nowrap font-semibold ${r.side === 'buy' ? 'text-red-300' : 'text-blue-300'}`}>{r.side === 'buy' ? '매수' : '매도'} {fmtQty(r.qty)}주</td>
                           <td className="py-1 px-2 text-right text-gray-300 whitespace-nowrap tabular-nums">{r.price > 0 ? money(r.price) : '-'}</td>
                           <td className="py-1 px-2 text-right text-gray-300 whitespace-nowrap tabular-nums">{r.status === 'ok' ? `${fmtQty(r.before)} → ${fmtQty(r.after)}` : '-'}</td>
-                          <td className={`py-1 pl-2 text-right whitespace-nowrap font-semibold ${r.status === 'ok' ? 'text-emerald-300' : r.status === 'dup' || r.status === 'dayedit' ? 'text-gray-500' : 'text-amber-300'}`}>{TRADE_STATUS_TEXT[r.status] || r.status}</td>
+                          <td className={`py-1 pl-2 text-right whitespace-nowrap font-semibold ${r.status === 'ok' ? 'text-emerald-300' : r.status === 'dup' || r.status === 'dayedit' || r.status === 'intable' ? 'text-gray-500' : 'text-amber-300'}`}>{TRADE_STATUS_TEXT[r.status] || r.status}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -563,6 +658,30 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
                   {out.cash && <li>계좌 표 · 예수금: {money(out.cash.before)} → <b className="text-gray-100">{money(out.cash.after)}</b></li>}
                 </ul>
               )}
+              {run.ocr && run.ocr.anchors.length > 0 && (
+                <ul className="text-[11.5px] text-gray-300 space-y-0.5">
+                  {run.ocr.anchors.map(a => {
+                    const l = out.live.find(x => x.name === a.name);
+                    const gap = l && a.holdInvest > 0 ? Math.round(l.costAfter - a.holdInvest) : 0;
+                    return (
+                      <li key={a.name} className={a.ok ? '' : 'text-amber-300'}>
+                        잔고 사진 기준 · <b className="text-gray-100">{a.name}</b>: {a.ok
+                          ? `표 ${fmtQty(a.liveQty)}주 → 잔고 ${fmtQty(a.holdQty)}주${a.applied ? ` · 빠진 매매 ${a.applied}건을 넣음` : ' · 이미 같음'}`
+                          : `잔고 ${fmtQty(a.holdQty)}주와 맞는 매매 묶음이 없어 넣지 않았습니다(표 ${fmtQty(a.liveQty)}주) — 계좌 표 「사진으로 보유 맞추기」로 맞춰 주세요`}
+                        {a.ok && Math.abs(gap) > Math.max(1000, a.holdInvest * 0.002) && <span className="text-amber-300"> · 투자금액이 잔고 사진과 {money(Math.abs(gap))} 다릅니다</span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {run.ocr && run.ocr.checks.length > 0 && (
+                <div className="text-[11.5px] text-amber-200 space-y-0.5">
+                  <p className="font-semibold">확인 필요 {run.ocr.checks.length}건 — 넣지 않고 「AI로 읽기·검수」의 칸에 넣어 두었습니다. 고친 뒤 「넣기」를 누르거나 AI로 검수해 주세요.</p>
+                  <ul className="list-disc pl-4">{run.ocr.checks.map((t, i) => <li key={i}>{t.date ? formatShortDate(t.date) : (t.rawDate || '날짜?')} {t.name} {t.side === 'buy' ? '매수' : '매도'} {fmtQty(t.qty)}주 {t.price > 0 ? money(t.price) : ''} — {t.flags.map(f => OCR_FLAG_TEXT[f]).join(' · ')}</li>)}</ul>
+                </div>
+              )}
+              {run.ocr && run.ocr.unknown > 0 && <p className="text-[11.5px] text-amber-300/90">표를 찾지 못한 사진 {run.ocr.unknown}장 — 주문내역·잔고 화면이 다 보이게 다시 찍거나 「AI로 읽기·검수」를 써 주세요.</p>}
+              {run.ocr && run.ocr.orderPhotos === 0 && run.ocr.holds > 0 && <p className="text-[11.5px] text-gray-400">잔고 사진만 있습니다 — 매매를 날짜에 넣으려면 주문내역 사진을 함께 올려 주세요(잔고만 맞추려면 계좌 표 「사진으로 보유 맞추기」).</p>}
               {out.moved.length > 0 && (
                 <p className="text-[11.5px] text-emerald-300/90">{out.moved.join(', ')} — 계좌 표가 이미 매매를 모두 반영한 수량이라, 그 변경을 매매 날짜로 옮겼습니다(표 수량은 그대로, 투자금액만 맞춤).</p>
               )}

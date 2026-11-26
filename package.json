@@ -43,6 +43,7 @@
     "verify:rebal-preview": "node scripts/verify-rebal-preview.mjs",
     "verify:backdated-trade": "node scripts/verify-backdated-trade.mjs",
     "verify:trade-photo": "node scripts/verify-trade-photo.mjs",
+    "verify:trade-ocr": "node scripts/verify-trade-ocr.mjs",
     "verify:deposit-ledger": "node scripts/verify-deposit-ledger.mjs",
     "verify:migrate": "node scripts/verify-migrate.mjs",
     "verify:cash-row": "node scripts/verify-cash-row.mjs",

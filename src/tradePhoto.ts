@@ -20,7 +20,7 @@ export interface TradeRow { date: string; rawDate: string; code: string; name: s
 export interface TradeSkip { line: string; reason: string }
 export interface TradeParsed { rows: TradeRow[]; skipped: TradeSkip[]; none: boolean }
 export interface TradeGroup { date: string; rawDate: string; code: string; name: string; side: 'buy' | 'sell'; qty: number; price: number; fills: number }
-export type TradeStatus = 'ok' | 'nodate' | 'future' | 'noitem' | 'notyet' | 'dup' | 'dayedit' | 'noprice' | 'short' | 'fail';
+export type TradeStatus = 'ok' | 'nodate' | 'future' | 'noitem' | 'notyet' | 'dup' | 'dayedit' | 'noprice' | 'short' | 'fail' | 'intable' | 'anchorfail' | 'check';
 
 const num = (v: unknown): number => {
   if (v === '' || v == null) return 0;
@@ -282,4 +282,55 @@ export const TRADE_STATUS_TEXT: Record<TradeStatus, string> = {
   noprice: '체결가를 못 읽음(매수)',
   short: '그날 보유보다 많이 판 기록',
   fail: '넣지 못함',
+  intable: '이미 표에 있음',
+  anchorfail: '잔고와 안 맞음',
+  check: '확인 필요',
 };
+
+// ── 잔고 사진을 기준으로(2026-11-26 — 사용자 사진: 주문내역 + MY자산 잔고) ──
+// 주문내역은 '최근 1개월'이라 그중 일부는 이미 계좌 표에 들어 있을 수 있다. 잔고 사진의 보유수량(= 지금의 정답)에 맞도록
+// 종목마다 **가장 최근 매매부터 거슬러** 몇 건이 아직 빠졌는지 찾는다: 표 수량 + (뒤쪽 k건의 순매매) = 잔고 수량 이 되는 가장 짧은 뒤쪽 묶음만 넣고,
+// 그 앞의 매매는 '이미 표에 있음'. 어떤 묶음으로도 맞지 않으면 그 종목은 넣지 않는다(잔고 사진과 맞지 않음 — 확인 필요).
+// 실제 사례: TIGER 표 10,885 · 잔고 10,835 → 11/24 매도 50만 넣음(11/17·11/23 매수는 이미 표에 있음) · KODEX 10,527 → 10,127 → 11/24 매도 400만.
+export interface HoldAnchor { code: string; name: string; qty: number; invest?: number }
+export function anchorToHoldings(p0: any, groups: TradeGroup[], holds: HoldAnchor[]): {
+  apply: TradeGroup[]; skipped: { g: TradeGroup; status: 'intable' | 'anchorfail'; itemName: string }[];
+  anchors: { name: string; liveQty: number; holdQty: number; holdInvest: number; applied: number; ok: boolean }[];
+} {
+  const live = (p0 && p0.portfolio) || [];
+  const used = new Set<number>();
+  const skipped: { g: TradeGroup; status: 'intable' | 'anchorfail'; itemName: string }[] = [];
+  const anchors: { name: string; liveQty: number; holdQty: number; holdInvest: number; applied: number; ok: boolean }[] = [];
+  const keep: TradeGroup[] = [];
+  const idxOf = groups.map(g => matchTradeIndex(g, live));
+  for (const h of holds || []) {
+    const li = matchTradeIndex({ code: h.code, name: h.name }, live);
+    if (li < 0 || used.has(li)) continue;
+    used.add(li);
+    const mine = groups.map((g, i) => ({ g, i })).filter(x => idxOf[x.i] === li)
+      .sort((a, b) => String(a.g.date).localeCompare(String(b.g.date)) || (a.g.side === b.g.side ? 0 : a.g.side === 'sell' ? -1 : 1));
+    const liveQty = num(live[li].quantity);
+    const need = r15(num(h.qty) - liveQty);
+    let k = -1;
+    for (let j = mine.length; j >= 0; j--) {
+      const net = r15(mine.slice(j).reduce((s, x) => s + signed(x.g), 0));
+      if (net === need) { k = j; break; }
+    }
+    const name = live[li].name || h.name;
+    if (k < 0) {
+      for (const x of mine) skipped.push({ g: x.g, status: 'anchorfail', itemName: name });
+      anchors.push({ name, liveQty, holdQty: num(h.qty), holdInvest: num(h.invest), applied: 0, ok: false });
+    } else {
+      for (const x of mine.slice(0, k)) skipped.push({ g: x.g, status: 'intable', itemName: name });
+      for (const x of mine.slice(k)) keep.push(x.g);
+      anchors.push({ name, liveQty, holdQty: num(h.qty), holdInvest: num(h.invest), applied: mine.length - k, ok: true });
+    }
+    for (const x of mine) idxOf[x.i] = -2;   // 처리함
+  }
+  groups.forEach((g, i) => { if (idxOf[i] !== -2) keep.push(g); });
+  return { apply: keep, skipped, anchors };
+}
+// 넣지 않은 건을 결과 표의 한 줄로
+export function skippedResult(g: TradeGroup, status: TradeStatus, itemName: string): TradeResult {
+  return { ...g, status, k: '', itemName: itemName || g.name, before: 0, after: 0, costBefore: 0, costAfter: 0, mode: '', reason: '' };
+}

@@ -1,0 +1,114 @@
+#!/usr/bin/env node
+// 주문내역·잔고 사진을 프로그램으로 읽기(AI 없이) 검증.   실행: npm run verify:trade-ocr
+//
+// 발단(사용자 2026-11-26): "무료 구독자도 쓸 수 있게 — 사진을 올리면 OCR로 텍스트 추출 → 사진의 구조 파악 → 계산·적용 · AI는 최종 검수만 ·
+//   OCR은 나의 학습 사이트의 것" + 사진(미래에셋 주문내역 2장 · MY자산 잔고 3장).
+// 구성 ①  src/tradeOcr.ts·src/tradePhoto.ts·src/holdingsPhoto.ts 직접 import — 아래 FX는 학습 사이트의 PP-OCRv5(public/ocr/pp5 = src/screenOcr.ts)가
+//        사용자 사진과 같은 배치로 다시 그린 화면(어두운 화면·같은 칸·같은 숫자, 계좌번호는 가림)을 크로미움에서 실제로 읽은 결과다(글줄 [글, 확신, x0, y0, x1, y1] 0~1).
+//        표 구조 해석 → 매매 줄 · 잔고 줄 → 잔고 기준(빠진 매매만) → 같은 넣기까지.
+// 구성 ②  배선 — 엔진 파일·배포 설정·창 두 곳·검사 도구가 읽는 문자열.
+
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const read = (p) => readFileSync(join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
+let pass = 0, fail = 0;
+const ok = (label, cond) => { if (cond) { pass++; console.log(`  ✓ ${label}`); } else { fail++; console.log(`  ✗ ${label}`); } };
+const eq = (label, a, b) => ok(`${label} (${JSON.stringify(a)} === ${JSON.stringify(b)})`, JSON.stringify(a) === JSON.stringify(b));
+const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+
+const FX = {"mock":[["TIGER 반도체TOP10커버드콜액티브",1,0.043,0.021,0.614,0.045],["6,750원+1.96%",1,0.041,0.046,0.313,0.069],["KRX정규장 종가 6,750원",1,0.041,0.071,0.45,0.094],["주문내역 (최근 1개월)",0.99,0.057,0.16,0.528,0.192],["[종합_주식]AI",0.99,0.052,0.227,0.292,0.253],["010-0000-0000-6",0.99,0.055,0.257,0.369,0.28],["주문단가",1,0.359,0.327,0.514,0.352],["주문날짜",1,0.043,0.327,0.194,0.352],["평균체결가",1,0.767,0.327,0.952,0.352],["체결수량",1,0.56,0.327,0.714,0.352],["구분",1,0.233,0.327,0.322,0.352],["11.24",0.96,0.049,0.379,0.153,0.407],["매도",1,0.24,0.378,0.333,0.409],["7,485",0.9,0.421,0.379,0.536,0.409],["50",1,0.67,0.379,0.737,0.409],["7,490",0.95,0.865,0.379,0.981,0.41],["매수",1,0.238,0.439,0.335,0.47],["11.23",0.99,0.048,0.44,0.155,0.469],["6,965",1,0.417,0.439,0.538,0.471],["5",1,0.694,0.442,0.737,0.468],["6,960",1,0.861,0.439,0.981,0.472],["매수",1,0.236,0.499,0.336,0.533],["11.17",0.93,0.048,0.501,0.143,0.531],["30",1,0.665,0.501,0.74,0.532],["7,100",1,0.429,0.5,0.538,0.534],["7,090",0.9,0.865,0.5,0.981,0.534],["매수",1,0.235,0.56,0.337,0.593],["11.17",0.97,0.049,0.563,0.143,0.591],["20",1,0.667,0.561,0.739,0.592],["7,150",1,0.43,0.56,0.54,0.594],["7,150",1,0.877,0.561,0.981,0.593],["매수",1,0.237,0.621,0.335,0.654],["11.17",0.98,0.049,0.624,0.141,0.652],["7,200",1,0.421,0.622,0.536,0.654],["10",1,0.677,0.624,0.737,0.654],["7,200",0.99,0.866,0.623,0.982,0.654],["·주문내역에 따라 일부만 조회 될 수 있습니다.",1,0.058,0.696,0.787,0.72]],"mock2":[["KODEX 반도체타겟위클리커버드콜",1,0.041,0.021,0.595,0.045],["5,695원 +1.24%",0.99,0.042,0.046,0.314,0.069],["KRX 정규장 종가 5,695원",1,0.041,0.071,0.451,0.094],["주문내역 (최근 1개월)",0.99,0.057,0.16,0.528,0.192],["[종합_주식]AI",0.99,0.052,0.227,0.292,0.253],["010-0000-0000-6",0.99,0.055,0.257,0.369,0.28],["주문날짜",0.99,0.043,0.327,0.194,0.352],["주문단가",1,0.359,0.327,0.514,0.352],["체결수량",1,0.56,0.327,0.714,0.352],["평균체결가",1,0.767,0.327,0.952,0.352],["구분",1,0.233,0.327,0.322,0.352],["11.24",0.97,0.049,0.379,0.153,0.407],["400",0.89,0.649,0.379,0.737,0.409],["매도",1,0.24,0.378,0.334,0.409],["6,160",1,0.427,0.378,0.536,0.409],["6,160",1,0.872,0.379,0.981,0.41],["매수",1,0.238,0.439,0.335,0.47],["11.23",0.96,0.048,0.44,0.155,0.469],["5,875",1,0.421,0.439,0.537,0.471],["5",1,0.694,0.442,0.737,0.468],["5,875",0.97,0.867,0.44,0.981,0.471],["매수",1,0.237,0.499,0.336,0.533],["268",1,0.647,0.501,0.74,0.531],["11.23",0.98,0.048,0.501,0.156,0.531],["5,875",0.9,0.419,0.5,0.538,0.533],["5,875",0.96,0.866,0.501,0.981,0.532],["매수",1,0.235,0.56,0.337,0.593],["100",0.91,0.653,0.561,0.739,0.592],["11.20",0.99,0.048,0.562,0.156,0.592],["5,930",1,0.416,0.561,0.538,0.594],["5,930",1,0.862,0.562,0.98,0.594],["매수",1,0.238,0.622,0.337,0.654],["11.17",0.98,0.049,0.624,0.141,0.652],["20",1,0.669,0.623,0.738,0.654],["6,045",1,0.417,0.623,0.536,0.654],["6,045",1,0.862,0.623,0.981,0.654],["·주문내역에 따라 일부만 조회 될 수 있습니다.",0.99,0.058,0.696,0.787,0.72]],"hold":[["MY자산",1,0.036,0.026,0.243,0.062],["해외주식",1,0.735,0.096,0.906,0.125],["자산",1,0.09,0.094,0.192,0.128],["국내주식",1,0.377,0.095,0.547,0.127],["010-0000-0000-6 [종합_주식]AI",0.99,0.044,0.155,0.59,0.177],["일지",1,0.539,0.214,0.625,0.244],["예수금",1,0.665,0.215,0.784,0.244],["체결",1,0.285,0.215,0.374,0.244],["현금",1,0.036,0.215,0.123,0.244],["평가",1,0.412,0.215,0.502,0.244],["담보",1,0.163,0.215,0.248,0.244],["개별",0.99,0.476,0.284,0.563,0.313],["합산",0.99,0.354,0.284,0.442,0.313],["통합",0.99,0.227,0.285,0.314,0.313],["매매비용",1,0.037,0.285,0.183,0.312],["평가손익",1,0.479,0.335,0.62,0.361],["평가금액",1,0.69,0.336,0.829,0.361],["현재가",1,0.891,0.336,1.002,0.361],["종목명",1,0.164,0.342,0.274,0.369],["수익률(%)",0.99,0.46,0.355,0.62,0.382],["매입금액",1,0.69,0.356,0.829,0.381],["평균단가",1,0.859,0.357,1.001,0.381],["보유수량",1,0.25,0.376,0.391,0.402],["주문가능",1,0.048,0.376,0.189,0.402],["2,610,914",0.96,0.654,0.418,0.832,0.445],["104,465",1,0.847,0.419,0.999,0.444],["7,239",1,0.51,0.417,0.622,0.446],["TIGER머니마켓액티브",1,0.014,0.427,0.395,0.452],["0.28",1,0.525,0.44,0.621,0.467],["104,175",0.99,0.859,0.44,1.001,0.468],["2,603,675",0.95,0.645,0.441,0.831,0.467],["25",1,0.286,0.462,0.354,0.492],["25",1,0.084,0.462,0.152,0.492],["6,750",1,0.887,0.507,1.001,0.534],["-39,419,172 73,110,932",0.98,0.444,0.508,0.829,0.533],["TIGER반도체TOP10커",0.99,0.012,0.515,0.399,0.541],["10,388",1,0.871,0.529,1.001,0.557],["-35.03 112,530,104",1,0.494,0.531,0.828,0.556],["10,835",1,0.053,0.552,0.183,0.581],["10,835",0.95,0.255,0.552,0.384,0.581],["5,695",1,0.887,0.595,1.001,0.624],["-21,981,85057,654,546",0.97,0.446,0.598,0.827,0.623],["KODEX반도체타겟위클",0.96,0.014,0.605,0.414,0.63],["-27.60 79,636,396",0.98,0.5,0.62,0.826,0.644],["7,866",0.99,0.891,0.618,1.001,0.647],["10,127",1,0.26,0.641,0.378,0.671],["10,127",1,0.059,0.64,0.18,0.672]]};
+const L = (k) => FX[k].map(([text, conf, x0, y0, x1, y1]) => ({ text, conf, x0, y0, x1, y1 }));
+const TODAY = '2026-11-26';
+const CANDS = [{ code: '0043B0', name: 'TIGER 머니마켓액티브' }, { code: '0177R0', name: 'TIGER 반도체TOP10커버드콜액티브' }, { code: '0190G0', name: 'KODEX 반도체타겟위클리커버드콜' }];
+
+console.log('\n── 파트① 해석·계산 (직접 import) ──');
+let O = null, P = null, HP = null, U = null;
+try {
+  O = await import(pathToFileURL(join(ROOT, 'src/tradeOcr.ts')).href);
+  P = await import(pathToFileURL(join(ROOT, 'src/tradePhoto.ts')).href);
+  HP = await import(pathToFileURL(join(ROOT, 'src/holdingsPhoto.ts')).href);
+  U = await import(pathToFileURL(join(ROOT, 'src/utils.ts')).href);
+} catch (e) {
+  if (e && e.code === 'ERR_UNKNOWN_FILE_EXTENSION') console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 파트①을 건너뜁니다.`);
+  else { fail++; console.log(`  ✗ 모듈 로드 실패 — ${e && (e.code || e.message)}`); }
+}
+if (O && P && HP && U) {
+  eq('#C1 화면 종류 — 주문내역 2장 · 잔고 1장', ['mock', 'mock2', 'hold'].map(k => O.classifyOcr(L(k))), ['orders', 'orders', 'holdings']);
+  const a = O.parseOcrTrades(L('mock'), CANDS, TODAY);
+  eq('#T1 미래에셋 TIGER — 머리줄 · 제목의 종목 · 다섯 줄(체결수량·평균체결가, 주문단가 아님)', [a.header, a.title, a.trades.map(t => [t.date, t.code, t.side, t.qty, t.price, t.flags.length])],
+    [true, 'TIGER 반도체TOP10커버드콜액티브', [['2026-11-24', '0177R0', 'sell', 50, 7490, 0], ['2026-11-23', '0177R0', 'buy', 5, 6960, 0], ['2026-11-17', '0177R0', 'buy', 30, 7090, 0], ['2026-11-17', '0177R0', 'buy', 20, 7150, 0], ['2026-11-17', '0177R0', 'buy', 10, 7200, 0]]]);
+  const b = O.parseOcrTrades(L('mock2'), CANDS, TODAY);
+  eq('#T2 미래에셋 KODEX — 다섯 줄', b.trades.map(t => [t.date, t.code, t.side, t.qty, t.price]),
+    [['2026-11-24', '0190G0', 'sell', 400, 6160], ['2026-11-23', '0190G0', 'buy', 5, 5875], ['2026-11-23', '0190G0', 'buy', 268, 5875], ['2026-11-20', '0190G0', 'buy', 100, 5930], ['2026-11-17', '0190G0', 'buy', 20, 6045]]);
+  const h = O.parseOcrHoldings(L('hold'), CANDS);
+  eq('#H1 MY자산 잔고(종목마다 두 줄) — 보유수량·매입금액·평균단가(붙어 읽힌 숫자 나눔)', h.holds.map(x => [x.code, x.qty, x.invest, x.avg, x.flags]),
+    [['0043B0', 25, 2603675, 104175, []], ['0177R0', 10835, 112530104, 10388, []], ['0190G0', 10127, 79636396, 7866, []]]);
+  eq('#H2 붙어 읽힌 쉼표 숫자 나누기', [O.splitGlued('-21,981,85057,654,546'), O.splitGlued('7,490'), O.splitGlued('11.24')], [['-21,981,850', '57,654,546'], ['7,490'], ['11.24']]);
+  eq('#H3 잘린 이름도 이 계좌 종목으로(TIGER반도체TOP10커 → 0177R0) · 글자 1자 틀림도', [O.matchCand('TIGER반도체TOP10커', CANDS)?.code, O.matchCand('KODEX 반도체타겟위클리커버드쿨', CANDS)?.code, O.matchCand('주문내역', CANDS)], ['0177R0', '0190G0', null]);
+  // 자체 검사·잘림·확신
+  const bad = L('hold').map(l => (l.text === '10,388' ? { ...l, text: '10,888' } : l));
+  const hb = O.parseOcrHoldings(bad, CANDS).holds.find(x => x.code === '0177R0');
+  eq('#H4 숫자 하나를 잘못 읽으면(평균단가 10,888) 자체 검사(수량×평균단가≈매입금액)에 걸려 그대로 둔다', [hb.flags.includes('selfcheck'), O.ocrHoldLine(hb)], [true, '보유 | 0177R0 | TIGER 반도체TOP10커버드콜액티브 | 잘림']);
+  const cut = L('hold').filter(l => !(l.y0 > 0.63));
+  const hc = O.parseOcrHoldings(cut, CANDS).holds.find(x => x.code === '0190G0');
+  eq('#H5 사진 아래가 잘려 숫자 줄이 없는 종목 = 잘림(그대로)', [hc && hc.cut, hc && O.ocrHoldLine(hc)], [true, '보유 | 0190G0 | KODEX 반도체타겟위클리커버드콜 | 잘림']);
+  const low = L('mock').map(l => (l.text === '7,490' ? { ...l, conf: 0.5 } : l));
+  eq('#T3 글자 확신이 낮은 줄은 확인 필요', O.parseOcrTrades(low, CANDS, TODAY).trades[0].flags, ['lowconf']);
+  const noHead = L('mock').filter(l => !/주문날짜|구분|주문단가|체결수량|평균체결가/.test(l.text));
+  const nh = O.parseOcrTrades(noHead, CANDS, TODAY).trades[0];
+  eq('#T4 머리줄이 없으면 [주문단가, 체결수량, 체결가]로 짐작하되 늘 확인 필요', [nh.qty, nh.price, nh.flags], [50, 7490, ['noheader']]);
+  const far = O.checkOcrTrades(a.trades, (c, d) => (d === '2026-11-24' ? 5000 : 7100));
+  eq('#T5 그날 종가와 15% 넘게 다르면 확인 필요(7,490 vs 5,000)', far.map(t => t.flags.includes('farclose')), [true, false, false, false, false]);
+  eq('#T6 겹쳐 찍은 같은 사진 둘 → 한 번만 · 같은 사진 안의 똑같은 줄은 둔다', [O.mergeOcrPhotos([a.trades, a.trades]).length, O.mergeOcrPhotos([[a.trades[0], a.trades[0]]]).length], [5, 2]);
+  const sp = O.splitOcrTrades(far);
+  eq('#T7 확인 필요한 줄은 따로(넣지 않음) · 줄 꼴 = AI 답과 같은 매매 줄', [sp.checks.length, sp.okText.split('\n').length, P.parseTradeText(sp.okText, TODAY).rows.length], [1, 4, 4]);
+  // 잔고 기준 — 실제 사례
+  const mk = (tq, kq) => [{ id: 'd', type: 'deposit', depositAmount: 2534 },
+    { id: 'm', type: 'stock', code: '0043B0', name: 'TIGER 머니마켓액티브', quantity: 25, investAmount: 2603675 },
+    { id: 't', type: 'stock', code: '0177R0', name: 'TIGER 반도체TOP10커버드콜액티브', quantity: tq, investAmount: 113049394 },
+    { id: 'k', type: 'stock', code: '0190G0', name: 'KODEX 반도체타겟위클리커버드콜', quantity: kq, investAmount: 82781906 }];
+  const acct = (tq, kq) => { const live = mk(tq, kq); return { id: 'p', accountType: 'portfolio', baselineDate: '2026-10-28', holdingSnapshots: [{ date: '2026-11-06', kind: 'auto', items: U.snapshotItemsFromPortfolio(live) }], portfolio: live }; };
+  const groups = P.groupTrades(P.parseTradeText(O.splitOcrTrades(O.mergeOcrPhotos([a.trades, b.trades])).okText, TODAY).rows);
+  const p0 = acct(10885, 10527);
+  const an = P.anchorToHoldings(p0, groups, h.holds);
+  eq('#A1 잔고 기준 — 빠진 매매 = 11/24 매도 둘뿐 · 앞의 매수 5건은 이미 표에 있음', [an.apply.map(g => [g.date, g.code, g.side, g.qty]), an.skipped.map(s => s.status)],
+    [[['2026-11-24', '0177R0', 'sell', 50], ['2026-11-24', '0190G0', 'sell', 400]], ['intable', 'intable', 'intable', 'intable', 'intable']]);
+  const out = P.runTradePhoto(p0, an.apply, { accountType: 'portfolio', today: TODAY });
+  const lv = (c) => out.next.portfolio.find(i => i.code === c);
+  eq('#A2 넣은 뒤 계좌 표 = 잔고 사진(수량 같음 · 매입금액 ±2원)', [lv('0177R0').quantity, lv('0190G0').quantity, Math.abs(lv('0177R0').investAmount - 112530104) <= 2, Math.abs(lv('0190G0').investAmount - 79636396) <= 2], [10835, 10127, true, true]);
+  eq('#A3 매도는 그 날짜(11/24)에 — 전날은 그대로', [U.resolveHoldings(out.next, '2026-11-23').items.find(i => i.code === '0177R0').quantity, U.resolveHoldings(out.next, '2026-11-24').items.find(i => i.code === '0177R0').quantity], [10885, 10835]);
+  const an2 = P.anchorToHoldings(acct(10820, 10134), groups, h.holds);
+  eq('#A4 표에 아무것도 안 들어갔으면(매매 전 수량) 일곱 묶음 모두 넣는다(같은 날·같은 구분은 합침)', [an2.apply.length, an2.skipped.length], [7, 0]);
+  const an3 = P.anchorToHoldings(acct(10000, 10527), groups, h.holds);
+  eq('#A5 어떤 묶음으로도 잔고와 안 맞으면 그 종목은 넣지 않음(anchorfail)', [an3.skipped.filter(s => s.status === 'anchorfail').length, an3.anchors.find(x => x.name.startsWith('TIGER 반도체')).ok], [3, false]);
+  // 잔고 맞추기 — 프로그램 읽기는 안 보인 종목을 0으로 하지 않는다
+  const items = [...mk(10885, 10527), { id: 'x', type: 'stock', code: '123456', name: '사진에 없는 종목', quantity: 7, investAmount: 70000 }];
+  const text = h.holds.map(O.ocrHoldLine).join('\n');
+  const plan = HP.planHoldingsSync(HP.parseHoldingsText(text), items, { keepUnseen: true });
+  eq('#S1 잔고 맞추기(프로그램) — 바꿈 2 · 같음 1 · 사진에 없는 종목은 그대로(0으로 안 함)', [plan.rows.filter(r => r.kind === 'update').length, plan.rows.filter(r => r.kind === 'same').length, plan.rows.find(r => r.name === '사진에 없는 종목').kind], [2, 1, 'keep']);
+  eq('#S2 AI 길(옵션 없음)은 전처럼 0으로', HP.planHoldingsSync(HP.parseHoldingsText(text), items).rows.find(r => r.name === '사진에 없는 종목').kind, 'zero');
+}
+
+console.log('\n── 파트② 배선 ──');
+const so = read('src/screenOcr.ts');
+const tw = stripComments(read('src/components/TradePhotoSync.tsx'));
+const hw = stripComments(read('src/components/HoldingsPhotoSync.tsx'));
+const vj = JSON.parse(read('vercel.json'));
+const files = [...so.matchAll(/`\$\{BASE\}\/([^`]+)`/g)].map(m => m[1]);
+ok('#W1 엔진 파일이 public/ocr/pp5에 있다(학습 사이트 vendor에서 옮김) · README 출처·라이선스', files.length >= 4 && files.every(f => existsSync(join(ROOT, 'public/ocr/pp5', f))) && existsSync(join(ROOT, 'public/ocr/pp5/ort.wasm.bundle.min.mjs'))
+  && statSync(join(ROOT, 'public/ocr/pp5/rec.onnx.gz')).size > 8e6 && /Apache License 2\.0/.test(read('public/ocr/pp5/README.md')) && existsSync(join(ROOT, 'public/ocr/pp5/LICENSE-onnxruntime')));
+ok('#W2 엔진은 사이트 주소(/ocr/pp5)에서만 받는다 — 사진은 밖으로 보내지 않음(fetch 대상은 BASE 파일뿐)', /const BASE = '\/ocr\/pp5'/.test(so) && !/https?:\/\//.test(stripComments(so)) && (stripComments(so).match(/fetch\(/g) || []).length === 1);
+ok('#W3 배포 설정 — /ocr/ 은 화면 주소로 넘기지 않음 · 오래 저장', vj.rewrites.some(r => r.source.includes('ocr/')) && vj.headers.some(h => h.source === '/ocr/(.*)'));
+ok('#W4 주문내역 창 — 프로그램 읽기(readByOcr): 종류 가리기 → 해석 → 프로그램 검수(종가) → 잔고 기준 → 같은 넣기',
+  /import \{[^}]*classifyOcr[^}]*parseOcrTrades[^}]*parseOcrHoldings[^}]*\} from '\.\.\/tradeOcr'/.test(tw) && /import \{ loadOcrEngine, ocrFile \} from '\.\.\/screenOcr'/.test(tw)
+  && /checkOcrTrades\(mergeOcrPhotos\(perTrades\), closeOf\)/.test(tw) && /anchorToHoldings\(acct, groups, goodHolds\)/.test(tw) && /patchAccount\(p => runTradePhoto\(p, anc\.apply,/.test(tw));
+ok('#W5 주문내역 창 — AI 방법은 접힘(showAi 기본 false) · 확인 필요한 줄은 붙여넣기 칸으로', /const \[showAi, setShowAi\] = useState\(false\)/.test(tw) && /if \(checks\.length\) \{ setPasteText\(/.test(tw));
+ok('#W6 잔고 창 — 프로그램 읽기는 keepUnseen(안 보인 종목 0으로 안 함) · AI 길은 그대로', /planHoldingsSync\(parsed, itemsRef\.current, ocr \? \{ keepUnseen: true \} : undefined\)/.test(hw) && /applyHoldText\(st\.text\.trim\(\), n, st\.model, null\)/.test(hw));
+ok('#W7 App이 종가 표(stockHistoryMap)를 주문내역 창에 넘긴다', /<TradePhotoSync[\s\S]{0,600}stockHistoryMap=\{stockHistoryMap\}/.test(read('src/App.tsx')));
+ok('#W8 package.json에 verify:trade-ocr 등록', JSON.parse(read('package.json')).scripts['verify:trade-ocr'] === 'node scripts/verify-trade-ocr.mjs');
+
+console.log(`\n  총 ${pass + fail}건 — 통과 ${pass} / 실패 ${fail}`);
+process.exit(fail ? 1 : 0);

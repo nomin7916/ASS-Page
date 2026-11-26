@@ -5892,6 +5892,7 @@ export default function App() {
         isAdmin={(authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()}
         viewingAs={!!ADMIN_VIEW_EMAIL || !!adminViewingAs}
         keyApi={geminiKeyApi}
+        stockHistoryMap={stockHistoryMap}
       />
       <PasteModal
         isPasteModalOpen={isPasteModalOpen}

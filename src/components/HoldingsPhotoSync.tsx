@@ -5,13 +5,15 @@
 // 키: 관리자는 사이트 키(내 키가 있으면 먼저) · 다른 사용자는 내 Gemini 키(내 Drive ai_settings.json — App의 keyApi가 읽고 쓴다).
 // ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 applyItems(앱 탭이 최신 prev 위에서 적용)로만.
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ImagePlus, RotateCcw, Lock, ExternalLink, BookOpen } from 'lucide-react';
+import { X, ImagePlus, RotateCcw, Lock, ExternalLink, BookOpen, ScanText } from 'lucide-react';
 import { generateId, formatNumber } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
 import { syncCandidates, parseHoldingsText, planHoldingsSync, applyHoldingsPlan, undoHoldingsPlan, holdCounts, holdErrorText, looksLikeGeminiKey, maskKey } from '../holdingsPhoto';
 import { shrinkPhotoToB64 } from '../photoShrink';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
+import { classifyOcr, parseOcrHoldings, ocrHoldLine, ocrHoldBad, OCR_FLAG_TEXT } from '../tradeOcr';
+import { loadOcrEngine, ocrFile } from '../screenOcr';
 
 const KIND_LABEL = {
   update: { t: '바꿈', c: 'text-sky-300' },
@@ -155,9 +157,13 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       setRun({ phase: 'error', n, code: st.error || 'cut', msg: st.msg, text: st.text });
       return;
     }
-    const text = st.text.trim();
+    applyHoldText(st.text.trim(), n, st.model, null);
+  };
+
+  // 읽은 글(AI 답 · 프로그램 글자 인식) → 해석 → 계획 → 바로 넣기. ocr = 프로그램 읽기 정보(안 보인 종목을 0으로 하지 않음).
+  const applyHoldText = (text, n, model, ocr) => {
     const parsed = parseHoldingsText(text);
-    const plan = planHoldingsSync(parsed, itemsRef.current);
+    const plan = planHoldingsSync(parsed, itemsRef.current, ocr ? { keepUnseen: true } : undefined);
     let undo = null;
     if (plan.outcome === 'apply' && applyItems) {
       const today = getTodayKST();
@@ -166,7 +172,47 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       undo = applyHoldingsPlan(itemsRef.current, plan, { newId: idGen(), today }).undo;
       applyItems(prev => applyHoldingsPlan(prev, plan, { newId: idGen(), today }).next);
     }
-    setRun({ phase: 'done', n, text, plan, parsed, counts: holdCounts(plan), model: st.model, undo });
+    setRun({ phase: 'done', n, text, plan, parsed, counts: holdCounts(plan), model, undo, ocr });
+  };
+
+  // 프로그램 읽기(AI 없이 · 무료 · 사진은 이 기기에서만) — src/screenOcr.ts(학습 사이트의 PP-OCRv5) → src/tradeOcr.ts 잔고 해석.
+  // 자체 검사(보유수량×평균단가 ≈ 매입금액)·글자 확신이 어긋난 종목과 잘린 종목은 '그대로', 안 보인 종목도 0으로 하지 않는다.
+  const readByOcr = async (e) => {
+    const list = Array.from(e.target.files || []);
+    e.target.value = '';
+    const { add, notImage, over } = mergePastePhotos([], list);
+    setPickNote([
+      notImage > 0 ? `사진이 아닌 파일 ${notImage}개는 뺐습니다` : '',
+      over > 0 ? `한 번에 ${PASTE_PHOTO_MAX}장까지라 ${over}장은 뺐습니다` : '',
+    ].filter(Boolean).join(' · '));
+    if (add.length === 0) return;
+    const id = ++runId.current;
+    const live = () => runId.current === id;
+    const n = add.length;
+    setRun({ phase: 'ocr', stage: 'load', n, f: 0 });
+    try { await loadOcrEngine(f => { if (live()) setRun(r => (r.phase === 'ocr' && r.stage === 'load' ? { ...r, f } : r)); }); }
+    catch (err) {
+      if (live()) setRun({ phase: 'error', n, code: 'ocr', msg: err && err.message === 'old' ? '이 브라우저는 너무 오래되어 글자 인식을 할 수 없습니다 — 크롬·사파리 최신판에서 열어 주세요.' : '글자 인식 엔진을 받지 못했습니다 — 인터넷 연결을 확인하고 다시 눌러 주세요.' });
+      return;
+    }
+    const cands = syncCandidates(itemsRef.current);
+    const holds = [];
+    let unknown = 0;
+    for (let i = 0; i < n; i++) {
+      if (!live()) return;
+      setRun({ phase: 'ocr', stage: 'read', n, i: i + 1, f: 0 });
+      let lines = [];
+      try { lines = await ocrFile(add[i], f => { if (live()) setRun(r => (r.phase === 'ocr' && r.stage === 'read' ? { ...r, f } : r)); }); }
+      catch { unknown++; continue; }
+      if (classifyOcr(lines) === 'holdings') holds.push(...parseOcrHoldings(lines, cands).holds);
+      else unknown++;
+    }
+    if (!live()) return;
+    if (holds.length === 0) { setRun({ phase: 'error', n, code: 'ocr', msg: '사진에서 잔고(보유종목) 표를 찾지 못했습니다 — 종목명·보유수량·매입금액 머리줄이 보이게 찍어 주세요(또는 아래 AI로 읽기).' }); return; }
+    // 겹쳐 찍은 사진의 같은 종목은 한 번만(먼저 읽은 것)
+    const seen = new Set();
+    const uniq = holds.filter(h => { const k = h.code || h.name; if (seen.has(k)) return false; seen.add(k); return true; });
+    applyHoldText(uniq.map(ocrHoldLine).join('\n'), n, '프로그램 글자 인식(AI 없이)', { bad: uniq.filter(ocrHoldBad), unknown });
   };
 
   const undoApply = () => {
@@ -201,6 +247,16 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
             <p>증권사 앱의 <b className="text-gray-100">잔고(보유종목) 화면</b>을 캡처해 올리면, 이 계좌 종목의 <b className="text-blue-200">보유수량·투자금액(매입금액)</b>을 사진대로 맞춥니다.</p>
             <p className="text-gray-400">목록이 길면 내려 가며 찍은 사진을 <b className="text-gray-200">한 번에 모두</b> 고르세요. 사진에 없는 종목은 판 것으로 보고 0으로 하고, 종목명 칸에 📝 메모(마우스를 올리면 보임)를 남깁니다.</p>
           </div>
+
+          <div className="rounded-lg border border-sky-600/60 bg-sky-950/30 px-3 py-2.5 space-y-1.5">
+            <div className="flex items-center gap-1.5 text-gray-100 font-semibold"><ScanText size={15} className="text-sky-300" />프로그램으로 읽기 <span className="font-normal text-gray-400">— AI 없이 · 무료 · 키 필요 없음</span></div>
+            <p className="text-[11.5px] text-gray-400">사진은 이 기기 밖으로 나가지 않습니다(처음 한 번 글자 인식 엔진 약 17MB를 받습니다). 자체 검사(보유수량×평균단가 ≈ 매입금액)가 어긋난 종목은 바꾸지 않고, 사진에 안 보인 종목도 0으로 하지 않습니다.</p>
+            <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || run.phase === 'ocr' ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'}`}>
+              <ImagePlus size={14} />{run.phase === 'ocr' ? '읽는 중…' : '잔고 사진 고르기(프로그램)'}
+              <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy || run.phase === 'ocr'} onChange={readByOcr} className="sr-only" />
+            </label>
+          </div>
+          <p className="text-[11.5px] text-gray-500">AI로 읽기 — 프로그램이 못 읽을 때(판 종목을 0으로 맞출 때도):</p>
 
           <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 space-y-1.5">
             <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -247,12 +303,17 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
           </div>
           {pickNote && <p className="text-[11.5px] text-amber-300/90">{pickNote}</p>}
 
+          {run.phase === 'ocr' && (
+            <p className="text-sky-200 animate-pulse">{run.stage === 'load'
+              ? `글자 인식 엔진을 받는 중… ${Math.round((run.f || 0) * 100)}% (처음 한 번만)`
+              : `사진 ${run.i}/${run.n}장 글자를 읽는 중… ${Math.round((run.f || 0) * 100)}%`}</p>
+          )}
           {run.phase === 'shrink' && <p className="text-sky-200">사진 {run.n}장을 줄이는 중…</p>}
           {run.phase === 'read' && <p className="text-sky-200 animate-pulse">AI가 사진 {run.n}장을 읽는 중…{run.got > 0 ? ` (${run.got}자 받음)` : ''}</p>}
           {run.phase === 'error' && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 space-y-1">
-              <p className="text-red-200">{holdErrorText(run.code)}</p>
-              {run.msg && <p className="text-[11px] text-red-300/70 break-all">{run.msg}</p>}
+              <p className="text-red-200">{run.code === 'ocr' ? run.msg : holdErrorText(run.code)}</p>
+              {run.msg && run.code !== 'ocr' && <p className="text-[11px] text-red-300/70 break-all">{run.msg}</p>}
               {(run.code === 'needkey' || run.code === 'badkey' || run.code === 'credit' || run.code === 'quota0') && <button onClick={() => setShowGuide(true)} className="text-[11.5px] text-amber-200 underline">키 받는 법 보기</button>}
             </div>
           )}
@@ -291,7 +352,9 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
               {rows.some(r => r.note && (r.kind === 'add' || r.kind === 'bad' || r.kind === 'keep' || r.kind === 'cut')) && (
                 <ul className="text-[11.5px] text-gray-400 list-disc pl-4 space-y-0.5">
                   {c.add > 0 && <li>새로 추가한 종목은 <b className="text-gray-200">다른 계좌에 같은 이름의 종목이 있으면 그 코드를, 없으면 이름으로 찾아 넣고 현재가를 불러옵니다</b>(몇 초) — 찾지 못한 종목은 표의 코드 칸이 노란색이니 6자리 코드를 넣어 주세요.</li>}
-                  {c.keep > 0 && <li>맨 아래 종목이 잘린 사진이라 <b className="text-gray-200">사진에 안 보인 종목은 0으로 하지 않았습니다</b> — 목록 끝까지 찍은 사진을 함께 올리면 판 종목도 0으로 맞춥니다.</li>}
+                  {c.keep > 0 && (run.ocr
+                    ? <li>프로그램 읽기는 <b className="text-gray-200">사진에 안 보인 종목을 0으로 하지 않습니다</b>(한 줄을 놓쳤을 수 있어서) — 판 종목이면 표에서 직접 0으로 하거나 아래 AI로 읽어 주세요.</li>
+                    : <li>맨 아래 종목이 잘린 사진이라 <b className="text-gray-200">사진에 안 보인 종목은 0으로 하지 않았습니다</b> — 목록 끝까지 찍은 사진을 함께 올리면 판 종목도 0으로 맞춥니다.</li>)}
                   {c.bad > 0 && <li>숫자가 잘렸거나 읽지 못한 새 종목은 넣지 않았습니다 — 그 종목이 다 보이게 한 장 더 찍어 함께 올려 주세요.</li>}
                 </ul>
               )}
@@ -301,6 +364,13 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
                   <ul className="mt-1 space-y-0.5">{run.parsed.skipped.map((s, i) => <li key={i} className="break-all">· {s.line} — <span className="text-amber-300/80">{s.reason}</span></li>)}</ul>
                 </details>
               )}
+              {run.ocr && run.ocr.bad.length > 0 && (
+                <div className="text-[11.5px] text-amber-200">
+                  <p className="font-semibold">확인 필요 {run.ocr.bad.length}종목 — 바꾸지 않고 그대로 두었습니다:</p>
+                  <ul className="list-disc pl-4">{run.ocr.bad.map((h, i) => <li key={i}>{h.name} — {h.flags.filter(f => f !== 'noname').map(f => OCR_FLAG_TEXT[f]).join(' · ')}</li>)}</ul>
+                </div>
+              )}
+              {run.ocr && run.ocr.unknown > 0 && <p className="text-[11.5px] text-amber-300/90">잔고 표를 찾지 못한 사진 {run.ocr.unknown}장은 건너뛰었습니다.</p>}
               {run.model && <p className="text-[10.5px] text-gray-600">읽은 AI: {run.model}</p>}
             </div>
           )}
