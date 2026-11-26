@@ -4,8 +4,9 @@
 //   POST ?op=done&id=…&model=…  (본문 = 답 글 그대로, text/plain)
 //   POST ?op=fail&id=…          (본문 = 까닭 한 줄)
 //   GET  ?op=ping                         연결 시험 {ok:true}
+//   GET  ?op=img&id=…&n=…                 질문에 든 사진 n번째(그림 자체 · take가 알려 준 imgs 수만큼)
 export const config = { runtime: 'edge' };
-import { requirePcKey, pcUserOf, json, takeJob, finishJob, touchSeen, pcTarget, cleanAnswer, cleanModel, cleanFail, ANSWER_MAX } from './_pcAsk.js';
+import { requirePcKey, pcUserOf, json, takeJob, finishJob, touchSeen, pcTarget, cleanAnswer, cleanModel, cleanFail, jobImage, ANSWER_MAX } from './_pcAsk.js';
 
 export default async function handler(request: Request): Promise<Response> {
   const denied = await requirePcKey(request);
@@ -19,6 +20,15 @@ export default async function handler(request: Request): Promise<Response> {
     await touchSeen(u, now);
     return json(200, { ok: true });
   }
+  if (op === 'img' && request.method === 'GET') {
+    const got = await jobImage(u, url.searchParams.get('id') || '', Number(url.searchParams.get('n') || 0));
+    if (got === undefined) return json(503, { error: 'store' });
+    if (!got) return json(404, { error: 'no image' });
+    let bytes: Uint8Array;
+    try { const bin = atob(got.b64); bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); }
+    catch { return json(500, { error: 'image' }); }
+    return new Response(bytes, { status: 200, headers: { 'Content-Type': got.mime, 'Cache-Control': 'no-store' } });
+  }
   if (request.method !== 'POST') return json(405, { error: 'POST' });
 
   if (op === 'take') {
@@ -27,7 +37,7 @@ export default async function handler(request: Request): Promise<Response> {
     if (job === undefined) return json(503, { error: 'store' });
     if (!job) return json(200, { none: true });
     const t = pcTarget(job.t);
-    return json(200, { id: job.id, target: job.t, label: t ? t.label : job.t, url: t ? t.url : '', prompt: job.p, at: job.at });
+    return json(200, { id: job.id, target: job.t, label: t ? t.label : job.t, url: t ? t.url : '', prompt: job.p, at: job.at, imgs: Number(job.ni) || 0 });
   }
 
   if (op === 'done' || op === 'fail') {

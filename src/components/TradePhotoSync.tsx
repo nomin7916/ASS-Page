@@ -5,13 +5,14 @@
 // 키: 사진으로 보유 맞추기와 같다(관리자 = 사이트 키 · 다른 사용자 = 내 Gemini 키 — App의 keyApi가 내 Drive ai_settings.json에서 읽고 쓴다).
 // ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 patchAccount(앱 탭이 최신 계좌 위에서 다시 계산)로만.
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, Copy, ClipboardPaste, Bot } from 'lucide-react';
+import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, Copy, ClipboardPaste, Bot, Monitor } from 'lucide-react';
 import { formatNumber, formatShortDate } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
 import { syncCandidates, holdErrorText, looksLikeGeminiKey, maskKey } from '../holdingsPhoto';
 import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, tradeAskPrompt, TRADE_STATUS_TEXT } from '../tradePhoto';
 import { aiHandById } from '../aiProviders';
+import { pcOnline, pcSeenText, pcWaitText, pcAskErrorText, pcTooLate, pcModelLabel, pcPhotoAddendum, PC_POLL_FAST, PC_POLL_SLOW, PC_FAST_FOR, PC_PHOTO_N, PC_PHOTO_CHARS } from '../pcAsk';
 import { shrinkPhotoToB64 } from '../photoShrink';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
 
@@ -31,6 +32,12 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
   const [showSub, setShowSub] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [subNote, setSubNote] = useState('');
+  // 내 PC의 Claude로 읽기(키 없이) — AI 검색 「PC 자동」과 같은 우편함(/api/pc-ask). 사진은 PC의 Claude가 직접 읽는다.
+  const [pcState, setPcState] = useState({ loaded: false, linked: false, seen: 0 });
+  const [pcJob, setPcJob] = useState(null);   // { id, at(ISO), atMs, n, cash, st, ta }
+  const [pcBusy, setPcBusy] = useState(false);
+  const [pcMsg, setPcMsg] = useState('');
+  const [addNote, setAddNote] = useState('');
   const runId = useRef(0);
   const abortRef = useRef(null);
   const accountRef = useRef(account);
@@ -46,6 +53,51 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
   }, [open, keyApi, viewingAs]);
 
   useEffect(() => () => { runId.current += 1; if (abortRef.current) { try { abortRef.current.abort(); } catch { /* 끝남 */ } } }, []);
+
+  // PC 연결 상태 — 관리자 접속(impersonation) 중엔 안 본다(우편함은 로그인한 본인 것).
+  useEffect(() => {
+    if (!open || viewingAs) return;
+    let alive = true;
+    fetch('/api/pc-ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'status' }) })
+      .then(r => r.json().catch(() => ({})).then(j => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => { if (alive) setPcState({ loaded: true, linked: ok && !!j.linked, seen: Number(j.seen) || 0 }); })
+      .catch(() => { if (alive) setPcState({ loaded: true, linked: false, seen: 0 }); });
+    return () => { alive = false; };
+  }, [open, viewingAs]);
+
+  // PC에 맡긴 사진 — 답이 오면 같은 넣기(applyText)로. 창을 닫아 두면 다시 열 때 이어서 기다린다.
+  useEffect(() => {
+    if (!open || !pcJob) return;
+    let alive = true;
+    let timer = null;
+    const job0 = pcJob;
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/pc-ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'get', ids: [job0.id] }) });
+        const j = await r.json().catch(() => ({}));
+        if (!alive) return;
+        if (j.seen) setPcState(s => ({ ...s, seen: Number(j.seen) || s.seen }));
+        const got = Array.isArray(j.jobs) ? j.jobs[0] : null;
+        if (got && got.st === 'done') {
+          setPcJob(null);
+          const text = String(got.a || '');
+          applyText(text, job0.n, pcModelLabel('Claude', got.m || 'Claude'), job0.cash);
+          if (!/^\s*[|*>`-]*\s*매매\s*\|/m.test(text) && /사진\s*없음/.test(text)) setPcMsg('PC의 Claude가 사진을 열지 못했습니다 — 아래 「맥의 Claude 대화에 붙여 넣을 규칙」을 넣어 주세요.');
+          return;
+        }
+        if (got && (got.st === 'fail' || got.st === 'cancel' || got.st === 'gone')) {
+          setPcJob(null);
+          setPcMsg(got.st === 'fail' ? `PC가 읽지 못했습니다 — ${got.e || '까닭 없음'}` : got.st === 'cancel' ? '취소했습니다' : 'PC 우편함에서 사라졌습니다(2일이 지났거나 지워짐)');
+          return;
+        }
+        if (got) setPcJob(p => (p && p.id === got.id ? { ...p, st: got.st, ta: got.ta } : p));
+        if (pcTooLate(job0.at)) { setPcJob(null); setPcMsg(pcAskErrorText('late')); return; }
+      } catch { /* 다음 차례에 다시 */ }
+      if (alive) timer = setTimeout(tick, Date.now() - job0.atMs < PC_FAST_FOR ? PC_POLL_FAST : PC_POLL_SLOW);
+    };
+    timer = setTimeout(tick, PC_POLL_FAST);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [open, pcJob && pcJob.id]);
 
   if (!open) return null;
 
@@ -177,6 +229,43 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
     setRun({ phase: 'done', n, parsed, out, undo, model });
   };
 
+  const sendToPc = async (e) => {
+    const list = Array.from(e.target.files || []);
+    e.target.value = '';
+    const { add, notImage, over } = mergePastePhotos([], list);
+    const files = add.slice(0, PC_PHOTO_N);
+    const cut = over + Math.max(0, add.length - PC_PHOTO_N);
+    setPickNote([
+      notImage > 0 ? `사진이 아닌 파일 ${notImage}개는 뺐습니다` : '',
+      cut > 0 ? `PC로는 한 번에 ${PC_PHOTO_N}장까지라 ${cut}장은 뺐습니다` : '',
+    ].filter(Boolean).join(' · '));
+    if (files.length === 0 || pcBusy || pcJob) return;
+    setPcMsg('');
+    setPcBusy(true);
+    try {
+      const budget = Math.min(photoBudget(files.length), PC_PHOTO_CHARS);
+      const imgs = [];
+      for (const f of files) imgs.push({ mime: 'image/jpeg', data: await shrinkPhotoToB64(f, budget) });
+      const prompt = `${subPrompt()}\n\n(사진 ${imgs.length}장이 함께 왔습니다 — 사진을 열지 못했으면 아무 줄도 지어내지 말고 '사진 없음' 한 줄만 쓰세요.)`;
+      const r = await fetch('/api/pc-ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'ask', target: 'claude', prompt, imgs }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.id) { setPcMsg(j.code && j.code !== 'bad' ? pcAskErrorText(j.code) : (j.error || `보내지 못했습니다 (HTTP ${r.status})`)); return; }
+      setPcJob({ id: j.id, at: new Date().toISOString(), atMs: Date.now(), n: imgs.length, cash: cashOn, st: 'wait' });
+    } catch (err) {
+      setPcMsg(err && err.message === 'big' ? '사진이 너무 커서 줄이지 못했습니다' : '사진을 보내지 못했습니다(연결을 확인해 주세요)');
+    } finally { setPcBusy(false); }
+  };
+  const cancelPc = async () => {
+    const id = pcJob && pcJob.id;
+    setPcJob(null);
+    setPcMsg('취소했습니다');
+    if (id) { try { await fetch('/api/pc-ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'cancel', id }) }); } catch { /* 무시 */ } }
+  };
+  const copyAddendum = async () => {
+    try { await navigator.clipboard.writeText(pcPhotoAddendum(window.location.origin)); setAddNote('copied'); }
+    catch { setAddNote('manual'); }
+  };
+
   const subPrompt = () => tradeAskPrompt({ cands: syncCandidates(accountRef.current?.portfolio || []), today: getTodayKST() });
   const copySubPrompt = async () => {
     try { await navigator.clipboard.writeText(subPrompt()); setSubNote('copied'); }
@@ -279,6 +368,46 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
             <span className="text-[11px] text-gray-500">한 번에 {PASTE_PHOTO_MAX}장까지 · 사진은 저장하지 않습니다</span>
           </div>
           {pickNote && <p className="text-[11.5px] text-amber-300/90">{pickNote}</p>}
+
+          {!viewingAs && (
+            <div className="rounded-lg border border-emerald-700/50 bg-emerald-950/20 px-3 py-2 space-y-1.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="flex items-center gap-1.5 text-gray-200 font-semibold"><Monitor size={14} className="text-emerald-300" />내 PC의 Claude로 읽기 <span className="font-normal text-gray-500">— 키 없이 · 구독으로 자동</span></span>
+                {pcState.loaded && pcState.linked && <span className={`text-[11px] ${pcOnline(pcState.seen) ? 'text-emerald-300' : 'text-amber-300'}`}>{pcSeenText(pcState.seen)}</span>}
+              </div>
+              {!pcState.loaded ? (
+                <p className="text-gray-500">PC 연결을 확인하는 중…</p>
+              ) : !pcState.linked ? (
+                <p className="text-[11.5px] text-gray-400">PC가 아직 연결되지 않았습니다 — 위쪽 말풍선(AI 검색) 창의 ⚙ 설정 「내 PC로 자동 묻기」에서 PC 연결 문구를 만들어 PC의 Claude 대화에 붙여 넣으면, 여기서 사진만 고르면 PC의 Claude(구독)가 읽어 넣습니다.</p>
+              ) : pcJob ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-emerald-200 animate-pulse">{pcWaitText('Claude', pcJob, pcState.seen)}</p>
+                  <button onClick={cancelPc} className="px-2 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-800 text-[11.5px]">취소</button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-[12.5px] transition ${pcBusy ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-emerald-700 hover:bg-emerald-600 text-white cursor-pointer'}`}
+                    title="주문내역 사진을 고르면 내 PC의 Claude가 읽어 바로 넣습니다">
+                    <Monitor size={13} />{pcBusy ? '보내는 중…' : '내 PC로 사진 보내기'}
+                    <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={pcBusy} onChange={sendToPc} className="sr-only" />
+                  </label>
+                  <span className="text-[11px] text-gray-500">한 번에 {PC_PHOTO_N}장까지 · 읽으면 사진은 우편함에서 바로 지웁니다</span>
+                </div>
+              )}
+              {pcMsg && <p className="text-[11.5px] text-amber-300/90">{pcMsg}</p>}
+              {pcState.linked && (
+                <details className="text-[11.5px] text-gray-400">
+                  <summary className="cursor-pointer">맥의 Claude가 사진을 못 읽으면 — 대화에 붙여 넣을 규칙(이 기능 전에 연결한 경우 한 번)</summary>
+                  <div className="mt-1 space-y-1">
+                    <p>PC의 Claude 대화(PC 연결 문구를 붙여 넣은 그 대화)에 아래 글을 한 번 붙여 넣어 보내 주세요. 열쇠는 그 대화가 이미 알고 있습니다.</p>
+                    <button onClick={copyAddendum} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-800/70 hover:bg-emerald-700/70 text-white font-bold text-[11.5px]"><Copy size={11} />규칙 글 복사</button>
+                    {addNote === 'copied' && <span className="text-emerald-300"> ✓ 복사했습니다</span>}
+                    {addNote === 'manual' && <textarea readOnly value={pcPhotoAddendum(window.location.origin)} rows={5} onFocus={e => e.target.select()} className="w-full bg-[#0b1120] border border-gray-700 rounded-md px-2 py-1.5 text-[11px] text-gray-300 font-mono" />}
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
 
           <div className="rounded-lg border border-gray-700/70 bg-gray-900/40">
             <button onClick={() => setShowSub(v => !v)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left">

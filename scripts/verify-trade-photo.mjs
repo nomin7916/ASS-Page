@@ -189,7 +189,8 @@ eq('#W1 tradePhoto.ts는 import 없는 세 모듈만(.ts 확장자 — 검증이
 ok('#W2 넣기는 자산검증과 같은 함수(planBackdatedTrade → applyBackdatedTrade, src photo)', /planBackdatedTrade\(p,/.test(tp) && /applyBackdatedTrade\(p, plan, base\)/.test(tp) && /src: 'photo'/.test(tp));
 ok('#W3 그날 기록에 매매를 남긴다(trades — 두 번 넣기 막기)', /trades: \[\.\.\.prevTrades, rec\]/.test(bt) && /trades: \[rec\]/.test(bt));
 ok('#W4 창이 tradePhoto 함수를 import', /import\s*\{[^}]*parseTradeText[^}]*groupTrades[^}]*runTradePhoto[^}]*tradePhotoUndo[^}]*undoTradePhoto[^}]*\}\s*from\s*'\.\.\/tradePhoto'/.test(win));
-ok('#W5 /api/holdings-photo 에 kind trades로 보낸다(화면은 AI를 직접 부르지 않는다)', /fetch\('\/api\/holdings-photo'/.test(win) && /kind: 'trades'/.test(win) && (win.match(/fetch\(/g) || []).length === 1);
+ok('#W5 /api/holdings-photo 에 kind trades로 보낸다 · 그 밖의 fetch는 PC 우편함(/api/pc-ask)뿐(화면은 AI를 직접 부르지 않는다)', /fetch\('\/api\/holdings-photo'/.test(win) && /kind: 'trades'/.test(win)
+  && (win.match(/fetch\(/g) || []).length === (win.match(/fetch\('\/api\/holdings-photo'/g) || []).length + (win.match(/fetch\('\/api\/pc-ask'/g) || []).length);
 ok('#W6 끝까지 받은 답만 넣는다(st.done)', /if \(st\.error \|\| !st\.done\)/.test(win) && win.indexOf('!st.done') < win.indexOf('runTradePhoto(acct'));
 ok('#W7 적용은 앱 탭의 최신 계좌 위에서 다시 계산(patchAccount 안에서 runTradePhoto)', /patchAccount\(p => runTradePhoto\(p, groups,/.test(win));
 ok('#W8 추이 머리줄 카메라 버튼(prop이 있을 때만)', /import \{[^}]*Camera[^}]*\} from 'lucide-react'/.test(hp) && /\{onOpenTradePhoto && \(/.test(hp) && /onClick=\{onOpenTradePhoto\}/.test(hp));
@@ -201,6 +202,10 @@ ok('#W13 구독 AI 길 = 부탁 글 복사(tradeAskPrompt) + Gemini·Claude 열�
   /import \{[^}]*tradeAskPrompt[^}]*\} from '\.\.\/tradePhoto'/.test(win) && /import \{ aiHandById \} from '\.\.\/aiProviders'/.test(win)
   && /applyText\(pasteText,/.test(win) && /applyText\(st\.text,/.test(win) && /const applyText = [\s\S]{0,400}runTradePhoto\(acct, groups/.test(win));
 ok('#W14 키·한도 오류에서 무료 키 받는 법과 구독 AI 길을 함께 보여 준다(nokey 포함)', /\['needkey', 'nokey', 'badkey', 'credit', 'quota0', 'rate', 'rate1m'\]\.includes\(run\.code\)/.test(win) && /setShowSub\(true\)/.test(win));
+ok('#W15 내 PC의 Claude로 읽기 — pcAsk 도구 import · 사진은 target claude + imgs · 한도 PC_PHOTO_N/CHARS · 답은 같은 applyText · 관리자 접속 중 숨김',
+  /import \{[^}]*pcWaitText[^}]*pcPhotoAddendum[^}]*PC_PHOTO_N[^}]*PC_PHOTO_CHARS[^}]*\} from '\.\.\/pcAsk'/.test(win)
+  && /op: 'ask', target: 'claude', prompt, imgs/.test(win) && /Math\.min\(photoBudget\(files\.length\), PC_PHOTO_CHARS\)/.test(win)
+  && /applyText\(text, job0\.n,/.test(win) && /\{!viewingAs && \(\s*<div className="rounded-lg border border-emerald/.test(win));
 ok('#W11 package.json에 verify:trade-photo 등록', pkg.scripts['verify:trade-photo'] === 'node scripts/verify-trade-photo.mjs');
 
 console.log(`\n  총 ${pass + fail}건 — 통과 ${pass} / 실패 ${fail}`);

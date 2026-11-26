@@ -1,10 +1,11 @@
 // Vercel Edge Function — 「내 PC가 구독 AI에 묻기」 창 쪽 길(2026-11-26). 흐름·열쇠는 api/_pcAsk.ts 머리 주석.
 // POST { op } — 사용자 = 로그인 토큰의 이메일(사용자마다 우편함이 따로다).
 //   status → {linked, keyAt, seen} · newkey → {key}(한 번만 보여 줌 · 앞 열쇠는 바로 끝) · unlink
-//   ask {target, prompt} → {id} · get {ids:[…]} → {jobs, seen} · cancel {id}
+//   ask {target, prompt, imgs?} → {id} · get {ids:[…]} → {jobs, seen} · cancel {id}
+//   imgs = [{mime, data(base64)}] 4장까지 — 사진이 든 질문은 PC의 Claude만(자산 평가액 추이 「주문내역 사진」, 2026-11-26)
 export const config = { runtime: 'edge' };
 import { requireAuth, callerEmail } from './_auth.js';
-import { json, storeOn, userTag, pcStatus, mintPcKey, unlinkPc, checkAsk, askJob, jobsView, cancelJob, PROMPT_MAX } from './_pcAsk.js';
+import { json, storeOn, userTag, pcStatus, mintPcKey, unlinkPc, checkAsk, askJob, jobsView, cancelJob, ASK_BODY_MAX } from './_pcAsk.js';
 
 export default async function handler(request: Request): Promise<Response> {
   const denied = await requireAuth(request);
@@ -16,10 +17,11 @@ export default async function handler(request: Request): Promise<Response> {
   const email = await callerEmail(request);
   if (!email) return json(401, { error: '로그인이 확인되지 않았습니다' });
   const u = await userTag(email);
+  if (Number(request.headers.get('content-length') || 0) > ASK_BODY_MAX) return json(413, { error: '사진·질문이 너무 큽니다' });
   let b: any = null;
   try {
     const raw = await request.text();
-    if (raw.length > PROMPT_MAX * 3) return json(413, { error: '질문이 너무 깁니다' });
+    if (raw.length > ASK_BODY_MAX) return json(413, { error: '사진·질문이 너무 큽니다' });
     b = JSON.parse(raw);
   } catch { return json(400, { error: '요청 형식이 틀렸습니다' }); }
   const op = String(b?.op || '');
@@ -36,7 +38,7 @@ export default async function handler(request: Request): Promise<Response> {
   if (op === 'ask') {
     const c = checkAsk(b);
     if ('error' in c) return json(400, { error: c.error, code: 'bad' });
-    const r = await askJob(u, c.t, c.p);
+    const r = await askJob(u, c.t, c.p, Date.now(), c.imgs);
     if ('error' in r) return json(r.code === 'store' ? 503 : r.code === 'nopc' ? 409 : 429, r);
     return json(200, r);
   }

@@ -10,6 +10,7 @@ import { register } from 'node:module';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -139,6 +140,32 @@ if (H) {
   await J(pc('take', KEY));
   await J(site({ op: 'cancel', id: q4.id }));
   eq('#B13 PC가 묻는 사이 창에서 취소 → 답 넣기는 cancel', (await J(pc('done', KEY, { q: `&id=${q4.id}`, body: '늦은 답' }))).error, 'cancel');
+  // 사진이 든 질문(자산 평가액 추이 「주문내역 사진」 → 내 PC의 Claude) — 2026-11-26
+  const PNG = randomBytes(600);   // 사진 자리(서버는 그림 내용이 아니라 base64 모양·크기만 본다)
+  const bigImg = { mime: 'image/jpeg', data: 'A'.repeat(H.L.PC_IMG_MAX + 4) };
+  const img1 = { mime: 'image/png', data: PNG.toString('base64') };
+  eq('#I1 사진 질문 거절 — 다른 AI·5장·형식·너무 큼', [
+    (await J(site({ op: 'ask', target: 'chatgpt', prompt: 'p', imgs: [img1] }))).error,
+    (await J(site({ op: 'ask', target: 'claude', prompt: 'p', imgs: Array(H.L.PC_IMG_N + 1).fill(img1) }))).error,
+    (await J(site({ op: 'ask', target: 'claude', prompt: 'p', imgs: [{ mime: 'image/gif', data: img1.data }] }))).error,
+    (await J(site({ op: 'ask', target: 'claude', prompt: 'p', imgs: [bigImg] }))).error,
+  ], ['사진은 내 PC의 Claude만 읽습니다', `사진은 한 번에 ${H.L.PC_IMG_N}장까지입니다`, '사진 형식이 틀렸습니다', '사진 자료가 깨졌거나 너무 큽니다']);
+  const realImg = { mime: 'image/png', data: PNG.toString('base64') };
+  const qi = await J(site({ op: 'ask', target: 'claude', prompt: '주문내역 사진을 읽어 매매 줄로', imgs: [realImg, realImg] }));
+  ok('#I2 사진 두 장 맡기기 → 번호 · Redis에 사진 두 칸', qi.status === 200 && [...store.keys()].filter(k => k.includes(`:${qi.id}:`) && k.startsWith('pca:img:')).length === 2);
+  const ti = await J(pc('take', KEY));
+  eq('#I3 PC가 받는 질문에 사진 수(imgs) · claude', [ti.id, ti.target, ti.imgs], [qi.id, 'claude', 2]);
+  const im1 = await pc('img', KEY, { q: `&id=${qi.id}&n=1`, method: 'GET' });
+  const im1b = Buffer.from(await im1.arrayBuffer());
+  eq('#I4 사진 받기 = 그림 그대로(형식 포함)', [im1.status, im1.headers.get('content-type'), im1b.equals(PNG)], [200, 'image/png', true]);
+  eq('#I5 없는 번호·남의 열쇠 → 404', [(await pc('img', KEY, { q: `&id=${qi.id}&n=3`, method: 'GET' })).status, (await pc('img', otherKey, { q: `&id=${qi.id}&n=1`, method: 'GET' })).status], [404, 404]);
+  await J(pc('done', KEY, { q: `&id=${qi.id}&model=Claude`, body: '매매 | 2026-11-17 | 0177R0 | TIGER | 매수 | 30 | 7,090' }));
+  eq('#I6 답을 넣으면 사진은 바로 지운다 · 그 뒤 사진 받기 404', [[...store.keys()].some(k => k.startsWith('pca:img:') && k.includes(qi.id)), (await pc('img', KEY, { q: `&id=${qi.id}&n=1`, method: 'GET' })).status], [false, 404]);
+  const qc = await J(site({ op: 'ask', target: 'claude', prompt: 'x', imgs: [realImg] }));
+  await J(site({ op: 'cancel', id: qc.id }));
+  eq('#I7 취소해도 사진을 지운다', [...store.keys()].some(k => k.startsWith('pca:img:') && k.includes(qc.id)), false);
+  await J(pc('take', KEY));
+  eq('#I0 화면 한도 = 서버 한도(장수·글자 수)', [H.C.PC_PHOTO_N, H.C.PC_PHOTO_CHARS], [H.L.PC_IMG_N, H.L.PC_IMG_MAX]);
   // 동시에 맡길 수 있는 수
   const many = [];
   for (let i = 0; i < H.L.WAIT_MAX + 1; i++) many.push(await J(site({ op: 'ask', target: 'chatgpt', prompt: `m${i}` })));
@@ -201,6 +228,18 @@ if (H) {
     eq('#P6 실패 알리기 명령 → 창이 까닭을 본다', [fsent.out, (await J(site({ op: 'get', ids: [qb.id] }))).jobs[0].e], ['{"ok":true}', '까닭 한 줄(예: 로그인 필요: ChatGPT)']);
     const pingLine = (text.match(/연결 시험: (curl[^\n]+)/) || [])[1] || '';
     eq('#P7 연결 시험 명령 = {"ok":true}', (await sh(pingLine, dir)).out, '{"ok":true}');
+    const PNG2 = randomBytes(900);
+    const qp = await J(site({ op: 'ask', target: 'claude', prompt: '사진', imgs: [{ mime: 'image/jpeg', data: PNG2.toString('base64') }] }));
+    const gotp = JSON.parse((await sh(fast, dir)).out || '{}');
+    const imgLine = (text.match(/^\s*(curl -s "[^"]*op=img[^\n]*)$/m) || [])[1] || '';
+    await sh(imgLine.replace('<id>', gotp.id).replace(/<n>/g, '1'), dir);
+    let file = null;
+    try { file = readFileSync(join(dir, 'pcask-img-1.jpg')); } catch { file = null; }
+    eq('#I8 문구 속 사진 받기 명령 → 파일 = 보낸 사진 그대로', [gotp.id === qp.id, gotp.imgs, !!file && file.equals(PNG2)], [true, 1, true]);
+    const add = H.C.pcPhotoAddendum(SITE + '/');
+    const addLine = (add.match(/^(curl -s "[^"]*op=img[^\n]*)$/m) || [])[1] || '';
+    eq('#I3 덧붙일 규칙 글의 사진 받기 명령 = 연결 문구의 것(열쇠 자리만 다름) · 열쇠를 적지 않음', [addLine.replace('<PC 열쇠>', KEY3), add.includes(KEY3)], [imgLine.trim(), false]);
+    await J(pc('fail', KEY3, { q: `&id=${qp.id}`, body: 'x' }));
     const bad = await sh(fast.split(KEY3).join(KEY3.slice(0, 25) + 'B'.repeat(43)), dir);
     ok('#P8 열쇠가 바뀌었으면 기다리기가 pc key required를 출력하고 바로 끝난다', bad.code === 0 && bad.out.includes('pc key required'));
   } catch (e) {

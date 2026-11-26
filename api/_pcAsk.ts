@@ -20,6 +20,10 @@ export const SEEN_TTL_S = 7 * 86_400;
 export const SEEN_EVERY = 60_000;     // PC 확인 시각은 1분에 한 번만 적는다(Redis 사용량)
 export const KEY_CACHE_MS = 60_000;
 export const IDS_MAX = 10;
+// 사진이 든 질문(자산 평가액 추이 「주문내역 사진」 → 내 PC의 Claude가 직접 읽음, 2026-11-26) — 사진은 질문과 같은 기간만 두고 끝나면 지운다.
+export const PC_IMG_N = 4;
+export const PC_IMG_MAX = 850_000;   // base64 글자 수(api/_aiTax.ts IMG_MAX와 같은 값 — Upstash 한 요청 1MB 아래)
+export const ASK_BODY_MAX = PROMPT_MAX * 3 + PC_IMG_N * (PC_IMG_MAX + 200);
 
 // 구독 AI 사이트 — 화면 src/aiProviders.ts AI_HANDS 와 id·주소가 같아야 한다(verify:pc-ask가 대조). claude = PC의 Claude가 직접.
 export const PC_TARGETS: { id: string; label: string; url: string }[] = [
@@ -42,9 +46,10 @@ const K_SEEN = (u: string) => `pca:seen:${u}`;
 const K_Q = (u: string) => `pca:q:${u}`;
 const K_JOB = (u: string, id: string) => `pca:job:${u}:${id}`;
 const K_N = (u: string, day: string) => `pca:n:${u}:${day}`;
+const K_IMG = (u: string, id: string, n: number) => `pca:img:${u}:${id}:${n}`;
 
 export interface PcKeyRec { v: 1; h: string; at: number }
-export interface PcJob { v: 1; id: string; t: string; p: string; st: 'wait' | 'take' | 'done' | 'fail' | 'cancel'; at: number; ta?: number; da?: number; a?: string; m?: string; e?: string }
+export interface PcJob { v: 1; id: string; t: string; p: string; st: 'wait' | 'take' | 'done' | 'fail' | 'cancel'; at: number; ta?: number; da?: number; a?: string; m?: string; e?: string; ni?: number; mi?: string[] }
 
 function env(name: string): string {
   return (typeof process !== 'undefined' && process.env && process.env[name]) || '';
@@ -152,13 +157,27 @@ export async function touchSeen(u: string, now = Date.now()): Promise<void> {
 
 const clean = (s: unknown, max: number) => String(s ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, max);
 const oneLine = (s: unknown, max: number) => clean(s, 2000).replace(/\s+/g, ' ').slice(0, max);
-export function checkAsk(body: any): { t: string; p: string } | { error: string } {
+const IMG_MIME = /^image\/(jpeg|png|webp)$/;
+const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+export function checkAsk(body: any): { t: string; p: string; imgs: { mime: string; data: string }[] } | { error: string } {
   const t = pcTarget(body?.target);
   if (!t) return { error: '물을 AI가 틀렸습니다' };
   const p = clean(body?.prompt, PROMPT_MAX + 1);
   if (!p) return { error: '질문이 없습니다' };
   if (p.length > PROMPT_MAX) return { error: `질문이 너무 깁니다(${PROMPT_MAX.toLocaleString()}자까지)` };
-  return { t: t.id, p };
+  const raw = Array.isArray(body?.imgs) ? body.imgs : [];
+  if (raw.length > PC_IMG_N) return { error: `사진은 한 번에 ${PC_IMG_N}장까지입니다` };
+  const imgs: { mime: string; data: string }[] = [];
+  for (const im of raw) {
+    const mime = String(im?.mime ?? '');
+    const data = String(im?.data ?? '');
+    if (!IMG_MIME.test(mime)) return { error: '사진 형식이 틀렸습니다' };
+    if (data.length < 100 || data.length > PC_IMG_MAX || !B64.test(data)) return { error: '사진 자료가 깨졌거나 너무 큽니다' };
+    imgs.push({ mime, data });
+  }
+  // 사진은 PC의 Claude가 직접 읽는다(다른 AI 사이트에 사진을 올리는 크롬 조작은 하지 않는다).
+  if (imgs.length > 0 && t.id !== 'claude') return { error: '사진은 내 PC의 Claude만 읽습니다' };
+  return { t: t.id, p, imgs };
 }
 export const cleanAnswer = (s: unknown) => clean(s, ANSWER_MAX);
 export const cleanModel = (s: unknown) => oneLine(s, 60).replace(/[<>"'`]/g, '');
@@ -171,7 +190,7 @@ async function getJob(u: string, id: string): Promise<PcJob | null> {
 const putJob = async (u: string, job: PcJob) => (await redis(['SET', K_JOB(u, job.id), JSON.stringify(job), 'EX', JOB_TTL_S])) === 'OK';
 
 // 창 쪽 — 맡기기. 까닭이 있으면 { error, code }.
-export async function askJob(u: string, t: string, p: string, now = Date.now()): Promise<{ id: string } | { error: string; code: string }> {
+export async function askJob(u: string, t: string, p: string, now = Date.now(), imgs: { mime: string; data: string }[] = []): Promise<{ id: string } | { error: string; code: string }> {
   const rec = await getKeyRec(u);
   if (rec === undefined) return { error: '우편함에 닿지 못했습니다', code: 'store' };
   if (!rec) return { error: 'PC가 아직 연결되지 않았습니다', code: 'nopc' };
@@ -182,6 +201,13 @@ export async function askJob(u: string, t: string, p: string, now = Date.now()):
   if (n === 1) await redis(['EXPIRE', nk, 2 * 86_400]);
   if (n > DAY_MAX) return { error: `오늘은 PC에 ${DAY_MAX}번까지 맡길 수 있습니다`, code: 'day' };
   const job: PcJob = { v: 1, id: newJobId(), t, p, st: 'wait', at: now };
+  if (imgs.length > 0) {
+    for (let i = 0; i < imgs.length; i++) {
+      if ((await redis(['SET', K_IMG(u, job.id, i + 1), imgs[i].data, 'EX', JOB_TTL_S])) !== 'OK') return { error: '사진을 우편함에 넣지 못했습니다', code: 'store' };
+    }
+    job.ni = imgs.length;
+    job.mi = imgs.map(im => im.mime);
+  }
   if (!(await putJob(u, job))) return { error: '우편함에 넣지 못했습니다', code: 'store' };
   if ((await redis(['LPUSH', K_Q(u), job.id])) === undefined) return { error: '우편함에 넣지 못했습니다', code: 'store' };
   await redis(['EXPIRE', K_Q(u), JOB_TTL_S]);
@@ -205,11 +231,31 @@ export async function jobsView(u: string, ids: string[]) {
   return { jobs, seen: Number(seen) || 0, store: vals !== undefined };
 }
 
+// 끝난 질문의 사진은 바로 지운다(보관 기간을 기다리지 않는다).
+async function dropImgs(u: string, j: PcJob): Promise<void> {
+  const n = Math.min(PC_IMG_N, Number(j.ni) || 0);
+  if (n > 0) await redis(['DEL', ...Array.from({ length: n }, (_, i) => K_IMG(u, j.id, i + 1))]);
+}
+
 export async function cancelJob(u: string, id: string): Promise<boolean> {
   if (!JOB_ID_RE.test(id)) return false;
   const j = await getJob(u, id);
   if (!j || (j.st !== 'wait' && j.st !== 'take')) return false;
-  return putJob(u, { ...j, st: 'cancel', da: Date.now() });
+  const ok = await putJob(u, { ...j, st: 'cancel', da: Date.now() });
+  if (ok) await dropImgs(u, j);
+  return ok;
+}
+
+// PC 쪽 — 질문에 든 사진 하나(가져간·기다리는 질문만). 없으면 null.
+export async function jobImage(u: string, id: string, n: number): Promise<{ mime: string; b64: string } | null | undefined> {
+  if (!JOB_ID_RE.test(id) || !Number.isInteger(n) || n < 1 || n > PC_IMG_N) return null;
+  const j = await getJob(u, id);
+  if (!j || (j.st !== 'take' && j.st !== 'wait') || n > (Number(j.ni) || 0)) return null;
+  const b64 = await redis(['GET', K_IMG(u, id, n)]);
+  if (b64 === undefined) return undefined;
+  if (!b64) return null;
+  const mime = Array.isArray(j.mi) && IMG_MIME.test(String(j.mi[n - 1] || '')) ? String(j.mi[n - 1]) : 'image/jpeg';
+  return { mime, b64: String(b64) };
 }
 
 // PC 쪽 — 가장 오래 기다린 질문 하나(취소된 것은 건너뛴다).
@@ -237,7 +283,9 @@ export async function finishJob(u: string, id: string, patch: { a?: string; m?: 
   const next: PcJob = patch.e !== undefined
     ? { ...j, st: 'fail', e: patch.e || '까닭 없음', da: now }
     : { ...j, st: 'done', a: patch.a || '', m: patch.m || '', da: now };
-  return (await putJob(u, next)) ? 'ok' : 'store';
+  if (!(await putJob(u, next))) return 'store';
+  await dropImgs(u, j);
+  return 'ok';
 }
 
 export async function pcStatus(u: string) {
