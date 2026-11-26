@@ -23,6 +23,11 @@
   Claude 데스크톱 앱(코워크)에서 맥미니(크롬에 Claude in Chrome 이 연결된 컴퓨터)를 고른 채 새 예약 작업 →
   이름 `[ASS-PAGE-펀드 기준가 · 맥미니 크롬]` · 평일 10:17 · 지시 칸에 TRIGGER-PROMPT.md 의 `-----` 사이 글 → 저장 → "지금 실행" 한 번.
 - 연결할 것: 구글 드라이브 커넥터(열쇠 파일 읽기) · Claude in Chrome.
+- 2026-11-26 클라우드 세션에서 직접 만들어 보려 했으나 막혔다: 코워크 환경에 create_trigger·create_session 모두 거절,
+  Remote Control 폴더 목록이 비어 맥미니에 붙지도 못함. 그래서 맥미니 Claude 앱 새 채팅에 붙여 넣는 한 줄을 쓴다
+  (순서는 `.claude/skills/mac-mini-remote/SKILL.md`).
+- 열쇠 파일이 없으면 예약 작업이 처음 한 번만 사이트(nominfi1.vercel.app)를 맥미니 크롬에 열어 만들게 한다
+  — 앱 화면을 새로 열면 다른 기기 로그인이 끊기므로 그때만.
 
 ## 고칠 때
 - 우편함의 코드 모양은 `api/_fundFeed.ts` CODE_RE 와 `src/fundFeed.ts` FUND_FEED_CODE_RE 가 같아야 한다(verify:fund-feed).
