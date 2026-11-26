@@ -82,7 +82,7 @@ if (H) {
   const by2 = Object.fromEntries(r2.next.map(it => [it.id, it]));
   eq('#H2 0으로 · 메모에 이전 수량·투자금액', [by2.a7.quantity, by2.a7.investAmount, by2.a7.syncNote], [0, 0, zeroNote(TODAY, { qty: 10, invest: 300000 })]);
   ok('#H2 메모 글 = 날짜 · 이전 10주 · 300,000원', /^11\/26 사진 맞추기 — .*이전 10주 · 300,000원/.test(by2.a7.syncNote));
-  eq('#H2 새 종목 = 맨 위 새 행(코드 비움 · 메모)', [r2.next[0].id, r2.next[0].type, r2.next[0].code, r2.next[0].name, r2.next[0].quantity, r2.next[0].investAmount, /종목코드를 넣어/.test(r2.next[0].syncNote)],
+  eq('#H2 새 종목 = 맨 위 새 행(코드 비움 · 메모 = 코드 찾기 대상 표시)', [r2.next[0].id, r2.next[0].type, r2.next[0].code, r2.next[0].name, r2.next[0].quantity, r2.next[0].investAmount, /사진에서 새로 추가한 종목.*종목코드를 찾는 중/.test(r2.next[0].syncNote)],
     ['N1', 'stock', '', 'KODEX 미국나스닥100', 20, 400000, true]);
   eq('#H2 예수금·펀드·현금·0주 행은 그대로', [by2.d1.depositAmount, by2.f1.investAmount, by2.c1.investAmount, by2.a8.quantity], [10000, 100000, 50000, 0]);
   // 되돌리기 — 바꾼 칸만 이전으로, 새 행은 빼고, 그 사이 들어온 시세는 그대로
@@ -171,6 +171,84 @@ if (H && P) {
   eq('#K2 관리자 = 내 키 → 사이트 키 · 다른 사용자 = 내 키만(사이트 키 안 씀)', [
     P.pickHoldKeys(true, UK, ['s1', 's2']), P.pickHoldKeys(true, '', ['s1']), P.pickHoldKeys(false, UK, ['s1']), P.pickHoldKeys(false, '', ['s1', 's2']),
   ], [[UK, 's1', 's2'], ['s1'], [UK], []]);
+}
+
+// #C 새로 넣은 종목의 종목코드를 이름으로 찾기(사용자 신고 2026-11-26: 새 계좌를 사진으로 맞췄더니 현재가 0·수익률 -100%)
+if (H) {
+  const { nameFits, cleanPhotoName, jsonFromBytes, codeCandsFrom, pickCodeCands, findCodeByName, photoCodeTodo, fillPhotoCode, markPhotoCodeMiss, PHOTO_ADD_MARK, parseHoldingsText, planHoldingsSync, applyHoldingsPlan } = H;
+  eq('#C1 이름 맞춤 — 같음 · 사진이 잘림(앞 4자 이상) · …뗌 · 짧은 앞부분·공식이 더 짧음은 아님', [
+    nameFits('KODEX 200', 'KODEX 200'), nameFits('RISE 삼성전자SK하이', 'RISE 삼성전자SK하이닉스채권혼합50'), nameFits('RISE 삼성전자SK…', 'RISE 삼성전자SK하이닉스채권혼합50'),
+    nameFits('KOD', 'KODEX 200'), nameFits('KODEX 200선물인버스2X', 'KODEX 200'), cleanPhotoName('TIGER 미국S&P5... '),
+  ], [true, true, true, false, false, 'TIGER 미국S&P5']);
+  const ascii = (s) => [...s].map(ch => ch.charCodeAt(0));
+  const euc = new Uint8Array([...ascii('{"itemname":"'), 0xB0, 0xA1, ...ascii('"}')]);
+  eq('#C2 바이트 → JSON(UTF-8 · EUC-KR · 감싼 글 · 못 읽음 null)', [
+    jsonFromBytes(new TextEncoder().encode('{"a":"가"}')), jsonFromBytes(euc), jsonFromBytes(new TextEncoder().encode('cb({"a":1});')), jsonFromBytes(new TextEncoder().encode('<html>')),
+  ], [{ a: '가' }, { itemname: '가' }, { a: 1 }, null]);
+  const AC = { query: 'KODEX', items: [
+    { code: '069500', name: '<b>KODEX</b> 200', typeCode: 'KOSPI', nationCode: 'KOR' },
+    { code: 'AAPL', name: '애플', nationCode: 'USA' },
+    { code: '252670', name: 'KODEX 200선물인버스2X', nationCode: 'KOR' },
+    { reutersCode: '005930', name: '삼성전자', nationCode: 'USA' },
+  ] };
+  const OLD = { items: [[[['KODEX 200'], ['069500'], ['코스피']], [['KODEX 레버리지'], ['122630'], ['코스피']]]] };
+  const ETF = { resultCode: 'success', result: { etfItemList: [{ itemcode: '069500', itemname: 'KODEX 200' }, { itemcode: '0047A0', itemname: 'RISE 삼성전자SK하이닉스채권혼합50' }, { itemcode: '0091P0', itemname: 'TIGER 머니마켓액티브' }] } };
+  eq('#C3 검색 답 읽기 — 지금 모양(국내만·태그 뗌) · 옛 자동완성 줄 · ETF 전체 목록(맞는 이름만)', [
+    codeCandsFrom(AC), codeCandsFrom(OLD), codeCandsFrom(ETF, 'RISE 삼성전자SK하이'), codeCandsFrom('없음'), codeCandsFrom(null),
+  ], [
+    [{ code: '069500', name: 'KODEX 200' }, { code: '252670', name: 'KODEX 200선물인버스2X' }],
+    [{ code: '069500', name: 'KODEX 200' }, { code: '122630', name: 'KODEX 레버리지' }],
+    [{ code: '0047A0', name: 'RISE 삼성전자SK하이닉스채권혼합50' }], [], [],
+  ]);
+  const C = [{ code: '069500', name: 'KODEX 200' }, { code: '252670', name: 'KODEX 200선물인버스2X' }, { code: '102110', name: 'TIGER 200' }];
+  eq('#C4 후보 고르기 — 같은 이름 먼저 · 잘린 이름은 하나뿐일 때만 · 여럿이면 고르지 않음', [
+    pickCodeCands('KODEX 200', C), pickCodeCands('KODEX 200선물', C), pickCodeCands('KODEX', C), pickCodeCands('ACE 반도체', C),
+  ], [
+    { list: [C[0]], exact: true, why: '' }, { list: [C[1]], exact: false, why: '' }, { list: [], exact: false, why: 'many' }, { list: [], exact: false, why: 'none' },
+  ]);
+
+  const BOOK = { '069500': { name: 'KODEX 200', price: 41230, changeRate: -1.2 }, '0047A0': { name: 'RISE 삼성전자SK하이닉스채권혼합50', price: 12880, changeRate: 0.4 }, '999990': { name: '엉뚱한종목', price: 1000, changeRate: 0 }, '0000Z0': { name: 'KODEX 반도체', price: 0, changeRate: 0 } };
+  const deps = (cands, { reached = true, down = false } = {}) => {
+    const calls = { search: 0, info: [] };
+    return { calls, search: async () => { calls.search++; return { reached, cands }; }, info: async (code) => { calls.info.push(code); return down ? null : (BOOK[code] || null); } };
+  };
+  const d1 = deps([{ code: '069500', name: 'KODEX 200' }]);
+  const r1 = await findCodeByName('KODEX 200', d1);
+  eq('#C5 이름이 같은 종목 → 시세 조회의 공식 이름으로 확인하고 코드·현재가', [r1, d1.calls.info], [{ found: { code: '069500', name: 'KODEX 200', price: 41230, changeRate: -1.2 }, why: '' }, ['069500']]);
+  const r2 = await findCodeByName('RISE 삼성전자SK하이', deps([{ code: '0047A0', name: 'RISE 삼성전자SK하이닉스채권혼합50' }]));
+  eq('#C6 잘린 이름 · 후보 하나 → 공식 이름(전체)으로 채움', r2.found && [r2.found.code, r2.found.name], ['0047A0', 'RISE 삼성전자SK하이닉스채권혼합50']);
+  const r3 = await findCodeByName('KODEX 200', deps([{ code: '999990', name: 'KODEX 200' }]));
+  eq('#C7 검색이 준 코드의 공식 이름이 다르면(틀린 코드) 넣지 않는다', r3, { found: null, why: 'none' });
+  eq('#C8 연결 실패 — 검색이 닿지 않음 · 시세 조회가 닿지 않음 = net(메모를 고치지 않고 다음에 다시)', [
+    await findCodeByName('KODEX 200', deps([], { reached: false })), await findCodeByName('KODEX 200', deps([{ code: '069500', name: 'KODEX 200' }], { down: true })),
+    await findCodeByName('KODEX 200', { search: async () => { throw new Error('x'); }, info: async () => null }),
+  ], [{ found: null, why: 'net' }, { found: null, why: 'net' }, { found: null, why: 'net' }]);
+  eq('#C9 못 찾음 — 후보 없음 · 여럿 · 현재가 0 은 넣지 않음', [
+    await findCodeByName('ACE 반도체', deps([])), await findCodeByName('KODEX', deps(C)), await findCodeByName('KODEX 반도체', deps([{ code: '0000Z0', name: 'KODEX 반도체' }])),
+  ], [{ found: null, why: 'none' }, { found: null, why: 'many' }, { found: null, why: 'none' }]);
+
+  // 사용자 상황 그대로 — 새 계좌(빈 계좌)를 사진으로 맞춤 → 새 행은 코드가 비어 있다 → 찾을 목록에 든다
+  const plan = planHoldingsSync(parseHoldingsText(PHOTO1), []);
+  let n = 0;
+  const added = applyHoldingsPlan([], plan, { newId: () => `n${++n}`, today: TODAY }).next;
+  const accts = [
+    { id: 'p1', accountType: 'portfolio', portfolio: added },
+    { id: 'p2', accountType: 'overseas', portfolio: [{ id: 'o1', type: 'stock', code: '', name: 'Apple', syncNote: `11/26 사진 맞추기 — ${PHOTO_ADD_MARK}입니다` }] },
+    { id: 'p3', accountType: 'portfolio', deletedAt: '2026-11-01', portfolio: [{ id: 'z1', type: 'stock', code: '', name: 'KODEX 200', syncNote: PHOTO_ADD_MARK }] },
+    { id: 'p4', portfolio: [{ id: 'm1', type: 'stock', code: '', name: 'KODEX 200', syncNote: '' }, { id: 'm2', type: 'stock', code: '069500', name: 'KODEX 200', syncNote: PHOTO_ADD_MARK }] },
+  ];
+  eq('#C10 찾을 행 — 사진으로 새로 넣고 코드가 빈 주식 행만(해외·삭제 계좌·메모 없음·코드 있음 제외)', photoCodeTodo(accts).map(t => `${t.pid}:${t.name}`),
+    added.filter(it => it.type === 'stock' && !it.code).map(it => `p1:${it.name}`));
+  ok('#C10b 사용자 사진(빈 계좌) — 새로 넣은 행이 모두 코드 빈칸 · 찾을 목록 5개', photoCodeTodo(accts).length === 5 && added.every(it => it.code === ''));
+  const f = { code: '0047A0', name: 'RISE 삼성전자SK하이닉스채권혼합50', price: 12880, changeRate: 0.4 };
+  const target = added.find(it => it.name.startsWith('RISE'));
+  const filled = fillPhotoCode(added, target.id, f, TODAY).find(it => it.id === target.id);
+  ok('#C11 채우기 — 코드·공식 이름·현재가·등락률 · 메모에 찾은 코드 · 수량·투자금액은 그대로', filled.code === '0047A0' && filled.name === f.name && filled.currentPrice === 12880 && filled.changeRate === 0.4
+    && filled.syncNote.includes('0047A0') && filled.quantity === target.quantity && filled.investAmount === target.investAmount && photoCodeTodo([{ id: 'p1', portfolio: [filled] }]).length === 0);
+  const typed = fillPhotoCode([{ ...target, code: '123456' }], target.id, f, TODAY)[0];
+  ok('#C12 그사이 사용자가 코드를 넣은 행은 건드리지 않는다', typed.code === '123456' && typed.name === target.name);
+  const missed = markPhotoCodeMiss(added, target.id, 'many', TODAY).find(it => it.id === target.id);
+  ok('#C13 못 찾음 메모 — 까닭 · 코드 넣어 달라 · 표시 그대로(다음 실행에 다시 찾음)', missed.syncNote.includes('여럿') && missed.syncNote.includes('종목코드를 넣어') && missed.syncNote.includes(PHOTO_ADD_MARK) && missed.code === '');
 }
 
 // #E 서버 처리부를 끝까지 — 로그인 확인·관리자 판별은 바꿔 끼우고 가짜 Gemini로
@@ -297,6 +375,17 @@ const imgs = [...guide.matchAll(/img: '(\/ai-guide\/[^']+\.svg)'/g)].map(m => m[
 ok('#S11 사용법 그림 다섯 장 — 파일이 있고 SVG다', imgs.length === 5 && imgs.every(p => existsSync(join(ROOT, 'public', p)) && /^<svg[\s\S]*<\/svg>\s*$/.test(read(join('public', p)))));
 ok('#S12 사용법 — 키 받는 곳 주소 · 무료 한도 초기화 시각 · 사진 저장 안 함 · 구글 약관 안내', /AI_KEY_PAGE = 'https:\/\/aistudio\.google\.com\/apikey'/.test(guide)
   && guide.includes('오후 4~5시') && guide.includes('사진을 저장하지 않습니다') && guide.includes('구글 서비스 개선'));
+const fillHook = stripComments(read('src/hooks/usePhotoCodeFill.ts'));
+const apiSrc = stripComments(read('src/api.ts'));
+const search = apiSrc.slice(apiSrc.indexOf('export const searchKrStockCodes'), apiSrc.indexOf('export const fetchUsStockInfo'));
+ok('#S13 App — 코드 찾기는 부팅 정착 뒤 · 관리자 접속이 아닐 때만 · 찾으면 구분 물려받기 + 그 계좌 id로 단일 갱신(이력 스탬프)',
+  /usePhotoCodeFill\(\{[\s\S]*?ready: histPhase === 'settled',[\s\S]*?canWrite: \(\) => !ADMIN_VIEW_EMAIL && !adminViewingAsRef\.current,[\s\S]*?onFilled: \(pid, id, code\) => \{ inheritSharedCategoryFor\(pid, id\); handleSingleStockRefreshFor\(pid, id, code\); \}/.test(app)
+  && /import \{ usePhotoCodeFill \} from '\.\/hooks\/usePhotoCodeFill';/.test(app));
+ok('#S14 코드 찾기 훅 — 확인한 코드만 넣는다(findCodeByName · 시세 조회 fetchStockInfo) · 연결 실패는 메모를 고치지 않음 · 한 세션에 한 번',
+  /findCodeByName\(t\.name, \{ search: searchKrStockCodes, info: fetchStockInfo \}\)/.test(fillHook) && /else if \(r\.why === 'net'\) net\+\+;/.test(fillHook)
+  && /tried\.current\.add\(/.test(fillHook) && !/fetch\(/.test(fillHook));
+ok('#S15 이름 검색은 /api/proxy(로그인 확인)만 — 바깥 공용 프록시로 보내지 않음', search.length > 200 && (search.match(/fetch\(/g) || []).length === 0
+  && /fetch\(`\/api\/proxy\?url=\$\{encodeURIComponent\(url\)\}`/.test(apiSrc) && !/allorigins|codetabs/.test(search));
 
 console.log(`\nverify:holdings-photo — ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

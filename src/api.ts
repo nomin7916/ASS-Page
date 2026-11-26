@@ -1,3 +1,5 @@
+import { codeCandsFrom, jsonFromBytes, type CodeCand } from './holdingsPhoto';
+
 // ── 해외주식 히스토리: 서버사이드 Edge Function 경유 (Naver worldstock → Yahoo Finance) ──
 export const fetchUsStockHistory = async (
   code: string,
@@ -160,6 +162,44 @@ export const fetchStockInfo = async (code: string) => {
     } catch (e) { continue; }
   }
   return null;
+};
+
+// 국내 종목 이름 → 코드 후보(사진으로 넣은 새 종목의 코드 찾기). 네이버 자동완성 두 곳 → 그래도 없으면 ETF 전체 목록.
+// 답의 모양은 codeCandsFrom이 넓게 읽고, 고른 코드는 부르는 쪽이 fetchStockInfo의 공식 이름으로 다시 확인한다.
+let _etfList: Promise<unknown> | null = null;
+const proxyJson = async (url: string): Promise<unknown> => {
+  try {
+    const res = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(9000) });
+    if (!res.ok) return null;
+    return jsonFromBytes(await res.arrayBuffer());
+  } catch { return null; }
+};
+export const searchKrStockCodes = async (query: string): Promise<{ reached: boolean; cands: CodeCand[] }> => {
+  const q = String(query || '').trim().slice(0, 40);
+  if (!q) return { reached: true, cands: [] };
+  let reached = false;
+  const sources = [
+    `https://ac.stock.naver.com/ac?q=${encodeURIComponent(q)}&target=stock,index,marketindicator`,
+    `https://m.stock.naver.com/front-api/search/autoComplete?query=${encodeURIComponent(q)}&target=stock`,
+  ];
+  for (const url of sources) {
+    const json = await proxyJson(url);
+    if (json == null) continue;
+    reached = true;
+    const cands = codeCandsFrom(json, q);
+    if (cands.length) return { reached, cands };
+  }
+  if (!_etfList) {
+    _etfList = proxyJson('https://finance.naver.com/api/sise/etfItemList.nhn?etfType=0&targetColumn=market_sum&sortOrder=desc');
+    _etfList.then(j => { if (j == null) _etfList = null; });
+  }
+  const etf = await _etfList;
+  if (etf != null) {
+    reached = true;
+    const cands = codeCandsFrom(etf, q);
+    if (cands.length) return { reached, cands };
+  }
+  return { reached, cands: [] };
 };
 
 // 해외(미국) 주식/ETF 현재가 조회: 서버사이드 라우트 1순위 → 클라이언트 사이드 fallback

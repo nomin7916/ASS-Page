@@ -38,6 +38,7 @@ import CashTransferModal from './components/CashTransferModal';
 import UnlockPinModal from './components/UnlockPinModal';
 import PasteModal from './components/PasteModal';
 import HoldingsPhotoSync from './components/HoldingsPhotoSync';
+import { usePhotoCodeFill } from './hooks/usePhotoCodeFill';
 import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
 import PortfolioStatsPanel from './components/PortfolioStatsPanel';
 import AccountTabBar from './components/AccountTabBar';
@@ -2160,6 +2161,15 @@ export default function App() {
     marketHolidays,
   });
   refreshPricesRef.current = refreshPrices;
+
+  // 사진으로 새로 넣은 종목(코드 빈칸)의 종목코드를 이름으로 찾아 채우고 시세·이력 스탬프는 단일 갱신에 맡긴다.
+  usePhotoCodeFill({
+    portfolios, setPortfolios,
+    ready: histPhase === 'settled',
+    canWrite: () => !ADMIN_VIEW_EMAIL && !adminViewingAsRef.current,
+    onFilled: (pid, id, code) => { inheritSharedCategoryFor(pid, id); handleSingleStockRefreshFor(pid, id, code); },
+    notify,
+  });
 
   // 백필(효과#2)·자동확정은 useStockData **뒤**에 둔다 — 부팅 상태 머신 histPhase(정착 신호)를 게이트로 받기 위해서다.
   // STOCK-first는 Drive 캐시(전 세션 장중 stamp 포함)를 KIS 실제종가 도착 **전에** 보이게 하므로, 백필은 settled에서만,

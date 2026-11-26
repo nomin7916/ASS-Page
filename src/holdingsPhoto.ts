@@ -165,7 +165,7 @@ export function planHoldingsSync(parsed: HoldParsed, items: any[]): HoldPlan {
       continue;
     }
     if (r.cut || r.unread) { rows.push({ kind: 'bad', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: 0, invest: 0 }, note: r.unread ? `이 계좌에 없는 종목인데 숫자를 읽지 못해(${r.unread}) 넣지 않음` : '이 계좌에 없는 종목인데 숫자가 잘려 넣지 않음 — 그 종목이 다 보이게 한 장 더 찍어 주세요' }); continue; }
-    rows.push({ kind: 'add', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: r.qty, invest: r.invest }, note: '새 종목 — 종목코드를 넣어 주세요' });
+    rows.push({ kind: 'add', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: r.qty, invest: r.invest }, note: '새 종목 — 이름으로 종목코드를 찾아 넣습니다' });
   }
   const listContinues = parsed.rows.some(r => r.cut);
   for (const it of targets) {
@@ -201,7 +201,148 @@ export function zeroNote(today: string, before: { qty: number; invest: number })
   return `${mmdd(today)} 사진 맞추기 — 사진에 없어 보유수량·투자금액을 0으로 맞췄습니다 (이전 ${fmt(before.qty)}주 · ${fmt(before.invest)}원)`;
 }
 export function addNote(today: string): string {
-  return `${mmdd(today)} 사진 맞추기 — 사진에서 새로 추가한 종목입니다. 종목코드를 넣어 주세요`;
+  return `${mmdd(today)} 사진 맞추기 — 사진에서 새로 추가한 종목입니다. 이름으로 종목코드를 찾는 중입니다(못 찾으면 표에서 코드를 넣어 주세요)`;
+}
+
+// ── 새로 넣은 종목의 종목코드를 이름으로 찾기(사용자 신고 2026-11-26: 사진으로 넣은 새 종목이 코드가 비어 현재가 0·수익률 -100%) ──
+// ⚠️ 찾은 코드는 그 코드의 시세 조회가 돌려준 공식 이름이 사진 이름과 맞을 때만 쓴다 — 틀린 코드로 남의 시세를 끌어오지 않게.
+//    이름이 같은 후보가 없고 앞부분만 맞는 후보가 둘 이상이면(잘린 이름) 고르지 않는다(비워 두고 메모로 알린다).
+export const PHOTO_ADD_MARK = '사진에서 새로 추가한 종목';
+export const KR_CODE_RE = /^[0-9][0-9A-Z]{5}$/;
+const CAND_CODE_KEYS = ['code', 'cd', 'itemCode', 'itemcode', 'symbolCode', 'stockCode', 'reutersCode'];
+const CAND_NAME_KEYS = ['name', 'nm', 'itemName', 'itemname', 'stockName', 'korName'];
+export interface CodeCand { code: string; name: string }
+export interface CodeFound { code: string; name: string; price: number; changeRate: number }
+
+export function cleanPhotoName(s: unknown): string {
+  return String(s ?? '').replace(/(\s*(…|\.{2,}))+\s*$/, '').trim();
+}
+
+// 사진 이름이 공식 이름과 같거나, 사진 이름이 잘려 공식 이름의 앞부분(4자 이상)일 때만 맞다.
+export function nameFits(photo: unknown, official: unknown): boolean {
+  const a = normName(cleanPhotoName(photo)), b = normName(official);
+  if (!a || !b) return false;
+  return a === b || (a.length >= 4 && b.startsWith(a));
+}
+
+// 바이트 → JSON(UTF-8, 아니면 EUC-KR — 네이버 금융의 옛 API는 EUC-KR로 준다). 못 읽으면 null.
+export function jsonFromBytes(bytes: ArrayBuffer | Uint8Array): unknown {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let text = '';
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(u8); }
+  catch { try { text = new TextDecoder('euc-kr').decode(u8); } catch { return null; } }
+  text = text.replace(/^﻿/, '').trim();
+  try { return JSON.parse(text); } catch { /* 감싼 글이면 안쪽만 */ }
+  const m = text.match(/[[{][\s\S]*[\]}]/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch { return null; }
+}
+
+// 검색 답(모양이 바뀌어도 읽게 — 객체의 코드·이름 칸, 옛 자동완성의 [["이름"],["코드"]] 줄)에서 국내 종목 후보만 뽑는다.
+// want를 주면 그 이름에 맞는 후보만(ETF 전체 목록처럼 큰 답에서도 맞는 것만 남게).
+export function codeCandsFrom(json: unknown, want?: string): CodeCand[] {
+  const out: CodeCand[] = [];
+  const seen = new Set<string>();
+  let visits = 0;
+  const isCode = (x: unknown) => KR_CODE_RE.test(String(x ?? '').trim().toUpperCase());
+  const add = (code: unknown, name: unknown) => {
+    const c = String(code ?? '').trim().toUpperCase(), n = String(name ?? '').replace(/<[^>]*>/g, '').trim().slice(0, 80);
+    if (!KR_CODE_RE.test(c) || !n || seen.has(c)) return;
+    if (want != null && !nameFits(want, n)) return;
+    seen.add(c);
+    out.push({ code: c, name: n });
+  };
+  const walk = (v: any, depth: number) => {
+    if (v == null || typeof v !== 'object' || depth > 8 || out.length >= 40 || ++visits > 30000) return;
+    if (Array.isArray(v)) {
+      const cells = v.map(x => (Array.isArray(x) && x.length === 1 ? x[0] : x));
+      if (cells.length >= 2 && cells.every(x => typeof x === 'string' || typeof x === 'number')) {
+        const code = cells.find(isCode);
+        const name = cells.find(x => typeof x === 'string' && !isCode(x) && /[가-힣A-Za-z]/.test(x));
+        if (code != null && name != null) add(code, name);
+        return;
+      }
+      for (const x of v) walk(x, depth + 1);
+      return;
+    }
+    const codeK = CAND_CODE_KEYS.find(k => isCode(v[k]));
+    const nameK = CAND_NAME_KEYS.find(k => typeof v[k] === 'string' && v[k].trim());
+    const nation = String(v.nationCode ?? v.nation ?? 'KOR').toUpperCase();
+    if (codeK && nameK && (nation === 'KOR' || nation === 'KR')) add(v[codeK], v[nameK]);
+    for (const k of Object.keys(v)) if (v[k] && typeof v[k] === 'object') walk(v[k], depth + 1);
+  };
+  walk(json, 0);
+  return out;
+}
+
+// 확인할 후보 — 이름이 같은 후보(2개까지), 없으면 앞부분이 맞는 후보가 하나뿐일 때만.
+export function pickCodeCands(photo: string, cands: CodeCand[]): { list: CodeCand[]; exact: boolean; why: '' | 'none' | 'many' } {
+  const pn = normName(cleanPhotoName(photo));
+  const fit = (Array.isArray(cands) ? cands : []).filter((c, i, a) => nameFits(photo, c.name) && a.findIndex(x => x.code === c.code) === i);
+  const exact = fit.filter(c => normName(c.name) === pn);
+  if (exact.length) return { list: exact.slice(0, 2), exact: true, why: '' };
+  if (fit.length === 1) return { list: fit, exact: false, why: '' };
+  return { list: [], exact: false, why: fit.length ? 'many' : 'none' };
+}
+
+export interface CodeDeps {
+  search: (query: string) => Promise<{ reached: boolean; cands: CodeCand[] }>;
+  info: (code: string) => Promise<{ name: string; price: number; changeRate: number } | null>;
+}
+// why: none = 맞는 종목 없음 · many = 앞부분만 맞는 종목이 여럿 · net = 조회가 닿지 않음(다음에 다시)
+export async function findCodeByName(photoName: string, deps: CodeDeps): Promise<{ found: CodeFound | null; why: '' | 'none' | 'many' | 'net' }> {
+  const q = cleanPhotoName(photoName);
+  if (normName(q).length < 2) return { found: null, why: 'none' };
+  let res: { reached: boolean; cands: CodeCand[] };
+  try { res = await deps.search(q); } catch { return { found: null, why: 'net' }; }
+  const pick = pickCodeCands(q, res?.cands || []);
+  if (!pick.list.length) return { found: null, why: res?.reached ? (pick.why || 'none') : 'net' };
+  let reached = false;
+  for (const c of pick.list) {
+    let d: { name: string; price: number; changeRate: number } | null = null;
+    try { d = await deps.info(c.code); } catch { d = null; }
+    if (!d) continue;
+    reached = true;
+    const fits = pick.exact ? normName(d.name) === normName(q) : nameFits(q, d.name);
+    const price = Number(d.price), rate = Number(d.changeRate);
+    if (fits && price > 0) return { found: { code: c.code, name: String(d.name), price, changeRate: Number.isFinite(rate) ? rate : 0 }, why: '' };
+  }
+  return { found: null, why: reached ? 'none' : 'net' };
+}
+
+export function codeFoundNote(today: string, code: string, name: string): string {
+  return `${mmdd(today)} 사진 맞추기 — ${PHOTO_ADD_MARK}입니다. 종목코드 ${code}(${name})는 이름으로 찾아 넣었습니다 — 다르면 코드를 고쳐 주세요`;
+}
+export function codeMissNote(today: string, why: string): string {
+  const reason = why === 'many' ? '이름이 비슷한 종목이 여럿이라 고르지 못했습니다' : '이름으로 종목코드를 찾지 못했습니다';
+  return `${mmdd(today)} 사진 맞추기 — ${PHOTO_ADD_MARK}입니다. ${reason} — 표에서 종목코드를 넣어 주세요`;
+}
+
+// 코드를 찾을 행 — 사진으로 새로 넣었고(메모 표시) 코드가 비어 있는 주식 행. 해외·코인·금현물·간편·삭제 계좌는 뺀다(코드 체계가 다르다).
+const NO_KR_CODE = new Set(['overseas', 'crypto', 'gold', 'simple']);
+export function photoCodeTodo(portfolios: any[]): { pid: string; id: string; name: string }[] {
+  const out: { pid: string; id: string; name: string }[] = [];
+  for (const p of Array.isArray(portfolios) ? portfolios : []) {
+    if (!p || p.deletedAt || NO_KR_CODE.has(String(p.accountType || 'portfolio'))) continue;
+    for (const it of Array.isArray(p.portfolio) ? p.portfolio : []) {
+      if (!it || it.type !== 'stock' || it.isManualCash || String(it.code ?? '').trim()) continue;
+      if (!String(it.syncNote || '').includes(PHOTO_ADD_MARK) || !String(it.name ?? '').trim()) continue;
+      out.push({ pid: p.id, id: it.id, name: String(it.name) });
+    }
+  }
+  return out;
+}
+
+// 찾은 코드·공식 이름·시세를 넣는다 — 그사이 사용자가 코드를 넣은 행은 건드리지 않는다.
+export function fillPhotoCode(items: any[], id: string, f: CodeFound, today: string): any[] {
+  return (Array.isArray(items) ? items : []).map(it => (it && it.id === id && !String(it.code ?? '').trim()
+    ? { ...it, code: f.code, name: f.name, currentPrice: f.price, changeRate: f.changeRate, syncNote: codeFoundNote(today, f.code, f.name) }
+    : it));
+}
+export function markPhotoCodeMiss(items: any[], id: string, why: string, today: string): any[] {
+  return (Array.isArray(items) ? items : []).map(it => (it && it.id === id && !String(it.code ?? '').trim()
+    ? { ...it, syncNote: codeMissNote(today, why) }
+    : it));
 }
 
 // 계획대로 바꾼 항목 배열 + 되돌리기 정보. 시세 필드는 건드리지 않는다(앱 탭이 최신 prev 위에서 부른다).
