@@ -54,7 +54,7 @@ function calculateKrEtfDividendTax(purchases, dividend, options = {}) {
     ...purchases.map(p => ({ date: p.date, kind: 'B', shares: p.shares, price: p.taxBasePrice })),
     ...sales.map(s => ({ date: s.date, kind: 'S', shares: s.shares })),
   ]
-    .filter(e => e.date <= dividend.exDate)
+    .filter(e => e.date < dividend.exDate)   // 배당락 전날 장 마감 보유분만(배당락일 매수는 권리 없음 · 배당락일 매도분은 이미 권리 확정)
     .sort((a, b) => a.date.localeCompare(b.date) || (a.kind === b.kind ? 0 : a.kind === 'B' ? -1 : 1));
 
   let heldShares = 0;
@@ -249,6 +249,18 @@ it('1000건 누적 후에도 평균이 안정적', () => {
   // 예상 평균 = 9836.56 + 0.01*0.4 (i%5 = 0,1,2,3,4 평균 = 2 → 0.02) wait...
   // i%5 = 0,1,2,3,4 균등, 평균 = 2.0 → +0.02
   expectApprox(r.weightedAvgTaxBase, 9836.58, 0.001, 'weightedAvgTaxBase');
+});
+
+console.log('\n[8b] 배당락일 당일 매매는 그 분배금과 무관 — 배당락 전날 장 마감 보유(사용자 확정 2026-11-26)');
+it('배당락일 매수는 권리 없음 · 배당락일 매도분은 권리 있음(전날 보유)', () => {
+  const r = calculateKrEtfDividendTax(
+    [{ date: '2026-11-03', shares: 100, taxBasePrice: 10000 }, { date: '2026-11-12', shares: 50, taxBasePrice: 9000 }],
+    { exDate: '2026-11-12', exTaxBasePrice: 10266.18, perShareGrossDividend: 58 },
+    { sales: [{ date: '2026-11-12', shares: 40 }] },
+  );
+  expectEq(r.totalShares, 100, 'totalShares = 전날 보유(당일 매수 50·매도 40 모두 제외)');
+  expectApprox(r.weightedAvgTaxBase, 10000, 0.0001, '당일 매수 과표(9000)는 평균에 안 섞인다');
+  expectEq(r.taxablePerShare, 266.18, 'taxablePerShare');
 });
 
 console.log('\n[8] 전량 매도 후 배당락 → 보유 0 케이스');
@@ -1100,18 +1112,40 @@ function computeRunningAvgSnapshotsA(events, anchors) {
   return out;
 }
 
-function computeMonthlyAvgForGridA(events, monthYms, anchors) {
+function exCutOf(exDateMap, ym) {
+  const ex = exDateMap ? String(exDateMap[ym] || '') : '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(ex) ? ex : '';
+}
+
+function computeMonthlyAvgForGridA(events, monthYms, anchors, exDateMap) {
   const snapshots = computeRunningAvgSnapshotsA(events, anchors);
   const result = {};
   for (const ym of (monthYms || [])) {
-    const [year, month] = ym.split('-').map(Number);
-    const lastDay = new Date(year, month, 0).toISOString().slice(0, 10);
+    const lastDay = monthEndOfYm(ym);
+    const ex = exCutOf(exDateMap, ym);
     let best = null;
     for (const s of snapshots) {
-      if (s.date <= lastDay) best = s;
-      else break;
+      if (s.date > lastDay) break;
+      if (!ex || s.date < ex || s.anchored) best = s;
     }
     if (best && best.avgPrice > 0) result[ym] = best.avgPrice;
+  }
+  return result;
+}
+
+function computeMonthlyQtyForGridA(events, monthYms, exDateMap) {
+  const snapshots = computeRunningAvgSnapshotsA(events);
+  if (snapshots.length === 0) return {};
+  const result = {};
+  for (const ym of (monthYms || [])) {
+    const lastDay = monthEndOfYm(ym);
+    const ex = exCutOf(exDateMap, ym);
+    let best = null;
+    for (const s of snapshots) {
+      if (s.date > lastDay || (ex && s.date >= ex)) break;
+      best = s;
+    }
+    result[ym] = best != null ? best.qty : 0;
   }
   return result;
 }
@@ -1610,7 +1644,7 @@ it('#G19 prop 체인 4-hop이 끊기지 않는다 (App → DividendSummaryTable 
 
 it('#G20 ⚠️ 자동 계산에 앵커를 반드시 넘긴다 — 안 넘기면 조정이 화면에 반영되지 않는다', () => {
   ok(/const anchors = buildAvgTaxAnchors\(avgTaxBaseAdj\);/.test(MX), '앵커 생성(공유 함수)');
-  ok(/computeMonthlyAvgForGrid\(events, monthYms, anchors\)/.test(MX), '그리드 자동값에 전달');
+  ok(/computeMonthlyAvgForGrid\(events, monthYms, anchors, exDateMap\)/.test(MX), '그리드 자동값에 전달(배당락일 표도)');
   ok(/buildSortedEventsWithAvg\(events, anchors\)/.test(MX), '계산기 러닝 평균에 전달');
   // 앵커 생성을 손복제하면 두 화면의 날짜 해석이 갈린다.
   ok(!/exDate \|\| ''\) \|\| monthEndOf\(/.test(MX), '앵커 생성 손복제 없음');
@@ -1736,6 +1770,42 @@ it('#G25 미러 드리프트 — buildAvgTaxAnchors·avgTaxBaseAdjNeeded 본문�
   const b1 = normFn(sliceBlock(HL, 'export function avgTaxBaseAdjNeeded(', '\n}'));
   const b2 = normFn(sliceBlock(SELF, 'function avgTaxBaseAdjNeeded(', '\n}'));
   expectEq(b2, b1, 'avgTaxBaseAdjNeeded 드리프트');
+});
+
+it('#170b 배당락일이 있는 달 = 배당락 전날 장 마감 기준(평균 과표·수량) · 배당락일 매매·그 뒤 매매 제외 · 없는 달은 말일(사용자 확정 2026-11-26)', () => {
+  const evts = [
+    { id: 'a', date: '2026-11-03', change: 1000, taxBasePrice: 10000 },
+    { id: 'b', date: '2026-11-12', change: 500, taxBasePrice: 9000 },    // 배당락일 매수 — 11월 분배금 권리 없음
+    { id: 'c', date: '2026-11-24', change: -400, taxBasePrice: 0 },     // 배당락 뒤 매도 — 11월 분배금은 이미 1,000주에 붙음
+  ];
+  const ex = { '2026-11': '2026-11-12' };
+  expectApprox(computeMonthlyAvgForGridA(evts, ['2026-11'], undefined, ex)['2026-11'], 10000, 0.001, '평균 과표 = 배당락 전날');
+  expectEq(computeMonthlyQtyForGridA(evts, ['2026-11'], ex)['2026-11'], 1000, '수량 = 배당락 전날 보유');
+  expectEq(computeMonthlyQtyForGridA(evts, ['2026-11'])['2026-11'], 1100, '배당락일을 모르면 전처럼 말일(1000+500-400)');
+  expectApprox(computeMonthlyAvgForGridA(evts, ['2026-11'])['2026-11'], 9666.67, 0.01, '배당락일을 모르면 전처럼 말일 평균');
+  expectEq(computeMonthlyQtyForGridA(evts, ['2026-11', '2026-12'], ex)['2026-12'], 1100, '다음 달(배당락일 모름)은 말일');
+});
+
+it('#170c 배당락일 표가 있어도 그 달 앵커(실제 과세 역산 — 박제 배당락일·말일 폴백)는 그 달 셀에 들어간다', () => {
+  const evts = [
+    { id: 'a', date: '2026-07-14', change: 1000, taxBasePrice: 9900 },
+    { id: 'b', date: '2026-09-02', change: 1000, taxBasePrice: 10100 },
+  ];
+  const ex = { '2026-09': '2026-09-02' };
+  expectApprox(computeMonthlyAvgForGridA(evts, ['2026-09'], [{ date: '2026-09-02', value: 9946.72 }], ex)['2026-09'], 9946.72, 0.001, '배당락일 앵커 · 그날 매수 제외');
+  expectApprox(computeMonthlyAvgForGridA(evts, ['2026-09'], [{ date: '2026-09-30', value: 9946.72 }], ex)['2026-09'], 9946.72, 0.001, '말일 폴백 앵커도 그 달에');
+  expectApprox(computeMonthlyAvgForGridA(evts, ['2026-09'], undefined, ex)['2026-09'], 9900, 0.001, '앵커 없으면 배당락 전날 평균');
+});
+
+it('#G25c 미러 드리프트 — exCutOf·computeMonthlyAvgForGrid·computeMonthlyQtyForGrid 본문이 src와 같다 · 두 호출부가 배당락일 표를 넘긴다', () => {
+  const pairs = [['exCutOf', 'exCutOf'], ['computeMonthlyAvgForGrid', 'computeMonthlyAvgForGridA'], ['computeMonthlyQtyForGrid', 'computeMonthlyQtyForGridA']];
+  for (const [src, mir] of pairs) {
+    const a = normFn(sliceBlock(HL, `export function ${src}(`, '\n}')).replace(/^function \w+\(/, 'function F(').replace(/\?/g, '').replace(/: Record<string, number>/g, '').replace(/computeRunningAvgSnapshots\(/g, 'SNAP(');
+    const b = normFn(sliceBlock(SELF, `function ${mir}(`, '\n}')).replace(/^function \w+\(/, 'function F(').replace(/\?/g, '').replace(/computeRunningAvgSnapshotsA\(/g, 'SNAP(');
+    expectEq(b, a, `${src} 드리프트`);
+  }
+  ok(/computeMonthlyQtyForGrid\(events, monthYms, exDateMap\)/.test(MX), '수량 그리드에 전달');
+  ok(/computeMonthlyAvgForGrid\(events, \[ym\], anchors, portfolio\?\.dividendExDate\?\.\[code\]\)/.test(HL), '분배금 표(조정 제안)도 같은 기준');
 });
 
 // ─── 결과 출력 ────────────────────────────────────────────────────────────────

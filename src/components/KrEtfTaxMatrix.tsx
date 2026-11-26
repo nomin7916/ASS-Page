@@ -20,10 +20,13 @@ import {
   avgAdjTooltip,
   buildAvgTaxAnchors,
   monthEndOfYm,
+  exCutOf,
 } from '../krEtfTaxHelpers';
 import { taxRowMonth, groupTaxRowsByMonth, taxMonthOpen, showTaxMonthHeads, taxMonthLabel, taxMonthSummary } from '../taxCalcMonths';
 import { parseTaxCalcPaste, planTaxCalcPaste, applyTaxCalcPaste, pasteCounts, buildPastePrompt, mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoFitSize, PHOTO_TRIES, photoReadInit, photoReadStep, photoErrorText, photoOutcome } from '../taxCalcPaste';
 import TaxPhotoJobs from './TaxPhotoJobs';
+import { loadOcrEngine, ocrFile } from '../screenOcr';
+import { ocrTaxRead } from '../tradeOcr';
 import { splitByStock } from '../taxPhotoJob';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
@@ -357,8 +360,10 @@ export default function KrEtfTaxMatrix({
     // ⚠️ 날짜는 저장 시 박제한 exDate를 쓴다 — 나중에 배당락일 입력이 바뀌어도 확정한 앵커가
     //    조용히 흔들리면 안 된다. 폴백은 그 달 말일(UTC 조립 — 로컬 TZ로 하루 밀리지 않게).
     const anchors = buildAvgTaxAnchors(avgTaxBaseAdj);
-    const computedAvg = computeMonthlyAvgForGrid(events, monthYms, anchors);
-    const computedQtyMap = computeMonthlyQtyForGrid(events, monthYms);
+    // 배당락일이 있는 달은 배당락 전날 장 마감 기준(평균 과표·보유 수량) — 분배금 권리가 정해지는 시점(krEtfTaxHelpers.exCutOf).
+    const exDateMap = portfolio?.dividendExDate?.[stock.code] || {};
+    const computedAvg = computeMonthlyAvgForGrid(events, monthYms, anchors, exDateMap);
+    const computedQtyMap = computeMonthlyQtyForGrid(events, monthYms, exDateMap);
     const hasQtyEvents = Object.keys(computedQtyMap).length > 0;
     const sortedEventsRaw = buildSortedEventsWithAvg(events, anchors);
     // 현재가 — 포트폴리오 테이블과 같은 라이브 시세(item.currentPrice). 삭제된 종목(유령 행)이나
@@ -519,7 +524,7 @@ export default function KrEtfTaxMatrix({
       const showSuggest = !!suggest && suggest.needed
         && !(adjApplied && Math.abs(safeNum(adj.value) - suggest.value) < 0.005);
       return {
-        ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty,
+        ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty, exCut: exCutOf(exDateMap, ym),
         adj, adjApplied, obs, suggest, showSuggest, anchorDate,
         // ⚠️ 수동 평균 과표는 자동값(앵커 반영)보다 우선하므로, 그대로 두면 조정을 적용해도
         //    화면 값이 1원도 바뀌지 않는데 배지만 '조정됨'이 된다 → 적용 시 함께 지운다.
@@ -626,17 +631,66 @@ export default function KrEtfTaxMatrix({
     readPhotosAndApply(stock, photos.map(p => p.file));
   };
 
-  // 사진 → 기기에서 줄이기 → /api/tax-photo(구글 Gemini가 읽음) → 해석 → 바로 넣기(규칙은 붙여넣기와 같다 — 같은 날·같은
-  // 수량 행은 빈칸만 채우고 입력된 값은 덮지 않는다). 넣은 뒤 '되돌리기'로 넣기 전으로 돌릴 수 있다.
-  // ⚠️ 답을 끝까지 받은({d:1}) 때만 넣는다 — 중간에 끊긴 글을 넣으면 체결이 빠진 채 들어간다.
-  const readPhotosAndApply = async (stock, files) => {
+  // 사진 → ① 프로그램 글자 인식(AI 없이·무료·사진은 기기 밖으로 안 나감 — src/screenOcr.ts + tradeOcr.ocrTaxRead) 1순위
+  //   → 이 종목 체결·과표기준가를 하나라도 또렷하게 읽으면 그것만 넣고 끝(확인 필요한 줄은 붙여넣기 칸으로 — 고쳐서 '넣기').
+  // ② 프로그램이 이 종목 것을 하나도 못 읽었을 때만(또는 'AI로 검수'를 눌렀을 때) 기기에서 줄이기 → /api/tax-photo(구글 Gemini가 읽음).
+  // (사용자 확정 2026-11-26: 사진으로 넣는 곳은 모두 OCR 1순위 · AI 2순위.) 넣는 규칙은 붙여넣기와 같다 — 같은 날·같은
+  // 수량 행은 빈칸만 채우고 입력된 값은 덮지 않는다. 넣은 뒤 '되돌리기'로 넣기 전으로 돌릴 수 있다.
+  // ⚠️ AI 답은 끝까지 받은({d:1}) 때만 넣는다 — 중간에 끊긴 글을 넣으면 체결이 빠진 채 들어간다.
+  const readPhotosAndApply = async (stock, files, opts = {}) => {
     const id = ++photoRunId.current;
     const live = () => photoRunId.current === id;
     if (photoAbort.current) { try { photoAbort.current.abort(); } catch { /* 이미 끝남 */ } }
     const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
     photoAbort.current = ac;
     const n = files.length;
-    setPhotoRun({ phase: 'shrink', n });
+    let ocr = null;
+    if (!opts.ai) {
+      setPhotoRun({ phase: 'ocr', stage: 'load', n, f: 0 });
+      let engineOk = true;
+      try { await loadOcrEngine(f => { if (live()) setPhotoRun(r => (r.phase === 'ocr' && r.stage === 'load' ? { ...r, f } : r)); }); }
+      catch { engineOk = false; }
+      if (!live()) return;
+      if (engineOk) {
+        const per = [];
+        for (let i = 0; i < n; i++) {
+          setPhotoRun({ phase: 'ocr', stage: 'read', n, i: i + 1, f: 0 });
+          try { per.push(await ocrFile(files[i], f => { if (live()) setPhotoRun(r => (r.phase === 'ocr' && r.stage === 'read' ? { ...r, f } : r)); })); }
+          catch { /* 그림을 못 연 사진은 건너뛴다 */ }
+          if (!live()) return;
+        }
+        ocr = ocrTaxRead(per, { code: stock.code, name: stock.name || '' }, getTodayKST());
+      }
+      if (ocr && ocr.okN > 0) {
+        const today = getTodayKST();
+        const before = getCodeTaxBase(portfolioRef.current, stock.code).events || [];
+        const parsed = parseTaxCalcPaste(ocr.okText, today);
+        const plan = planTaxCalcPaste(parsed, before);
+        let kind = photoOutcome(parsed, plan);
+        const exFill = exFillsOf(stock, ocr.exs);
+        const exNew = exFill.filter(x => x.status === 'fill');
+        if (kind === 'apply') commitPastePlan(stock, before, plan);
+        exNew.forEach(x => updateTaxBaseExPrice(portfolio.id, stock.code, x.ym, x.value));
+        if (exNew.length > 0) kind = 'apply';
+        else if (kind === 'none' && exFill.length > 0) kind = 'same';
+        if (ocr.checkText) { setPasteText(ocr.checkText); setPasteMore(true); }
+        if (ocr.checks.length === 0 && kind !== 'none') setPastePhotos(prev => { prev.forEach(p => URL.revokeObjectURL(p.url)); return []; });
+        setPhotoRun({
+          phase: kind, n, text: ocr.okText, plan, counts: pasteCounts(plan), skipped: parsed.skipped, model: '프로그램 글자 인식(AI 없이)',
+          via: 'ocr', checks: ocr.checks, other: ocr.other, otherScreens: ocr.otherScreens, exFill,
+          undo: kind === 'apply' ? { code: stock.code, prev: before, ex: exNew.map(x => x.ym) } : null,
+        });
+        return;
+      }
+      // 다른 종목의 과세 화면뿐이면 AI에 물어도 이 종목 값이 없다 — 묻지 않고 알린다.
+      if (ocr && ocr.okN === 0 && ocr.otherScreens > 0 && !ocr.checkText) {
+        setPhotoRun({ phase: 'none', n, via: 'ocr', otherScreens: ocr.otherScreens, skipped: [] });
+        return;
+      }
+    }
+    // AI도 못 읽으면 프로그램이 읽은 '확인 필요' 줄이라도 붙여넣기 칸에 남긴다(고쳐서 '넣기').
+    const ocrToPaste = () => { if (ocr && ocr.checkText) { setPasteText(ocr.checkText); setPasteMore(true); } };
+    setPhotoRun({ phase: 'shrink', n, ocr });
     let images = [];
     try {
       const budget = photoBudget(n);
@@ -645,11 +699,11 @@ export default function KrEtfTaxMatrix({
         if (!live()) return;
       }
     } catch (err) {
-      if (live()) setPhotoRun({ phase: 'error', n, code: err && err.message === 'big' ? 'big' : 'decode' });
+      if (live()) { ocrToPaste(); setPhotoRun({ phase: 'error', n, ocr, code: err && err.message === 'big' ? 'big' : 'decode' }); }
       return;
     }
     if (!live()) return;
-    setPhotoRun({ phase: 'read', n, got: 0 });
+    setPhotoRun({ phase: 'read', n, got: 0, ocr });
     const today = getTodayKST();
     let st = photoReadInit();
     try {
@@ -664,7 +718,7 @@ export default function KrEtfTaxMatrix({
         let msg = '';
         try { msg = String((await res.json()).error || ''); } catch { /* 글 아님 */ }
         const code = res.status === 401 || res.status === 403 ? 'auth' : (res.status === 400 || res.status === 413 ? 'bad' : 'gemini');
-        if (live()) setPhotoRun({ phase: 'error', n, code, msg: msg || `HTTP ${res.status}` });
+        if (live()) { ocrToPaste(); setPhotoRun({ phase: 'error', n, ocr, code, msg: msg || `HTTP ${res.status}` }); }
         return;
       }
       if (res.body && res.body.getReader) {
@@ -684,12 +738,14 @@ export default function KrEtfTaxMatrix({
       }
     } catch (err) {
       if (!live() || (err && err.name === 'AbortError')) return;
-      setPhotoRun({ phase: 'error', n, code: 'net' });
+      ocrToPaste();
+      setPhotoRun({ phase: 'error', n, ocr, code: 'net' });
       return;
     }
     if (!live()) return;
     if (st.error || !st.done) {
-      setPhotoRun({ phase: 'error', n, code: st.error || 'cut', msg: st.msg, text: st.text });
+      ocrToPaste();
+      setPhotoRun({ phase: 'error', n, ocr, code: st.error || 'cut', msg: st.msg, text: st.text });
       return;
     }
     const text = st.text.trim();
@@ -700,18 +756,37 @@ export default function KrEtfTaxMatrix({
     if (kind === 'apply') commitPastePlan(stock, before, plan);
     if (kind !== 'none') {
       setPastePhotos(prev => { prev.forEach(p => URL.revokeObjectURL(p.url)); return []; });
-    }
+    } else ocrToPaste();
     setPhotoRun({
-      phase: kind, n, text, plan, counts: pasteCounts(plan), skipped: parsed.skipped, model: st.model,
+      phase: kind, n, text, plan, counts: pasteCounts(plan), skipped: parsed.skipped, model: st.model, via: 'ai', ocr,
       undo: kind === 'apply' ? { code: stock.code, prev: before } : null,
     });
   };
 
-  // 사진으로 넣은 것을 넣기 전으로 — 넣기 직전의 이벤트를 그대로 되돌려 쓴다.
+  // 과세 화면 사진의 전일배당전과표기준가격(배당락일) → 그 달 「배당 과표」. 달 = 이 종목 배당락일 표(dividendExDate)에서 그 날짜인 달, 없으면 그 날짜의 달.
+  // 빈 달만 넣는다(이미 있는 값은 덮지 않음 — 다르면 표시만).
+  const exFillsOf = (stock, exs) => {
+    const rec = getCodeTaxBase(portfolioRef.current, stock.code);
+    const exMap = (portfolioRef.current?.dividendExDate || {})[stock.code] || {};
+    const out = [];
+    const seen = new Set();
+    for (const x of exs || []) {
+      if (!ISO_DATE.test(String(x.date || ''))) continue;
+      const ym = Object.keys(exMap).find(k => exMap[k] === x.date) || x.date.slice(0, 7);
+      if (seen.has(ym)) continue;
+      seen.add(ym);
+      const cur = safeNum((rec.exTaxBase || {})[ym]);
+      out.push({ ym, date: x.date, value: x.value, cur, status: !(cur > 0) ? 'fill' : Math.abs(cur - x.value) < 0.01 ? 'same' : 'differ' });
+    }
+    return out;
+  };
+
+  // 사진으로 넣은 것을 넣기 전으로 — 넣기 직전의 이벤트를 그대로 되돌려 쓴다(사진으로 채운 「배당 과표」 달은 다시 비운다).
   const undoPhotoApply = () => {
     const u = photoRun.undo;
     if (!u) return;
     persistEvents(u.code, u.prev);
+    (u.ex || []).forEach(ym => updateTaxBaseExPrice(portfolio.id, u.code, ym, null));
     setPhotoRun(r => ({ ...r, phase: 'undone', undo: null }));
   };
 
@@ -943,7 +1018,7 @@ export default function KrEtfTaxMatrix({
                           className={exInputCls}
                           title="배당락일 과표기준가 (1주당)"
                         />
-                        <div className="text-[9px] text-gray-500 tabular-nums text-right px-0.5" title="해당 월 말 기준 보유 주식수">
+                        <div className="text-[9px] text-gray-500 tabular-nums text-right px-0.5" title={d.exCut ? `배당락일(${d.exCut}) 전날 장 마감 보유 주식수 — 분배금·과세가 붙는 수량` : '해당 월 말 기준 보유 주식수'}>
                           보유 {d.monthQty.toLocaleString()}주
                         </div>
                         <div className="relative">
@@ -1073,7 +1148,7 @@ export default function KrEtfTaxMatrix({
                             className={'text-[10px] px-2 py-0.5 rounded border inline-flex items-center gap-1 ' + (pasteFor === stock.code
                               ? 'border-violet-500 text-violet-200 bg-violet-900/30'
                               : 'border-violet-700/60 text-violet-300 hover:text-violet-200 hover:border-violet-500')}
-                            title="주문내역(체결내역) 사진을 올리면 AI가 읽어 날짜별 매수·매도 수량, 평균 단가, 과표기준가를 바로 넣습니다"
+                            title="주문내역(체결내역)·종목 정보 「과세」 화면 사진을 올리면 프로그램이 글자를 읽어(AI 없이) 날짜별 매수·매도 수량, 평균 단가, 과표기준가, 배당 과표를 바로 넣습니다 — 못 읽으면 AI가 읽습니다"
                           >
                             <ImagePlus size={10} /> 사진으로 넣기
                           </button>
@@ -1094,9 +1169,41 @@ export default function KrEtfTaxMatrix({
                           const counts = pasteCounts(plan);
                           const prompt = buildPastePrompt({ name: stock.name || '', code: stock.code, year: Number(getTodayKST().slice(0, 4)) });
                           const pr = photoRun;
-                          const busy = pr.phase === 'shrink' || pr.phase === 'read';
-                          const planTable = (rows) => (
-                            <table className="text-[10px] border-collapse">
+                          const busy = pr.phase === 'ocr' || pr.phase === 'shrink' || pr.phase === 'read';
+                          const pct = (f) => `${Math.round((Number(f) || 0) * 100)}%`;
+                          // 프로그램(OCR)으로 넣은 뒤 — 확인 필요한 줄·뺀 다른 종목 · 'AI로 검수'(사진을 AI에 한 번 더 — 2순위)
+                          const ocrNotes = (r) => (r.via === 'ocr' || r.ocr) && (
+                            <div className="space-y-1 text-[10px]">
+                              {r.via === 'ocr' && <div className="text-gray-500">프로그램 글자 인식으로 읽었습니다(AI 없이 · 무료 · 사진은 기기 밖으로 나가지 않았습니다)</div>}
+                              {r.via === 'ai' && r.ocr && <div className="text-gray-500">프로그램 글자 인식으로 이 종목 체결을 찾지 못해 AI로 읽었습니다</div>}
+                              {r.via === 'ocr' && r.other > 0 && <div className="text-gray-500">다른 종목 체결 {r.other}건은 뺐습니다</div>}
+                              {r.via === 'ocr' && r.otherScreens > 0 && <div className="text-amber-400/90">다른 종목의 과세 화면 {r.otherScreens}장은 넣지 않았습니다 — 화면 위 종목 이름을 확인해 주세요</div>}
+                              {r.via === 'ocr' && r.checks && r.checks.length > 0 && (
+                                <div className="text-amber-400/90 space-y-0.5">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span>확인 필요 {r.checks.length}줄은 넣지 않았습니다 — 아래 붙여넣기 칸에서 고쳐 '넣기'를 누르세요</span>
+                                    {pastePhotos.length > 0 && (
+                                      <button
+                                        onClick={() => readPhotosAndApply(stock, pastePhotos.map(p => p.file), { ai: true })}
+                                        className="px-2 py-0.5 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50"
+                                        title="같은 사진을 AI(구글 Gemini)에 한 번 더 읽힙니다 — 이미 넣은 날은 다시 넣지 않습니다"
+                                      >
+                                        AI로 검수
+                                      </button>
+                                    )}
+                                  </div>
+                                  {r.checks.slice(0, 5).map((c, i) => <div key={i} className="font-mono text-gray-400">{c.line} <span className="text-amber-400/80 font-sans">({c.why})</span></div>)}
+                                  {r.checks.length > 5 && <div className="text-gray-500">… 외 {r.checks.length - 5}줄</div>}
+                                </div>
+                              )}
+                            </div>
+                          );
+                          // 과세 화면 사진은 날짜가 많다 — 그날 매매 행이 없는 날(넣을 곳 없음)은 표에서 빼고 한 줄로만.
+                          const planTable = (all) => {
+                            const rows = (all || []).filter(r => !(r.side === null && r.note === '그날 매매 행 없음'));
+                            const idle = (all || []).length - rows.length;
+                            return (<>
+                            {rows.length > 0 && <table className="text-[10px] border-collapse">
                               <thead className="text-gray-500 border-b border-gray-700/50">
                                 <tr>
                                   <th className="text-left py-0.5 pr-3 font-normal">일자</th>
@@ -1125,7 +1232,19 @@ export default function KrEtfTaxMatrix({
                                   </tr>
                                 ))}
                               </tbody>
-                            </table>
+                            </table>}
+                            {idle > 0 && <div className="text-[10px] text-gray-500">과표기준가를 읽은 날 중 매매 행이 없는 {idle}일은 넣을 곳이 없어 건너뛰었습니다</div>}
+                            </>);
+                          };
+                          const exLines = (r) => r.exFill && r.exFill.length > 0 && (
+                            <div className="text-[10px] space-y-0.5">
+                              {r.exFill.map(x => (
+                                <div key={x.ym} className={x.status === 'fill' ? 'text-sky-300' : 'text-gray-500'}>
+                                  {Number(x.ym.slice(5))}월 배당 과표 {fmtPastePrice(x.value)} ({x.date.slice(5).replace('-', '.')} 전일배당전과표기준가격)
+                                  {x.status === 'fill' ? ' — 넣음' : x.status === 'same' ? ' — 이미 같음' : ` — 입력된 값 ${fmtPastePrice(x.cur)}과 달라 그대로 둠`}
+                                </div>
+                              ))}
+                            </div>
                           );
                           const skippedLine = (list) => list && list.length > 0 && (
                             <div className="text-[10px] text-gray-500">
@@ -1134,7 +1253,7 @@ export default function KrEtfTaxMatrix({
                           );
                           const readText = (t) => t && (
                             <details className="text-[10px] text-gray-500">
-                              <summary className="cursor-pointer select-none hover:text-gray-300">AI가 사진에서 읽은 글 보기</summary>
+                              <summary className="cursor-pointer select-none hover:text-gray-300">{pr.via === 'ocr' ? '프로그램이 사진에서 읽은 글 보기' : 'AI가 사진에서 읽은 글 보기'}</summary>
                               <pre className="mt-1 max-w-[720px] whitespace-pre-wrap bg-gray-950 border border-gray-800 rounded px-2 py-1 text-gray-300 font-mono">{t}</pre>
                             </details>
                           );
@@ -1144,13 +1263,13 @@ export default function KrEtfTaxMatrix({
                                 <label
                                   className={'px-3 py-1.5 rounded border border-violet-400 text-white bg-violet-700/70 hover:bg-violet-600/80 inline-flex items-center gap-1.5 font-medium '
                                     + (busy ? 'opacity-50 pointer-events-none' : 'cursor-pointer')}
-                                  title="휴대폰은 사진 보관함·사진 찍기·파일에서 고릅니다. 고르면 AI가 바로 읽어 넣습니다. 사진은 저장하지 않습니다."
+                                  title="휴대폰은 사진 보관함·사진 찍기·파일에서 고릅니다. 고르면 프로그램이 글자를 읽어(AI 없이) 바로 넣습니다 — 못 읽으면 AI가 읽습니다. 사진은 저장하지 않습니다."
                                 >
-                                  <ImagePlus size={13} /> 주문내역 사진 올리기
+                                  <ImagePlus size={13} /> 사진 올리기 (주문내역 · 과세 화면)
                                   <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy} onChange={e => pickAndReadPhotos(stock, e)} className="sr-only" />
                                 </label>
                                 <span className="text-[10px] text-gray-500">
-                                  사진을 고르면 AI가 읽어 날짜별 매수·매도 수량, 평균 단가, 과표기준가를 바로 넣습니다 · 여러 장은 한 번에 고르세요(최대 {PASTE_PHOTO_MAX}장)
+                                  사진을 고르면 프로그램이 글자를 읽어(AI 없이 · 무료) 주문내역은 날짜별 매수·매도 수량·평균 단가를, 종목 정보 「과세」 화면은 매매한 날의 과표기준가와 그 달 배당 과표를 바로 넣습니다 · 못 읽으면 AI가 읽습니다 · 여러 장은 한 번에 고르세요(최대 {PASTE_PHOTO_MAX}장)
                                 </span>
                               </div>
                               {pastePhotos.length > 0 && (
@@ -1176,13 +1295,17 @@ export default function KrEtfTaxMatrix({
                               {busy && (
                                 <div className="text-[11px] text-violet-200 inline-flex items-center gap-2" role="status">
                                   <span className="inline-block h-3 w-3 rounded-full border-2 border-violet-300 border-t-transparent animate-spin" />
-                                  {pr.phase === 'shrink' ? `사진 ${pr.n}장을 보낼 크기로 줄이는 중…` : `AI가 사진 ${pr.n}장을 읽는 중… 보통 10~30초 걸립니다`}
+                                  {pr.phase === 'ocr'
+                                    ? (pr.stage === 'load'
+                                      ? `글자 인식 엔진 받는 중… ${pct(pr.f)} (처음 한 번 약 17MB · AI 없이 기기에서 읽습니다)`
+                                      : `사진 ${pr.i}/${pr.n}장 글자 읽는 중… ${pct(pr.f)} (사진은 기기 밖으로 나가지 않습니다)`)
+                                    : `${pr.ocr ? '프로그램이 이 종목 체결을 찾지 못해 AI로 읽습니다 — ' : ''}${pr.phase === 'shrink' ? `사진 ${pr.n}장을 보낼 크기로 줄이는 중…` : `AI가 사진 ${pr.n}장을 읽는 중… 보통 10~30초 걸립니다`}`}
                                 </div>
                               )}
                               {pr.phase === 'apply' && (
                                 <div className="space-y-1.5">
                                   <div className="text-[11px] text-emerald-400 flex items-center gap-2 flex-wrap">
-                                    <span>✓ 넣었습니다 — 추가 {pr.counts.add}행{pr.counts.fill > 0 ? ` · 빈칸 채움 ${pr.counts.fill}행` : ''}</span>
+                                    <span>✓ 넣었습니다 — 추가 {pr.counts.add}행{pr.counts.fill > 0 ? ` · 빈칸 채움 ${pr.counts.fill}행` : ''}{pr.exFill && pr.exFill.some(x => x.status === 'fill') ? ` · 배당 과표 ${pr.exFill.filter(x => x.status === 'fill').length}개월` : ''}</span>
                                     {pr.undo && (
                                       <button
                                         onClick={undoPhotoApply}
@@ -1194,6 +1317,8 @@ export default function KrEtfTaxMatrix({
                                     )}
                                   </div>
                                   {planTable(pr.plan)}
+                                  {exLines(pr)}
+                                  {ocrNotes(pr)}
                                   {skippedLine(pr.skipped)}
                                   {readText(pr.text)}
                                 </div>
@@ -1202,13 +1327,17 @@ export default function KrEtfTaxMatrix({
                                 <div className="space-y-1.5">
                                   <div className="text-[11px] text-gray-300">사진의 체결은 모두 이미 들어 있습니다 — 바꾼 것이 없습니다.</div>
                                   {planTable(pr.plan)}
+                                  {exLines(pr)}
+                                  {ocrNotes(pr)}
                                   {skippedLine(pr.skipped)}
                                   {readText(pr.text)}
                                 </div>
                               )}
                               {pr.phase === 'none' && (
                                 <div className="space-y-1.5">
-                                  <div className="text-[11px] text-amber-400">사진에서 이 종목({stock.name || stock.code})의 체결·과표기준가를 찾지 못했습니다 — 주문내역(체결내역) 화면인지 확인해 주세요.</div>
+                                  <div className="text-[11px] text-amber-400">사진에서 이 종목({stock.name || stock.code})의 체결·과표기준가를 찾지 못했습니다 — 주문내역(체결내역) 화면이나 종목 정보의 「과세」 화면인지 확인해 주세요.</div>
+                                  {ocrNotes(pr)}
+                                  {pr.ocr && pr.ocr.checkText && <div className="text-[10px] text-amber-400/90">프로그램이 읽은 확인 필요 {pr.ocr.checks.length}줄을 아래 붙여넣기 칸에 넣어 두었습니다 — 고쳐서 '넣기'를 누르세요</div>}
                                   {skippedLine(pr.skipped)}
                                   {readText(pr.text)}
                                 </div>
@@ -1228,6 +1357,11 @@ export default function KrEtfTaxMatrix({
                                     )}
                                   </div>
                                   {pr.msg && pr.code !== 'bad' && <div className="text-[10px] text-gray-600 break-all">({pr.msg})</div>}
+                                  {pr.ocr && (
+                                    <div className="text-[10px] text-gray-500">
+                                      프로그램 글자 인식으로는 이 종목 것을 찾지 못해 AI에 물었습니다{pr.ocr.checkText ? ` — 프로그램이 읽은 확인 필요 ${pr.ocr.checks.length}줄은 아래 붙여넣기 칸에 넣어 두었습니다` : ''}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                               <button

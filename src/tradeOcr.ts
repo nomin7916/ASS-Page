@@ -9,7 +9,7 @@ import { normTradeDate } from './tradePhoto.ts';
 import { normName } from './holdingsPhoto.ts';
 
 export interface OcrLineIn { text: string; conf: number; x0: number; y0: number; x1: number; y1: number }
-export type OcrFlag = 'lowconf' | 'noheader' | 'orderprice' | 'farclose' | 'noprice' | 'nodate' | 'noname' | 'selfcheck' | 'cut';
+export type OcrFlag = 'lowconf' | 'noheader' | 'orderprice' | 'farclose' | 'noprice' | 'nodate' | 'noname' | 'selfcheck' | 'cut' | 'dateorder';
 export interface OcrTrade { rawDate: string; date: string; code: string; name: string; side: 'buy' | 'sell'; qty: number; price: number; conf: number; flags: OcrFlag[]; src: string }
 export interface OcrParsed { trades: OcrTrade[]; header: boolean; title: string }
 
@@ -25,6 +25,7 @@ export const OCR_FLAG_TEXT: Record<OcrFlag, string> = {
   noname: '종목을 못 찾음',
   selfcheck: '보유수량×평균단가가 매입금액과 맞지 않음',
   cut: '사진 아래가 잘려 숫자가 없음',
+  dateorder: '날짜가 앞뒤 줄과 이어지지 않음',
 };
 export const OCR_SELF_TOL = 0.01;   // 보유수량 × 평균단가 ≈ 매입금액(1% 안) — 숫자 하나를 잘못 읽으면 어긋난다
 
@@ -300,3 +301,143 @@ export const ocrHoldBad = (h: OcrHold) => !!h.cut || h.flags.includes('lowconf')
 export const ocrHoldLine = (h: OcrHold) => ocrHoldBad(h)
   ? `보유 | ${h.code || '-'} | ${h.name} | 잘림`
   : `보유 | ${h.code || '-'} | ${h.name} | ${h.qty} | ${h.invest > 0 ? h.invest : '-'} | ${h.avg > 0 ? h.avg : '-'}`;
+
+// ── 평균 과표 계산기(한 종목) 「주문내역 사진 올리기」 1순위(2026-11-26 사용자 확정: 사진은 OCR 먼저, AI는 그다음) ──
+// 주문내역 사진 → 이 종목 체결만 계산기 붙여넣기 줄(`2026-11-24 매도 50주 7490원` — taxCalcPaste.parseTaxCalcPaste가 읽는 꼴).
+// 과세 화면 사진(미래에셋 종목 → 정보 → 과세: 일자 · 과표기준가격 · 전일배당전과표기준가격) →
+//   과표기준가격 = `2026-11-24 과표 10266.18` 줄(그날 매매 행의 빈 과표기준가) · 전일배당전과표기준가격(배당락일에만 0이 아님) = 그 달 「배당 과표」.
+//   화면이 좁으면 머리줄 '과표기준가격'의 앞이 잘려 '기준가격'으로 읽힌다 — 같은 머리줄에 '…배당전과표…' 칸이 있을 때만 그 칸을 과표로 본다.
+//   화면 위 제목이 이 종목과 맞지 않으면(다른 종목 화면) 모두 확인 필요(noname).
+// 확인 필요한 줄은 넣지 않고 따로 돌려준다(붙여넣기 칸에서 고쳐 넣기). 다른 종목 이름이 보이는 체결은 뺀다(other) · 종목 이름이 아예 없는 체결은 확인 필요.
+export interface OcrTaxBase { date: string; rawDate: string; taxBase: number; conf: number; flags: OcrFlag[] }
+type TCol = 'tax' | 'ex' | 'guess' | 'date' | 'other';
+const tcolOf = (t: string): TCol => {
+  const s = t.replace(/^[^가-힣A-Za-z0-9]+|[^가-힣A-Za-z0-9]+$/g, '').replace(/[\s()·:]/g, '');
+  if (/당전.*과표|전일.*과표|배당.*과표/.test(s)) return 'ex';
+  if (/^(과표|과세표준)(기준가격?|기준가)?$/.test(s)) return 'tax';
+  if (/^기준가격?$/.test(s)) return 'guess';
+  if (/일자|날짜|기준일/.test(s)) return 'date';
+  return 'other';
+};
+// 과세 화면은 하루씩 이어진 달력 날짜다(미래에셋 — 주말 포함). 날짜 + 줄 번호가 거의 모든 줄에서 같으면(이어진 날짜) 그 값에서 벗어난 줄은
+//   잘못 읽은 것: 읽은 글자가 맞는 날짜의 앞부분이면(「2026.11.1」 ← 2026.11.11, 끝자리가 잘려 읽힘) 고치고, 아니면 확인 필요.
+//   이어진 날짜가 아니면(영업일만 보이는 화면) 가장 긴 한 방향 차례에서 벗어난 줄만 확인 필요.
+const dayNum = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) / 864e5 : NaN);
+const dayStr = (n: number) => new Date(n * 864e5).toISOString().slice(0, 10);
+function fixDateOrder<T extends { date: string; raw: string; bad?: boolean }>(recs: T[]): T[] {
+  if (recs.length < 3) return recs;
+  const d = recs.map(r => dayNum(r.date));
+  let up = 0, down = 0;
+  for (let i = 1; i < d.length; i++) { if (d[i] > d[i - 1]) up++; else if (d[i] < d[i - 1]) down++; }
+  const dir = down >= up ? -1 : 1;
+  const cnt = new Map<number, number>();
+  d.forEach((v, i) => { if (Number.isFinite(v)) { const o = v - dir * i; cnt.set(o, (cnt.get(o) || 0) + 1); } });
+  let mode = NaN, mc = 0;
+  cnt.forEach((c, o) => { if (c > mc) { mc = c; mode = o; } });
+  if (mc >= Math.max(3, Math.ceil(recs.length * 0.6))) {
+    return recs.map((r, i) => {
+      if (d[i] - dir * i === mode) return r;
+      const want = dayStr(mode + dir * i), raw = r.raw.replace(/\D/g, ''), w = want.replace(/\D/g, '');
+      if (raw.length >= 3 && (w.startsWith(raw) || w.slice(4).startsWith(raw))) return { ...r, date: want };
+      return { ...r, bad: true };
+    });
+  }
+  // 가장 긴 한 방향 차례(줄 수 적음 — 30줄 안팎)
+  const len = d.map(() => 1), prev = d.map(() => -1);
+  for (let i = 0; i < d.length; i++) {
+    if (!Number.isFinite(d[i])) { len[i] = 0; continue; }
+    for (let j = 0; j < i; j++) if (Number.isFinite(d[j]) && (d[i] - d[j]) * dir > 0 && len[j] + 1 > len[i]) { len[i] = len[j] + 1; prev[i] = j; }
+  }
+  let end = 0;
+  len.forEach((l, i) => { if (l > len[end]) end = i; });
+  const keep = new Set<number>();
+  for (let i = end; i >= 0 && len[i] > 0; i = prev[i]) keep.add(i);
+  return recs.map((r, i) => (keep.has(i) ? r : { ...r, bad: true }));
+}
+export function parseOcrTaxBase(lines: OcrLineIn[], stock: { code: string; name: string } | null, today: string): { bases: OcrTaxBase[]; exs: OcrTaxBase[]; header: boolean; titleOk: boolean } {
+  const bases: OcrTaxBase[] = [], exs: OcrTaxBase[] = [];
+  let cols: { xc: number; c: TCol }[] = [];
+  let titleOk = !stock;
+  let recs: { date: string; raw: string; conf: number; tax?: Tok; ex?: Tok; bad?: boolean }[] = [];
+  for (const row of ocrRows(lines || [])) {
+    const toks = row.flatMap(toksOf);
+    if (toks.some(k => /과표|과세표준/.test(k.t)) && toks.some(k => tcolOf(k.t) === 'tax' || tcolOf(k.t) === 'ex')) {
+      cols = toks.filter(k => isWordy(k.t)).map(k => ({ xc: k.xc, c: tcolOf(k.t) }));
+      if (!cols.some(c => c.c === 'tax') && cols.some(c => c.c === 'ex')) cols = cols.map(c => (c.c === 'guess' ? { ...c, c: 'tax' } : c));
+      continue;
+    }
+    if (!cols.length) {
+      if (stock && !titleOk && matchCand(row.map(l => l.text).join(' '), [stock])) titleOk = true;
+      continue;
+    }
+    const dateTok = toks.find(k => DATE_RE.test(k.t));
+    if (!dateTok) continue;
+    const near = (k: Tok) => cols.reduce((b, c) => (Math.abs(c.xc - k.xc) < Math.abs(b.xc - k.xc) ? c : b)).c;
+    const numOf = (c: TCol) => toks.find(k => k !== dateTok && NUM_RE.test(k.t.replace(/원$/, '')) && near(k) === c);
+    recs.push({ date: normTradeDate(dateTok.t, today), raw: dateTok.t, conf: dateTok.conf, tax: numOf('tax'), ex: numOf('ex') });
+  }
+  recs = fixDateOrder(recs);
+  for (const r of recs) {
+    const push = (list: OcrTaxBase[], k: Tok | undefined) => {
+      if (!k) return;
+      const v = num(k.t);
+      if (!(v > 0)) return;
+      const flags: OcrFlag[] = [];
+      const conf = Math.min(r.conf, k.conf);
+      if (conf < OCR_LOWCONF) flags.push('lowconf');
+      if (!r.date) flags.push('nodate');
+      else if (r.bad) flags.push('dateorder');
+      if (!titleOk) flags.push('noname');
+      list.push({ date: r.date, rawDate: r.raw, taxBase: v, conf, flags });
+    };
+    push(bases, r.tax);
+    push(exs, r.ex);
+  }
+  return { bases, exs, header: cols.length > 0, titleOk };
+}
+export const taxTradeLine = (t: OcrTrade) => `${t.date || t.rawDate || '?'} ${t.side === 'buy' ? '매수' : '매도'} ${t.qty}주 ${t.price > 0 ? t.price : '?'}원`;
+export const taxBaseLine = (b: OcrTaxBase) => `${b.date || b.rawDate || '?'} 과표 ${b.taxBase}`;
+export interface OcrTaxRead {
+  okText: string; okN: number; checkText: string; checks: { line: string; why: string }[]; other: number; holdings: number;
+  exs: { date: string; value: number }[]; otherScreens: number;
+}
+export function ocrTaxRead(perPhoto: OcrLineIn[][], stock: { code: string; name: string }, today: string): OcrTaxRead {
+  const cand = { code: stock.code, name: stock.name || stock.code };
+  const lists: OcrTrade[][] = [];
+  const bases: OcrTaxBase[] = [], exs: OcrTaxBase[] = [];
+  let other = 0, holdings = 0, otherScreens = 0;
+  for (const lines of perPhoto) {
+    if (classifyOcr(lines) === 'holdings') { holdings++; continue; }
+    const mine: OcrTrade[] = [];
+    for (const t of parseOcrTrades(lines, [cand], today).trades) {
+      if (t.code === stock.code) mine.push(t);
+      else if (normName(t.name).length >= 2) other++;
+      else mine.push(t.flags.includes('noname') ? t : { ...t, flags: [...t.flags, 'noname'] });
+    }
+    lists.push(mine);
+    const tb = parseOcrTaxBase(lines, cand, today);
+    // 화면 위 종목 이름이 이 종목과 다르면(다른 종목의 과세 화면) 그 사진의 과표는 통째로 뺀다 — 확인 줄로도 넣지 않는다.
+    if (!tb.titleOk && (tb.bases.length || tb.exs.length)) { otherScreens++; continue; }
+    const add = (to: OcrTaxBase[], from: OcrTaxBase[]) => { const seen = new Set(to.map(b => b.date || b.rawDate)); for (const b of from) if (!seen.has(b.date || b.rawDate)) to.push(b); };
+    add(bases, tb.bases);
+    add(exs, tb.exs);
+  }
+  const trades = mergeOcrPhotos(lists);
+  const okT = trades.filter(t => t.flags.length === 0), badT = trades.filter(t => t.flags.length > 0);
+  const okB = bases.filter(b => b.flags.length === 0), badB = bases.filter(b => b.flags.length > 0);
+  const okE = exs.filter(b => b.flags.length === 0), badE = exs.filter(b => b.flags.length > 0);
+  const why = (fs: OcrFlag[]) => fs.map(f => OCR_FLAG_TEXT[f]).join(' · ');
+  const checks = [
+    ...badT.map(t => ({ line: taxTradeLine(t), why: why(t.flags) })),
+    ...badB.map(b => ({ line: taxBaseLine(b), why: why(b.flags) })),
+    ...badE.map(b => ({ line: `${b.date || b.rawDate || '?'} 배당 과표 ${b.taxBase}`, why: why(b.flags) + ' — 그 달 「배당 과표」 칸에 직접 넣어 주세요' })),
+  ];
+  return {
+    okText: [...okT.map(taxTradeLine), ...okB.map(taxBaseLine)].join('\n'),
+    okN: okT.length + okB.length + okE.length,
+    // ⚠️ 배당 과표 줄은 붙여넣기 칸에 넣지 않는다 — `… 과표 N`으로 읽혀 그날 매매 행의 과표기준가에 들어간다.
+    checkText: [...badT.map(taxTradeLine), ...badB.map(taxBaseLine)].join('\n'),
+    checks, other, holdings, otherScreens,
+    exs: okE.map(b => ({ date: b.date, value: b.taxBase })),
+  };
+}

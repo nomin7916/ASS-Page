@@ -2586,7 +2586,7 @@ export function calculateKrEtfDividendTax(
     ...purchases.map<Evt>(p => ({ date: p.date, kind: 'B', shares: p.shares, price: p.taxBasePrice })),
     ...sales.map<Evt>(s => ({ date: s.date, kind: 'S', shares: s.shares })),
   ]
-    .filter(e => e.date <= dividend.exDate)
+    .filter(e => e.date < dividend.exDate)   // 배당락 전날 장 마감 보유분만(배당락일 매수는 권리 없음 · 배당락일 매도분은 이미 권리 확정)
     .sort((a, b) => a.date.localeCompare(b.date) || (a.kind === b.kind ? 0 : a.kind === 'B' ? -1 : 1));
 
   let heldShares = 0;

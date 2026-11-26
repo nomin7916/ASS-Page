@@ -268,7 +268,7 @@ export function computeMonthlyAvgFromEvents(events, exDateMap, anchors?) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(exDate || ''))) continue;
     let best = null;
     for (const s of snapshots) {
-      if (s.date <= exDate) best = s;
+      if (s.date < exDate || (s.anchored && s.date === exDate)) best = s;   // 배당락 전날 장 마감(배당락일 매매 제외 · 그날 앵커는 포함)
       else break;
     }
     if (best && best.avgPrice > 0) result[ym] = best.avgPrice;
@@ -276,35 +276,49 @@ export function computeMonthlyAvgFromEvents(events, exDateMap, anchors?) {
   return result;
 }
 
-// 연간 그리드 표시용 — 배당락일 없는 달도 포함, 각 달 말일 기준 평균 과표 계산
-// monthYms: ['YYYY-01', ..., 'YYYY-12']
-export function computeMonthlyAvgForGrid(events, monthYms, anchors?) {
+// 배당락월 셀의 기준 시점(사용자 확정 2026-11-26 — 미래에셋 종목 정보 「과세」 화면으로 확인):
+//   과표기준가격은 표시된 날짜에 산정·공고되는 값(전일 장 마감 기준)이라 그 날짜의 매매에 쓴다 — 매매한 다음 날을 기다릴 필요 없음.
+//   배당락일 줄의 과표기준가격 = 전일배당전과표기준가격 = 그 분배금의 과세 기준(배당 과표).
+//   분배금은 배당락 전날 장 마감 보유분에 붙는다(dividendQty.ts와 같은 규칙) → 배당락일이 있는 달은 배당락일 **전** 매매까지만
+//   평균 과표·수량에 넣는다(배당락일 매수는 권리 없음 · 배당락일 매도분은 이미 권리 확정 → 둘 다 빼면 그 전날 보유).
+//   앵커(실제 과세 역산)는 그 달 배당 기준의 참값이라 그 달 말일까지의 앵커는 넣는다(배당락일 박제 · 말일 폴백 둘 다).
+//   배당락일을 모르는 달(exDateMap 없음·빈 칸)은 전처럼 그 달 말일.
+export function exCutOf(exDateMap, ym) {
+  const ex = exDateMap ? String(exDateMap[ym] || '') : '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(ex) ? ex : '';
+}
+
+// 연간 그리드 표시용 — 배당락일 없는 달도 포함, 각 달 말일(배당락일이 있으면 그 전날 장 마감) 기준 평균 과표 계산
+// monthYms: ['YYYY-01', ..., 'YYYY-12'] · exDateMap: { 'YYYY-MM': 'YYYY-MM-DD' } (portfolio.dividendExDate[code])
+export function computeMonthlyAvgForGrid(events, monthYms, anchors?, exDateMap?) {
   const snapshots = computeRunningAvgSnapshots(events, anchors);
   const result: Record<string, number> = {};
   for (const ym of (monthYms || [])) {
     const lastDay = monthEndOfYm(ym);
+    const ex = exCutOf(exDateMap, ym);
     let best = null;
     for (const s of snapshots) {
-      if (s.date <= lastDay) best = s;
-      else break;
+      if (s.date > lastDay) break;
+      if (!ex || s.date < ex || s.anchored) best = s;
     }
     if (best && best.avgPrice > 0) result[ym] = best.avgPrice;
   }
   return result;
 }
 
-// 연간 그리드 표시용 — 각 달 말일 기준 누적 보유 수량 계산
+// 연간 그리드 표시용 — 각 달 말일(배당락일이 있으면 그 전날 장 마감) 기준 누적 보유 수량 계산
 // 이벤트가 없으면 {} 반환 (호출부에서 currentQty로 폴백)
-export function computeMonthlyQtyForGrid(events, monthYms) {
+export function computeMonthlyQtyForGrid(events, monthYms, exDateMap?) {
   const snapshots = computeRunningAvgSnapshots(events);
   if (snapshots.length === 0) return {};
   const result: Record<string, number> = {};
   for (const ym of (monthYms || [])) {
     const lastDay = monthEndOfYm(ym);
+    const ex = exCutOf(exDateMap, ym);
     let best = null;
     for (const s of snapshots) {
-      if (s.date <= lastDay) best = s;
-      else break;
+      if (s.date > lastDay || (ex && s.date >= ex)) break;
+      best = s;
     }
     result[ym] = best != null ? best.qty : 0;
   }
@@ -570,7 +584,7 @@ export function resolveAvgAdjState(portfolio, code, ym) {
     };
   }
   const anchors = buildAvgTaxAnchors(avgTaxBaseAdj);
-  const computed = computeMonthlyAvgForGrid(events, [ym], anchors)[ym];
+  const computed = computeMonthlyAvgForGrid(events, [ym], anchors, portfolio?.dividendExDate?.[code])[ym];
   const avgNum = avgTaxBase[ym] !== undefined ? safeNum(avgTaxBase[ym]) : safeNum(computed);
   const suggest = avgTaxBaseAdjNeeded({ exTaxBase: exNum, avgTaxBase: avgNum, taxAmount: obs.taxAmount, qty: obs.qty });
   if (!suggest) return null;

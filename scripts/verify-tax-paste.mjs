@@ -369,13 +369,13 @@ const sendFn = (mx.match(/const sendPhotosToAI = async \(prompt\) => \{[\s\S]*?\
 ok('#S9 ② 공유 창은 누른 순간에 연다 — navigator.share 가 첫 await 보다 앞', /navigator\.share\(share\.data\)/.test(sendFn)
   && sendFn.indexOf('navigator.share(') >= 0 && sendFn.indexOf('navigator.share(') < sendFn.indexOf('await'));
 ok('#S10 ③ AI 답은 클립보드에서 바로 칸에(막히면 칸에 초점·직접 붙여넣기 안내)', /navigator\.clipboard\.readText\(\)/.test(mx) && /pasteBoxRef\.current\.focus\(\)/.test(mx) && /ref=\{pasteBoxRef\}/.test(mx));
-const readFn = (mx.match(/const readPhotosAndApply = async \(stock, files\) => \{[\s\S]*?\n  \};/) || [''])[0];
+const readFn = (mx.match(/const readPhotosAndApply = async \(stock, files, opts = \{\}\) => \{[\s\S]*?\n  \};/) || [''])[0];
 ok('#S11 사진은 저장하지 않는다(보내기·읽기에 Drive·FormData 없음) + 닫을 때 읽기를 멈추고 미리보기 주소 돌려줌', sendFn && readFn
   && !/fetch\(|FormData|saveDriveFile|uploadDrive/.test(sendFn) && !/FormData|saveDriveFile|uploadDrive|localStorage|sessionStorage|indexedDB/.test(readFn)
   && /const resetPaste = [\s\S]{0,400}photoAbort\.current\.abort\(\)[\s\S]{0,200}URL\.revokeObjectURL\(p\.url\)/.test(mx));
 ok('#S14 끝까지 받은 답만 넣는다 · 넣을 때 그 순간의 이벤트로 다시 계획 · 되돌리기 = 넣기 전 이벤트', readFn
   && /if \(st\.error \|\| !st\.done\) \{[\s\S]{0,160}return;/.test(readFn)
-  && readFn.indexOf('!st.done') < readFn.indexOf('commitPastePlan(')
+  && readFn.indexOf('!st.done') < readFn.lastIndexOf('commitPastePlan(')   // AI 답(2순위)의 넣기 — 프로그램 읽기(1순위)의 넣기는 그 앞
   && /const before = getCodeTaxBase\(portfolioRef\.current, stock\.code\)\.events \|\| \[\];/.test(readFn)
   && /planTaxCalcPaste\(parsed, before\)/.test(readFn) && /undo: kind === 'apply' \? \{ code: stock\.code, prev: before \}/.test(readFn)
   && /const undoPhotoApply = [\s\S]{0,160}persistEvents\(u\.code, u\.prev\)/.test(mx) && /onClick=\{undoPhotoApply\}/.test(mx));
