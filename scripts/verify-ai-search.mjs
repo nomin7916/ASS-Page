@@ -66,7 +66,7 @@ if (A) {
     [true, 'gemini-x', [{ uri: 'https://a.com/x', title: 'a.com' }], ['q1'], '<div>s</div>']);
   const se = A.searchReadStep(A.searchReadInit(), '{"e":"needkey"}\n{"e":"rate"}\n', true);
   eq('#R2 첫 오류만', [se.error, se.done], ['needkey', false]);
-  ok('#R3 오류 글 — 키 없음·틀림·한도·끊김·멈춤', ['needkey', 'badkey', 'rate', 'cut', 'stop', 'auth', 'net'].every(c => A.searchErrorText(c) !== A.searchErrorText('zzz')));
+  ok('#R3 오류 글 — 키 없음·틀림·한도·끊김·멈춤', ['needkey', 'badkey', 'credit', 'rate', 'cut', 'stop', 'auth', 'net'].every(c => A.searchErrorText(c) !== A.searchErrorText('zzz')));
   // #V 듣기
   const ch = A.speechChunks(ANSWER);
   ok('#V1 읽을 글에 마크다운 기호·주소·이모지·코드가 없다', ch.length > 5 && ch.every(c => !/[*#|`>]|https?:|📈/.test(c)) && !ch.some(c => c.includes('code')));
@@ -233,6 +233,28 @@ if (A && P) {
       eq('#E10 로그인 확인 실패 → 그대로 401', r9.status, 401);
       const r10 = await handler(new Request('https://site.example/api/ai-search', { method: 'GET' }));
       eq('#E11 GET → 405', r10.status, 405);
+      // 2026-11-26 사용자 신고: 내 키의 선불 크레딧 소진(402)인데 다른 키로 넘어가지 않고 원문 JSON만 보였다
+      const PAY = '{ "error": { "code": 402, "message": "Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing.", "status": "RESOURCE_EXHAUSTED" } }';
+      process.env.GEMINI_API_KEY = 's1';
+      calls.length = 0;
+      script = [{ status: 402, body: PAY }, grounded];
+      const r11 = await call(body, { 'x-test-email': 'admin@test', 'X-Gemini-Key': UK });
+      eq('#E12 관리자 · 내 키 선불 크레딧 소진(402) → 같은 모델로 사이트 키에 넘어가 답', [r11.st.done, r11.st.error, calls.map(c => c.key), calls.map(c => c.model)],
+        [true, '', [UK, 's1'], ['gemini-flash-latest', 'gemini-flash-latest']]);
+      calls.length = 0;
+      script = [{ status: 402, body: PAY }];
+      const r12 = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
+      eq('#E13 다른 사용자 · 내 키 402 → credit(다른 모델로 되풀이하지 않음) · 구글 글은 message만', [r12.st.error, calls.length, r12.st.msg],
+        ['credit', 1, '402 Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing.']);
+      calls.length = 0;
+      script = [{ status: 402, body: PAY }, { status: 400, body: '{"error":{"details":[{"reason":"API_KEY_INVALID"}]}}' }];
+      const r13 = await call(body, { 'x-test-email': 'admin@test', 'X-Gemini-Key': UK });
+      eq('#E14 관리자 · 내 키 402 + 사이트 키 틀림 → credit(키마다 한 번씩만)', [r13.st.error, calls.length], ['credit', 2]);
+      calls.length = 0;
+      script = [{ status: 402, body: PAY }, { status: 429, body: 'q' }, { status: 429, body: 'q' }, { status: 429, body: 'q' }];
+      const r14 = await call(body, { 'x-test-email': 'admin@test', 'X-Gemini-Key': UK });
+      eq('#E15 관리자 · 내 키 402 + 사이트 키 한도 → 사이트 키로만 모델마다 물어본 뒤 rate', [r14.st.error, calls.map(c => c.key)], ['rate', [UK, 's1', 's1', 's1']]);
+      delete process.env.GEMINI_API_KEY;
     } catch (e) {
       fail++; console.log(`  ✗ #E 처리부 실행 중 오류 — ${e && (e.stack || e.message)}`);
     } finally {

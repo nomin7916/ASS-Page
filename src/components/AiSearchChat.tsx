@@ -562,7 +562,8 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
                   {m.msg && m.err !== 'stop' && <p className="text-[11px] text-red-300/70 break-all">{m.msg}</p>}
                   <div className="flex gap-1.5 flex-wrap">
                     {i === msgs.length - 1 && !running && <button onClick={() => retry(i)} className={chip}><RefreshCw size={12} />다시 묻기</button>}
-                    {(m.err === 'needkey' || m.err === 'badkey' || m.err === 'nokey') && <button onClick={() => setPanel('settings')} className={chip}><Lock size={12} />키 설정</button>}
+                    {(m.err === 'needkey' || m.err === 'badkey' || m.err === 'nokey' || m.err === 'credit') && <button onClick={() => setPanel('settings')} className={chip}><Lock size={12} />키 설정</button>}
+                    {m.err === 'credit' && <a href="https://aistudio.google.com/projects" target="_blank" rel="noopener noreferrer" className={chip}><ExternalLink size={12} />AI Studio 열기</a>}
                   </div>
                 </div>
               )}

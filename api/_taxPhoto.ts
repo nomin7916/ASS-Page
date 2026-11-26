@@ -7,6 +7,34 @@ export const GAPI = 'https://generativelanguage.googleapis.com/v1beta';
 // 앞에서부터 쓴다 — 없는 모델(404)·잠깐 안 됨(5xx)은 다음 모델, 한도(429)·틀린 키는 다음 키.
 export const GMODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest'];
 export const GKEYBAD = /API_KEY_INVALID|API key not valid|PERMISSION_DENIED|API_KEY_SERVICE_BLOCKED/i;
+// 선불 크레딧 소진(2026-11-26 사용자 신고 — 402 "Your prepayment credits are depleted") 등 결제로 막힌 키.
+// 그 키의 프로젝트 전체가 막힌 것이라 다른 모델로도 다시 쓰지 않고 다음 키로 넘어간다.
+export const GKEYPAY = /prepayment credits|credits are depleted|BILLING_DISABLED|requires billing/i;
+
+// 키가 죽었는가 — 'bad' 틀린 키 · 'credit' 선불 크레딧 소진·결제 막힘 · '' 키 탓 아님(한도·모델·요청 문제).
+export function gKeyDead(status: number, body: string): '' | 'bad' | 'credit' {
+  const t = String(body || '');
+  if (status === 402 || ((status === 403 || status === 429) && GKEYPAY.test(t))) return 'credit';
+  if ((status === 400 || status === 403) && GKEYBAD.test(t)) return 'bad';
+  return '';
+}
+
+// 구글 오류 본문 → 화면에 보일 짧은 글(JSON이면 error.message만, 배열에 싸여 와도).
+export function gErrBrief(body: string): string {
+  const t = String(body || '');
+  try {
+    const j = JSON.parse(t);
+    const e = (Array.isArray(j) ? j[0] : j)?.error;
+    if (e && typeof e.message === 'string' && e.message.trim()) return e.message.replace(/\s+/g, ' ').trim().slice(0, 300);
+  } catch { /* JSON 아님 */ }
+  return t.replace(/\s+/g, ' ').trim().slice(0, 300);
+}
+
+// 끝까지 못 받았을 때의 까닭 — 모든 키가 죽었으면 credit(하나라도 크레딧 소진)·badkey, 아니면 마지막 답으로 rate·gemini.
+export function gFailCode(keys: string[], dead: Map<string, string>, lastStatus: number): 'credit' | 'badkey' | 'rate' | 'gemini' {
+  if (keys.length > 0 && keys.every(k => dead.has(k))) return [...dead.values()].includes('credit') ? 'credit' : 'badkey';
+  return lastStatus === 429 ? 'rate' : 'gemini';
+}
 export const PHOTO_MAX = 10;
 // 요청 본문 상한(글자 수) — 클라이언트가 사진을 줄여 이 안에 맞춘다(src/taxCalcPaste.ts PHOTO_BODY_BUDGET보다 넉넉히).
 export const BODY_MAX = 4_000_000;

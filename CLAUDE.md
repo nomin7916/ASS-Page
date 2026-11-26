@@ -193,6 +193,8 @@ src/
 - 대화 = 내 Drive `ai_search_chats.json`(DRIVE_FILES.AI_SEARCH, `saveDriveFile`만 · STATE·버전 백업·브라우저 저장소 금지 · 관리자 접속 중 읽기/쓰기 안 함).
   ⚠️ 읽기 실패면 저장하지 않는다(빈 목록으로 덮어 지난 대화를 지운다). 검색 제안 html은 저장하지 않는다(그때만 격리 iframe — scripts·same-origin 금지).
 - 보유 종목은 켰을 때만 이름·코드만. 듣기 = 브라우저 말하기(`useSpeech`, 문장 조각 · 창을 닫으면 멈춤). 검증: `verify:ai-search`(가짜 Gemini로 서버 처리부 끝까지).
+- 죽은 키(틀린 키 · **선불 크레딧 소진 402** · 결제 막힘)는 `api/_taxPhoto.ts` `gKeyDead` 하나로 가려 다른 모델로 되풀이하지 않고 다음 키로(ai-search·holdings-photo·tax-photo 셋 다).
+  모든 키가 죽으면 `gFailCode` → `credit`(하나라도 크레딧 소진)·`badkey`. 화면에 보일 구글 글은 `gErrBrief`(JSON의 message만). ⚠️ 402를 `break`(다음 모델)로 되돌리지 말 것 — 다른 키로 안 넘어간다(2026-11-26 사용자 신고).
 
 ## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 

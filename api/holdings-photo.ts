@@ -2,11 +2,11 @@
 // POST { account, cands:[{code,name}], images:[{mime,data(base64)}] } (+ 헤더 X-Gemini-Key = 내 키, 선택)
 //   → 구글 Gemini가 잔고 사진을 읽어 parseHoldingsText(src/holdingsPhoto.ts) 형식의 줄로 답한다.
 // 응답 = 줄마다 JSON 하나(NDJSON, /api/tax-photo 와 같은 모양): {"s":1} · {"k":1} · {"t":"글"} · {"m":"모델"} ·
-//        {"e":"needkey"|"badkey"|"nokey"|"rate"|"block"|"gemini","msg"} · {"d":1}. 요청 검사에서 걸리면 JSON {error} + 400/413.
+//        {"e":"needkey"|"badkey"|"credit"|"nokey"|"rate"|"block"|"gemini","msg"} · {"d":1}. 요청 검사에서 걸리면 JSON {error} + 400/413.
 // 키: 관리자 = 내 키 → 사이트 키 · 다른 사용자 = 내 키만(api/_holdingsPhoto.ts pickHoldKeys). 내 키·사진은 저장·기록하지 않는다.
 export const config = { runtime: 'edge' };
 import { requireAuth, callerEmail, ADMIN_EMAIL } from './_auth.js';
-import { GAPI, GMODELS, GKEYBAD, BODY_MAX, geminiKeys, sseTexts } from './_taxPhoto.js';
+import { GAPI, GMODELS, BODY_MAX, geminiKeys, sseTexts, gKeyDead, gErrBrief, gFailCode } from './_taxPhoto.js';
 import { USER_KEY_HEADER, userGeminiKey, pickHoldKeys, checkHoldReq, holdGeminiBody } from './_holdingsPhoto.js';
 
 const jsonRes = (o: unknown, status: number) => new Response(JSON.stringify(o), {
@@ -46,12 +46,12 @@ export default async function handler(request: Request): Promise<Response> {
       const finish = () => { clearInterval(tick); if (!closed) { closed = true; try { ctrl.close(); } catch { /* 이미 닫힘 */ } } };
       send({ s: 1 });
       if (keys.length === 0) { send({ e: isAdmin ? 'nokey' : 'needkey' }); finish(); return; }
-      const badKeys = new Set<string>();
+      const dead = new Map<string, string>();   // 죽은 키 → 'bad'(틀림)·'credit'(선불 크레딧 소진) — 다른 모델로도 다시 쓰지 않는다
       let last = { status: 0, msg: '' };
       try {
         for (const model of GMODELS) {
           for (const key of keys) {
-            if (badKeys.has(key)) continue;
+            if (dead.has(key)) continue;
             let r: Response;
             try {
               r = await fetch(`${GAPI}/models/${model}:streamGenerateContent?alt=sse`, {
@@ -81,19 +81,19 @@ export default async function handler(request: Request): Promise<Response> {
               return;
             }
             const t = (await r.text().catch(() => '')).slice(0, 600);
-            last = { status: r.status, msg: t.replace(/\s+/g, ' ').slice(0, 300) };
-            if ((r.status === 400 || r.status === 403) && GKEYBAD.test(t)) { badKeys.add(key); continue; }   // 틀린 키 — 다른 모델로도 다시 쓰지 않는다
+            last = { status: r.status, msg: gErrBrief(t) };
+            const why = gKeyDead(r.status, t);
+            if (why) { dead.set(key, why); continue; }   // 틀린 키·선불 크레딧 소진(402) → 다음 키
             if (r.status === 429) continue;
             if (r.status === 404 || r.status >= 500) break;   // 없는 모델·잠깐 안 됨 → 다음 모델
             send({ e: 'gemini', msg: `${r.status} ${last.msg}` });   // 400 등 — 요청이 틀렸다(다른 키로도 같다)
             finish();
             return;
           }
-          if (keys.every(k => badKeys.has(k))) break;
+          if (keys.every(k => dead.has(k))) break;
           // 모든 키가 한도(429)여도 다음 모델로 — 무료 한도는 모델마다 따로다
         }
-        const allBad = keys.every(k => badKeys.has(k));
-        send({ e: allBad ? 'badkey' : (last.status === 429 ? 'rate' : 'gemini'), msg: `${last.status} ${last.msg}`.trim() });
+        send({ e: gFailCode(keys, dead, last.status), msg: `${last.status} ${last.msg}`.trim() });
       } catch (err) {
         send({ e: 'gemini', msg: String((err as Error)?.message || err).slice(0, 200) });
       }

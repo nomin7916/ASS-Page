@@ -200,6 +200,25 @@ if (T && P) {
     P.checkPhotoReq({ code: '0177R0', year: 2026, images: [{ mime: 'text/html', data: img.data }] }, 2026).error,
     P.checkPhotoReq({ code: '0177R0', year: 2026, images: [{ mime: 'image/png', data: 'A'.repeat(150) + '<' }] }, 2026).error,
   ].map(Boolean), [true, true, true, true, true, true]);
+  // 2026-11-26: 선불 크레딧 소진(402)도 죽은 키 — 다른 모델로 되풀이하지 않고 다음 키로
+  eq('#G3 죽은 키 가리기(402·결제 막힘 → credit · 틀린 키 → bad · 한도·요청 문제 → 없음)', [
+    P.gKeyDead(402, '{"error":{"code":402,"message":"Your prepayment credits are depleted."}}'),
+    P.gKeyDead(403, '{"error":{"message":"This method requires billing to be enabled","status":"PERMISSION_DENIED"}}'),
+    P.gKeyDead(400, '{"error":{"details":[{"reason":"API_KEY_INVALID"}]}}'),
+    P.gKeyDead(429, '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}'),
+    P.gKeyDead(400, '{"error":{"message":"bad image"}}'),
+  ], ['credit', 'credit', 'bad', '', '']);
+  eq('#G3 구글 오류 글 → message만(배열에 싸여도 · JSON 아니면 그대로)', [
+    P.gErrBrief('{ "error": { "code": 402, "message": "Your prepayment  credits are depleted." } }'),
+    P.gErrBrief('[{"error":{"message":"API key not valid."}}]'),
+    P.gErrBrief('model\n not found'),
+  ], ['Your prepayment credits are depleted.', 'API key not valid.', 'model not found']);
+  eq('#G3 끝 까닭(모든 키 죽음 → credit 우선·badkey · 아니면 rate·gemini)', [
+    P.gFailCode(['a', 'b'], new Map([['a', 'credit'], ['b', 'bad']]), 400),
+    P.gFailCode(['a'], new Map([['a', 'bad']]), 400),
+    P.gFailCode(['a', 'b'], new Map([['a', 'credit']]), 429),
+    P.gFailCode(['a', 'b'], new Map(), 503),
+  ], ['credit', 'badkey', 'rate', 'gemini']);
   eq('#G3 키 목록(GEMINI_API_KEY + 2~9, 빈 값 건너뜀)', P.geminiKeys({ GEMINI_API_KEY: ' a ', GEMINI_API_KEY2: '', GEMINI_API_KEY3: 'c' }), ['a', 'c']);
   const gb = JSON.parse(P.geminiBody(good));
   ok('#G3 Gemini 본문 = 사진 inline_data + 부탁 문장 · temperature 0', gb.contents[0].parts[0].inline_data.mime_type === 'image/jpeg'
@@ -297,6 +316,12 @@ if (T && P) {
         { status: 200, chunks: [ev({ promptFeedback: { blockReason: 'OTHER' } })] }];
       const r4 = await call(reqBody);
       eq('#G6 틀린 키 → 다음 키 · 차단 답 → block', [r4.st.error, r4.st.text, calls.map(c => c.key)], ['block', '', ['k1', 'k2']]);
+      calls.length = 0;
+      script = [{ status: 402, body: '{"error":{"code":402,"message":"Your prepayment credits are depleted.","status":"RESOURCE_EXHAUSTED"}}' },
+        { status: 402, body: '{"error":{"code":402,"message":"Your prepayment credits are depleted.","status":"RESOURCE_EXHAUSTED"}}' }];
+      const r5 = await call(reqBody);
+      eq('#G6 사이트 키 둘 다 선불 크레딧 소진(402) → credit(키마다 한 번씩만)', [r5.st.error, r5.st.msg, calls.map(c => c.key)], ['credit', '402 Your prepayment credits are depleted.', ['k1', 'k2']]);
+      ok('#G6 credit 글 = 관리자에게 알림', photoErrorText('credit').includes('크레딧') && photoErrorText('credit') !== photoErrorText('zzz'));
       calls.length = 0;
       const bad = await Promise.all([
         call({ ...reqBody, code: '<x>' }),

@@ -141,7 +141,7 @@ if (H) {
   eq('#H8 목록 = 주식 행(현금·예수금·펀드 제외)', syncCandidates(ITEMS()).map(c => c.code), ['0091P0', '0183J0', '411060', '0100X0', '0047A0', '0005A0', '069500', '360750']);
 
   // #H9 화면 글
-  ok('#H9 오류 글(needkey·badkey·nokey·rate·block·cut·auth·net·decode·big·gemini)', ['needkey', 'badkey', 'nokey', 'rate', 'block', 'cut', 'auth', 'net', 'decode', 'big', 'gemini'].every(c => holdErrorText(c).length > 10)
+  ok('#H9 오류 글(needkey·badkey·credit·nokey·rate·block·cut·auth·net·decode·big·gemini)', ['needkey', 'badkey', 'credit', 'nokey', 'rate', 'block', 'cut', 'auth', 'net', 'decode', 'big', 'gemini'].every(c => holdErrorText(c).length > 10)
     && holdErrorText('needkey') !== holdErrorText('gemini') && /메모 달력 → AI 연동/.test(holdErrorText('needkey')));
   eq('#H9 키 모양·가리기', [looksLikeGeminiKey('AIzaSyA1234567890abcdefghijklmnopqrstuv'), looksLikeGeminiKey('짧음'), looksLikeGeminiKey('AIza 1234'), maskKey('AIzaSyA1234567890abcdefghijklmnopqrstuv')], [true, false, false, 'AIza…stuv']);
 }
@@ -346,6 +346,15 @@ if (P && T) {
       script = [{ status: 429, body: 'q' }, { status: 429, body: 'q' }, { status: 429, body: 'q' }];
       const r5 = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
       eq('#E6 내 키 한도 → 모델마다 한 번씩 물어본 뒤 rate', [r5.st.error, calls.length], ['rate', 3]);
+      const PAY = '{"error":{"code":402,"message":"Your prepayment credits are depleted.","status":"RESOURCE_EXHAUSTED"}}';
+      calls.length = 0;
+      script = [{ status: 402, body: PAY }, okAnswer(PHOTO1)];
+      const r5b = await call(body, { 'x-test-email': 'admin@test', 'X-Gemini-Key': UK });
+      eq('#E6b 관리자 · 내 키 선불 크레딧 소진(402) → 사이트 키로 이어서', [r5b.st.done, r5b.st.error, calls.map(c => c.key)], [true, '', [UK, 's1']]);
+      calls.length = 0;
+      script = [{ status: 402, body: PAY }];
+      const r5c = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
+      eq('#E6c 다른 사용자 · 내 키 402 → credit(다른 모델로 되풀이하지 않음)', [r5c.st.error, r5c.st.msg, calls.length], ['credit', '402 Your prepayment credits are depleted.', 1]);
       delete process.env.GEMINI_API_KEY; delete process.env.GEMINI_API_KEY2;
       calls.length = 0;
       const r6 = await call(body, { 'x-test-email': 'admin@test' });

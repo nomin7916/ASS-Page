@@ -342,6 +342,8 @@ export function photoReadStep(st: PhotoReadState, chunk: string, end = false): P
 // 실패 까닭 → 사용자에게 보일 글.
 export function photoErrorText(code: string): string {
   switch (code) {
+    case 'credit': return '사이트 AI 키의 선불 크레딧(충전금)이 다 떨어졌습니다 — 관리자에게 알려 주세요(구글 AI Studio 충전 또는 다른 키).';
+    case 'badkey': return '사이트 AI 키가 맞지 않습니다 — 관리자에게 알려 주세요(Vercel 환경 변수 GEMINI_API_KEY).';
     case 'nokey': return '사이트에 사진 읽기 AI 키가 아직 들어 있지 않습니다 — 관리자에게 알려 주세요(Vercel 환경 변수 GEMINI_API_KEY).';
     case 'rate': return 'AI 무료 사용량을 다 썼습니다 — 잠시 뒤(오래 걸리면 내일) 다시 올려 주세요.';
     case 'block': return 'AI가 이 사진을 읽지 않았습니다 — 주문내역 화면만 보이게 다시 찍어 올려 주세요.';

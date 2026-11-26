@@ -1,13 +1,13 @@
 // Vercel Edge Function — 평균 과표 계산기 '사진으로 넣기'(사용자 요청 2026-11-24)
 // POST { name, code, year, images:[{mime,data(base64)}] } → 구글 Gemini가 사진을 읽어 parseTaxCalcPaste 형식의 줄로 답한다.
 // 응답 = 줄마다 JSON 하나(NDJSON): {"s":1} 시작 · {"k":1} 기다리는 중 · {"t":"글"} 받은 글 · {"m":"모델"} ·
-//        {"e":"nokey"|"rate"|"block"|"gemini","msg"} 실패 · {"d":1} 끝. 요청 검사에서 걸리면 JSON {error} + 400/413.
+//        {"e":"nokey"|"badkey"|"credit"|"rate"|"block"|"gemini","msg"} 실패 · {"d":1} 끝. 요청 검사에서 걸리면 JSON {error} + 400/413.
 // ⚠️ 사진은 저장하지 않는다(서버 메모리에서 Gemini로 넘길 뿐 — 서버·Drive·기록 0). 키는 Vercel 환경 변수
 //    GEMINI_API_KEY(2~9 더 넣으면 한도·틀린 키일 때 다음 키). 응답은 바로 흘려보낸다(Edge는 25초 안에 응답을 시작해야 한다).
 
 export const config = { runtime: 'edge' };
 import { requireAuth } from './_auth.js';
-import { GAPI, GMODELS, GKEYBAD, BODY_MAX, geminiKeys, checkPhotoReq, geminiBody, sseTexts } from './_taxPhoto.js';
+import { GAPI, GMODELS, BODY_MAX, geminiKeys, checkPhotoReq, geminiBody, sseTexts, gKeyDead, gErrBrief, gFailCode } from './_taxPhoto.js';
 
 const jsonRes = (o: unknown, status: number) => new Response(JSON.stringify(o), {
   status,
@@ -45,10 +45,12 @@ export default async function handler(request: Request): Promise<Response> {
       const finish = () => { clearInterval(tick); if (!closed) { closed = true; try { ctrl.close(); } catch { /* 이미 닫힘 */ } } };
       send({ s: 1 });
       if (keys.length === 0) { send({ e: 'nokey' }); finish(); return; }
+      const dead = new Map<string, string>();   // 죽은 키 → 'bad'(틀림)·'credit'(선불 크레딧 소진) — 다른 모델로도 다시 쓰지 않는다
       let last = { status: 0, msg: '' };
       try {
         for (const model of GMODELS) {
           for (const key of keys) {
+            if (dead.has(key)) continue;
             let r: Response;
             try {
               r = await fetch(`${GAPI}/models/${model}:streamGenerateContent?alt=sse`, {
@@ -78,16 +80,19 @@ export default async function handler(request: Request): Promise<Response> {
               return;
             }
             const t = (await r.text().catch(() => '')).slice(0, 600);
-            last = { status: r.status, msg: t.replace(/\s+/g, ' ').slice(0, 300) };
-            if (r.status === 429 || ((r.status === 400 || r.status === 403) && GKEYBAD.test(t))) continue;
+            last = { status: r.status, msg: gErrBrief(t) };
+            const why = gKeyDead(r.status, t);
+            if (why) { dead.set(key, why); continue; }   // 틀린 키·선불 크레딧 소진(402) → 다음 키
+            if (r.status === 429) continue;
             if (r.status === 404 || r.status >= 500) break;   // 없는 모델·잠깐 안 됨 → 다음 모델
             send({ e: 'gemini', msg: `${r.status} ${last.msg}` });   // 400 등 — 요청이 틀렸다(다른 키로도 같다)
             finish();
             return;
           }
+          if (keys.every(k => dead.has(k))) break;
           // 모든 키가 한도(429)여도 다음 모델로 — 무료 한도는 모델마다 따로다
         }
-        send({ e: last.status === 429 ? 'rate' : 'gemini', msg: `${last.status} ${last.msg}`.trim() });
+        send({ e: gFailCode(keys, dead, last.status), msg: `${last.status} ${last.msg}`.trim() });
       } catch (err) {
         send({ e: 'gemini', msg: String((err as Error)?.message || err).slice(0, 200) });
       }
