@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" width="720" height="420" font-family="Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fbbf24"/></marker></defs>
+  <rect width="720" height="420" rx="18" fill="#0b1120"/>
+  <rect x="0.5" y="0.5" width="719" height="419" rx="18" fill="none" stroke="#334155"/>
+  <circle cx="40" cy="38" r="16" fill="#0ea5e9"/><text x="40" y="44" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">1</text>
+  <text x="66" y="45" font-size="21" font-weight="700" fill="#e2e8f0">구글 AI 스튜디오 열기 · 로그인</text>
+  <rect x="30" y="70" width="660" height="282" rx="12" fill="#f8fafc" stroke="#475569"/>
+  <path d="M30 82a12 12 0 0 1 12-12h636a12 12 0 0 1 12 12v26H30z" fill="#1f2937"/>
+  <circle cx="50" cy="89" r="5" fill="#ef4444"/><circle cx="66" cy="89" r="5" fill="#f59e0b"/><circle cx="82" cy="89" r="5" fill="#22c55e"/>
+  <rect x="104" y="77" width="420" height="24" rx="12" fill="#0f172a" stroke="#fbbf24" stroke-width="2.5"/>
+  <text x="122" y="94" font-size="14" fill="#e2e8f0">🔒 aistudio.google.com/apikey</text>
+  <rect x="30" y="108" width="150" height="244" fill="#e2e8f0"/>
+  <text x="46" y="140" font-size="14" fill="#475569">Google AI Studio</text>
+  <text x="46" y="176" font-size="13" fill="#64748b">채팅 (Chat)</text>
+  <text x="46" y="204" font-size="13" fill="#64748b">만들기 (Build)</text>
+  <text x="46" y="232" font-size="13" fill="#64748b">대시보드</text>
+  <rect x="36" y="300" width="138" height="30" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="105" y="320" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1d4ed8">🔑 Get API key</text>
+  <rect x="240" y="140" width="390" height="170" rx="14" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="435" y="176" text-anchor="middle" font-size="17" font-weight="700" fill="#0f172a">구글 계정으로 로그인</text>
+  <circle cx="300" cy="226" r="22" fill="#38bdf8"/><text x="300" y="233" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">나</text>
+  <text x="336" y="220" font-size="14" font-weight="700" fill="#0f172a">이 사이트에 로그인한 계정</text>
+  <text x="336" y="241" font-size="13" fill="#64748b">같은 구글 계정을 고르세요</text>
+  <rect x="290" y="266" width="290" height="30" rx="8" fill="#2563eb"/>
+  <text x="435" y="286" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">처음이면 약관 동의 → 계속</text>
+  <text x="538" y="94" font-size="13" font-weight="700" fill="#fbbf24">← 여기에 주소 입력</text>
+  <text x="360" y="382" text-anchor="middle" font-size="14" fill="#cbd5e1">주소창에 aistudio.google.com/apikey 를 열고, 이 사이트와 같은 구글 계정으로 로그인합니다</text>
+  <text x="360" y="404" text-anchor="middle" font-size="12" fill="#64748b">그림은 이해를 돕는 예시입니다 — 실제 화면의 글자·배치는 조금 다를 수 있습니다</text>
+</svg>

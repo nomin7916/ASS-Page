@@ -37,6 +37,7 @@ import StockTransferModal from './components/StockTransferModal';
 import CashTransferModal from './components/CashTransferModal';
 import UnlockPinModal from './components/UnlockPinModal';
 import PasteModal from './components/PasteModal';
+import HoldingsPhotoSync from './components/HoldingsPhotoSync';
 import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
 import PortfolioStatsPanel from './components/PortfolioStatsPanel';
 import AccountTabBar from './components/AccountTabBar';
@@ -614,6 +615,8 @@ export default function App() {
   const [comparisonMode, setComparisonMode] = useState('latestOverPast');
   const [isLinkSettingsOpen, setIsLinkSettingsOpen] = useState(false);
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
+  // 📷 사진으로 보유 맞추기 — 연 순간의 계좌 id(열린 동안 다른 계좌로 바꿔도 그 계좌에만 쓴다). null = 닫힘
+  const [holdPhotoPid, setHoldPhotoPid] = useState(null);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   // 종목 계좌 간 이관 — 대상 항목 id(모달 열림 여부 겸용)
   const [transferItemId, setTransferItemId] = useState(null);
@@ -3493,6 +3496,46 @@ export default function App() {
   // 메시지 핸들러(deps [])가 첫 렌더의 ensureDriveFolder(로그인 전 authUser)를 붙잡지 않게 최신 함수를 ref로 둔다
   const ensureDriveFolderRef = useRef(ensureDriveFolder);
   ensureDriveFolderRef.current = ensureDriveFolder;
+  // 내 Gemini API 키(📷 사진으로 보유 맞추기, 2026-11-26) — 사용자 Index_Data 폴더의 ai_settings.json { geminiKey, updatedAt }.
+  // ⚠️ STATE·버전 백업에 넣지 않는다(백업 22본에 키가 복제된다) · saveDriveFile만(루트 저장 가드 경유).
+  // ⚠️ 관리자 접속(impersonation) 중에는 사용자의 키를 읽지도 쓰지도 않는다(그 탭은 관리자 토큰 → 서버가 사이트 키로 읽는다).
+  // 한 번 읽으면 이 탭 메모리에 계정별로 둔다(브라우저 저장소 금지 — 같은 기기에서 여러 계정이 번갈아 로그인한다).
+  const aiKeyCacheRef = useRef({ email: '', key: '', loaded: false });
+  const authEmailRef = useRef('');
+  authEmailRef.current = (authUser?.email || '').toLowerCase();
+  const geminiKeyApi = useMemo(() => ({
+    load: async () => {
+      if (adminViewingAsRef.current || ADMIN_VIEW_EMAIL) return { key: '', canSave: false, error: '관리자 접속 중' };
+      const email = authEmailRef.current;
+      const c = aiKeyCacheRef.current;
+      if (c.loaded && c.email === email) return { key: c.key, canSave: !!driveTokenRef.current };
+      const token = driveTokenRef.current;
+      if (!token) return { key: '', canSave: false, error: 'Drive에 아직 연결되지 않았습니다 — 잠시 뒤 다시 열어 주세요' };
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+        const data = await loadDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS);
+        const key = typeof data?.geminiKey === 'string' ? data.geminiKey.trim() : '';
+        aiKeyCacheRef.current = { email, key, loaded: true };
+        return { key, canSave: true };
+      } catch (err) {
+        return { key: '', canSave: false, error: `키를 불러오지 못했습니다 (${err?.message || err})` };
+      }
+    },
+    save: async (key) => {
+      if (adminViewingAsRef.current || ADMIN_VIEW_EMAIL) return { ok: false, error: '관리자 접속 중에는 저장하지 않습니다' };
+      const token = driveTokenRef.current;
+      if (!token) return { ok: false, error: 'Drive에 아직 연결되지 않았습니다' };
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+        const k = String(key || '').trim();
+        await saveDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS, { geminiKey: k, updatedAt: new Date().toISOString() });
+        aiKeyCacheRef.current = { email: authEmailRef.current, key: k, loaded: true };
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: `저장하지 못했습니다 (${err?.message || err})` };
+      }
+    },
+  }), []);
   const openRateWindow = () => {
     if (!rateAccess) return;
     const existing = rateWinRef.current;
@@ -4323,7 +4366,8 @@ export default function App() {
         //    나면 예적금 지문이 조용히 깨진다 — @ts-nocheck+esbuild라 컴파일러가 못 잡는다).
         //    ⚠️ investAmountUsd(해외 투자금액 사용자 입력)도 필수 — 수량 0인 행에서는 미러
         //    purchasePrice를 쓰지 않으므로 이 필드만 바뀌고, 빠지면 그 편집이 조용히 유실된다.
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, investAmountUsd: item.investAmountUsd, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, depositAmountKrw: item.depositAmountKrw, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, userCategory: item.userCategory || '', assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
+        //    ⚠️ syncNote(📷 사진 맞추기 메모)도 필수 — '메모 지우기'는 이 필드만 바꾼다.
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, investAmountUsd: item.investAmountUsd, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, depositAmountKrw: item.depositAmountKrw, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, userCategory: item.userCategory || '', assetClass: item.assetClass, syncNote: item.syncNote || '', ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         // ⚠️ 직접입력(simple) 계좌의 평가액·원금수동 플래그 — 이 둘만 바뀌는 경로가 실재한다
         //    (principalManual이 서 있는 계좌의 평가액 편집, 현금 이관의 simple 대상). 빠지면
@@ -5271,6 +5315,7 @@ export default function App() {
             categoryView={categoryViewTable}
             onCategoryViewChange={setCategoryViewTable}
             onCodeChanged={(id) => inheritSharedCategoryFor(activePortfolioId, id)}
+            onPhotoSync={activePortfolioAccountType === 'overseas' ? null : () => setHoldPhotoPid(activePortfolioId)}
           />
         )}
 
@@ -5703,6 +5748,17 @@ export default function App() {
       </div>
 
 
+      <HoldingsPhotoSync
+        open={!!holdPhotoPid}
+        onClose={() => setHoldPhotoPid(null)}
+        accountName={(portfolios.find(p => p.id === holdPhotoPid)?.name) || ''}
+        items={(portfolios.find(p => p.id === holdPhotoPid)?.portfolio) || []}
+        applyItems={(fn) => { const pid = holdPhotoPid; if (pid) setPortfolios(prev => prev.map(p => (p.id !== pid ? p : { ...p, portfolio: fn(p.portfolio ?? []) }))); }}
+        isAdmin={(authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()}
+        viewingAs={!!ADMIN_VIEW_EMAIL}
+        keyApi={geminiKeyApi}
+        onOpenCalendarGuide
+      />
       <PasteModal
         isPasteModalOpen={isPasteModalOpen}
         setIsPasteModalOpen={setIsPasteModalOpen}

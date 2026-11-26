@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" width="720" height="420" font-family="Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fbbf24"/></marker></defs>
+  <rect width="720" height="420" rx="18" fill="#0b1120"/>
+  <rect x="0.5" y="0.5" width="719" height="419" rx="18" fill="none" stroke="#334155"/>
+  <circle cx="40" cy="38" r="16" fill="#0ea5e9"/><text x="40" y="44" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">2</text>
+  <text x="66" y="45" font-size="21" font-weight="700" fill="#e2e8f0">'API 키 만들기(Create API key)' 누르기</text>
+  <rect x="30" y="70" width="660" height="282" rx="12" fill="#f8fafc" stroke="#475569"/>
+  <text x="56" y="108" font-size="19" font-weight="700" fill="#0f172a">API 키</text>
+  <text x="56" y="132" font-size="12.5" fill="#64748b">Gemini API를 부를 때 쓰는 키입니다</text>
+  <rect x="472" y="88" width="196" height="38" rx="10" fill="#2563eb" stroke="#fbbf24" stroke-width="3"/>
+  <text x="570" y="112" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">+ API 키 만들기</text>
+  <path d="M560 160 L 566 132" fill="none" stroke="#fbbf24" stroke-width="2.5" marker-end="url(#ah)"/>
+  <rect x="150" y="160" width="420" height="176" rx="14" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="174" y="192" font-size="16" font-weight="700" fill="#0f172a">새 키 만들기</text>
+  <text x="174" y="222" font-size="12.5" fill="#64748b">키 이름</text>
+  <rect x="174" y="230" width="372" height="26" rx="6" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="184" y="248" font-size="13" fill="#334155">Gemini API Key</text>
+  <text x="174" y="276" font-size="12.5" fill="#64748b">프로젝트 — 기본값 그대로 두면 됩니다</text>
+  <rect x="174" y="284" width="250" height="26" rx="6" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="184" y="302" font-size="13" fill="#334155">기본 프로젝트 (Default) ▾</text>
+  <rect x="440" y="284" width="106" height="30" rx="8" fill="#2563eb" stroke="#fbbf24" stroke-width="3"/>
+  <text x="493" y="304" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">키 만들기</text>
+  <text x="360" y="382" text-anchor="middle" font-size="14" fill="#cbd5e1">[+ API 키 만들기] → 프로젝트는 기본값 그대로 → [키 만들기]. 카드 등록·결제는 하지 않아도 됩니다</text>
+  <text x="360" y="404" text-anchor="middle" font-size="12" fill="#64748b">그림은 이해를 돕는 예시입니다 — 실제 화면의 글자·배치는 조금 다를 수 있습니다</text>
+</svg>

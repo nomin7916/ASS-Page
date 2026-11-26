@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" width="720" height="420" font-family="Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fbbf24"/></marker></defs>
+  <rect width="720" height="420" rx="18" fill="#0b1120"/>
+  <rect x="0.5" y="0.5" width="719" height="419" rx="18" fill="none" stroke="#334155"/>
+  <circle cx="40" cy="38" r="16" fill="#0ea5e9"/><text x="40" y="44" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">4</text>
+  <text x="66" y="45" font-size="21" font-weight="700" fill="#e2e8f0">이 사이트에 키 붙여넣기 · 저장</text>
+  <rect x="30" y="64" width="660" height="84" rx="10" fill="#0f172a" stroke="#475569"/>
+  <rect x="30" y="64" width="660" height="56" rx="10" fill="#1e293b"/>
+  <text x="50" y="97" font-size="12.5" font-weight="700" fill="#cbd5e1">구분</text>
+  <text x="120" y="97" font-size="12.5" font-weight="700" fill="#cbd5e1">종목명</text>
+  <text x="300" y="97" font-size="12.5" font-weight="700" fill="#93c5fd">보유수량</text>
+  <text x="400" y="97" font-size="12.5" font-weight="700" fill="#93c5fd">투자금액</text>
+  <text x="480" y="97" font-size="12.5" font-weight="700" fill="#cbd5e1">수익률</text>
+  <rect x="640" y="70" width="12" height="12" rx="2" fill="none" stroke="#34d399" stroke-width="1.5"/><path d="M640 76h12M646 70v12" stroke="#34d399" stroke-width="1.2"/>
+  <rect x="633" y="86" width="26" height="18" rx="5" fill="#0c4a6e" stroke="#fbbf24" stroke-width="2.5"/>
+  <rect x="639" y="90" width="12" height="10" rx="2" fill="none" stroke="#7dd3fc" stroke-width="1.5"/><path d="M640 99l3-3 2 2 3-3 2 2" fill="none" stroke="#7dd3fc" stroke-width="1.2"/><circle cx="652" cy="90" r="3.2" fill="#0c4a6e" stroke="#7dd3fc" stroke-width="1.2"/>
+  <text x="646" y="118" text-anchor="middle" font-size="14" fill="#c084fc">+</text>
+  <text x="624" y="82" text-anchor="end" font-size="11.5" fill="#64748b">엑셀</text><text x="624" y="100" text-anchor="end" font-size="11.5" font-weight="700" fill="#fbbf24">사진 아이콘 →</text><text x="624" y="118" text-anchor="end" font-size="11.5" fill="#64748b">종목 추가</text>
+  <text x="50" y="139" font-size="12.5" fill="#94a3b8">주식</text>
+  <text x="120" y="139" font-size="12.5" fill="#cbd5e1">TIGER 머니마켓액티브</text>
+  <text x="300" y="139" font-size="12.5" fill="#bfdbfe">9</text>
+  <text x="400" y="139" font-size="12.5" fill="#bfdbfe">935,273</text>
+  <text x="480" y="139" font-size="12.5" fill="#f87171">0.52%</text>
+  <path d="M662 96 C 690 120, 640 150, 600 164" fill="none" stroke="#fbbf24" stroke-width="2.5" marker-end="url(#ah)"/>
+  <rect x="120" y="160" width="480" height="190" rx="14" fill="#111827" stroke="#0ea5e9"/>
+  <text x="142" y="188" font-size="15" font-weight="700" fill="#e0f2fe">사진으로 보유 맞추기</text>
+  <text x="142" y="214" font-size="12.5" fill="#94a3b8">내 Gemini API 키</text>
+  <rect x="142" y="222" width="320" height="32" rx="8" fill="#0b1120" stroke="#fbbf24" stroke-width="2.5"/>
+  <text x="154" y="243" font-size="13" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#e2e8f0">AIzaSy… (붙여넣기)</text>
+  <rect x="474" y="222" width="104" height="32" rx="8" fill="#0284c7" stroke="#fbbf24" stroke-width="2.5"/>
+  <text x="526" y="243" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">저장</text>
+  <text x="142" y="280" font-size="12.5" fill="#34d399">✓ 저장됨 (AIza…Q1Xk) — 내 Drive에 보관 · PC·휴대폰 함께 씁니다</text>
+  <rect x="142" y="296" width="180" height="34" rx="8" fill="#0369a1"/>
+  <text x="232" y="318" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">사진 고르기</text>
+  <text x="338" y="318" font-size="12" fill="#64748b">잔고 화면 사진(여러 장 가능)</text>
+  <text x="360" y="382" text-anchor="middle" font-size="14" fill="#cbd5e1">계좌 표 오른쪽 위 사진 아이콘(엑셀 아이콘 아래) → 키 칸에 붙여넣기 → [저장]. 한 번만 하면 됩니다</text>
+  <text x="360" y="404" text-anchor="middle" font-size="12" fill="#64748b">키는 내 구글 Drive(Index_Data 폴더 ai_settings.json)에만 저장됩니다 · 관리자는 키 없이도 씁니다</text>
+</svg>

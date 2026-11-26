@@ -1,10 +1,11 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, ExternalLink } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, ExternalLink, BookOpen } from 'lucide-react';
 import { BG } from '../design';
 import { generateId, formatNumber, formatFundPrice, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, spanFromText, EMPTY_HIST_DETAIL, buildQtyChangesByDate } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { ledgerEventsByDate, LEDGER_DIVERGING } from '../ledger';
+import AiApiGuide from './AiApiGuide';
 
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -157,6 +158,8 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
 
   const [viewYear, setViewYear] = useState(ty);
   const [viewMonth, setViewMonth] = useState(tm);
+  // ✨ AI API 연동 사용법(구글 Gemini 키 받기 그림 안내, 2026-11-26) — 달력 창 안에 덮어 띄운다. 읽기 전용.
+  const [aiGuideOpen, setAiGuideOpen] = useState(false);
   // pad: null | { dayKey, mode: 'new'|'edit', memoId, val }
   // backPick: PICK 목록을 거쳐 열린 상세 패드에만 실린다(= 되돌아갈 목록의 pickKind).
   //           1건 칩에서 바로 연 상세·PICK 자신·사용자 메모에는 없다 → 그 경우 ✕/Esc는 완전 닫기.
@@ -687,6 +690,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
             </button>
           </div>
           <div className="flex items-center gap-1">
+            <button onMouseDown={(e) => e.stopPropagation()} onClick={() => setAiGuideOpen(o => !o)} title="AI API 연동 사용법 — 구글 Gemini 무료 키 받기(그림 안내)" className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] border transition ${aiGuideOpen ? 'border-amber-400/60 bg-amber-500/15 text-amber-200' : 'border-gray-700 text-gray-400 hover:text-amber-200 hover:bg-gray-800'}`}>
+              <BookOpen size={12} />AI 연동
+            </button>
             {/* 별도 브라우저 창으로 확장 — 클릭 제스처 직후 동기 window.open이라야 팝업 차단을 피한다 */}
             {onOpenWindow && (
               <button onMouseDown={(e) => e.stopPropagation()} onClick={onOpenWindow} title="별도 창으로 열기" className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-sky-300 transition">
@@ -698,6 +704,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
             </button>
           </div>
         </div>
+        {aiGuideOpen && <AiApiGuide onClose={() => setAiGuideOpen(false)} />}
         {headerNotice && (
           <div className="shrink-0 px-4 py-1 border-b border-amber-500/20 bg-amber-500/10 text-[11px] text-amber-300 text-center">
             {headerNotice}

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" width="720" height="420" font-family="Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fbbf24"/></marker></defs>
+  <rect width="720" height="420" rx="18" fill="#0b1120"/>
+  <rect x="0.5" y="0.5" width="719" height="419" rx="18" fill="none" stroke="#334155"/>
+  <circle cx="40" cy="38" r="16" fill="#0ea5e9"/><text x="40" y="44" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">3</text>
+  <text x="66" y="45" font-size="21" font-weight="700" fill="#e2e8f0">만들어진 키 복사하기</text>
+  <rect x="30" y="70" width="660" height="282" rx="12" fill="#f8fafc" stroke="#475569"/>
+  <text x="56" y="108" font-size="19" font-weight="700" fill="#0f172a">API 키</text>
+  <rect x="56" y="126" width="608" height="34" rx="6" fill="#e2e8f0"/>
+  <text x="72" y="148" font-size="12.5" font-weight="700" fill="#475569">이름</text>
+  <text x="240" y="148" font-size="12.5" font-weight="700" fill="#475569">키</text>
+  <text x="560" y="148" font-size="12.5" font-weight="700" fill="#475569">복사</text>
+  <rect x="56" y="160" width="608" height="48" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="72" y="189" font-size="13.5" fill="#0f172a">Gemini API Key</text>
+  <text x="240" y="189" font-size="14" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#0f172a">AIzaSy••••••••••••••••••Q1Xk</text>
+  <rect x="546" y="168" width="70" height="32" rx="8" fill="#dbeafe" stroke="#fbbf24" stroke-width="3"/>
+  <text x="581" y="189" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">⧉ 복사</text>
+  <path d="M640 236 L 606 206" fill="none" stroke="#fbbf24" stroke-width="2.5" marker-end="url(#ah)"/>
+  <rect x="470" y="236" width="170" height="30" rx="15" fill="#0f172a"/>
+  <text x="555" y="256" text-anchor="middle" font-size="13" fill="#e2e8f0">✓ 클립보드에 복사됨</text>
+  <rect x="56" y="282" width="608" height="54" rx="10" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="76" y="306" font-size="14" font-weight="700" fill="#92400e">🔒 키는 비밀번호와 같습니다</text>
+  <text x="76" y="326" font-size="12.5" fill="#92400e">남에게 보여 주거나 채팅·게시판에 붙여넣지 마세요. 새어 나갔으면 지우고 새로 만드세요.</text>
+  <text x="360" y="382" text-anchor="middle" font-size="14" fill="#cbd5e1">AIza로 시작하는 긴 글자가 키입니다 — 옆의 [복사]를 누르세요</text>
+  <text x="360" y="404" text-anchor="middle" font-size="12" fill="#64748b">그림은 이해를 돕는 예시입니다 — 실제 화면의 글자·배치는 조금 다를 수 있습니다</text>
+</svg>

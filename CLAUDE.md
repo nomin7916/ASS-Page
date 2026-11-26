@@ -30,6 +30,8 @@ src/
 ├── taxCalcMonths.ts     # 평균 과표 계산기 월별 접기(지난 달 접힘 기본·세션 로컬·일자 미입력은 늘 펼침) (⚠️ import 0 — verify:tax-months)
 ├── taxPhotoJob.ts       # 과표 계산기 「📷 사진 맡기기」(관리자 전용) 화면 도구: 상태·오류 글·다시 부르기 판단·예약 작업 지침 글(ROUTINE_PROMPT = docs/ai-task/ROUTINE-PROMPT.md) (⚠️ import 0 — verify:ai-tax)
 ├── taxCalcPaste.ts      # 평균 과표 계산기 '사진으로 넣기'(모든 사용자, 2026-11-24 둘째 요청 — 사진만 올리면 끝): 사진 고르자마자 기기에서 JPEG로 줄여(photoBudget·photoFitSize — 합계 3MB) `api/tax-photo.ts`(Edge, 구글 Gemini · 키 = Vercel `GEMINI_API_KEY`(2~9) · 부탁 문장은 서버 `api/_taxPhoto.ts`가 만든다 · 응답 NDJSON을 바로 흘림) → 끝까지 받은 답({d:1})만 parseTaxCalcPaste → plan(그 순간의 이벤트) → 바로 넣기 + '되돌리기' · 날짜·구분별 합친 행(가중평균 단가)·같은 날 같은 수량은 빈칸만 채움·`과표 N` · '다른 방법'(접힘) = AI 앱으로 공유(navigator.share 는 첫 await 보다 먼저) · AI 답 붙여넣기 — ⚠️ 사진은 저장하지 않는다(서버·Drive·기록 0) · 화면은 AI를 직접 부르지 않는다(fetch는 /api/tax-photo 하나) · accept 값은 PASTE_PHOTO_ACCEPT(슬래시·별표를 붙여 쓰면 검사 도구가 주석으로 읽는다) (⚠️ import 0 — verify:tax-paste · #G가 서버 처리부를 가짜 Gemini로 끝까지)
+├── holdingsPhoto.ts     # 계좌 표 「사진으로 보유 맞추기」(2026-11-26) 순수 로직: AI 답 줄 해석(`보유 | 코드 | 이름 | 수량 | 매입금액 | 평균단가`·잘림)·종목 맞추기(코드→이름→잘린 앞부분)·계획(바꿈/같음/0으로/그대로/새로 추가)·적용·되돌리기·메모 글 (⚠️ import 0 — verify:holdings-photo)
+├── photoShrink.ts       # 사진을 기기에서 JPEG로 줄이기(shrinkPhotoToB64 — taxCalcPaste의 PHOTO_TRIES·photoFitSize 사용)
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
 ├── introVideo.ts        # 인트로 영상(public/intro) 목록 INTRO_VIDEOS(⚠️ 최신이 맨 앞 — 새 영상은 맨 앞 한 줄 = 버튼 하나)·처음 영상 pickIntroVideo(INTRO_PICK_MODE 'latest'·나중에 'random')·진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro · 영상 음량은 −22.3 LUFS로 맞춰 INTRO_VOLUME 하나)
@@ -71,6 +73,8 @@ src/
     ├── DriveBackupModal.tsx      # Drive 백업 관리 모달
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
+    ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기
+    ├── AiApiGuide.tsx            # AI API 연동 사용법(구글 Gemini 키 받기, 그림 public/ai-guide/*.svg) — 메모 달력 「AI 연동」·사진 맞추기 창이 함께 씀
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)
     ├── CashTransferModal.tsx    # 현금(예수금) 계좌 간 이관 모달(원금 반영 선택, z=1070)
     ├── CustomDatePicker.tsx      # 날짜 선택기
@@ -161,6 +165,17 @@ src/
   미승인은 **403**(401이면 앱이 재발급을 반복한다). 이메일별 메모리 + Redis(이메일 해시 키): 승인 **1시간**(사용자 확정 — 취소 반영
   최대 시간, 토큰 캐시도 이 시각을 넘지 않는다) · 미승인 5분. 스크립트 무응답일 때만 24시간 안 승인 기록으로 통과, 그 외 503.
   ⚠️ `SCRIPT_URL`·`ADMIN_EMAIL`·`CLIENT_ID`는 src/config.ts 사본이다(verify:api-auth가 대조). 검증: `verify:api-auth`.
+
+## 사진으로 보유 맞추기 (`src/holdingsPhoto.ts`·`api/holdings-photo.ts`·`api/_holdingsPhoto.ts`, ⚠️ 회귀 주의 — 2026-11-26)
+
+- 계좌 표 머리 아이콘 칸(엑셀 아래 사진 아이콘, 해외계좌 제외) → 잔고 사진 → `/api/holdings-photo`(Gemini) → 끝까지 받은 답(`{d:1}`)만 맞춘다 → 바로 적용 + 「되돌리기」.
+  주식 행만 대상(예수금·펀드·예적금·현금 행 제외). 사진에 없는 종목(수량>0) = 수량·투자금액 0 + 항목 `syncNote` 메모(이전 수량·금액 — 종목명 칸 📝, title 호버·눌러 보기/지우기).
+  새 종목 = 새 행(코드 비움 — 틀린 코드는 남의 시세를 끌어온다). ⚠️ 하나도 안 맞으면(다른 계좌 사진) 아무것도 안 바꾼다 · 잘린 줄이 남으면 안 보인 종목을 0으로 하지 않는다(keep)
+  · 숫자를 못 믿는 줄도 '사진에 있음'(0으로 안 함). ⚠️ `syncNote`는 Drive 구조 지문 항목 필드 + `handleUpdateFor` 글 필드(빈 글 = 삭제)에 있어야 저장된다.
+- 키(사용자 확정: 관리자 먼저, 다른 사용자는 자기 무료 한도): 관리자 = 내 키 → 사이트 키(GEMINI_API_KEY 2~9) · 다른 사용자 = 내 키만(없으면 `needkey`, 사이트 키 안 씀).
+  내 키 = 사용자 Index_Data 폴더 `ai_settings.json`(DRIVE_FILES.AI_SETTINGS, `saveDriveFile`만 · STATE·버전 백업·브라우저 저장소 금지 · 관리자 접속 중 읽기/쓰기 안 함)
+  → 요청 헤더 `X-Gemini-Key`로만(서버는 저장·기록 안 함). 과표 '사진으로 넣기'(/api/tax-photo)는 그대로 사이트 키.
+- 메모 달력 머리줄 「AI 연동」 = 사용법(그림 5장 `public/ai-guide/`). 검증: `verify:holdings-photo`(가짜 Gemini로 서버 처리부 끝까지 포함).
 
 ## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { Trash2, RefreshCw, Plus, Calendar, FileSpreadsheet } from 'lucide-react';
+import { Trash2, RefreshCw, Plus, Calendar, FileSpreadsheet, ImagePlus } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { rowHighlightOf, nextRowHighlight } from '../watchlistGroups';
 import {
@@ -348,7 +348,7 @@ const UserCategoryCell = ({ item, fallback, list, shared, rowIds, onUpdate }) =>
 // 계좌 타입별 기능 게이팅 (혼동/회귀 방지 — CLAUDE.md "계좌 타입별 D/S·펀드 게이팅" 참조)
 //  · isRetirement   : 펀드 행 + "펀드 추가" 버튼 — 퇴직연금(DC/IRP) + 개인연금(pension)
 //  · showAssetClass : 위험/안전(D/S) 자산 구분 배지 — 퇴직연금(DC/IRP) 전용 (개인연금 제외)
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onTransferCash = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {}, accountName = '', categoryView = 'asset', onCategoryViewChange = null, onCodeChanged = null }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onTransferCash = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {}, accountName = '', categoryView = 'asset', onCategoryViewChange = null, onCodeChanged = null, onPhotoSync = null }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -388,6 +388,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   //    (RebalancingPanel 목표 날짜 칩과 같은 규약).
   // ⚠️ 훅은 전부 아래 `if (!totals) return null;` **위**에 있어야 한다 — 조건부 훅 금지.
   const [excelFlash, setExcelFlash] = useState('idle');
+  // 📝 사진 맞추기 메모 보기 { id, text, x, y } | null
+  const [notePop, setNotePop] = useState(null);
   const excelTimerRef = useRef(null);
   const tableWrapRef = useRef(null);
   const [hlListOpen, setHlListOpen] = useState(false);
@@ -751,6 +753,19 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
         </div>
       </div>
     )}
+    {/* 📝 사진 맞추기 메모(syncNote) — 휴대폰은 마우스 올리기가 없어 눌러서 본다. 표 밖(fixed)에 띄워 스크롤 칸에 잘리지 않게 */}
+    {notePop && (
+      <div className="fixed inset-0 z-[1000]" onClick={() => setNotePop(null)}>
+        <div className="fixed w-[290px] max-w-[calc(100vw-16px)] rounded-lg border border-amber-500/40 bg-[#1e293b] shadow-2xl px-3 py-2 text-[12px] text-gray-200" style={{ left: notePop.x, top: notePop.y }} onClick={e => e.stopPropagation()}>
+          <div className="text-amber-300 font-bold mb-1">📝 메모</div>
+          <div className="whitespace-pre-wrap leading-relaxed">{notePop.text}</div>
+          <div className="flex justify-end gap-2 mt-2">
+            <button onClick={() => { onUpdate(notePop.id, 'syncNote', ''); setNotePop(null); }} className="px-2 py-0.5 rounded border border-gray-600 text-gray-400 hover:text-red-300 hover:bg-gray-800 text-[11.5px]">메모 지우기</button>
+            <button onClick={() => setNotePop(null)} className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-100 text-[11.5px]">닫기</button>
+          </div>
+        </div>
+      </div>
+    )}
     <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full">
       {hiddenColumns.length > 0 && (
         <div className="flex items-end gap-1 px-3 pt-2 pb-0 flex-wrap bg-[#080e1c]">
@@ -889,6 +904,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     title={excelFlash === 'fail' ? '엑셀 파일을 만들지 못했습니다' : `엑셀로 내려받기 — ${excelFileLabel}`}
                     className={`transition-colors p-0.5 ${excelFlash === 'done' ? 'text-emerald-400' : excelFlash === 'fail' ? 'text-red-400' : 'text-gray-400 hover:text-emerald-400'}`}
                   ><FileSpreadsheet size={14} /></button>
+                  {onPhotoSync && <button onClick={onPhotoSync} title="사진으로 보유 맞추기 — 증권사 잔고(보유종목) 화면 사진으로 보유수량·투자금액을 맞춥니다" className="text-gray-400 hover:text-sky-300 transition-colors p-0.5"><ImagePlus size={14} /></button>}
                   <button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-0.5"><Plus size={14} /></button>
                 </div>
               </th>
@@ -938,6 +954,10 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 ${stickyMarkClass} [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={hlStickyStyle(hl)}>
                       <div className="flex items-center gap-1 px-1">
                         <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-gray-300 caret-blue-400`} value={item.name} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
+                        {item.syncNote && (
+                          <button type="button" tabIndex={-1} title={`${item.syncNote}\n(누르면 메모 보기·지우기)`} className="shrink-0 text-[11px] leading-none opacity-90 hover:opacity-100"
+                            onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setNotePop(p => (p && p.id === item.id) ? null : { id: item.id, text: item.syncNote, x: Math.max(8, Math.min(r.left - 8, window.innerWidth - 298)), y: Math.min(r.bottom + 6, window.innerHeight - 140) }); }}>📝</button>
+                        )}
                         {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
                         {fStatus === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />}
                         {fStatus === 'loading' && <RefreshCw size={10} className="animate-spin text-yellow-400 shrink-0" title="갱신 중..." />}

@@ -11,6 +11,7 @@
     "verify:tax": "node scripts/verify-kretf-tax.mjs",
     "verify:tax-months": "node scripts/verify-tax-months.mjs",
     "verify:tax-paste": "node scripts/verify-tax-paste.mjs",
+    "verify:holdings-photo": "node scripts/verify-holdings-photo.mjs",
     "verify:ai-tax": "node scripts/verify-ai-tax.mjs",
     "verify:dividend": "node scripts/verify-dividend-slots.mjs",
     "verify:dividend-qty": "node scripts/verify-dividend-qty.mjs",

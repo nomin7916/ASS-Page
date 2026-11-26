@@ -767,6 +767,8 @@ export function usePortfolioState({
     patchById(pid, pf => ({ portfolio: (pf.portfolio ?? []).map(p => {
       if (p.id !== id) return p;
       if (['category', 'name', 'code', 'assetClass'].includes(field)) return { ...p, [field]: value };
+      // 사진 맞추기 메모(📝 syncNote)는 글이다 — 아래 cleanNum으로 가면 0이 된다. 빈 글 = 메모 지우기(필드 삭제).
+      if (field === 'syncNote') { const { syncNote: _drop, ...rest } = p; return value ? { ...rest, syncNote: String(value) } : rest; }
       const num = cleanNum(value);
       const acctType = pf.accountType || 'portfolio';
       if (acctType === 'overseas' && p.type === 'stock'
