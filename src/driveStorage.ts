@@ -31,6 +31,7 @@ export const DRIVE_FILES = {
   RATE_SETTINGS:     'rate_monitor_settings.json',   // 금리 모니터링 ⑥ 설정(기준치·수동값·브라질 메모) — 버전 백업 없음
   AI_SETTINGS:       'ai_settings.json',             // 내 Gemini API 키(사진으로 보유 맞추기·AI 검색) — 버전 백업 없음 · STATE에 넣지 않는다
   AI_SEARCH:         'ai_search_chats.json',         // AI 검색 채팅창 대화(자료)·듣기 설정 — 버전 백업 없음 · STATE에 넣지 않는다
+  FUND_NAV_JOB:      'fund_nav_job.json',            // 펀드 기준가 예약 작업 열쇠(관리자만 — src/fundFeed.ts) — 버전 백업 없음 · STATE에 넣지 않는다
   // 금리 모니터링 지표 과거 기록(10-A) — 묶음별 파일, 형식은 rateHistStore.ts. 4MB 초과 시 '_2' 파일로 나뉜다. 버전 백업 없음
   RATE_HIST_US:      'rate_hist_us.json',
   RATE_HIST_CREDIT:  'rate_hist_credit.json',

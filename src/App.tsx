@@ -17,6 +17,7 @@ import { HIST_FILE_NAMES } from './rateHistStore';
 import { RATE_RULES } from './rateSignals';
 import { MANUAL_INPUTS } from './rateAssets';
 import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, uploadHtmlStudyMaterial, deleteDriveFileById, driveFileExists, updateDriveFileIfExists, getOrCreateAdminFolder } from './driveStorage';
+import { ensureFundJobKeyFile } from './fundFeed';
 import { MIGRATION_FILES, buildMigrationPreview, migrationErrorPreview, prepareMigratedState, migrationBackupName } from './accountMigration';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
@@ -3913,6 +3914,30 @@ export default function App() {
     }, 1500);
     return () => clearTimeout(t);
   }, [isRealAdmin, divLinksBootFor, dividendLinks]);
+
+  // ── 펀드 기준가 우편함 열쇠(2026-11-26, src/fundFeed.ts) — 관리자 본인 Drive Index_Data 폴더의 fund_nav_job.json ──
+  // 맥미니 크롬 예약 작업("[ASS-PAGE-펀드 기준가 · 맥미니 크롬]")이 Drive 커넥터로 이 파일의 열쇠를 읽어 /api/fund-job에 기준가를 넣는다.
+  // 세션마다 한 번 — 없거나 20일 지났으면 새 열쇠(앞 열쇠는 3일 더 통한다). ⚠️ STATE·버전 백업에 넣지 않는다 · saveDriveFile만.
+  // ⚠️ divLinksBootFor 게이트(이 계정 STATE를 정상 로드 = Drive 연결됨) · 관리자 접속(impersonation) 중에는 하지 않는다(isRealAdmin).
+  const fundJobKeyDoneRef = useRef('');
+  useEffect(() => {
+    if (!isRealAdmin || ADMIN_VIEW_EMAIL || divLinksBootFor !== authUser.email.toLowerCase()) return;
+    const email = authUser.email.toLowerCase();
+    if (fundJobKeyDoneRef.current === email) return;
+    const token = driveTokenRef.current;
+    if (!token) return;
+    fundJobKeyDoneRef.current = email;
+    (async () => {
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+        const r = await ensureFundJobKeyFile({
+          load: () => loadDriveFile(token, folderId, DRIVE_FILES.FUND_NAV_JOB),
+          save: (data) => saveDriveFile(token, folderId, DRIVE_FILES.FUND_NAV_JOB, data).then(() => {}),
+        });
+        if (r === 'fail') fundJobKeyDoneRef.current = ''; // 실패면 다음 새로고침(또는 로그인 상태가 바뀔 때) 다시 — 벨 알림 없음(시세 계층과 같은 정책)
+      } catch { fundJobKeyDoneRef.current = ''; }
+    })();
+  }, [isRealAdmin, divLinksBootFor, authUser]);
 
   // ── 분배금 링크 공유 ② 설정 시트 → 분배금 사용자(feature3) — 칸별 병합(utils.mergeSharedDividendLinks) ──
   // 결과 seen(dividendLinksSeen)은 STATE에 저장된다 — 다음 접속에서 '관리자가 바꾼 칸'만 골라 덮는 기준이다.

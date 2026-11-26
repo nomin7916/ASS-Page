@@ -1472,6 +1472,36 @@ export function useStockData({
 
           // MA 펀드이고 오늘 NAV를 새로 받았으면 portfolio currentPrice 보정
           // (fetchMiraeFundInfo가 외부 프록시 캐시로 인해 어제 기준가를 반환한 경우 수정)
+          // + 오늘 것이 아니어도 화면 기준가 날짜(navDate)보다 새 날짜면 맞춘다(2026-11-26) — 직접 조회가 막혀 현재가가
+          //   한 달 묵었는데 우편함(맥미니 크롬)으로 이력만 받은 경우. 등락은 이력의 직전 거래일과 견준다(묵은 현재가와 견주지 않는다).
+          const histDays = hist ? Object.keys(hist).filter(d => !isWeekend(d) && d <= today && hist[d] > 0).sort() : [];
+          const newestDay = histDays[histDays.length - 1] || '';
+          if (code.startsWith('MA:') && newestDay && newestDay < today) {
+            const nav = hist[newestDay];
+            const prevDay = histDays[histDays.length - 2] || '';
+            const prevNav = prevDay ? hist[prevDay] : 0;
+            const fixNewer = (item: any) => {
+              if (item.type !== 'fund' || item.code !== code || !(newestDay > (item.navDate || ''))) return item;
+              return {
+                ...item,
+                currentPrice: nav,
+                changeAmount: prevNav > 0 ? +(nav - prevNav).toFixed(2) : 0,
+                changeRate: prevNav > 0 ? +((nav - prevNav) / prevNav * 100).toFixed(2) : 0,
+                navDate: newestDay,
+                ...(prevDay ? { prevNavDate: prevDay, prevNavPrice: prevNav } : {}),
+              };
+            };
+            setPortfolios(prev => prev.map(p => {
+              if (p.deletedAt) return p; // 삭제 계좌 동결
+              const items = p.portfolio || [];
+              const upd = items.map(fixNewer);
+              return upd.some((it: any, i: number) => it !== items[i]) ? { ...p, portfolio: upd } : p;
+            }));
+            setPortfolio(prev => {
+              const upd = prev.map(fixNewer);
+              return upd.some((it: any, i: number) => it !== prev[i]) ? upd : prev;
+            });
+          }
           if (code.startsWith('MA:') && hist?.[today]) {
             const todayNav = hist[today];
             setPortfolios(prev => prev.map(p => {

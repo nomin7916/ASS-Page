@@ -156,7 +156,7 @@ src/
 
 - 모든 `api/*.ts` 경로는 처리부 **첫 줄**이 `const denied = await requireAuth(req); if (denied) return denied;`(새 경로도).
   예외는 `market-calendar`뿐(로그인 화면에서 부름·비밀 키 없음 — 대신 연도 범위를 작년-4~+10년으로 묶는다).
-  그리고 `ai-job`(Claude 예약 작업 전용) — 첫 줄이 `requireJobKey`(일마다의 열쇠, Redis엔 해시만). verify:api-auth `JOB_ROUTES`.
+  그리고 `ai-job`(Claude 예약 작업 전용) — 첫 줄이 `requireJobKey`(일마다의 열쇠, Redis엔 해시만) · `fund-job`(펀드 기준가 우편함 — 첫 줄 `requireFundJobKey`). verify:api-auth `JOB_GUARDS`.
 - 헤더 `X-App-Token`(구글 로그인 액세스 토큰) → tokeninfo `aud`=GOOGLE_CLIENT_ID·`email_verified`(인스턴스 메모리 캐시: 통과 ≤10분·거부 1분).
   ⚠️ `Authorization`으로 바꾸지 말 것 — Vercel CDN이 그 요청은 캐시하지 않는다. CDN 캐시 적중은 토큰 없이 나간다(공개 시세·함수 미실행 = 키 한도 0).
 - 서버끼리(`history`·`indicators` → `fred`)는 `internalAuthHeaders()`(서버 비밀값 해시). `allowInternal`은 `fred`만.
@@ -212,6 +212,17 @@ src/
   한도: 동시 6 · 하루 30 · 한 시간 10번 · 같은 일 3분 · 이틀 지난 일 안 부름. 토큰은 화면 「⚙ Claude 연결」(시험으로 한 번 불러 통한 것만, 서버 비밀값 키로 AES-GCM) —
   없으면 Vercel 변수 `AI_TAX_ROUTINE_URL`·`AI_TAX_ROUTINE_TOKEN`. 서버 비밀값이 바뀌면 다시 연결. 다른 사용자는 '사진으로 넣기'(Gemini)·붙여넣기만.
 - ⚠️ 예약 작업에 알리는 사이트 주소는 요청 주소가 아니라 `JOB_SITE`(14ass-page-eea5.vercel.app) 하나 — 운영 주소 nominfi1.vercel.app 로 열어도 같은 서버·Redis. 요청 주소를 쓰면 작업 지침·환경 네트워크에 막힌다(2026-11-25). 검증: `verify:ai-tax`.
+
+## 펀드 기준가 우편함 — 맥미니 크롬 (`api/_fundFeed.ts`·`api/fund-feed.ts`·`api/fund-job.ts`·`src/fundFeed.ts`, ⚠️ 회귀 주의 — 2026-11-26)
+
+- 미래에셋·funetf가 서버 요청을 막아 펀드 기준가가 10/27에서 멈췄다. 앱 차례(src/api.ts): 직접 → 서울 중계(`/api/fund-proxy`, icn1·정직한 UA) → `/api/proxy`
+  → **우편함**(`/api/fund-feed`). ⚠️ 이 대체 길(4개 함수의 `fundFeedRows`·`fundFeedWant`)을 빼지 말 것 — 막힌 동안 기준가가 다시 멈춘다.
+- 막힌 코드는 앱이 목록에 올리고(op=want, 코드마다 10분 1회) → 맥미니 크롬 예약 작업 **"[ASS-PAGE-펀드 기준가 · 맥미니 크롬]"**(지시 = `docs/fund-nav-task/TRIGGER-PROMPT.md`)이
+  미래에셋 화면 탭에서 목록(`/api/fund-job?op=want`)을 받아 기준가 목록을 읽어 넣는다(op=put — 목록에 있는 코드만, CORS는 미래에셋·funetf 두 곳만).
+- 열쇠 = 관리자 앱이 세션마다 확인해 **관리자 Drive `fund_nav_job.json`**(DRIVE_FILES.FUND_NAV_JOB, saveDriveFile만 · 20일마다 새로 · 앞 열쇠 3일 · Redis엔 해시만)에 둔다.
+  관리자 접속(impersonation) 중엔 안 한다. 예약 작업은 Drive 커넥터로 읽는다. ⚠️ 이 예약 작업은 **맥미니에 묶여야** 한다(클라우드에는 크롬이 없다).
+- 이력이 화면 기준가 날짜(navDate)보다 새로우면 현재가도 맞춘다(useStockData `fixNewer`). 기준가는 공개 자료라 코드별로 모든 사용자가 같이 쓴다.
+- ⚠️ 막힘을 속이지 않는다 — 서버 중계는 브라우저 흉내(UA·Referer 위조) 금지. 크롬 길은 사용자의 브라우저로 공개 화면을 읽는 것(쪽 사이 0.4초 · 150쪽까지). 검증: `verify:fund-feed`.
 
 ## 상세 문서 위치 (⚠️ 자동 로드 금지 — 이 절이 생긴 이유: 2026-10-18 CLAUDE.md가 916KB까지 커져 모든 세션이 시작과 동시에 작업 기억 한계에 걸려 압축만 반복했다)
 

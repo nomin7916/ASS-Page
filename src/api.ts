@@ -1,4 +1,5 @@
 import { codeCandsFrom, jsonFromBytes, type CodeCand } from './holdingsPhoto';
+import { fundFeedCode, fundFeedRows, fundFeedWant, feedSlice, feedLatest } from './fundFeed';
 
 // ── 해외주식 히스토리: 서버사이드 Edge Function 경유 (Naver worldstock → Yahoo Finance) ──
 export const fetchUsStockHistory = async (
@@ -286,6 +287,9 @@ export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; 
 // 펀드 기준가 전용 서울(icn1) 중계 — 미래에셋·funetf가 해외 서버(/api/proxy의 싱가포르)를 막는다(2026-10-28~).
 // ⚠️ 이 경로를 /api/proxy보다 **앞에** 둘 것 — 뒤로 보내면 막힌 경로에서 시간만 쓰고 펀드 기준가가 다시 멈춘다(api/fund-proxy.ts).
 const fundProxyUrl = (u: string) => `/api/fund-proxy?url=${encodeURIComponent(u)}`;
+// 펀드 기준가 우편함 — 위 직접 조회(직접 · 서울 중계 · /api/proxy)가 모두 막히면 맥미니 크롬 예약 작업이 넣어 둔 기준가를 쓴다
+// (src/fundFeed.ts · api/_fundFeed.ts). ⚠️ 이 대체 길을 빼지 말 것 — 막힌 동안 펀드 기준가가 다시 멈춘다(verify:fund-feed).
+const kstTodayIso = () => new Date(Date.now() + 9 * 3600000).toISOString().split('T')[0];
 
 export const fetchFundInfo = async (code: string): Promise<{ name: string; price: number; changeRate: number } | null> => {
   if (!code || code.trim().length < 8) return null;
@@ -363,6 +367,15 @@ export const fetchFundInfo = async (code: string): Promise<{ name: string; price
       if (price > 0) return { name: name || c, price, changeRate };
     } catch { continue; }
   }
+  // 우편함 — 최신 2거래일로 등락률
+  const fc = fundFeedCode(c, false);
+  const latest = feedLatest(await fundFeedRows(fc), kstTodayIso());
+  if (latest.length) {
+    fundFeedWant(fc, latest[0].date);
+    const prev = latest[1]?.price || 0;
+    return { name: c, price: latest[0].price, changeRate: prev > 0 ? +(((latest[0].price - prev) / prev) * 100).toFixed(2) : 0 };
+  }
+  fundFeedWant(fc, new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]);
   return null;
 };
 
@@ -413,7 +426,10 @@ export const fetchFundNavHistory = async (
       if (Object.keys(result).length > 0) return result;
     } catch { continue; }
   }
-  return null;
+  // 우편함 — 막힌 동안 맥미니 크롬 예약 작업이 넣어 둔 기준가(이 구간만)
+  const fc = fundFeedCode(c, false);
+  fundFeedWant(fc, startDate);
+  return feedSlice(await fundFeedRows(fc), startDate, endDate);
 };
 
 // ── 미래에셋 기준가 HTML 파싱 헬퍼 ──────────────────────────────────────────
@@ -550,6 +566,17 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
       return { name, price, changeRate, changeAmount, navDate, prevNavDate, prevNavPrice };
     } catch { continue; }
   }
+  // 우편함 — 최신 2거래일(이름은 비워 둔다: 부르는 쪽이 기존 이름을 지킨다 — name: d.name || p.name)
+  const fc = fundFeedCode(code, true);
+  const latest = feedLatest(await fundFeedRows(fc), kstTodayIso());
+  if (latest.length) {
+    fundFeedWant(fc, latest[0].date);
+    const [a, b] = latest;
+    const changeAmount = b ? +(a.price - b.price).toFixed(2) : 0;
+    const changeRate = b && b.price > 0 ? +((changeAmount / b.price) * 100).toFixed(2) : 0;
+    return { name, price: a.price, changeRate, changeAmount, navDate: a.date, prevNavDate: b?.date, prevNavPrice: b?.price };
+  }
+  fundFeedWant(fc, twoWeeksAgo);
   return null;
 };
 
@@ -577,7 +604,12 @@ export const fetchMiraeFundNavHistory = async (
   };
 
   const firstHtml = await fetchPage(1);
-  if (!firstHtml) return null;
+  if (!firstHtml) {
+    // 우편함 — 막힌 동안 맥미니 크롬 예약 작업이 넣어 둔 기준가(이 구간만). 목록에 올려 다음 실행이 이 구간을 읽게 한다.
+    const fc = fundFeedCode(code, true);
+    fundFeedWant(fc, startDate);
+    return feedSlice(await fundFeedRows(fc), startDate, endDate);
+  }
 
   const totalPages = parseMiraeTotalPages(firstHtml);
   const result: Record<string, number> = {};

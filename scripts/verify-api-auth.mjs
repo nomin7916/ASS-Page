@@ -34,22 +34,25 @@ const eq = (name, got, want) => {
 const OPEN_ROUTES = ['market-calendar'];
 // 서버 내부 호출(내부 키)을 받는 경로
 const INTERNAL_ROUTES = ['fred'];
-// 구글 토큰 대신 일마다의 열쇠(requireJobKey)로 여는 경로 — Claude 예약 작업 전용(과표 사진 맡기기, api/_aiTax.ts)
-const JOB_ROUTES = ['ai-job'];
+// 구글 토큰 대신 예약 작업 열쇠로 여는 경로 — Claude 예약 작업 전용. 경로마다 문(guard)과 그 문이 있는 공용 파일이 정해져 있다.
+//   ai-job: 과표 사진 맡기기(api/_aiTax.ts requireJobKey) · fund-job: 펀드 기준가 우편함(api/_fundFeed.ts requireFundJobKey, 2026-11-26)
+const JOB_GUARDS = { 'ai-job': ['requireJobKey', '_aiTax'], 'fund-job': ['requireFundJobKey', '_fundFeed'] };
+const JOB_ROUTES = Object.keys(JOB_GUARDS);
 
 // ── 파트① 소스 가드 ─────────────────────────────────────────
 console.log('\n[파트①] 소스 가드');
 
 const HANDLER_RE = /export default async function handler\((\w+): Request\): Promise<Response> \{\n\s*const denied = await requireAuth\(\1(, \{ allowInternal: true \})?\);\n\s*if \(denied\) return denied;\n/;
 const IMPORT_RE = /^import \{[^}]*\brequireAuth\b[^}]*\} from '\.\/_auth\.js';$/m;
-const JOB_HANDLER_RE = /export default async function handler\((\w+): Request\): Promise<Response> \{\n\s*const denied = await requireJobKey\(\1\);\n\s*if \(denied\) return denied;\n/;
+const jobHandlerRe = (guard) => new RegExp(`export default async function handler\\((\\w+): Request\\): Promise<Response> \\{\\n\\s*const denied = await ${guard}\\(\\1\\);\\n\\s*if \\(denied\\) return denied;\\n`);
 
 function routeProblems(name, src) {
   const out = [];
   if (JOB_ROUTES.includes(name)) {
+    const [guard, lib] = JOB_GUARDS[name];
     if (/requireAuth/.test(src)) out.push('열쇠 경로인데 requireAuth를 부른다(목록과 어긋남)');
-    if (!/^import \{[^}]*\brequireJobKey\b[^}]*\} from '\.\/_aiTax\.js';$/m.test(src)) out.push("import { requireJobKey } from './_aiTax.js' 없음");
-    if (!JOB_HANDLER_RE.test(src)) out.push('처리부 첫 줄이 requireJobKey가 아니다');
+    if (!new RegExp(`^import \\{[^}]*\\b${guard}\\b[^}]*\\} from '\\./${lib}\\.js';$`, 'm').test(src)) out.push(`import { ${guard} } from './${lib}.js' 없음`);
+    if (!jobHandlerRe(guard).test(src)) out.push(`처리부 첫 줄이 ${guard}가 아니다`);
     if ((src.match(/export default/g) || []).length !== 1) out.push('export default가 하나가 아니다');
     return out;
   }
@@ -74,7 +77,7 @@ for (const f of routeFiles) {
   const name = f.replace(/\.ts$/, '');
   SRC[name] = read(`api/${f}`);
   const probs = routeProblems(name, SRC[name]);
-  ok(`api/${f} ${OPEN_ROUTES.includes(name) ? '열린 경로' : JOB_ROUTES.includes(name) ? '처리부 첫 줄 requireJobKey' : '처리부 첫 줄 requireAuth'}${probs.length ? ' — ' + probs.join(' · ') : ''}`, probs.length === 0);
+  ok(`api/${f} ${OPEN_ROUTES.includes(name) ? '열린 경로' : JOB_ROUTES.includes(name) ? `처리부 첫 줄 ${JOB_GUARDS[name][0]}` : '처리부 첫 줄 requireAuth'}${probs.length ? ' — ' + probs.join(' · ') : ''}`, probs.length === 0);
 }
 
 // 서버끼리 부르는 같은 배포의 /api/… — 내부 키를 실어야 /api/fred가 받는다
@@ -143,6 +146,9 @@ ok('App.tsx 재발급이 진행 중인 대기자를 덮지 않는다', /register
   for (const name of JOB_ROUTES) ok(`열쇠 경로 ${name}가 실제로 있다`, routeNames.includes(name));
   ok('변이: 열쇠 경로가 requireJobKey를 빼면 잡는다', routeProblems('ai-job', SRC['ai-job'].replace('const denied = await requireJobKey(request);', '')).length > 0);
   ok('변이: 다른 경로가 requireJobKey로 바꾸면 잡는다', routeProblems('proxy', SRC['proxy'].replace(/requireAuth/g, 'requireJobKey').replace("'./_auth.js'", "'./_aiTax.js'")).length > 0);
+  ok('변이: fund-job이 requireFundJobKey를 빼면 잡는다', routeProblems('fund-job', SRC['fund-job'].replace('const denied = await requireFundJobKey(request);', '')).length > 0);
+  ok('변이: fund-job이 다른 공용 파일의 문을 쓰면 잡는다', routeProblems('fund-job', SRC['fund-job'].replace(/requireFundJobKey/g, 'requireJobKey').replace("'./_fundFeed.js'", "'./_aiTax.js'")).length > 0);
+  ok('변이: fund-feed가 requireAuth를 빼면 잡는다', routeProblems('fund-feed', SRC['fund-feed'].replace('const denied = await requireAuth(request);', '')).length > 0);
 }
 
 // ── 파트② api/_auth.ts 실행 ─────────────────────────────────
