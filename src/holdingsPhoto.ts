@@ -165,7 +165,7 @@ export function planHoldingsSync(parsed: HoldParsed, items: any[]): HoldPlan {
       continue;
     }
     if (r.cut || r.unread) { rows.push({ kind: 'bad', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: 0, invest: 0 }, note: r.unread ? `이 계좌에 없는 종목인데 숫자를 읽지 못해(${r.unread}) 넣지 않음` : '이 계좌에 없는 종목인데 숫자가 잘려 넣지 않음 — 그 종목이 다 보이게 한 장 더 찍어 주세요' }); continue; }
-    rows.push({ kind: 'add', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: r.qty, invest: r.invest }, note: '새 종목 — 이름으로 종목코드를 찾아 넣습니다' });
+    rows.push({ kind: 'add', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: r.qty, invest: r.invest }, note: '새 종목 — 종목코드는 다른 계좌의 같은 이름 종목 → 이름 검색 순으로 찾아 넣습니다' });
   }
   const listContinues = parsed.rows.some(r => r.cut);
   for (const it of targets) {
@@ -209,10 +209,11 @@ export function addNote(today: string): string {
 //    이름이 같은 후보가 없고 앞부분만 맞는 후보가 둘 이상이면(잘린 이름) 고르지 않는다(비워 두고 메모로 알린다).
 export const PHOTO_ADD_MARK = '사진에서 새로 추가한 종목';
 export const KR_CODE_RE = /^[0-9][0-9A-Z]{5}$/;
+const NO_KR_CODE = new Set(['overseas', 'crypto', 'gold', 'simple']);
 const CAND_CODE_KEYS = ['code', 'cd', 'itemCode', 'itemcode', 'symbolCode', 'stockCode', 'reutersCode'];
 const CAND_NAME_KEYS = ['name', 'nm', 'itemName', 'itemname', 'stockName', 'korName'];
 export interface CodeCand { code: string; name: string }
-export interface CodeFound { code: string; name: string; price: number; changeRate: number }
+export interface CodeFound { code: string; name: string; price: number; changeRate: number; from?: 'acct' | 'search' }
 
 export function cleanPhotoName(s: unknown): string {
   return String(s ?? '').replace(/(\s*(…|\.{2,}))+\s*$/, '').trim();
@@ -305,21 +306,47 @@ export async function findCodeByName(photoName: string, deps: CodeDeps): Promise
     reached = true;
     const fits = pick.exact ? normName(d.name) === normName(q) : nameFits(q, d.name);
     const price = Number(d.price), rate = Number(d.changeRate);
-    if (fits && price > 0) return { found: { code: c.code, name: String(d.name), price, changeRate: Number.isFinite(rate) ? rate : 0 }, why: '' };
+    if (fits && price > 0) return { found: { code: c.code, name: String(d.name), price, changeRate: Number.isFinite(rate) ? rate : 0, from: 'search' }, why: '' };
   }
+  // 시세 조회만 닿지 않음 + 검색에서 이름이 똑같은 후보가 하나 → 코드는 넣고 현재가는 다음 갱신에 맡긴다
+  if (!reached && pick.exact && pick.list.length === 1) return { found: { ...pick.list[0], price: 0, changeRate: 0, from: 'search' }, why: '' };
   return { found: null, why: reached ? 'none' : 'net' };
 }
 
-export function codeFoundNote(today: string, code: string, name: string): string {
-  return `${mmdd(today)} 사진 맞추기 — ${PHOTO_ADD_MARK}입니다. 종목코드 ${code}(${name})는 이름으로 찾아 넣었습니다 — 다르면 코드를 고쳐 주세요`;
+// 다른 계좌(같은 계좌 포함)에 이름이 같은 종목이 이미 있으면 그 코드를 쓴다(사용자 요청 2026-11-26).
+// 이름이 똑같은 행 → 없으면 사진 이름이 잘려 앞부분이 맞는 행 — 어느 쪽이든 코드가 하나로 모일 때만.
+export function knownCodeFor(photoName: unknown, portfolios: any[]): CodeCand | null {
+  const pn = normName(cleanPhotoName(photoName));
+  if (!pn) return null;
+  const rows: CodeCand[] = [];
+  for (const p of Array.isArray(portfolios) ? portfolios : []) {
+    if (!p || NO_KR_CODE.has(String(p.accountType || 'portfolio'))) continue;
+    for (const it of Array.isArray(p.portfolio) ? p.portfolio : []) {
+      const code = String(it?.code ?? '').trim().toUpperCase();
+      if (!it || it.type !== 'stock' || it.isManualCash || !KR_CODE_RE.test(code) || !String(it.name ?? '').trim()) continue;
+      rows.push({ code, name: String(it.name).trim() });
+    }
+  }
+  const one = (list: CodeCand[]) => (list.length && list.every(r => r.code === list[0].code) ? list[0] : null);
+  const exact = rows.filter(r => normName(r.name) === pn);
+  if (exact.length) return one(exact);
+  return pn.length >= 4 ? one(rows.filter(r => normName(r.name).startsWith(pn))) : null;
+}
+
+export function codeFoundNote(today: string, code: string, name: string, from: 'acct' | 'search' = 'search'): string {
+  const how = from === 'acct' ? '다른 계좌의 같은 이름 종목에서 가져왔습니다' : '이름으로 찾아 넣었습니다';
+  return `${mmdd(today)} 사진 맞추기 — ${PHOTO_ADD_MARK}입니다. 종목코드 ${code}(${name})는 ${how} — 다르면 코드를 고쳐 주세요`;
+}
+export function codeTypedNote(today: string): string {
+  return `${mmdd(today)} 사진 맞추기 — ${PHOTO_ADD_MARK}입니다. 종목코드는 직접 넣었습니다`;
 }
 export function codeMissNote(today: string, why: string): string {
-  const reason = why === 'many' ? '이름이 비슷한 종목이 여럿이라 고르지 못했습니다' : '이름으로 종목코드를 찾지 못했습니다';
+  const reason = why === 'many' ? '이름이 비슷한 종목이 여럿이라 고르지 못했습니다'
+    : why === 'net' ? '연결이 안 돼 종목코드를 찾지 못했습니다(새로고침하면 다시 찾습니다)' : '이름으로 종목코드를 찾지 못했습니다';
   return `${mmdd(today)} 사진 맞추기 — ${PHOTO_ADD_MARK}입니다. ${reason} — 표에서 종목코드를 넣어 주세요`;
 }
 
 // 코드를 찾을 행 — 사진으로 새로 넣었고(메모 표시) 코드가 비어 있는 주식 행. 해외·코인·금현물·간편·삭제 계좌는 뺀다(코드 체계가 다르다).
-const NO_KR_CODE = new Set(['overseas', 'crypto', 'gold', 'simple']);
 export function photoCodeTodo(portfolios: any[]): { pid: string; id: string; name: string }[] {
   const out: { pid: string; id: string; name: string }[] = [];
   for (const p of Array.isArray(portfolios) ? portfolios : []) {
@@ -336,8 +363,16 @@ export function photoCodeTodo(portfolios: any[]): { pid: string; id: string; nam
 // 찾은 코드·공식 이름·시세를 넣는다 — 그사이 사용자가 코드를 넣은 행은 건드리지 않는다.
 export function fillPhotoCode(items: any[], id: string, f: CodeFound, today: string): any[] {
   return (Array.isArray(items) ? items : []).map(it => (it && it.id === id && !String(it.code ?? '').trim()
-    ? { ...it, code: f.code, name: f.name, currentPrice: f.price, changeRate: f.changeRate, syncNote: codeFoundNote(today, f.code, f.name) }
+    ? { ...it, code: f.code, name: f.name, ...(f.price > 0 ? { currentPrice: f.price, changeRate: f.changeRate } : {}), syncNote: codeFoundNote(today, f.code, f.name, f.from) }
     : it));
+}
+
+// 표의 코드 칸 표시 — wait = 찾는 중 · miss = 찾지 못함(눈에 띄게 · 사용자가 넣는다) · '' = 해당 없음
+export function photoCodeState(item: any): '' | 'wait' | 'miss' {
+  if (!item || item.type !== 'stock' || String(item.code ?? '').trim()) return '';
+  const note = String(item.syncNote || '');
+  if (!note.includes(PHOTO_ADD_MARK)) return '';
+  return note.includes('찾는 중') ? 'wait' : 'miss';
 }
 export function markPhotoCodeMiss(items: any[], id: string, why: string, today: string): any[] {
   return (Array.isArray(items) ? items : []).map(it => (it && it.id === id && !String(it.code ?? '').trim()

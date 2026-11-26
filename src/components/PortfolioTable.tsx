@@ -17,6 +17,7 @@ import { getTodayKST } from '../hooks/useMarketCalendar';
 import CustomDatePicker from './CustomDatePicker';
 import CategoryViewSwitch from './CategoryViewSwitch';
 import { normalizeUserCategory, userCategoryNames, userCategoryColor, normalizeCategoryView, effectiveUserCategory, USER_CATEGORY_MAX } from '../userCategory';
+import { photoCodeState, codeTypedNote } from '../holdingsPhoto';
 
 const formatUSD = (n) => {
   const v = cleanNum(n);
@@ -914,6 +915,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             {stockItems.map((item) => {
               const fStatus = stockFetchStatus?.[item.code];
               const isRefreshing = fStatus === 'loading';
+              // 사진으로 넣은 새 종목의 코드 칸 — 찾는 중 / 찾지 못함(노란 칸 · 사용자가 넣는다)
+              const codeState = photoCodeState(item);
               // 해외 투자금액(USD) — 사용자가 저장한 입력값이 단일 소스.
               // ⚠️ `item`은 totals.calcPortfolio 행이라 `item.investAmount`가 이미 **원화 환산값**으로
               //    덮여 있다(usePortfolioData). 신규 필드 `investAmountUsd`는 그 덮어쓰기 대상이
@@ -967,8 +970,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   )}
                   {/* 코드 */}
                   {!H('code') && (
-                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
-                      <input type="text" data-col="code" className={`${inp} text-center text-gray-400 text-xs font-mono caret-blue-400`} value={item.code} onFocus={e => { codeFocusRef.current = { id: item.id, code: item.code }; e.target.select(); }} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => { const was = codeFocusRef.current; codeFocusRef.current = null; onBlur(item.id, e.target.value); if (onCodeChanged && was?.id === item.id && String(was.code ?? '').trim().toUpperCase() !== e.target.value.trim().toUpperCase()) onCodeChanged(item.id); }} onKeyDown={e => handleTableKeyDown(e, 'code')} />
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS} ${codeState === 'miss' ? 'bg-amber-500/20 ring-1 ring-inset ring-amber-400' : ''}`} title={codeState === 'miss' ? '종목코드를 찾지 못했습니다 — 6자리 종목코드를 넣으면 현재가를 불러옵니다' : codeState === 'wait' ? '종목코드를 찾는 중입니다' : undefined}>
+                      <input type="text" data-col="code" className={`${inp} text-center ${codeState === 'miss' ? 'text-amber-200 placeholder:text-amber-300' : 'text-gray-400 placeholder:text-gray-500'} text-xs font-mono caret-blue-400`} value={item.code} placeholder={codeState === 'miss' ? '코드 입력' : codeState === 'wait' ? '찾는 중…' : undefined} onFocus={e => { codeFocusRef.current = { id: item.id, code: item.code }; e.target.select(); }} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => { const was = codeFocusRef.current; codeFocusRef.current = null; onBlur(item.id, e.target.value); if (onCodeChanged && was?.id === item.id && String(was.code ?? '').trim().toUpperCase() !== e.target.value.trim().toUpperCase()) onCodeChanged(item.id); if (was?.id === item.id && !String(was.code ?? '').trim() && e.target.value.trim() && photoCodeState({ ...item, code: '' })) onUpdate(item.id, 'syncNote', codeTypedNote(getTodayKST())); }} onKeyDown={e => handleTableKeyDown(e, 'code')} />
                     </td>
                   )}
                   {/* 등락률 */}

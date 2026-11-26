@@ -214,15 +214,16 @@ if (H) {
   };
   const d1 = deps([{ code: '069500', name: 'KODEX 200' }]);
   const r1 = await findCodeByName('KODEX 200', d1);
-  eq('#C5 이름이 같은 종목 → 시세 조회의 공식 이름으로 확인하고 코드·현재가', [r1, d1.calls.info], [{ found: { code: '069500', name: 'KODEX 200', price: 41230, changeRate: -1.2 }, why: '' }, ['069500']]);
+  eq('#C5 이름이 같은 종목 → 시세 조회의 공식 이름으로 확인하고 코드·현재가', [r1, d1.calls.info], [{ found: { code: '069500', name: 'KODEX 200', price: 41230, changeRate: -1.2, from: 'search' }, why: '' }, ['069500']]);
   const r2 = await findCodeByName('RISE 삼성전자SK하이', deps([{ code: '0047A0', name: 'RISE 삼성전자SK하이닉스채권혼합50' }]));
   eq('#C6 잘린 이름 · 후보 하나 → 공식 이름(전체)으로 채움', r2.found && [r2.found.code, r2.found.name], ['0047A0', 'RISE 삼성전자SK하이닉스채권혼합50']);
   const r3 = await findCodeByName('KODEX 200', deps([{ code: '999990', name: 'KODEX 200' }]));
   eq('#C7 검색이 준 코드의 공식 이름이 다르면(틀린 코드) 넣지 않는다', r3, { found: null, why: 'none' });
-  eq('#C8 연결 실패 — 검색이 닿지 않음 · 시세 조회가 닿지 않음 = net(메모를 고치지 않고 다음에 다시)', [
+  eq('#C8 연결 실패 — 검색이 닿지 않음 = net(메모를 고치지 않고 다음에 다시) · 시세만 닿지 않음 + 이름이 똑같은 후보 하나 = 코드만 넣음(현재가 0 → 다음 갱신)', [
     await findCodeByName('KODEX 200', deps([], { reached: false })), await findCodeByName('KODEX 200', deps([{ code: '069500', name: 'KODEX 200' }], { down: true })),
+    await findCodeByName('RISE 삼성전자SK하이', deps([{ code: '0047A0', name: 'RISE 삼성전자SK하이닉스채권혼합50' }], { down: true })),
     await findCodeByName('KODEX 200', { search: async () => { throw new Error('x'); }, info: async () => null }),
-  ], [{ found: null, why: 'net' }, { found: null, why: 'net' }, { found: null, why: 'net' }]);
+  ], [{ found: null, why: 'net' }, { found: { code: '069500', name: 'KODEX 200', price: 0, changeRate: 0, from: 'search' }, why: '' }, { found: null, why: 'net' }, { found: null, why: 'net' }]);
   eq('#C9 못 찾음 — 후보 없음 · 여럿 · 현재가 0 은 넣지 않음', [
     await findCodeByName('ACE 반도체', deps([])), await findCodeByName('KODEX', deps(C)), await findCodeByName('KODEX 반도체', deps([{ code: '0000Z0', name: 'KODEX 반도체' }])),
   ], [{ found: null, why: 'none' }, { found: null, why: 'many' }, { found: null, why: 'none' }]);
@@ -249,6 +250,30 @@ if (H) {
   ok('#C12 그사이 사용자가 코드를 넣은 행은 건드리지 않는다', typed.code === '123456' && typed.name === target.name);
   const missed = markPhotoCodeMiss(added, target.id, 'many', TODAY).find(it => it.id === target.id);
   ok('#C13 못 찾음 메모 — 까닭 · 코드 넣어 달라 · 표시 그대로(다음 실행에 다시 찾음)', missed.syncNote.includes('여럿') && missed.syncNote.includes('종목코드를 넣어') && missed.syncNote.includes(PHOTO_ADD_MARK) && missed.code === '');
+
+  // #C14~ 사용자 요청(2026-11-26 둘째): 다른 계좌에 이름이 같은 종목이 있으면 그 코드 → 없으면 검색 → 못 찾으면 칸을 눈에 띄게(사용자가 넣는다)
+  const { knownCodeFor, photoCodeState, codeTypedNote } = H;
+  const book = [
+    { id: 'x1', accountType: 'portfolio', portfolio: [{ id: 'k1', type: 'stock', code: '0047a0', name: 'RISE 삼성전자SK하이닉스채권혼합50' }, { id: 'k2', type: 'stock', code: '069500', name: 'KODEX 200' }, { id: 'k3', type: 'stock', code: '', name: 'SOL 국제금' }] },
+    { id: 'x2', accountType: 'isa', portfolio: [{ id: 'k4', type: 'stock', code: '411060', name: 'SOL 국제금' }, { id: 'k5', type: 'stock', code: '102110', name: 'TIGER 200' }, { id: 'k6', type: 'stock', code: '139260', name: 'TIGER 200 IT' }] },
+    { id: 'x3', accountType: 'overseas', portfolio: [{ id: 'k7', type: 'stock', code: '360750', name: 'TIGER 미국S&P500' }] },
+    { id: 'x4', accountType: 'portfolio', portfolio: [{ id: 'k8', type: 'stock', code: '0005A0', name: 'ACE K휴머노이드로봇' }, { id: 'k9', type: 'stock', code: '0006B0', name: 'ACE K휴머노이드로봇' }] },
+  ];
+  eq('#C14 다른 계좌의 같은 이름 — 똑같은 이름 · 잘린 이름(하나뿐) · 코드 없는 행은 건너뜀 · 해외 계좌 안 봄 · 같은 이름 코드가 둘이면 안 씀 · 비슷하기만 하면 안 씀', [
+    knownCodeFor('KODEX 200', book), knownCodeFor('RISE 삼성전자SK하이', book), knownCodeFor('SOL 국제금', book), knownCodeFor('TIGER 미국S&P500', book),
+    knownCodeFor('ACE K휴머노이드로봇', book), knownCodeFor('TIGER 200', book), knownCodeFor('TIGER', book), knownCodeFor('KOD', book),
+  ], [
+    { code: '069500', name: 'KODEX 200' }, { code: '0047A0', name: 'RISE 삼성전자SK하이닉스채권혼합50' }, { code: '411060', name: 'SOL 국제금' }, null,
+    null, { code: '102110', name: 'TIGER 200' }, null, null,
+  ]);
+  const fa = fillPhotoCode([{ id: 'q', type: 'stock', code: '', name: 'SOL 국제금', currentPrice: 0, changeRate: 0, syncNote: PHOTO_ADD_MARK }], 'q', { code: '411060', name: 'SOL 국제금', price: 0, changeRate: 0, from: 'acct' }, TODAY)[0];
+  ok('#C15 다른 계좌에서 가져온 코드 — 코드만 넣고(현재가는 단일 갱신이 부름) 메모에 「다른 계좌」', fa.code === '411060' && fa.currentPrice === 0 && fa.syncNote.includes('다른 계좌') && !('changeRate' in fa && fa.changeRate !== 0));
+  const wait = added[0], miss2 = markPhotoCodeMiss(added, added[0].id, 'none', TODAY)[0];
+  eq('#C16 표의 코드 칸 — 찾는 중 · 찾지 못함(눈에 띄게) · 코드가 들어오면 · 사진으로 넣은 행이 아니면 해당 없음', [
+    photoCodeState(wait), photoCodeState(miss2), photoCodeState({ ...miss2, code: '069500' }), photoCodeState({ type: 'stock', code: '', name: 'A', syncNote: '' }), photoCodeState({ ...miss2, type: 'fund' }),
+  ], ['wait', 'miss', '', '', '']);
+  const typedNote = codeTypedNote(TODAY);
+  ok('#C17 직접 넣은 코드의 메모 — 표시는 남되(코드가 있어 다시 찾지 않음) 「직접 넣었습니다」', typedNote.includes(PHOTO_ADD_MARK) && typedNote.includes('직접 넣었') && photoCodeTodo([{ id: 'p', portfolio: [{ id: 'r', type: 'stock', code: '069500', name: 'KODEX 200', syncNote: typedNote }] }]).length === 0);
 }
 
 // #E 서버 처리부를 끝까지 — 로그인 확인·관리자 판별은 바꿔 끼우고 가짜 Gemini로
@@ -381,9 +406,13 @@ const search = apiSrc.slice(apiSrc.indexOf('export const searchKrStockCodes'), a
 ok('#S13 App — 코드 찾기는 부팅 정착 뒤 · 관리자 접속이 아닐 때만 · 찾으면 구분 물려받기 + 그 계좌 id로 단일 갱신(이력 스탬프)',
   /usePhotoCodeFill\(\{[\s\S]*?ready: histPhase === 'settled',[\s\S]*?canWrite: \(\) => !ADMIN_VIEW_EMAIL && !adminViewingAsRef\.current,[\s\S]*?onFilled: \(pid, id, code\) => \{ inheritSharedCategoryFor\(pid, id\); handleSingleStockRefreshFor\(pid, id, code\); \}/.test(app)
   && /import \{ usePhotoCodeFill \} from '\.\/hooks\/usePhotoCodeFill';/.test(app));
-ok('#S14 코드 찾기 훅 — 확인한 코드만 넣는다(findCodeByName · 시세 조회 fetchStockInfo) · 연결 실패는 메모를 고치지 않음 · 한 세션에 한 번',
-  /findCodeByName\(t\.name, \{ search: searchKrStockCodes, info: fetchStockInfo \}\)/.test(fillHook) && /else if \(r\.why === 'net'\) net\+\+;/.test(fillHook)
-  && /tried\.current\.add\(/.test(fillHook) && !/fetch\(/.test(fillHook));
+ok('#S14 코드 찾기 훅 — ① 다른 계좌의 같은 이름(knownCodeFor) ② 없으면 검색(findCodeByName · 공식 이름 확인 fetchStockInfo) ③ 못 찾으면 메모 · 한 세션에 한 번',
+  /const known = knownCodeFor\(t\.name, latest\.current\);\s*const r = known\s*\? \{ found: \{ \.\.\.known, price: 0, changeRate: 0, from: 'acct' as const \}[\s\S]*?: await findCodeByName\(t\.name, \{ search: searchKrStockCodes, info: fetchStockInfo \}\)/.test(fillHook)
+  && /write\(items => markPhotoCodeMiss\(items, t\.id, r\.why, today\)\)/.test(fillHook) && /tried\.current\.add\(/.test(fillHook) && !/fetch\(/.test(fillHook));
+ok('#S16 표 — 찾지 못한 코드 칸은 노란 칸 + 「코드 입력」 · 직접 넣으면 메모를 「직접 넣었습니다」로', /const codeState = photoCodeState\(item\);/.test(pt)
+  && /codeState === 'miss' \? 'bg-amber-500\/20 ring-1 ring-inset ring-amber-400' : ''/.test(pt) && /placeholder=\{codeState === 'miss' \? '코드 입력'/.test(pt)
+  && /photoCodeState\(\{ \.\.\.item, code: '' \}\)\) onUpdate\(item\.id, 'syncNote', codeTypedNote\(getTodayKST\(\)\)\)/.test(pt)
+  && /import \{ photoCodeState, codeTypedNote \} from '\.\.\/holdingsPhoto';/.test(pt));
 ok('#S15 이름 검색은 /api/proxy(로그인 확인)만 — 바깥 공용 프록시로 보내지 않음', search.length > 200 && (search.match(/fetch\(/g) || []).length === 0
   && /fetch\(`\/api\/proxy\?url=\$\{encodeURIComponent\(url\)\}`/.test(apiSrc) && !/allorigins|codetabs/.test(search));
 

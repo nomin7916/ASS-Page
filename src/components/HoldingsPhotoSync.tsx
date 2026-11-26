@@ -290,7 +290,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
               )}
               {rows.some(r => r.note && (r.kind === 'add' || r.kind === 'bad' || r.kind === 'keep' || r.kind === 'cut')) && (
                 <ul className="text-[11.5px] text-gray-400 list-disc pl-4 space-y-0.5">
-                  {c.add > 0 && <li>새로 추가한 종목은 <b className="text-gray-200">이름으로 종목코드를 찾아 넣고 현재가를 불러옵니다</b>(몇 초) — 찾지 못한 종목은 📝 메모에 적히니 표에서 코드를 넣어 주세요.</li>}
+                  {c.add > 0 && <li>새로 추가한 종목은 <b className="text-gray-200">다른 계좌에 같은 이름의 종목이 있으면 그 코드를, 없으면 이름으로 찾아 넣고 현재가를 불러옵니다</b>(몇 초) — 찾지 못한 종목은 표의 코드 칸이 노란색이니 6자리 코드를 넣어 주세요.</li>}
                   {c.keep > 0 && <li>맨 아래 종목이 잘린 사진이라 <b className="text-gray-200">사진에 안 보인 종목은 0으로 하지 않았습니다</b> — 목록 끝까지 찍은 사진을 함께 올리면 판 종목도 0으로 맞춥니다.</li>}
                   {c.bad > 0 && <li>숫자가 잘렸거나 읽지 못한 새 종목은 넣지 않았습니다 — 그 종목이 다 보이게 한 장 더 찍어 함께 올려 주세요.</li>}
                 </ul>
