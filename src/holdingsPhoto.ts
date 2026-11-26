@@ -456,6 +456,27 @@ export function undoHoldingsPlan(items: any[], undo: HoldUndo): any[] {
   });
 }
 
+// ── 예수금(해외 계좌 — 키움 「예수금」 화면: 미국달러 외화예수금 → 예수금 행 달러 칸 depositAmount · 원화예수금 → 원화 칸 depositAmountKrw) ──
+// 사진에 없는 쪽(달러만·원화만)은 그대로 둔다. 예수금 행이 없으면 null(새로 만들지 않는다).
+export interface CashPlan { itemId: string; before: { usd: number; krw: number }; after: { usd: number; krw: number }; same: boolean }
+export function planCashSync(cash: { usd: number | null; krw: number | null } | null, items: any[]): CashPlan | null {
+  if (!cash) return null;
+  const dep = (Array.isArray(items) ? items : []).find(it => it && it.type === 'deposit');
+  if (!dep) return null;
+  const before = { usd: num(dep.depositAmount), krw: num(dep.depositAmountKrw) };
+  const after = { usd: cash.usd != null ? cash.usd : before.usd, krw: cash.krw != null ? cash.krw : before.krw };
+  const same = Math.round(before.usd * 100) === Math.round(after.usd * 100) && Math.round(before.krw) === Math.round(after.krw);
+  return { itemId: String(dep.id), before, after, same };
+}
+export function applyCashPlan(items: any[], plan: CashPlan | null): any[] {
+  if (!plan || plan.same) return items;
+  return (Array.isArray(items) ? items : []).map(it => (it && it.id === plan.itemId ? { ...it, depositAmount: plan.after.usd, depositAmountKrw: plan.after.krw } : it));
+}
+export function undoCashPlan(items: any[], plan: CashPlan | null): any[] {
+  if (!plan || plan.same) return items;
+  return (Array.isArray(items) ? items : []).map(it => (it && it.id === plan.itemId ? { ...it, depositAmount: plan.before.usd, depositAmountKrw: plan.before.krw } : it));
+}
+
 // ── 화면 글 ──
 export function holdErrorText(code: string): string {
   switch (code) {

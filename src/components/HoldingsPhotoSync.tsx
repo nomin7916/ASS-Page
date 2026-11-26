@@ -9,10 +9,10 @@ import { X, ImagePlus, RotateCcw, Lock, ExternalLink, BookOpen, ScanText } from 
 import { generateId, formatNumber } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
-import { syncCandidates, parseHoldingsText, planHoldingsSync, applyHoldingsPlan, undoHoldingsPlan, holdCounts, holdErrorText, looksLikeGeminiKey, maskKey } from '../holdingsPhoto';
+import { syncCandidates, parseHoldingsText, planHoldingsSync, applyHoldingsPlan, undoHoldingsPlan, holdCounts, holdErrorText, looksLikeGeminiKey, maskKey, planCashSync, applyCashPlan, undoCashPlan } from '../holdingsPhoto';
 import { shrinkPhotoToB64 } from '../photoShrink';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
-import { classifyOcr, parseOcrHoldings, ocrHoldLine, ocrHoldBad, OCR_FLAG_TEXT } from '../tradeOcr';
+import { classifyOcr, parseOcrHoldings, ocrHoldLine, ocrHoldBad, OCR_FLAG_TEXT, parseOcrCash } from '../tradeOcr';
 import { loadOcrEngine, ocrFile } from '../screenOcr';
 
 const KIND_LABEL = {
@@ -175,7 +175,9 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       undo = applyHoldingsPlan(itemsRef.current, plan, { newId: idGen(), today, usd }).undo;
       applyItems(prev => applyHoldingsPlan(prev, plan, { newId: idGen(), today, usd }).next);
     }
-    setRun({ phase: 'done', n, text, plan, parsed, counts: holdCounts(plan), model, undo, ocr });
+    const cashPlan = ocr && ocr.cashPlan;
+    if (cashPlan && !cashPlan.same && applyItems) applyItems(prev => applyCashPlan(prev, cashPlan));
+    setRun({ phase: 'done', n, text, plan, parsed, counts: holdCounts(plan), model, undo, ocr, cashPlan });
   };
 
   // 프로그램 읽기(AI 없이 · 무료 · 사진은 이 기기에서만) — src/screenOcr.ts(학습 사이트의 PP-OCRv5) → src/tradeOcr.ts 잔고 해석.
@@ -201,6 +203,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
     const cands = syncCandidates(itemsRef.current);
     const holds = [];
     let unknown = 0;
+    let cash = null;
     for (let i = 0; i < n; i++) {
       if (!live()) return;
       setRun({ phase: 'ocr', stage: 'read', n, i: i + 1, f: 0 });
@@ -208,7 +211,12 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       try { lines = await ocrFile(add[i], f => { if (live()) setRun(r => (r.phase === 'ocr' && r.stage === 'read' ? { ...r, f } : r)); }); }
       catch { unknown++; continue; }
       if (classifyOcr(lines) === 'holdings') holds.push(...parseOcrHoldings(lines, cands).holds);
-      else unknown++;
+      else {
+        // 해외 계좌의 예수금 화면(키움 「예수금」) — 예수금 행 달러·원화 칸
+        const c = usd ? parseOcrCash(lines) : null;
+        if (c && !cash) cash = c;
+        else unknown++;
+      }
     }
     if (!live()) return;
     // 해외 계좌 = 외화(USD) 화면만 — 원화 화면의 매입금액은 원화라 달러 원가로 쓸 수 없다(키움: 잔고 화면 「원화」 버튼을 눌러 「외화」로 바꿔 찍기)
@@ -218,21 +226,28 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       krwShots = holds.length - keep.length;
       holds.length = 0;
       holds.push(...keep);
-      if (keep.length === 0 && krwShots > 0) { setRun({ phase: 'error', n, code: 'ocr', msg: '원화 화면입니다 — 해외 계좌는 달러 금액이 필요합니다. 키움 해외잔고에서 「원화」 버튼을 눌러 「외화」로 바꾼 화면을 찍어 올려 주세요(원화 화면은 보유수량만 같고 매입금액이 원화입니다).' }); return; }
+      if (keep.length === 0 && krwShots > 0 && !cash) { setRun({ phase: 'error', n, code: 'ocr', msg: '원화 화면입니다 — 해외 계좌는 달러 금액이 필요합니다. 키움 해외잔고에서 「원화」 버튼을 눌러 「외화」로 바꾼 화면을 찍어 올려 주세요(원화 화면은 보유수량만 같고 매입금액이 원화입니다).' }); return; }
     }
     // 프로그램이 잔고 표를 못 찾았으면 AI(2순위)로 — 쓸 수 있을 때만(관리자 · 내 Gemini 키). 사용자 확정 2026-11-26: 사진은 OCR 1순위 · AI 2순위.
+    const cashPlan = planCashSync(cash, itemsRef.current);
+    if (holds.length === 0 && cashPlan) {
+      if (!cashPlan.same && applyItems) applyItems(prev => applyCashPlan(prev, cashPlan));
+      setRun({ phase: 'done', n, plan: null, cashPlan, model: '프로그램 글자 인식(AI 없이)', ocr: { bad: [], unknown, krwShots } });
+      return;
+    }
     if (holds.length === 0 && !needKey) { readAndApply(add, true); return; }
     if (holds.length === 0) { setRun({ phase: 'error', n, code: 'ocr', msg: '사진에서 잔고(보유종목) 표를 찾지 못했습니다 — 종목명·보유수량·매입금액 머리줄이 보이게 찍어 주세요(또는 아래 AI로 읽기).' }); return; }
     // 겹쳐 찍은 사진의 같은 종목은 한 번만(먼저 읽은 것)
     const seen = new Set();
     const uniq = holds.filter(h => { const k = h.code || h.name; if (seen.has(k)) return false; seen.add(k); return true; });
-    applyHoldText(uniq.map(ocrHoldLine).join('\n'), n, '프로그램 글자 인식(AI 없이)', { bad: uniq.filter(ocrHoldBad), unknown, krwShots });
+    applyHoldText(uniq.map(ocrHoldLine).join('\n'), n, '프로그램 글자 인식(AI 없이)', { bad: uniq.filter(ocrHoldBad), unknown, krwShots, cashPlan });
   };
 
   const undoApply = () => {
-    const u = run.undo;
-    if (!u || !applyItems) return;
-    applyItems(prev => undoHoldingsPlan(prev, u));
+    const u = run.undo, cp = run.cashPlan && !run.cashPlan.same ? run.cashPlan : null;
+    if ((!u && !cp) || !applyItems) return;
+    if (u) applyItems(prev => undoHoldingsPlan(prev, u));
+    if (cp) applyItems(prev => undoCashPlan(prev, cp));
     setRun(r => ({ ...r, phase: 'undone', undo: null }));
   };
 
@@ -334,6 +349,17 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
             </div>
           )}
 
+          {(run.phase === 'done' || run.phase === 'undone') && run.cashPlan && (
+            <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 flex items-center justify-between gap-2 flex-wrap text-[12px]">
+              <p className={run.cashPlan.same ? 'text-gray-300' : run.phase === 'undone' ? 'text-gray-400' : 'text-emerald-300 font-semibold'}>
+                {run.cashPlan.same ? '예수금은 이미 사진과 같습니다' : run.phase === 'undone' ? '예수금도 되돌렸습니다' : '예수금을 맞췄습니다'} — 달러 {'$'}{run.cashPlan.after.usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 원화 {formatNumber(Math.round(run.cashPlan.after.krw))}원
+                {!run.cashPlan.same && <span className="text-gray-500 font-normal"> (이전 {'$'}{run.cashPlan.before.usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · {formatNumber(Math.round(run.cashPlan.before.krw))}원)</span>}
+              </p>
+              {!run.plan && run.phase === 'done' && !run.cashPlan.same && (
+                <button onClick={undoApply} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-100 text-[12px] font-bold"><RotateCcw size={12} />되돌리기</button>
+              )}
+            </div>
+          )}
           {(run.phase === 'done' || run.phase === 'undone') && run.plan && (
             <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 space-y-2">
               {run.plan.outcome === 'none' && <p className="text-amber-200">사진에서 보유 종목 줄을 찾지 못했습니다 — 잔고(보유종목) 화면이 보이게 다시 찍어 주세요.</p>}

@@ -553,3 +553,28 @@ export function ocrTaxRead(perPhoto: OcrLineIn[][], stock: { code: string; name:
     exs: okE.map(b => ({ date: b.date, value: b.taxBase })),
   };
 }
+
+// ── 예수금 화면(키움 해외 「예수금」: 「원화예수금 12원」 줄 · 통화 | 외화예수금 | 인출가능금 표의 미국달러 줄) ──
+// 원화 = 「원화예수금」 낱말 오른쪽 숫자 · 달러 = 미국달러 줄에서 「외화예수금」 머리줄에 가장 가까운 숫자(인출가능금이 아니다).
+export interface OcrCash { krw: number | null; usd: number | null; conf: number }
+export function parseOcrCash(lines: OcrLineIn[]): OcrCash | null {
+  let krw: number | null = null, usd: number | null = null, conf = 1, usdX = -1;
+  const isN = (t: string) => NUM_RE.test(t.replace(/[원$]/g, ''));
+  for (const row of ocrRows(lines || [])) {
+    const toks = row.flatMap(toksOf);
+    const w = (k: Tok) => k.t.replace(/\s/g, '');
+    const ki = toks.findIndex(k => w(k) === '원화예수금');
+    if (ki >= 0) {
+      const n = toks.slice(ki + 1).find(k => isN(k.t));
+      if (n && krw == null) { krw = num(n.t.replace(/[원$]/g, '')); conf = Math.min(conf, n.conf); }
+      continue;
+    }
+    const hx = toks.find(k => w(k) === '외화예수금');
+    if (hx && !toks.some(k => isN(k.t))) { usdX = hx.xc; continue; }
+    if (usdX >= 0 && usd == null && toks.some(k => /^(미국달러|USD|달러)$/.test(w(k)))) {
+      const n = toks.filter(k => isN(k.t)).reduce((b: Tok | null, k) => (!b || Math.abs(k.xc - usdX) < Math.abs(b.xc - usdX) ? k : b), null);
+      if (n) { usd = num(n.t.replace(/[원$]/g, '')); conf = Math.min(conf, n.conf); }
+    }
+  }
+  return krw == null && usd == null ? null : { krw, usd, conf };
+}
