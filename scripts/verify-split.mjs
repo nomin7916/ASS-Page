@@ -25,7 +25,8 @@ const stripComments = (s) => s.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\
 
 const SCREENS = [['App', './App.tsx'], ['CalendarWindow', './components/CalendarWindow.tsx'], ['FlowWindow', './components/FlowWindow.tsx'],
   ['BacktestWindow', './components/BacktestWindow.tsx'], ['CardWindow', './components/CardWindow.tsx'], ['LedgerWindow', './components/LedgerWindow.tsx'],
-  ['RateWindow', './components/RateWindow.tsx'], ['WatchlistWindow', './components/WatchlistWindow.tsx'], ['StockChartWindow', './components/StockChartWindow.tsx']];
+  ['RateWindow', './components/RateWindow.tsx'], ['WatchlistWindow', './components/WatchlistWindow.tsx'], ['StockChartWindow', './components/StockChartWindow.tsx'],
+  ['AiSearchWindow', './components/AiSearchWindow.tsx']];
 
 console.log('\n── 파트① main.tsx — 화면 9개는 동적 import만 ──');
 const main = stripComments(read('src/main.tsx'));

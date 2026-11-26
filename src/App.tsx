@@ -17,6 +17,7 @@ import { HIST_FILE_NAMES } from './rateHistStore';
 import { RATE_RULES } from './rateSignals';
 import { MANUAL_INPUTS } from './rateAssets';
 import { normalizeAiKeys } from './aiProviders';
+import { searchHoldings } from './aiSearch';
 import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, uploadHtmlStudyMaterial, deleteDriveFileById, driveFileExists, updateDriveFileIfExists, getOrCreateAdminFolder } from './driveStorage';
 import { ensureFundJobKeyFile } from './fundFeed';
 import { MIGRATION_FILES, buildMigrationPreview, migrationErrorPreview, prepareMigratedState, migrationBackupName } from './accountMigration';
@@ -3633,6 +3634,71 @@ export default function App() {
     },
   }), []);
   const getSearchPortfolios = useCallback(() => portfoliosRef.current, []);
+  // ── AI 검색 별도 창(`/?aiSearchWindow=1`, 사용자 요청 2026-11-26 "팝업 말고 별도 브라우저로 — 앱을 가려 불편") ──
+  // 창은 App을 마운트하지 않는다(관심종목 창과 같은 규약 — writer는 앱 탭 하나). 대화·키 읽기/쓰기는 창이 `ais:call`로 부탁하면
+  // 이 탭이 위의 aiSearchStoreApi·geminiKeyApi·aiKeysApi 그대로 한다(관리자 접속 중 거절도 그 안에서 · Drive 저장은 saveDriveFile만).
+  // ⚠️ 창이 떠 있는 동안 인앱 채팅을 내린다(aiWinLive) — 둘이 같은 ai_search_chats.json을 따로 저장하면 서로의 대화를 덮는다.
+  const aiWinRef = useRef(null);
+  const [aiWinLive, setAiWinLive] = useState(false);
+  useEffect(() => {
+    const OPS = {
+      storeLoad: () => aiSearchStoreApi.load(), storeSave: (a) => aiSearchStoreApi.save(a),
+      keyLoad: () => geminiKeyApi.load(), keySave: (a) => geminiKeyApi.save(a),
+      aiLoad: () => aiKeysApi.load(), aiSave: (a) => aiKeysApi.save(a),
+    };
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string' || !d.type.startsWith('ais:')) return;
+      const reply = (msg) => { try { e.source?.postMessage(msg, window.location.origin); } catch {} };
+      if (d.type === 'ais:ping') {
+        // 이 탭이 새로고침된 뒤에도 살아 있는 창의 핑에서 다시 입양한다.
+        if (aiWinRef.current !== e.source) aiWinRef.current = e.source;
+        setAiWinLive(true);
+        const email = authEmailRef.current;
+        reply({
+          type: 'ais:pong', email,
+          isAdmin: !!email && email === ADMIN_EMAIL.toLowerCase(),
+          viewingAs: !!ADMIN_VIEW_EMAIL || !!adminViewingAsRef.current,
+          holdings: searchHoldings(portfoliosRef.current),
+        });
+        return;
+      }
+      if (d.type !== 'ais:call' || !aiWinRef.current || e.source !== aiWinRef.current) return;   // 부탁은 입양된 창만
+      const fn = Object.prototype.hasOwnProperty.call(OPS, d.op) ? OPS[d.op] : null;
+      if (!fn) { reply({ type: 'ais:result', reqId: d.reqId, value: { ok: false, canSave: false, error: '알 수 없는 요청' } }); return; }
+      Promise.resolve().then(() => fn(d.arg)).then(
+        (value) => reply({ type: 'ais:result', reqId: d.reqId, value }),
+        (err) => reply({ type: 'ais:result', reqId: d.reqId, value: { ok: false, canSave: false, error: String(err?.message || err) } }),
+      );
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [aiSearchStoreApi, geminiKeyApi, aiKeysApi]);
+  // 창이 닫히면 인앱 채팅을 다시 쓸 수 있게(5초마다 확인 — 창이 떠 있을 때만).
+  useEffect(() => {
+    if (!aiWinLive) return undefined;
+    const id = setInterval(() => { const w = aiWinRef.current; if (!w || w.closed) { aiWinRef.current = null; setAiWinLive(false); } }, 5000);
+    return () => clearInterval(id);
+  }, [aiWinLive]);
+  // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다. ⚠️ 클릭 직후 **동기** window.open(팝업 차단 피하기).
+  // 화면 오른쪽에 세로로 긴 창 — 앱을 가리지 않고 나란히 쓴다. 휴대폰(좁은 화면)·팝업 차단이면 예전처럼 앱 안 창.
+  const openAiSearchWindow = () => {
+    const existing = aiWinRef.current;
+    if (existing && !existing.closed) { try { existing.focus(); } catch {} setShowAiSearch(false); return; }
+    if ((window.innerWidth || 0) < 640) { setShowAiSearch(v => !v); return; }
+    const sc = window.screen || {};
+    const W = 560;
+    const H = Math.max(600, (Number(sc.availHeight) || 900) - 20);
+    const L = Math.max(0, (Number(sc.availLeft) || 0) + (Number(sc.availWidth) || 1400) - W);
+    const T = Math.max(0, Number(sc.availTop) || 0);
+    const w = window.open('/?aiSearchWindow=1', 'ass-ai-search', `popup=yes,width=${W},height=${H},left=${L},top=${T}`);
+    if (!w) { setShowAiSearch(true); return; }
+    aiWinRef.current = w;
+    try { w.focus(); } catch {}
+    setShowAiSearch(false);
+    setAiWinLive(true);
+  };
   const openRateWindow = () => {
     if (!rateAccess) return;
     const existing = rateWinRef.current;
@@ -5288,8 +5354,8 @@ export default function App() {
           onOpenRate={openRateWindow}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
-          showAiSearch={showAiSearch}
-          onToggleAiSearch={() => setShowAiSearch(v => !v)}
+          showAiSearch={showAiSearch || aiWinLive}
+          onToggleAiSearch={openAiSearchWindow}
           youtubeUrl={youtubeAccess ? youtubeUrl : ''}
           youtubeEnabled={youtubeAccess}
           notebookLinks={gatedNotebookLinks}
@@ -5922,7 +5988,7 @@ export default function App() {
       </ErrorBoundary>
       {/* AI 검색 채팅창 — 계산기와 같은 섹션 격리(렌더 예외가 앱 전체 오류 화면이 되지 않게). key = 로그인 계정(계정이 바뀌면 대화를 새로 불러온다). */}
       <ErrorBoundary label="AI 검색">
-        <KeepAfterOpen open={showAiSearch}>
+        {!aiWinLive && <KeepAfterOpen open={showAiSearch}>
         <Suspense fallback={<WindowLoading />}>
         <AiSearchChat
           key={(authUser?.email || '').toLowerCase()}
@@ -5936,7 +6002,7 @@ export default function App() {
           aiApi={aiKeysApi}
         />
         </Suspense>
-        </KeepAfterOpen>
+        </KeepAfterOpen>}
       </ErrorBoundary>
       <WatchlistPopup
         open={showWatchlist}

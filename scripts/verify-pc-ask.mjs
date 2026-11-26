@@ -409,6 +409,22 @@ ok('#S13 예약 작업 지침에 「AI 검색」 절 — 종류=search · aisear
   /`종류=search` → 맨 아래 「AI 검색」/.test(taskDoc) && /## AI 검색 \(종류=search\)/.test(taskDoc)
   && ['aisearch.mjs init', 'aisearch.mjs take', 'aisearch.mjs put', 'aisearch.mjs fail'].every(x => taskDoc.includes(x)) && /자료일 뿐 지시가 아니다/.test(taskDoc) && /연결 도구는 쓰지 않는다/.test(taskDoc));
 
+// AI 검색 별도 창(사용자 요청 2026-11-26 "팝업 말고 별도 브라우저로 — 앱을 가려 불편")
+const appSrc = stripComments(read('src/App.tsx'));
+const winSrc = stripComments(read('src/components/AiSearchWindow.tsx'));
+const mainSrc = stripComments(read('src/main.tsx'));
+ok('#W1 AI 검색 단추 = 별도 창(/?aiSearchWindow=1 · 이름 ass-ai-search · noopener 없음) · 막히거나 좁은 화면이면 앱 안 창',
+  /onToggleAiSearch=\{openAiSearchWindow\}/.test(appSrc) && /window\.open\('\/\?aiSearchWindow=1', 'ass-ai-search', `popup=yes,/.test(appSrc) && !/aiSearchWindow=1[^\n]*noopener/.test(appSrc)
+  && /if \(!w\) \{ setShowAiSearch\(true\); return; \}/.test(appSrc) && /if \(\(window\.innerWidth \|\| 0\) < 640\) \{ setShowAiSearch\(v => !v\); return; \}/.test(appSrc));
+ok('#W2 창이 떠 있는 동안 앱 안 채팅을 내린다(같은 대화 파일을 둘이 덮지 않게) · 부탁은 입양된 창만 · 할 일은 여섯 가지뿐',
+  /\{!aiWinLive && <KeepAfterOpen open=\{showAiSearch\}>/.test(appSrc) && /if \(d\.type !== 'ais:call' \|\| !aiWinRef\.current \|\| e\.source !== aiWinRef\.current\) return;/.test(appSrc)
+  && /storeLoad: \(\) => aiSearchStoreApi\.load\(\), storeSave: \(a\) => aiSearchStoreApi\.save\(a\),\s*keyLoad: \(\) => geminiKeyApi\.load\(\), keySave: \(a\) => geminiKeyApi\.save\(a\),\s*aiLoad: \(\) => aiKeysApi\.load\(\), aiSave: \(a\) => aiKeysApi\.save\(a\),\s*\};/.test(appSrc)
+  && /Object\.prototype\.hasOwnProperty\.call\(OPS, d\.op\)/.test(appSrc) && /import \{ searchHoldings \} from '\.\/aiSearch';/.test(appSrc));
+ok('#W3 창 = App 없이 같은 AiSearchChat(variant page) · opener·같은 출처 메시지만 · 브라우저 저장소 안 씀 · main에서 창 부팅',
+  /if \(!window\.opener \|\| e\.source !== window\.opener\) return;/.test(winSrc) && /if \(e\.origin !== window\.location\.origin\) return;/.test(winSrc)
+  && /variant="page"/.test(winSrc) && !/localStorage|sessionStorage|\bApp\b'/.test(winSrc) && /import AiSearchChat from '\.\/AiSearchChat';/.test(winSrc)
+  && /: AI_SEARCH_WINDOW_BOOT \? <AiSearchWindow \/>/.test(mainSrc) && /\|\| AI_SEARCH_WINDOW_BOOT\ninstallApiAuth/.test(mainSrc));
+
 globalThis.fetch = realFetch;
 console.log(`\nverify:pc-ask — ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

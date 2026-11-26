@@ -18,6 +18,7 @@ const LedgerWindow = lazyScreen(() => import('./components/LedgerWindow.tsx'))
 const RateWindow = lazyScreen(() => import('./components/RateWindow.tsx'))
 const WatchlistWindow = lazyScreen(() => import('./components/WatchlistWindow.tsx'))
 const StockChartWindow = lazyScreen(() => import('./components/StockChartWindow.tsx'))
+const AiSearchWindow = lazyScreen(() => import('./components/AiSearchWindow.tsx'))
 
 // 화면 조각이 그려지는 커밋에서(그리기 직전) index.html의 로딩용 어두운 바탕(html.booting)을 지운다.
 // Suspense 안 형제라 화면과 같은 커밋에 들어간다 — 그 전에 지우면 흰 화면이 한 번 비친다.
@@ -47,11 +48,13 @@ const WATCHLIST_WINDOW_BOOT = _params.get('watchlistWindow') === '1'
 // 종목 비교 차트 창(`/?stockChartWindow=1&code=…`, 관심종목 미니차트 클릭)도 같은 규약 — App을 마운트하지 않는다.
 // 이 창은 시세를 스스로 조회하고 아무것도 저장하지 않는다(브릿지 없음).
 const STOCK_CHART_WINDOW_BOOT = _params.get('stockChartWindow') === '1'
+// AI 검색 별도 창(`/?aiSearchWindow=1`, 2026-11-26)도 같은 규약 — App을 마운트하지 않는다(대화·키는 앱 탭에 부탁).
+const AI_SEARCH_WINDOW_BOOT = _params.get('aiSearchWindow') === '1'
 
 // 서버 경로(/api/…) 호출에 로그인 토큰을 싣는 관문 — 어떤 컴포넌트보다 먼저 설치한다(apiAuth.ts 머리말).
 // 별도 창은 App이 없어 opener에게 토큰을 받는다.
 const SEPARATE_WINDOW_BOOT = CALENDAR_WINDOW_BOOT || FLOW_WINDOW_BOOT || BACKTEST_WINDOW_BOOT || CARD_WINDOW_BOOT
-  || LEDGER_WINDOW_BOOT || RATE_WINDOW_BOOT || WATCHLIST_WINDOW_BOOT || STOCK_CHART_WINDOW_BOOT
+  || LEDGER_WINDOW_BOOT || RATE_WINDOW_BOOT || WATCHLIST_WINDOW_BOOT || STOCK_CHART_WINDOW_BOOT || AI_SEARCH_WINDOW_BOOT
 installApiAuth(SEPARATE_WINDOW_BOOT ? 'window' : 'app')
 // 별도 창에서 하는 조작도 앱 탭의 비활동 자동 로그아웃을 미룬다(sessionKeepAlive.ts) — 없으면 창에서만 일하는 동안 앱 탭이 로그아웃된다.
 if (SEPARATE_WINDOW_BOOT) installActivityRelay(window)
@@ -69,6 +72,7 @@ createRoot(document.getElementById('root')!).render(
         : RATE_WINDOW_BOOT ? <RateWindow />
         : WATCHLIST_WINDOW_BOOT ? <WatchlistWindow />
         : STOCK_CHART_WINDOW_BOOT ? <StockChartWindow />
+        : AI_SEARCH_WINDOW_BOOT ? <AiSearchWindow />
         : <App />}
       </Suspense>
     </ErrorBoundary>

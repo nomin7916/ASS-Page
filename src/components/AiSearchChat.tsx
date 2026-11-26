@@ -105,7 +105,9 @@ function SearchSuggest({ html }) {
   return <iframe title="구글 검색 제안" sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={doc} className="block w-full h-[62px] rounded-md border-0 bg-transparent" />;
 }
 
-export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = null, isAdmin = false, viewingAs = false, getPortfolios = null, aiApi = null }) {
+// variant 'page' = AI 검색 별도 브라우저 창(`/?aiSearchWindow=1` — AiSearchWindow.tsx): 창 전체를 채우고 넓게·작게 단추를 숨긴다(닫기 = 창 닫기).
+export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = null, isAdmin = false, viewingAs = false, getPortfolios = null, aiApi = null, variant = 'popup' }) {
+  const page = variant === 'page';
   const [store, setStore] = useState(null);
   const [loadInfo, setLoadInfo] = useState({ loaded: false, canSave: false, error: '' });
   const [keyState, setKeyState] = useState({ loaded: false, key: '', canSave: false, error: '' });
@@ -990,7 +992,7 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
   };
 
   return (
-    <div className={`fixed z-[996] inset-0 sm:inset-auto sm:right-4 sm:bottom-4 flex flex-col overflow-hidden bg-[#0f1623] sm:rounded-2xl sm:border border-sky-700/50 shadow-2xl sm:h-[min(84vh,800px)] ${wide ? 'sm:w-[min(880px,calc(100vw_-_2rem))]' : 'sm:w-[440px]'}`}>
+    <div className={page ? 'flex flex-col flex-1 min-h-0 w-full overflow-hidden bg-[#0f1623]' : `fixed z-[996] inset-0 sm:inset-auto sm:right-4 sm:bottom-4 flex flex-col overflow-hidden bg-[#0f1623] sm:rounded-2xl sm:border border-sky-700/50 shadow-2xl sm:h-[min(84vh,800px)] ${wide ? 'sm:w-[min(880px,calc(100vw_-_2rem))]' : 'sm:w-[440px]'}`}>
       <div className="flex items-center justify-between gap-1 px-3 py-2 border-b border-gray-800 shrink-0">
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-sky-300 shrink-0"><ChatIcon /></span>
@@ -1000,9 +1002,9 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
           <button onClick={() => setPanel(p => (p === 'list' ? 'chat' : 'list'))} title="저장한 자료(대화 목록)" className={panel === 'list' ? 'p-1.5 rounded bg-sky-900/40 text-sky-300 flex items-center justify-center' : btn}><List size={15} /></button>
           <button onClick={newChat} title="새 대화" className={btn}><Plus size={15} /></button>
           <button onClick={() => setPanel(p => (p === 'settings' || p === 'guide' ? 'chat' : 'settings'))} title="설정(키·듣기·보유 종목)" className={panel === 'settings' || panel === 'guide' ? 'p-1.5 rounded bg-sky-900/40 text-sky-300 flex items-center justify-center' : btn}><Settings size={15} /></button>
-          <button onClick={() => setWide(w => !w)} title={wide ? '좁게 보기' : '넓게 보기'} className={`hidden sm:flex ${btn}`}><Maximize2 size={14} /></button>
-          <button onClick={() => setMini(true)} title="작게(듣기는 계속)" className={btn}><MinIcon /></button>
-          <button onClick={close} title="닫기" className={btn}><X size={16} /></button>
+          {!page && <button onClick={() => setWide(w => !w)} title={wide ? '좁게 보기' : '넓게 보기'} className={`hidden sm:flex ${btn}`}><Maximize2 size={14} /></button>}
+          {!page && <button onClick={() => setMini(true)} title="작게(듣기는 계속)" className={btn}><MinIcon /></button>}
+          <button onClick={close} title={page ? '창 닫기' : '닫기'} className={btn}><X size={16} /></button>
         </div>
       </div>
 
