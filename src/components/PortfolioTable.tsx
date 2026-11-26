@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { Trash2, RefreshCw, Plus, Calendar, FileSpreadsheet, ImagePlus } from 'lucide-react';
+import { Trash2, RefreshCw, Plus, Calendar, FileSpreadsheet, Camera } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { rowHighlightOf, nextRowHighlight } from '../watchlistGroups';
 import {
@@ -905,7 +905,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     title={excelFlash === 'fail' ? '엑셀 파일을 만들지 못했습니다' : `엑셀로 내려받기 — ${excelFileLabel}`}
                     className={`transition-colors p-0.5 ${excelFlash === 'done' ? 'text-emerald-400' : excelFlash === 'fail' ? 'text-red-400' : 'text-gray-400 hover:text-emerald-400'}`}
                   ><FileSpreadsheet size={14} /></button>
-                  {onPhotoSync && <button onClick={onPhotoSync} title="사진으로 보유 맞추기 — 증권사 잔고(보유종목) 화면 사진으로 보유수량·투자금액을 맞춥니다" className="text-gray-400 hover:text-sky-300 transition-colors p-0.5"><ImagePlus size={14} /></button>}
+                  {onPhotoSync && <button onClick={onPhotoSync} title="사진으로 보유 맞추기 — 증권사 잔고(보유종목) 화면 사진으로 보유수량·투자금액을 맞춥니다" aria-label="사진으로 보유 맞추기" className="text-gray-400 hover:text-sky-300 transition-colors p-0.5"><Camera size={14} /></button>}
                   <button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-0.5"><Plus size={14} /></button>
                 </div>
               </th>

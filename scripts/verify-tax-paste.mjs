@@ -387,7 +387,7 @@ ok('#S16 서버: 처리부 첫 줄 requireAuth · POST만 · 다른 사이트 �
 ok('#S17 서버: 사진·글을 저장하거나 기록하지 않는다(Drive·Redis·console 없음)', !/saveDrive|redis|console\.|kv\.|put\(/i.test(api) && !/console\./.test(stripComments(read('api/_taxPhoto.ts'))));
 ok('#S12 열기·닫기·넣기 모두 resetPaste 경유(사진이 다른 종목 패널에 남지 않게)', /onClick=\{\(\) => resetPaste\(pasteFor === stock\.code \? null : stock\.code\)\}/.test(mx)
   && /onClick=\{\(\) => resetPaste\(null\)\}/.test(mx) && /const applyPaste = [\s\S]{0,600}resetPaste\(null\)/.test(mx));
-ok('#S13 아이콘 import(ImagePlus·Share2·X) + 사용', /import\s*\{[^}]*\bImagePlus\b[^}]*\bShare2\b[^}]*\bX\b[^}]*\}\s*from\s*'lucide-react'/.test(mx) && /<ImagePlus\b/.test(mx) && /<Share2\b/.test(mx) && /<X\b/.test(mx));
+ok('#S13 아이콘 import(Camera·Share2·X) + 사용 — 사진 단추는 카메라 기호 하나(사용자 확정 2026-11-26, 글은 title·aria-label에만)', /import\s*\{[^}]*\bCamera\b[^}]*\bShare2\b[^}]*\bX\b[^}]*\}\s*from\s*'lucide-react'/.test(mx) && /<Camera\b/.test(mx) && /<Share2\b/.test(mx) && /<X\b/.test(mx) && !/ImagePlus/.test(mx));
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:tax-paste — ${pass} 통과, ${fail} 실패`);
 process.exit(fail === 0 ? 0 : 1);

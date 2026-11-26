@@ -223,6 +223,12 @@ ok('#W13 서버 — cur usd 받기 · 잔고·매매 부탁 문장에 달러 줄
 ok('#W14 잔고 창 — 해외 계좌는 예수금 화면도(예수금 행 달러·원화) · 되돌리기 함께 · 원화 잔고뿐이어도 예수금 사진이 있으면 넣음',
   /const c = usd \? parseOcrCash\(lines\) : null;/.test(hw) && /const cashPlan = planCashSync\(cash, itemsRef\.current\);/.test(hw)
   && /if \(cp\) applyItems\(prev => undoCashPlan\(prev, cp\)\);/.test(hw) && /if \(keep\.length === 0 && krwShots > 0 && !cash\)/.test(hw));
+// 사진 단추 = 카메라 기호 하나(사용자 확정 2026-11-26 — 「사진 넣기·고르기·올리기 등 모든 문구를 카메라 기호로 통일」). 글은 title·aria-label(마우스·화면 읽기)에만.
+const PHOTO_UI = ['src/components/KrEtfTaxMatrix.tsx', 'src/components/TaxPhotoJobs.tsx', 'src/components/TradePhotoSync.tsx', 'src/components/HoldingsPhotoSync.tsx', 'src/components/PortfolioTable.tsx', 'src/components/HistoryPanel.tsx'];
+const visibleText = (src) => stripComments(src).replace(/(title|aria-label)=("[^"]*"|\{[^}]*\})/g, '');
+const photoWordLeft = PHOTO_UI.flatMap(f => (visibleText(read(f)).match(/사진\s*(으로\s*)?(넣기|고르기|올리기|맡기기|보내기)/g) || []).map(w => `${f}: ${w}`));
+ok(`#W15 사진 단추는 카메라 기호(Camera)로 통일 — ImagePlus 없음 · 단추 글씨에 「사진 넣기·고르기·올리기·맡기기·보내기」 없음${photoWordLeft.length ? ' — 남음: ' + photoWordLeft.join(', ') : ''}`,
+  photoWordLeft.length === 0 && PHOTO_UI.every(f => !/ImagePlus/.test(read(f))) && PHOTO_UI.every(f => /<Camera\b/.test(read(f))));
 ok('#W8 package.json에 verify:trade-ocr 등록', JSON.parse(read('package.json')).scripts['verify:trade-ocr'] === 'node scripts/verify-trade-ocr.mjs');
 
 console.log(`\n  총 ${pass + fail}건 — 통과 ${pass} / 실패 ${fail}`);

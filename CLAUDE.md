@@ -444,6 +444,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 - 함수 이동 시 functional update 패턴 (`setPortfolio(prev => ...)`)
 - 순수 유틸 → `utils.ts` | React 상태 관련 → 훅
 - 알림: 반드시 `notify(text, type)` — `window.alert/confirm` · 인라인 토스트 div 금지
+- 사진 단추(사진 넣기·고르기·올리기·맡기기·보내기)는 **카메라 기호(lucide `Camera`) 하나** — 글은 `title`·`aria-label`에만, 읽는 중엔 '읽는 중…'(사용자 확정 2026-11-26). `ImagePlus` 금지. 검증: `verify:trade-ocr` #W15.
 - Tailwind 클래스는 **완성된 글자로만** 쓴다(`bg-${색}-500`·`'w-' + n` 금지) — 꾸밈은 빌드 CSS 하나뿐이다.
   ⚠️ `index.html`에 외부 Tailwind 스크립트(cdn.tailwindcss.com)를 다시 넣지 말 것(첫 화면이 2배 느려진다). 검증: `verify:tw-static`.
 - `Intl.NumberFormat`은 모듈 상수(`const FMT_* = …`)로 한 번만 만든다 — 함수 안에서 매번 만들면 표 렌더가 수천 번 생성한다

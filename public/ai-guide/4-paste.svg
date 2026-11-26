@@ -13,9 +13,9 @@
   <text x="480" y="97" font-size="12.5" font-weight="700" fill="#cbd5e1">수익률</text>
   <rect x="640" y="70" width="12" height="12" rx="2" fill="none" stroke="#34d399" stroke-width="1.5"/><path d="M640 76h12M646 70v12" stroke="#34d399" stroke-width="1.2"/>
   <rect x="633" y="86" width="26" height="18" rx="5" fill="#0c4a6e" stroke="#fbbf24" stroke-width="2.5"/>
-  <rect x="639" y="90" width="12" height="10" rx="2" fill="none" stroke="#7dd3fc" stroke-width="1.5"/><path d="M640 99l3-3 2 2 3-3 2 2" fill="none" stroke="#7dd3fc" stroke-width="1.2"/><circle cx="652" cy="90" r="3.2" fill="#0c4a6e" stroke="#7dd3fc" stroke-width="1.2"/>
+  <g transform="translate(639.4 88.4) scale(0.55)" fill="none" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></g>
   <text x="646" y="118" text-anchor="middle" font-size="14" fill="#c084fc">+</text>
-  <text x="624" y="82" text-anchor="end" font-size="11.5" fill="#64748b">엑셀</text><text x="624" y="100" text-anchor="end" font-size="11.5" font-weight="700" fill="#fbbf24">사진 아이콘 →</text><text x="624" y="118" text-anchor="end" font-size="11.5" fill="#64748b">종목 추가</text>
+  <text x="624" y="82" text-anchor="end" font-size="11.5" fill="#64748b">엑셀</text><text x="624" y="100" text-anchor="end" font-size="11.5" font-weight="700" fill="#fbbf24">카메라 아이콘 →</text><text x="624" y="118" text-anchor="end" font-size="11.5" fill="#64748b">종목 추가</text>
   <text x="50" y="139" font-size="12.5" fill="#94a3b8">주식</text>
   <text x="120" y="139" font-size="12.5" fill="#cbd5e1">TIGER 머니마켓액티브</text>
   <text x="300" y="139" font-size="12.5" fill="#bfdbfe">9</text>
@@ -31,8 +31,8 @@
   <text x="526" y="243" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">저장</text>
   <text x="142" y="280" font-size="12.5" fill="#34d399">✓ 저장됨 (AIza…Q1Xk) — 내 Drive에 보관 · PC·휴대폰 함께 씁니다</text>
   <rect x="142" y="296" width="180" height="34" rx="8" fill="#0369a1"/>
-  <text x="232" y="318" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">사진 고르기</text>
+  <g transform="translate(219 300) scale(1.1)" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></g>
   <text x="338" y="318" font-size="12" fill="#64748b">잔고 화면 사진(여러 장 가능)</text>
-  <text x="360" y="382" text-anchor="middle" font-size="14" fill="#cbd5e1">계좌 표 오른쪽 위 사진 아이콘(엑셀 아이콘 아래) → 키 칸에 붙여넣기 → [저장]. 한 번만 하면 됩니다</text>
+  <text x="360" y="382" text-anchor="middle" font-size="14" fill="#cbd5e1">계좌 표 오른쪽 위 카메라 아이콘(엑셀 아이콘 아래) → 키 칸에 붙여넣기 → [저장]. 한 번만 하면 됩니다</text>
   <text x="360" y="404" text-anchor="middle" font-size="12" fill="#64748b">키는 내 구글 Drive(Index_Data 폴더 ai_settings.json)에만 저장됩니다 · 관리자는 키 없이도 씁니다</text>
 </svg>

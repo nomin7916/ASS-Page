@@ -5,7 +5,7 @@
 // 키: 관리자는 사이트 키(내 키가 있으면 먼저) · 다른 사용자는 내 Gemini 키(내 Drive ai_settings.json — App의 keyApi가 읽고 쓴다).
 // ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 applyItems(앱 탭이 최신 prev 위에서 적용)로만.
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ImagePlus, RotateCcw, Lock, ExternalLink, BookOpen, ScanText } from 'lucide-react';
+import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, ScanText } from 'lucide-react';
 import { generateId, formatNumber } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
@@ -266,7 +266,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
         ) : (<>
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
-            <ImagePlus size={16} className="text-sky-300 shrink-0" />
+            <Camera size={16} className="text-sky-300 shrink-0" />
             <span className="text-gray-100 font-semibold text-sm truncate">사진으로 보유 맞추기{accountName ? ` — ${accountName}` : ''}</span>
           </div>
           <button onClick={close} title="닫기" className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition"><X size={16} /></button>
@@ -281,8 +281,9 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
           <div className="rounded-lg border border-sky-600/60 bg-sky-950/30 px-3 py-2.5 space-y-1.5">
             <div className="flex items-center gap-1.5 text-gray-100 font-semibold"><ScanText size={15} className="text-sky-300" />프로그램으로 읽기 <span className="font-normal text-gray-400">— AI 없이 · 무료 · 키 필요 없음</span></div>
             <p className="text-[11.5px] text-gray-400">사진은 이 기기 밖으로 나가지 않습니다(처음 한 번 글자 인식 엔진 약 17MB를 받습니다). 자체 검사(보유수량×평균단가 ≈ 매입금액)가 어긋난 종목은 바꾸지 않고, 사진에 안 보인 종목도 0으로 하지 않습니다.</p>
-            <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || run.phase === 'ocr' ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'}`}>
-              <ImagePlus size={14} />{run.phase === 'ocr' ? '읽는 중…' : '잔고 사진 고르기(프로그램)'}
+            <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || run.phase === 'ocr' ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'}`}
+              title="잔고 사진 고르기 — 고르면 이 기기에서 글자를 읽어 바로 맞춥니다(AI 없이)" aria-label="잔고 사진 고르기(프로그램)">
+              <Camera size={18} />{run.phase === 'ocr' ? '읽는 중…' : ''}
               <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy || run.phase === 'ocr'} onChange={readByOcr} className="sr-only" />
             </label>
           </div>
@@ -325,8 +326,8 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
 
           <div className="flex items-center gap-2 flex-wrap">
             <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || needKey ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-700 hover:bg-sky-600 text-white cursor-pointer'}`}
-              title={needKey ? '먼저 내 Gemini API 키를 넣어 주세요' : '잔고 화면 사진을 고르면 바로 맞춥니다'}>
-              <ImagePlus size={14} />{busy ? '읽는 중…' : '사진 고르기'}
+              title={needKey ? '먼저 내 Gemini API 키를 넣어 주세요' : '잔고 사진 고르기 — 고르면 AI가 읽어 바로 맞춥니다'} aria-label="잔고 사진 고르기(AI)">
+              <Camera size={18} />{busy ? '읽는 중…' : ''}
               <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy || needKey} onChange={pickPhotos} className="sr-only" />
             </label>
             <span className="text-[11px] text-gray-500">한 번에 {PASTE_PHOTO_MAX}장까지 · 사진은 저장하지 않습니다</span>

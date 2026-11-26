@@ -388,7 +388,7 @@ ok('#S1 Drive 저장 지문에 syncNote(메모만 지워도 저장된다)', /por
 ok("#S2 쓰기 경로 — syncNote는 글(빈 글 = 필드 삭제), cleanNum으로 가지 않음", /if \(field === 'syncNote'\) \{[^\n]*return value \? \{ \.\.\.rest, syncNote: String\(value\) \} : rest; \}/.test(ups)
   && ups.indexOf("if (field === 'syncNote')") < ups.indexOf('const num = cleanNum(value);'));
 ok('#S3 표 — 📷 버튼(onPhotoSync)과 종목명 칸 📝 메모(마우스 올림 title + 눌러 보기·지우기)', /onPhotoSync = null \}\) => \{/.test(pt) && /\{onPhotoSync && <button onClick=\{onPhotoSync\}/.test(pt)
-  && /\{item\.syncNote && \(/.test(pt) && /title=\{`\$\{item\.syncNote\}/.test(pt) && /onUpdate\(notePop\.id, 'syncNote', ''\)/.test(pt) && /import \{[^}]*\bImagePlus\b[^}]*\} from 'lucide-react'/.test(pt));
+  && /\{item\.syncNote && \(/.test(pt) && /title=\{`\$\{item\.syncNote\}/.test(pt) && /onUpdate\(notePop\.id, 'syncNote', ''\)/.test(pt) && /import \{[^}]*\bCamera\b[^}]*\} from 'lucide-react'/.test(pt) && /<Camera size=\{14\} \/><\/button>\}/.test(pt));
 ok('#S4 App — 해외계좌도(2026-11-26 — 달러 원가 usd 모드) · 연 계좌 id에만 쓴다 · 창과 키 API 연결', /onPhotoSync=\{\(\) => setHoldPhotoPid\(activePortfolioId\)\}/.test(app)
   && /usd=\{\(portfolios\.find\(p => p\.id === holdPhotoPid\)\?\.accountType\) === 'overseas'\}/.test(app)
   && /<HoldingsPhotoSync[\s\S]*?applyItems=\{\(fn\) => \{ const pid = holdPhotoPid;/.test(app) && /keyApi=\{geminiKeyApi\}/.test(app)

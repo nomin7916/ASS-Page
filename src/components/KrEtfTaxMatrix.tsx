@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState, useRef, useCallback } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Eye, ClipboardPaste, ImagePlus, Share2, X } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Eye, ClipboardPaste, Camera, Share2, X } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency, formatPercent, resolveHoldings, buildHeldNameMap } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import {
@@ -914,9 +914,10 @@ export default function KrEtfTaxMatrix({
               onClick={() => setPhotoJobsOpen(v => !v)}
               aria-expanded={photoJobsOpen}
               className={'inline-flex items-center gap-1 px-2 py-0.5 rounded border transition-colors ' + (photoJobsOpen ? 'border-violet-500 text-violet-100 bg-violet-800/40' : 'border-violet-700/60 text-violet-300 hover:text-violet-100 hover:bg-violet-900/30')}
-              title="주문내역 사진을 맡기면 Claude가 어느 ETF인지 찾아 매매 수량·단가·과표기준가를 그 종목 계산기에 넣습니다(관리자)"
+              title="사진 맡기기(관리자) — 주문내역 사진을 맡기면 Claude가 어느 ETF인지 찾아 매매 수량·단가·과표기준가를 그 종목 계산기에 넣습니다"
+              aria-label="사진 맡기기(관리자)"
             >
-              <ImagePlus size={10} /> 사진 맡기기{photoJobsBadge.waiting > 0 ? ` · 읽는 중 ${photoJobsBadge.waiting}` : ''} {photoJobsOpen ? '▴' : '▾'}
+              <Camera size={13} />{photoJobsBadge.waiting > 0 ? ` 읽는 중 ${photoJobsBadge.waiting}` : ''} {photoJobsOpen ? '▴' : '▾'}
             </button>
           )}
         </span>
@@ -1148,9 +1149,10 @@ export default function KrEtfTaxMatrix({
                             className={'text-[10px] px-2 py-0.5 rounded border inline-flex items-center gap-1 ' + (pasteFor === stock.code
                               ? 'border-violet-500 text-violet-200 bg-violet-900/30'
                               : 'border-violet-700/60 text-violet-300 hover:text-violet-200 hover:border-violet-500')}
-                            title="주문내역(체결내역)·종목 정보 「과세」 화면 사진을 올리면 프로그램이 글자를 읽어(AI 없이) 날짜별 매수·매도 수량, 평균 단가, 과표기준가, 배당 과표를 바로 넣습니다 — 못 읽으면 AI가 읽습니다"
+                            title="사진으로 넣기 — 주문내역(체결내역)·종목 정보 「과세」 화면 사진을 올리면 프로그램이 글자를 읽어(AI 없이) 날짜별 매수·매도 수량, 평균 단가, 과표기준가, 배당 과표를 바로 넣습니다 — 못 읽으면 AI가 읽습니다"
+                            aria-label="사진으로 넣기"
                           >
-                            <ImagePlus size={10} /> 사진으로 넣기
+                            <Camera size={13} />
                           </button>
                           {monthHeads && pastGroups.length > 0 && (
                             <button
@@ -1263,9 +1265,10 @@ export default function KrEtfTaxMatrix({
                                 <label
                                   className={'px-3 py-1.5 rounded border border-violet-400 text-white bg-violet-700/70 hover:bg-violet-600/80 inline-flex items-center gap-1.5 font-medium '
                                     + (busy ? 'opacity-50 pointer-events-none' : 'cursor-pointer')}
-                                  title="휴대폰은 사진 보관함·사진 찍기·파일에서 고릅니다. 고르면 프로그램이 글자를 읽어(AI 없이) 바로 넣습니다 — 못 읽으면 AI가 읽습니다. 사진은 저장하지 않습니다."
+                                  title="사진 올리기(주문내역 · 과세 화면) — 휴대폰은 사진 보관함·사진 찍기·파일에서 고릅니다. 고르면 프로그램이 글자를 읽어(AI 없이) 바로 넣습니다 — 못 읽으면 AI가 읽습니다. 사진은 저장하지 않습니다."
+                                  aria-label="사진 올리기(주문내역 · 과세 화면)"
                                 >
-                                  <ImagePlus size={13} /> 사진 올리기 (주문내역 · 과세 화면)
+                                  <Camera size={18} />
                                   <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy} onChange={e => pickAndReadPhotos(stock, e)} className="sr-only" />
                                 </label>
                                 <span className="text-[10px] text-gray-500">
@@ -1342,7 +1345,7 @@ export default function KrEtfTaxMatrix({
                                   {readText(pr.text)}
                                 </div>
                               )}
-                              {pr.phase === 'undone' && <div className="text-[11px] text-gray-300">되돌렸습니다 — 사진으로 넣기 전으로 돌아갔습니다.</div>}
+                              {pr.phase === 'undone' && <div className="text-[11px] text-gray-300">되돌렸습니다 — 넣기 전으로 돌아갔습니다.</div>}
                               {pr.phase === 'error' && (
                                 <div className="space-y-1.5">
                                   <div className="text-[11px] text-amber-400 flex items-center gap-2 flex-wrap">

@@ -12,7 +12,7 @@ const STEPS = [
   { img: '/ai-guide/2-create.svg', text: '[API 키 만들기(Create API key)]를 누릅니다. 프로젝트는 기본값 그대로 두고 [키 만들기]. 카드 등록·결제는 하지 않아도 됩니다(무료 등급).' },
   { img: '/ai-guide/3-copy.svg', text: 'AIza로 시작하는 긴 글자가 키입니다. 옆의 [복사]를 누릅니다. 키는 비밀번호처럼 남에게 보여 주지 마세요.' },
   { img: '/ai-guide/4-paste.svg', text: '이 사이트 계좌 표 오른쪽 위 사진 아이콘(엑셀 아이콘 아래) → [내 Gemini API 키] 칸에 붙여넣고 [저장]. 내 구글 Drive에 보관돼 PC·휴대폰 모두 씁니다.' },
-  { img: '/ai-guide/5-use.svg', text: '증권사 앱의 잔고(보유종목) 화면을 캡처해 [사진 고르기]로 올리면 보유수량·투자금액이 바로 맞춰집니다. 잘못되면 [되돌리기].' },
+  { img: '/ai-guide/5-use.svg', text: '증권사 앱의 잔고(보유종목) 화면을 캡처해 카메라 단추로 올리면 보유수량·투자금액이 바로 맞춰집니다. 잘못되면 [되돌리기].' },
 ];
 
 export default function AiApiGuide({ onClose, inline = false }) {
@@ -31,7 +31,7 @@ export default function AiApiGuide({ onClose, inline = false }) {
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4 text-[12.5px] leading-relaxed text-gray-300">
         <div className="rounded-lg border border-sky-700/40 bg-sky-900/15 px-3 py-2 space-y-1">
-          <p>계좌 표 오른쪽 위 사진 아이콘(엑셀 아이콘 아래)의 <b className="text-sky-200">사진으로 보유 맞추기</b>는 구글 Gemini AI가 잔고 사진을 읽어 보유수량·투자금액을 맞춥니다.</p>
+          <p>계좌 표 오른쪽 위 카메라 아이콘(엑셀 아이콘 아래)의 <b className="text-sky-200">사진으로 보유 맞추기</b>는 구글 Gemini AI가 잔고 사진을 읽어 보유수량·투자금액을 맞춥니다.</p>
           <p>관리자는 사이트 키로 바로 씁니다. <b className="text-amber-200">다른 사용자는 본인 구글 계정의 무료 Gemini API 키</b>를 한 번 넣어 두면 본인 무료 한도로 씁니다.</p>
           <p>위쪽 막대의 말풍선 아이콘 <b className="text-sky-200">AI 검색</b>도 같은 키를 씁니다 — 구글 검색으로 최신 자료를 찾아 답하고, 답을 소리로 들을 수 있습니다(AI 검색 창 ⚙ 설정에서 키를 넣어도 됩니다).</p>
           <a href={AI_KEY_PAGE} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 mt-1 px-2.5 py-1 rounded-md bg-sky-700 hover:bg-sky-600 text-white font-bold text-[12px] transition">

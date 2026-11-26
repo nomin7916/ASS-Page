@@ -5,6 +5,7 @@
 // ⚠️ 칸이 닫혀 있어도(open=false) 이 부품은 떠 있다 — 끝난 일을 스스로 넣고(seen) 결과를 보이려 칸을 연다(onOpen).
 // ⚠️ 알림(notify)을 쓰지 않는다 — 진행·오류는 이 칸 안의 한 줄로만(알림 최소화 정책).
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Camera } from 'lucide-react';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import {
   IMG_LIMIT, POLL_MS, SHRINK_STEPS, ROUTINE_NAME, ROUTINES_URL, ROUTINE_PROMPT, SITE_ORIGIN,
@@ -202,10 +203,11 @@ export default function TaxPhotoJobs({ cands, open, onOpen, onApply, onBadge }) 
         <button
           disabled={!!busy || !st}
           onClick={() => (connected ? fileRef.current && fileRef.current.click() : setSetup(true))}
-          className="px-2 py-0.5 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 disabled:opacity-40 disabled:cursor-not-allowed"
-          title="주문내역 사진을 고르면 Claude가 어느 ETF인지 찾아 매매 수량·단가·과표기준가를 그 종목의 계산기에 넣습니다"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-violet-500 text-violet-100 bg-violet-800/40 hover:bg-violet-700/50 disabled:opacity-40 disabled:cursor-not-allowed"
+          title="주문내역 사진 고르기 — 고르면 Claude가 어느 ETF인지 찾아 매매 수량·단가·과표기준가를 그 종목의 계산기에 넣습니다"
+          aria-label="주문내역 사진 고르기"
         >
-          {sending ? `사진 보내는 중… ${busy.slice(5)}` : '📷 주문내역 사진 고르기'}
+          <Camera size={14} />{sending ? ` 보내는 중… ${busy.slice(5)}` : ''}
         </button>
         <span className="text-gray-500">Claude가 사진에서 ETF를 찾아 매매 수량·단가·과표기준가를 그 종목 계산기에 바로 넣습니다(1~3분 · 여러 장 가능)</span>
         <button

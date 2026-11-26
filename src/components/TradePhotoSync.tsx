@@ -424,8 +424,8 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
                     {canShareFiles && (
                       <span className="block mt-1.5">
                         <span className="text-gray-400">휴대폰: </span>
-                        <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-gray-600 text-gray-200 hover:bg-gray-800 text-[11.5px] cursor-pointer">
-                          <Camera size={11} />{sharePhotos.length ? `사진 ${sharePhotos.length}장 고름` : '사진 고르기'}
+                        <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-gray-600 text-gray-200 hover:bg-gray-800 text-[11.5px] cursor-pointer" title="사진 고르기" aria-label="사진 고르기">
+                          <Camera size={14} />{sharePhotos.length ? ` ${sharePhotos.length}장` : ''}
                           <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple onChange={pickForShare} className="sr-only" />
                         </label>
                         {' '}
@@ -482,12 +482,12 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
           </label>
 
           <div className="rounded-lg border border-sky-600/60 bg-sky-950/30 px-3 py-2.5 space-y-1.5">
-            <div className="flex items-center gap-1.5 text-gray-100 font-semibold"><ScanText size={15} className="text-sky-300" />사진 올리기 <span className="font-normal text-gray-400">— 프로그램이 읽어 넣습니다 · AI 없이 · 무료</span></div>
+            <div className="flex items-center gap-1.5 text-gray-100 font-semibold"><ScanText size={15} className="text-sky-300" />프로그램이 읽어 넣습니다 <span className="font-normal text-gray-400">— AI 없이 · 무료</span></div>
             <p className="text-[11.5px] text-gray-400">주문내역(체결내역) 사진과 <b className="text-gray-200">잔고 사진(MY자산·보유종목)</b>을 함께 고르면, 잔고 수량을 기준으로 <b className="text-gray-200">아직 표에 없는 매매만</b> 넣습니다. 사진은 이 기기 밖으로 나가지 않습니다(처음 한 번 글자 인식 엔진 약 17MB를 받습니다).</p>
             <div className="flex items-center gap-2 flex-wrap">
               <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || run.phase === 'ocr' ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'}`}
-                title="주문내역·잔고 사진을 고르면 이 기기에서 글자를 읽어 바로 넣습니다">
-                <Camera size={14} />{run.phase === 'ocr' ? '읽는 중…' : '주문내역·잔고 사진 고르기'}
+                title="주문내역·잔고 사진 고르기 — 고르면 이 기기에서 글자를 읽어 바로 넣습니다" aria-label="주문내역·잔고 사진 고르기">
+                <Camera size={18} />{run.phase === 'ocr' ? '읽는 중…' : ''}
                 <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy || run.phase === 'ocr'} onChange={readByOcr} className="sr-only" />
               </label>
               <span className="text-[11px] text-gray-500">한 번에 {PASTE_PHOTO_MAX}장까지</span>
@@ -542,8 +542,8 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
 
           <div className="flex items-center gap-2 flex-wrap">
             <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || needKey ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-700 hover:bg-sky-600 text-white cursor-pointer'}`}
-              title={needKey ? '먼저 내 Gemini API 키를 넣어 주세요' : '주문내역 사진을 고르면 바로 넣습니다'}>
-              <Camera size={14} />{busy ? '읽는 중…' : '주문내역 사진 고르기'}
+              title={needKey ? '먼저 내 Gemini API 키를 넣어 주세요' : '주문내역 사진 고르기 — 고르면 바로 넣습니다'} aria-label="주문내역 사진 고르기(AI)">
+              <Camera size={18} />{busy ? '읽는 중…' : ''}
               <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy || needKey} onChange={pickPhotos} className="sr-only" />
             </label>
             <span className="text-[11px] text-gray-500">한 번에 {PASTE_PHOTO_MAX}장까지 · 사진은 저장하지 않습니다</span>
@@ -568,8 +568,8 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
               ) : (
                 <div className="flex items-center gap-2 flex-wrap">
                   <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-[12.5px] transition ${pcBusy ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-emerald-700 hover:bg-emerald-600 text-white cursor-pointer'}`}
-                    title="주문내역 사진을 고르면 내 PC의 Claude가 읽어 바로 넣습니다">
-                    <Monitor size={13} />{pcBusy ? '보내는 중…' : '내 PC로 사진 보내기'}
+                    title="내 PC로 사진 보내기 — 주문내역 사진을 고르면 내 PC의 Claude가 읽어 바로 넣습니다" aria-label="내 PC로 사진 보내기">
+                    <Monitor size={14} /><Camera size={16} />{pcBusy ? '보내는 중…' : ''}
                     <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={pcBusy} onChange={sendToPc} className="sr-only" />
                   </label>
                   <span className="text-[11px] text-gray-500">한 번에 {PC_PHOTO_N}장까지 · 읽으면 사진은 우편함에서 바로 지웁니다</span>
