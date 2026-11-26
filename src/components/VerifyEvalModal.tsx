@@ -15,6 +15,7 @@ import {
   usdOfKrwFrame,
 } from '../utils';
 import { buildEvalCompare } from '../evalCompare';
+import { planBackdatedTrade, applyBackdatedTrade, tradeEligible } from '../backdatedTrade';
 import { downloadEvalCompareXlsx, dateLabel } from '../evalCompareExcel';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { BG, BORDER, Z } from '../design';
@@ -83,6 +84,125 @@ const PS_UNRESOLVED = ['미확인', '무효 입력'];
 //    카운트를 부풀리고 '예상 N 적용' 버튼까지 띄워 사용자가 채우도록 유도한다.
 const psCellLive = (row, side) => side === 'basis' || !!row?.compare?.present;
 
+// 그날 매매 반영 미리보기 — 숫자는 전부 plan(planBackdatedTrade)에서 온다(여기서 식을 다시 쓰지 않는다).
+const NO_PLAN_TEXT = {
+  noprice: '그날 단가가 없습니다 — 매수 단가(체결가)를 넣어 주세요.',
+  same: '수량이 그대로입니다.',
+  noitem: '이 종목을 찾지 못했습니다.',
+  ineligible: '이 행은 매매로 계산하지 않습니다.',
+};
+const fmtQty = (n) => (Number(n) || 0).toLocaleString('ko-KR', { maximumFractionDigits: 4 });
+function TradePanel({ plan, trade, setTrade, name, curQty, date, isOverseas, onApply, onQtyOnly }) {
+  const money = (n) => (isOverseas
+    ? `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : formatCurrency(Math.round(Number(n) || 0)));
+  const signed = (n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${money(Math.abs(n))}`;
+  const buy = plan.ok ? plan.side === 'buy' : trade.newQty > (Number(curQty) || 0);
+  const sideLabel = buy ? '매수' : '매도';
+  const set = (patch) => setTrade(t => (t ? { ...t, ...patch } : t));
+  const live = plan.ok ? plan.live : null;
+  const dayLabel = formatShortDate(date);
+  return (
+    <div className="rounded border border-sky-600/60 bg-sky-950/30 p-3 space-y-2 text-[11px]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-bold text-sky-200 truncate">📝 {dayLabel} 매매 반영 · {name}</span>
+        <button className="text-gray-500 hover:text-pink-400 shrink-0" title="취소" onClick={() => setTrade(null)}><X size={13} /></button>
+      </div>
+      <div className="text-gray-300">
+        보유수량 {fmtQty(plan.ok ? plan.oldQty : curQty)} → <span className="font-bold text-gray-100">{fmtQty(trade.newQty)}주</span>
+        {plan.ok && (
+          <span className={`ml-2 font-bold ${buy ? 'text-red-300' : 'text-blue-300'}`}>{sideLabel} {fmtQty(Math.abs(plan.dq))}주</span>
+        )}
+      </div>
+      <label className="flex items-center gap-2 text-gray-400">
+        <span className="shrink-0">{sideLabel} 단가</span>
+        <input
+          className="w-[96px] bg-gray-900 border border-gray-600 focus:border-blue-500 rounded px-1 py-0.5 text-right text-gray-100 outline-none"
+          value={trade.priceRaw}
+          inputMode="decimal"
+          onChange={e => set({ priceRaw: e.target.value })}
+        />
+        <span className="text-[10px] text-gray-500 leading-tight">기본 = 그날 종가 · 실제 체결가로 고칠 수 있어요{buy ? '' : ' (매도는 투자금액 계산에 안 씀)'}</span>
+      </label>
+      {!plan.ok ? (
+        <div className="text-amber-300 font-bold">{NO_PLAN_TEXT[plan.reason] || '계산할 수 없습니다.'}</div>
+      ) : (
+        <>
+          <div className="rounded bg-gray-900/60 border border-gray-700/60 px-2 py-1.5 space-y-0.5">
+            <div className="flex justify-between gap-2"><span className="text-gray-400">투자금액</span>
+              <span className="text-gray-200">{money(plan.oldCost)} → <b className="text-gray-100">{money(plan.newCost)}</b> <span className={plan.dc >= 0 ? 'text-red-300' : 'text-blue-300'}>({signed(plan.dc)})</span></span></div>
+            <div className="flex justify-between gap-2"><span className="text-gray-400">매입단가(평균)</span>
+              <span className="text-gray-300">{money(plan.avgBefore)} → {money(plan.avgAfter)}{buy ? '' : ' · 매도는 그대로'}</span></div>
+            {plan.amount > 0 && (
+              <div className="flex justify-between gap-2"><span className="text-gray-400">{sideLabel} 금액</span>
+                <span className="text-gray-300">{money(plan.amount)}{plan.realized != null && (
+                  <span className={plan.realized >= 0 ? 'text-red-300' : 'text-blue-300'}> · 실현손익 {signed(plan.realized)}</span>
+                )}</span></div>
+            )}
+            <div className="text-[10px] text-gray-500 leading-snug pt-0.5">
+              {buy ? '식: 투자금액 + 늘어난 수량 × 매수 단가' : '식: 투자금액 × 남은 수량 ÷ 원래 수량 (판 수량만큼 평균 원가를 뺍니다)'}
+            </div>
+          </div>
+          {plan.amount > 0 && (
+            <label className="flex items-start gap-1.5 text-gray-300 cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={!!trade.cashOn} onChange={e => set({ cashOn: e.target.checked })} />
+              <span>
+                {buy ? `매수 대금을 예수금에서 빼기 (−${money(plan.amount)})` : `매도 대금을 예수금에 더하기 (+${money(plan.amount)})`}
+                <span className="block text-[10px] text-gray-500">예수금을 증권사 잔고로 따로 맞춰 두셨다면 체크하지 마세요.</span>
+                {plan.cashOn && plan.cashAfter != null && (
+                  <span className={`block text-[10px] ${plan.cashAfter < 0 ? 'text-amber-300 font-bold' : 'text-gray-400'}`}>
+                    {dayLabel} 예수금 {money(plan.cashBefore)} → {money(plan.cashAfter)}{plan.cashAfter < 0 ? ' — 마이너스가 됩니다(같은 날 매도도 함께 넣어 주세요)' : ''}
+                  </span>
+                )}
+              </span>
+            </label>
+          )}
+          <div className="text-[10px] text-gray-400 leading-snug space-y-0.5">
+            {plan.mode === 'move' ? (
+              <div className="text-emerald-300">
+                계좌 표가 이미 {fmtQty(trade.newQty)}주입니다 → 오늘 표에서 먼저 고친 수량을 {dayLabel}로 옮깁니다
+                ({dayLabel}부터 {plan.stopDate && plan.stopDate !== 'live' ? `${formatShortDate(plan.stopDate)} 전까지` : '오늘 전까지'} 수량이 바뀌고, 표 수량은 그대로입니다).
+                <button className="ml-1 underline text-gray-400 hover:text-sky-300" onClick={() => set({ mode: 'add' })}>따로 매매로 더하기</button>
+              </div>
+            ) : (
+              <div>
+                적용: {dayLabel}부터 오늘까지의 모든 기록에 같은 차이를 더합니다{plan.laterDates.length ? ` (뒤 기록 ${plan.laterDates.length}개 포함)` : ''}.
+                {plan.moveAvailable && (
+                  <span className="text-amber-300"> 계좌 표가 이미 {fmtQty(trade.newQty)}주라 더하면 표가 {fmtQty(live.qtyAfter)}주가 됩니다.
+                    <button className="ml-1 underline hover:text-sky-300" onClick={() => set({ mode: 'move' })}>옮기기로 바꾸기</button>
+                  </span>
+                )}
+              </div>
+            )}
+            {live && live.found ? (
+              <div>
+                계좌 표(오늘): 수량 {fmtQty(live.qtyBefore)} → <b className="text-gray-200">{fmtQty(live.qtyAfter)}</b>
+                {' · '}투자금액 {money(live.costBefore)} → <b className="text-gray-200">{money(live.costAfter)}</b>
+                {plan.cashOn && live.cashBefore != null && live.cashAfter !== live.cashBefore && (
+                  <> · 예수금 {money(live.cashBefore)} → <b className="text-gray-200">{money(live.cashAfter)}</b></>
+                )}
+              </div>
+            ) : (
+              <div className="text-gray-500">계좌 표에는 이 종목이 없어 표는 그대로입니다.</div>
+            )}
+          </div>
+        </>
+      )}
+      <div className="flex items-center gap-2 pt-1">
+        <button className="flex-1 py-1.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-800 font-bold" onClick={() => setTrade(null)}>취소</button>
+        <button
+          className="flex-[2] py-1.5 rounded bg-sky-700/70 hover:bg-sky-600/70 text-sky-50 font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={!plan.ok}
+          onClick={onApply}
+        >{plan.ok ? `${sideLabel} 반영하기` : '반영할 수 없음'}</button>
+      </div>
+      <button className="text-[10px] text-gray-500 hover:text-gray-300 underline" onClick={onQtyOnly}>
+        투자금액은 두고 이 날짜 수량만 고치기(예전 방식 — 계좌 표는 그대로)
+      </button>
+    </div>
+  );
+}
+
 export default function VerifyEvalModal({
   record,
   portfolio,
@@ -133,6 +253,9 @@ export default function VerifyEvalModal({
   const [refetchingCodes, setRefetchingCodes] = useState<Set<string>>(new Set());
   const [editQtyIdx, setEditQtyIdx] = useState(-1);
   const [editQtyRaw, setEditQtyRaw] = useState('');
+  // 그날 매매 반영(backdatedTrade) — 수량을 바꾸면 바로 쓰지 않고 미리보기 칸을 연다.
+  // { idx, newQty, priceRaw, cashOn, mode: 'auto'|'add'|'move' }
+  const [trade, setTrade] = useState(null);
   const [editPriceIdx, setEditPriceIdx] = useState(-1);
   const [editPriceRaw, setEditPriceRaw] = useState('');
   const [editPrincipal, setEditPrincipal] = useState(false);
@@ -407,12 +530,53 @@ export default function VerifyEvalModal({
     if (!ok) notify(`${code} 종가 데이터를 찾을 수 없습니다 (신규 상장 또는 API 일시 불가)`, 'warning');
   };
 
+  // 수량이 바뀌면 = 그날의 매매. 주식·ETF·금·펀드 행은 미리보기(투자금액 자동 계산·뒤 날짜·계좌 표까지)를 먼저 연다.
   const commitQty = (idx) => {
     const v = cleanNum(editQtyRaw);
     setEditQtyIdx(-1);
     if (v < 0) return;
+    const r = rows[idx];
+    if (r && v !== r.quantity && tradeEligible(r.item, r.isCash)) {
+      setTrade({ idx, newQty: v, priceRaw: r.price > 0 ? String(r.price) : '', cashOn: false, mode: 'auto' });
+      return;
+    }
     patchActivePortfolio(p => withManualSnapshot(p, date, items =>
       items.map((it, i) => i === idx ? { ...it, quantity: v } : it)));
+  };
+
+  // ⚠️ 미리보기와 적용은 같은 함수(planBackdatedTrade)를 쓴다 — 적용은 최신 계좌 위에서 다시 계획한다.
+  //    그날 보유 항목은 withManualSnapshot과 같은 소스(resolveHoldings → snapshotItemsFromPortfolio)라 행 순서가 같다.
+  const tradeBase = useMemo(() => snapshotItemsFromPortfolio(resolved.items || []), [resolved]);
+  const tradePlan = useMemo(() => {
+    if (!trade) return null;
+    return planBackdatedTrade(portfolio, {
+      accountType, date, baseItems: tradeBase, baseIndex: trade.idx,
+      newQty: trade.newQty, price: cleanNum(trade.priceRaw), cashOn: trade.cashOn, mode: trade.mode,
+    });
+  }, [trade, portfolio, accountType, date, tradeBase]);
+
+  const applyTrade = () => {
+    if (!trade || !tradePlan || !tradePlan.ok) return;
+    const t = trade;
+    const mode = tradePlan.mode;
+    patchActivePortfolio(p => {
+      const base = snapshotItemsFromPortfolio(resolveHoldings(p, date).items || []);
+      const plan = planBackdatedTrade(p, {
+        accountType, date, baseItems: base, baseIndex: t.idx,
+        newQty: t.newQty, price: cleanNum(t.priceRaw), cashOn: t.cashOn, mode,
+      });
+      return plan.ok ? applyBackdatedTrade(p, plan, base) : p;
+    });
+    setTrade(null);
+  };
+
+  // 예전 동작(그날 기록만 정정 — 투자금액·뒤 날짜·계좌 표는 그대로).
+  const applyQtyOnly = () => {
+    if (!trade) return;
+    const t = trade;
+    setTrade(null);
+    patchActivePortfolio(p => withManualSnapshot(p, date, items =>
+      items.map((it, i) => i === t.idx ? { ...it, quantity: t.newQty } : it)));
   };
 
   const commitPrice = (idx) => {
@@ -612,8 +776,8 @@ export default function VerifyEvalModal({
                             {r.quantity.toLocaleString()}
                             <button
                               className="text-gray-500 hover:text-blue-400"
-                              title="보유수량 편집"
-                              onClick={() => { setEditQtyIdx(idx); setEditQtyRaw(String(r.quantity)); }}
+                              title={tradeEligible(r.item, r.isCash) ? '보유수량 편집 — 이 날짜의 매매로 기록합니다(투자금액 자동 계산 · 이후 날짜와 계좌 표까지 반영)' : '보유수량 편집'}
+                              onClick={() => { setTrade(null); setEditQtyIdx(idx); setEditQtyRaw(String(r.quantity)); }}
                             ><Pencil size={11} /></button>
                           </span>
                         )}
@@ -676,6 +840,20 @@ export default function VerifyEvalModal({
               </tbody>
             </table>
           </div>
+
+          {trade && tradePlan && (
+            <TradePanel
+              plan={tradePlan}
+              trade={trade}
+              setTrade={setTrade}
+              name={rows[trade.idx]?.name || ''}
+              curQty={rows[trade.idx]?.quantity || 0}
+              date={date}
+              isOverseas={isOverseas}
+              onApply={applyTrade}
+              onQtyOnly={applyQtyOnly}
+            />
+          )}
 
           <div>
             <button
