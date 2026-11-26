@@ -346,6 +346,8 @@ export function photoErrorText(code: string): string {
     case 'badkey': return '사이트 AI 키가 맞지 않습니다 — 관리자에게 알려 주세요(Vercel 환경 변수 GEMINI_API_KEY).';
     case 'nokey': return '사이트에 사진 읽기 AI 키가 아직 들어 있지 않습니다 — 관리자에게 알려 주세요(Vercel 환경 변수 GEMINI_API_KEY).';
     case 'rate': return 'AI 무료 사용량을 다 썼습니다 — 잠시 뒤(오래 걸리면 내일) 다시 올려 주세요.';
+    case 'rate1m': return '짧은 사이에 너무 많이 보내 1분 한도에 걸렸습니다 — 1분쯤 뒤 다시 올려 주세요.';
+    case 'quota0': return '사이트 AI 키(무료 등급)로는 이 모델을 쓸 수 없습니다 — 관리자에게 알려 주세요(결제 연결 필요).';
     case 'block': return 'AI가 이 사진을 읽지 않았습니다 — 주문내역 화면만 보이게 다시 찍어 올려 주세요.';
     case 'cut': return 'AI 답이 중간에 끊겼습니다 — 같은 사진으로 다시 읽어 주세요.';
     case 'auth': return '로그인이 확인되지 않았습니다 — 화면을 새로고침한 뒤 다시 올려 주세요.';

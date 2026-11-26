@@ -45,9 +45,11 @@ export function searchErrorText(code: string): string {
   switch (code) {
     case 'needkey': return '내 Gemini API 키가 필요합니다 — ⚙ 설정에서 키를 넣어 주세요(받는 법 그림이 있습니다).';
     case 'badkey': return 'Gemini API 키가 맞지 않습니다 — ⚙ 설정에서 키를 다시 복사해 넣어 주세요(앞뒤 빈칸 없이).';
-    case 'credit': return 'Gemini 키의 선불 크레딧(충전금)이 다 떨어졌습니다 — 구글 AI Studio에서 충전하거나, ⚙ 설정에서 결제를 연결하지 않은 무료 키로 바꿔 넣어 주세요.';
+    case 'credit': return 'Gemini 키의 선불 충전금이 0원입니다 — AI Studio 결제(Billing)에서 충전(최소 $5)하면 다시 됩니다. Google AI Pro 구독이면 매달 $10 크레딧이 먼저 쓰입니다(충전 잔액이 있어야 적용 — 아래 「구독 크레딧 쓰는 법」).';
     case 'nokey': return '사이트 AI 키가 아직 들어 있지 않습니다 — ⚙ 설정에서 내 키를 넣거나 Vercel 환경 변수 GEMINI_API_KEY를 넣어 주세요.';
-    case 'rate': return 'Gemini 무료 사용량을 다 썼습니다 — 잠시 뒤(오래 걸리면 내일 오후 5시쯤 초기화) 다시 물어봐 주세요.';
+    case 'rate': return 'Gemini 무료 사용량(하루 한도)을 다 썼습니다 — 한국 시간 오후 4~5시에 다시 채워집니다. 계속 쓰려면 키의 프로젝트에 결제(충전)를 연결하세요.';
+    case 'rate1m': return '짧은 사이에 너무 많이 물어 1분 한도에 걸렸습니다 — 1분쯤 뒤 「다시 묻기」를 눌러 주세요.';
+    case 'quota0': return '이 키(무료 등급)로는 구글 검색 답을 쓸 수 없습니다(한도 0) — 키의 프로젝트에 결제(충전)를 연결해야 합니다.';
     case 'block': return 'AI가 이 질문에는 답하지 않았습니다 — 질문을 조금 바꿔 다시 물어봐 주세요.';
     case 'cut': return 'AI 답이 중간에 끊겼습니다 — 「다시 묻기」를 눌러 주세요.';
     case 'auth': return '로그인이 확인되지 않았습니다 — 화면을 새로고침한 뒤 다시 물어봐 주세요.';

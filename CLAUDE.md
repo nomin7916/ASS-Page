@@ -194,7 +194,10 @@ src/
   ⚠️ 읽기 실패면 저장하지 않는다(빈 목록으로 덮어 지난 대화를 지운다). 검색 제안 html은 저장하지 않는다(그때만 격리 iframe — scripts·same-origin 금지).
 - 보유 종목은 켰을 때만 이름·코드만. 듣기 = 브라우저 말하기(`useSpeech`, 문장 조각 · 창을 닫으면 멈춤). 검증: `verify:ai-search`(가짜 Gemini로 서버 처리부 끝까지).
 - 죽은 키(틀린 키 · **선불 크레딧 소진 402** · 결제 막힘)는 `api/_taxPhoto.ts` `gKeyDead` 하나로 가려 다른 모델로 되풀이하지 않고 다음 키로(ai-search·holdings-photo·tax-photo 셋 다).
-  모든 키가 죽으면 `gFailCode` → `credit`(하나라도 크레딧 소진)·`badkey`. 화면에 보일 구글 글은 `gErrBrief`(JSON의 message만). ⚠️ 402를 `break`(다음 모델)로 되돌리지 말 것 — 다른 키로 안 넘어간다(2026-11-26 사용자 신고).
+  키·모델 돌리기는 세 경로 공용 `gFirstOk` 하나(429 = `gQuota`로 하루·1분·한도 0 가림 · 1분 한도이고 25초 안이면 한 번만 기다렸다 다시).
+  실패 = `gFailOf` → `credit`(모든 키 죽음 중 크레딧 소진이 있거나, 한 키라도 충전금 0원)·`badkey`·`quota0`·`rate1m`·`rate`·`gemini` + 키별 까닭 한 줄(`gKeyLabels` 내 키·사이트 키 N).
+  ⚠️ 오류 본문은 **끝까지(2만 자) 읽고 나서** 가린다 — 600자에서 자르면 429 JSON이 깨져 원문만 보였다(2026-11-26 둘째 신고). ⚠️ 402를 `break`(다음 모델)로 되돌리지 말 것.
+- 구독(Google AI Pro) ≠ API: 앱 한도와 무관. AI Pro의 월 $10 GDP 크레딧은 AI Studio 선불 지갑 잔액(최소 $5)이 있어야 Gemini API에 쓰인다 — 안내는 `AiApiGuide`「Google AI Pro 구독이 있다면」.
 
 ## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 

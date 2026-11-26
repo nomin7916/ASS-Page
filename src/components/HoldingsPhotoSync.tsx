@@ -253,7 +253,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 space-y-1">
               <p className="text-red-200">{holdErrorText(run.code)}</p>
               {run.msg && <p className="text-[11px] text-red-300/70 break-all">{run.msg}</p>}
-              {(run.code === 'needkey' || run.code === 'badkey' || run.code === 'credit') && <button onClick={() => setShowGuide(true)} className="text-[11.5px] text-amber-200 underline">키 받는 법 보기</button>}
+              {(run.code === 'needkey' || run.code === 'badkey' || run.code === 'credit' || run.code === 'quota0') && <button onClick={() => setShowGuide(true)} className="text-[11.5px] text-amber-200 underline">키 받는 법 보기</button>}
             </div>
           )}
 

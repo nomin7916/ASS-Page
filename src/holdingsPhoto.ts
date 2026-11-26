@@ -430,6 +430,8 @@ export function holdErrorText(code: string): string {
     case 'credit': return 'Gemini 키의 선불 크레딧(충전금)이 다 떨어졌습니다 — 구글 AI Studio에서 충전하거나, 결제를 연결하지 않은 무료 키로 바꿔 넣어 주세요.';
     case 'nokey': return '사이트에 사진 읽기 AI 키가 아직 들어 있지 않습니다 — Vercel 환경 변수 GEMINI_API_KEY 또는 내 키를 넣어 주세요.';
     case 'rate': return 'Gemini 무료 사용량을 다 썼습니다 — 잠시 뒤(오래 걸리면 내일 오후 5시쯤 초기화) 다시 올려 주세요.';
+    case 'rate1m': return '짧은 사이에 너무 많이 보내 1분 한도에 걸렸습니다 — 1분쯤 뒤 다시 올려 주세요.';
+    case 'quota0': return '이 키(무료 등급)로는 이 모델을 쓸 수 없습니다(한도 0) — 키의 프로젝트에 결제(충전)를 연결해야 합니다.';
     case 'block': return 'AI가 이 사진을 읽지 않았습니다 — 잔고(보유종목) 화면만 보이게 다시 찍어 올려 주세요.';
     case 'cut': return 'AI 답이 중간에 끊겼습니다 — 같은 사진으로 다시 올려 주세요.';
     case 'auth': return '로그인이 확인되지 않았습니다 — 화면을 새로고침한 뒤 다시 올려 주세요.';

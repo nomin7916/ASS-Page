@@ -244,8 +244,8 @@ if (A && P) {
       calls.length = 0;
       script = [{ status: 402, body: PAY }];
       const r12 = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
-      eq('#E13 다른 사용자 · 내 키 402 → credit(다른 모델로 되풀이하지 않음) · 구글 글은 message만', [r12.st.error, calls.length, r12.st.msg],
-        ['credit', 1, '402 Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing.']);
+      eq('#E13 다른 사용자 · 내 키 402 → credit(다른 모델로 되풀이하지 않음) · 키별 까닭 한 줄', [r12.st.error, calls.length, r12.st.msg],
+        ['credit', 1, '내 키: 선불 충전금 0원(402)']);
       calls.length = 0;
       script = [{ status: 402, body: PAY }, { status: 400, body: '{"error":{"details":[{"reason":"API_KEY_INVALID"}]}}' }];
       const r13 = await call(body, { 'x-test-email': 'admin@test', 'X-Gemini-Key': UK });
@@ -253,7 +253,40 @@ if (A && P) {
       calls.length = 0;
       script = [{ status: 402, body: PAY }, { status: 429, body: 'q' }, { status: 429, body: 'q' }, { status: 429, body: 'q' }];
       const r14 = await call(body, { 'x-test-email': 'admin@test', 'X-Gemini-Key': UK });
-      eq('#E15 관리자 · 내 키 402 + 사이트 키 한도 → 사이트 키로만 모델마다 물어본 뒤 rate', [r14.st.error, calls.map(c => c.key)], ['rate', [UK, 's1', 's1', 's1']]);
+      eq('#E15 관리자 · 내 키 402 + 사이트 키 한도 → 사이트 키로만 모델마다 물어본 뒤 credit(고칠 곳은 내 키) · 둘 다 까닭', [r14.st.error, calls.map(c => c.key), r14.st.msg],
+        ['credit', [UK, 's1', 's1', 's1'], '내 키: 선불 충전금 0원(402) · 사이트 키 1: 사용 한도 초과(429)']);
+      // 2026-11-26 사용자 신고 둘째: 429 본문이 길어 600자에서 잘려 JSON을 못 읽고 원문만 보였다 — 끝까지 읽어 하루·1분·한도 0을 가린다
+      const q429 = (id, value, model, retry) => JSON.stringify({ error: { code: 429, message: 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. ', status: 'RESOURCE_EXHAUSTED',
+        details: [{ '@type': 'type.googleapis.com/google.rpc.Help', links: [{ description: 'Learn more about Gemini API quotas', url: 'https://ai.google.dev/gemini-api/docs/rate-limits' }] },
+          { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId: id, quotaDimensions: { location: 'global', model }, quotaValue: value }] },
+          { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: retry }] } }, null, 2);
+      ok('#E16 시험용 429 본문은 600자를 넘는다(전에는 잘려 깨졌다)', q429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '20', 'gemini-2.5-flash', '41s').length > 600);
+      calls.length = 0;
+      script = [{ status: 429, body: q429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '20', 'gemini-3-flash', '41s') },
+        { status: 429, body: q429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '20', 'gemini-2.5-flash', '41s') },
+        { status: 429, body: q429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '20', 'gemini-2.5-flash-lite', '41s') }];
+      const r15 = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
+      eq('#E16 하루 한도 → rate · 기다리지 않음 · 몇 회·어느 모델인지', [r15.st.error, calls.length, r15.st.msg], ['rate', 3, '내 키: 하루 한도 20회 다 씀 · gemini-3-flash']);
+      calls.length = 0;
+      script = [{ status: 429, body: q429('GenerateRequestsPerMinutePerProjectPerModel-FreeTier', '5', 'gemini-3-flash', '0.2s') }, grounded];
+      const t0 = Date.now();
+      const r16 = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
+      eq('#E17 1분 한도(짧게 기다리면 됨) → 한 번 기다렸다 같은 키·같은 모델로 다시 → 답', [r16.st.done, r16.st.error, calls.map(c => c.model)], [true, '', ['gemini-flash-latest', 'gemini-flash-latest']]);
+      ok('#E17 기다린 시간 ≥ 알려 준 시간', Date.now() - t0 >= 200);
+      calls.length = 0;
+      script = [{ status: 429, body: q429('GenerateRequestsPerMinutePerProjectPerModel-FreeTier', '5', 'gemini-3-flash', '0.1s') },
+        { status: 429, body: q429('GenerateRequestsPerMinutePerProjectPerModel-FreeTier', '5', 'gemini-3-flash', '0.1s') },
+        { status: 429, body: q429('GenerateRequestsPerMinutePerProjectPerModel-FreeTier', '5', 'gemini-2.5-flash', '0.1s') },
+        { status: 429, body: q429('GenerateRequestsPerMinutePerProjectPerModel-FreeTier', '5', 'gemini-2.5-flash-lite', '0.1s') }];
+      const r17 = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
+      eq('#E18 1분 한도만 계속 → 한 번만 기다리고 rate1m', [r17.st.error, calls.length], ['rate1m', 4]);
+      calls.length = 0;
+      script = [{ status: 429, body: q429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '0', 'gemini-3-flash', '0s') },
+        { status: 429, body: q429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '0', 'gemini-2.5-flash', '0s') },
+        { status: 429, body: q429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '0', 'gemini-2.5-flash-lite', '0s') }];
+      const r18 = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
+      eq('#E19 무료 등급 한도 0 → quota0', [r18.st.error, r18.st.msg], ['quota0', '내 키: 무료 등급에서 못 씀(한도 0 · gemini-3-flash)']);
+      ok('#E19 화면 글 — rate1m·quota0·credit은 서로 다르고 고칠 길을 말한다', A.searchErrorText('rate1m') !== A.searchErrorText('zzz') && /결제/.test(A.searchErrorText('quota0')) && /\$5/.test(A.searchErrorText('credit')) && /AI Pro/.test(A.searchErrorText('credit')));
       delete process.env.GEMINI_API_KEY;
     } catch (e) {
       fail++; console.log(`  ✗ #E 처리부 실행 중 오류 — ${e && (e.stack || e.message)}`);

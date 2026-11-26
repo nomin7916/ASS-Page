@@ -44,6 +44,21 @@ export default function AiApiGuide({ onClose, inline = false }) {
             <figcaption className="text-gray-300"><b className="text-sky-300">{i + 1}.</b> {s.text}</figcaption>
           </figure>
         ))}
+        <div className="rounded-lg border border-amber-600/40 bg-amber-900/10 px-3 py-2 space-y-1.5">
+          <div className="text-amber-200 font-semibold">Google AI Pro 구독이 있다면 — 매달 $10 크레딧으로 쓰기</div>
+          <p><b className="text-gray-200">구독과 API는 따로입니다.</b> Gemini 앱의 「사용량 한도 0%」는 앱에서 대화할 때의 한도이고, 이 사이트는 API 키로 부르므로 요금·한도를 키의 프로젝트에서 셉니다.</p>
+          <p>대신 Google AI Pro에는 <b className="text-amber-200">매달 $10의 Google Cloud 크레딧</b>(Google Developer Program 혜택)이 들어 있어 Gemini API에 쓸 수 있습니다. 저절로 들어오지 않으니 한 번 받아야 합니다.</p>
+          <ol className="list-decimal pl-5 space-y-0.5">
+            <li>aistudio.google.com 왼쪽 메뉴 <b className="text-gray-200">결제(Billing)</b> → 선불 지갑에 <b className="text-gray-200">최소 $5 충전</b>(충전 잔액이 0원이면 크레딧이 있어도 402가 납니다).</li>
+            <li>같은 결제 화면(또는 developers.google.com/profile 의 혜택)에서 <b className="text-gray-200">구독 크레딧 받기</b> → 결제 계정을 고릅니다.</li>
+            <li>API 키 화면에서 그 키의 <b className="text-gray-200">프로젝트가 그 결제 계정에 연결</b>돼 있는지 봅니다(다른 프로젝트 키면 그 프로젝트를 연결하거나 새 키를 만듭니다).</li>
+            <li>AI 검색에서 「다시 묻기」. 크레딧이 충전금보다 먼저 쓰입니다.</li>
+          </ol>
+          <p className="text-gray-400">크레딧은 구독 혜택을 처음 받은 날 기준으로 매달 들어옵니다. 넘는 금액은 충전금에서 빠지니 Google Cloud 결제에서 예산 알림($10)을 걸어 두면 안전합니다. 버튼 이름은 구글이 바꾸기도 합니다(2026-11 기준 안내).</p>
+          <a href="https://aistudio.google.com/projects" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-700 hover:bg-amber-600 text-white font-bold text-[12px] transition">
+            AI Studio 프로젝트·결제 열기 <ExternalLink size={12} />
+          </a>
+        </div>
         <div className="rounded-lg border border-gray-700/60 bg-gray-900/40 px-3 py-2 space-y-1.5">
           <div className="text-gray-100 font-semibold">자주 묻는 것</div>
           <p><b className="text-gray-200">무료 한도를 다 쓰면</b> — 'Gemini 무료 사용량을 다 썼습니다'가 뜹니다. 하루 한도는 미국 태평양 시간 자정(한국 시간 오후 4~5시)에 다시 채워집니다. 한도는 모델·프로젝트마다 다르고 구글이 바꾸기도 해서 숫자는 AI 스튜디오 왼쪽 메뉴의 사용량(Usage)·한도(Rate limit) 화면에서 확인합니다.</p>

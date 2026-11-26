@@ -354,7 +354,7 @@ if (P && T) {
       calls.length = 0;
       script = [{ status: 402, body: PAY }];
       const r5c = await call(body, { 'x-test-email': 'user@x', 'X-Gemini-Key': UK });
-      eq('#E6c 다른 사용자 · 내 키 402 → credit(다른 모델로 되풀이하지 않음)', [r5c.st.error, r5c.st.msg, calls.length], ['credit', '402 Your prepayment credits are depleted.', 1]);
+      eq('#E6c 다른 사용자 · 내 키 402 → credit(다른 모델로 되풀이하지 않음)', [r5c.st.error, r5c.st.msg, calls.length], ['credit', '내 키: 선불 충전금 0원(402)', 1]);
       delete process.env.GEMINI_API_KEY; delete process.env.GEMINI_API_KEY2;
       calls.length = 0;
       const r6 = await call(body, { 'x-test-email': 'admin@test' });

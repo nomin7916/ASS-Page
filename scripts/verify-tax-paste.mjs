@@ -213,12 +213,20 @@ if (T && P) {
     P.gErrBrief('[{"error":{"message":"API key not valid."}}]'),
     P.gErrBrief('model\n not found'),
   ], ['Your prepayment credits are depleted.', 'API key not valid.', 'model not found']);
-  eq('#G3 끝 까닭(모든 키 죽음 → credit 우선·badkey · 아니면 rate·gemini)', [
-    P.gFailCode(['a', 'b'], new Map([['a', 'credit'], ['b', 'bad']]), 400),
-    P.gFailCode(['a'], new Map([['a', 'bad']]), 400),
-    P.gFailCode(['a', 'b'], new Map([['a', 'credit']]), 429),
-    P.gFailCode(['a', 'b'], new Map(), 503),
-  ], ['credit', 'badkey', 'rate', 'gemini']);
+  const N = (status, dead, kind) => ({ status, dead, q: kind == null ? null : { kind, limit: null, model: '', retrySec: null }, brief: '' });
+  eq('#G3 끝 까닭(모든 키 죽음 → credit 우선·badkey · 충전금 0원 키가 있으면 credit · 429 모양 → quota0·rate1m·rate · 그 밖 gemini)', [
+    P.gFailOf(['a', 'b'], ['A', 'B'], [[N(402, 'credit')], [N(400, 'bad')]]).e,
+    P.gFailOf(['a'], ['A'], [[N(400, 'bad')]]).e,
+    P.gFailOf(['a', 'b'], ['A', 'B'], [[N(402, 'credit')], [N(429, '', 'day')]]).e,
+    P.gFailOf(['a'], ['A'], [[N(429, '', 'zero'), N(429, '', 'zero')]]).e,
+    P.gFailOf(['a'], ['A'], [[N(429, '', 'minute')]]).e,
+    P.gFailOf(['a'], ['A'], [[N(429, '', 'minute'), N(429, '', 'day')]]).e,
+    P.gFailOf(['a', 'b'], ['A', 'B'], [[N(503, '')], []]).e,
+  ], ['credit', 'badkey', 'credit', 'quota0', 'rate1m', 'rate', 'gemini']);
+  eq('#G3 키 이름(내 키 먼저 · 사이트 키 1·2)', [P.gKeyLabels(['u', 's1', 's2'], 'u'), P.gKeyLabels(['s1', 's2'])], [['내 키', '사이트 키 1', '사이트 키 2'], ['사이트 키 1', '사이트 키 2']]);
+  const longQ = JSON.stringify({ error: { code: 429, message: 'You exceeded your current quota. * Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash Please retry in 33.5s.', status: 'RESOURCE_EXHAUSTED' } });
+  eq('#G3 429 가리기 — QuotaFailure 없으면 글에서(한도·모델·기다릴 시간)', [P.gQuota(longQ).limit, P.gQuota(longQ).model, P.gQuota(longQ).retrySec], [20, 'gemini-2.5-flash', 33.5]);
+  eq('#G3 429 가리기 — JSON 아님·빈 글', [P.gQuota('q'), P.gQuota('')].map(q => q.kind), ['', '']);
   eq('#G3 키 목록(GEMINI_API_KEY + 2~9, 빈 값 건너뜀)', P.geminiKeys({ GEMINI_API_KEY: ' a ', GEMINI_API_KEY2: '', GEMINI_API_KEY3: 'c' }), ['a', 'c']);
   const gb = JSON.parse(P.geminiBody(good));
   ok('#G3 Gemini 본문 = 사진 inline_data + 부탁 문장 · temperature 0', gb.contents[0].parts[0].inline_data.mime_type === 'image/jpeg'
@@ -320,7 +328,7 @@ if (T && P) {
       script = [{ status: 402, body: '{"error":{"code":402,"message":"Your prepayment credits are depleted.","status":"RESOURCE_EXHAUSTED"}}' },
         { status: 402, body: '{"error":{"code":402,"message":"Your prepayment credits are depleted.","status":"RESOURCE_EXHAUSTED"}}' }];
       const r5 = await call(reqBody);
-      eq('#G6 사이트 키 둘 다 선불 크레딧 소진(402) → credit(키마다 한 번씩만)', [r5.st.error, r5.st.msg, calls.map(c => c.key)], ['credit', '402 Your prepayment credits are depleted.', ['k1', 'k2']]);
+      eq('#G6 사이트 키 둘 다 선불 크레딧 소진(402) → credit(키마다 한 번씩만)', [r5.st.error, r5.st.msg, calls.map(c => c.key)], ['credit', '사이트 키 1: 선불 충전금 0원(402) · 사이트 키 2: 선불 충전금 0원(402)', ['k1', 'k2']]);
       ok('#G6 credit 글 = 관리자에게 알림', photoErrorText('credit').includes('크레딧') && photoErrorText('credit') !== photoErrorText('zzz'));
       calls.length = 0;
       const bad = await Promise.all([

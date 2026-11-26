@@ -30,10 +30,141 @@ export function gErrBrief(body: string): string {
   return t.replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
-// 끝까지 못 받았을 때의 까닭 — 모든 키가 죽었으면 credit(하나라도 크레딧 소진)·badkey, 아니면 마지막 답으로 rate·gemini.
-export function gFailCode(keys: string[], dead: Map<string, string>, lastStatus: number): 'credit' | 'badkey' | 'rate' | 'gemini' {
-  if (keys.length > 0 && keys.every(k => dead.has(k))) return [...dead.values()].includes('credit') ? 'credit' : 'badkey';
-  return lastStatus === 429 ? 'rate' : 'gemini';
+// 429 본문 → 어떤 한도인가(구글 QuotaFailure·RetryInfo, 없으면 message 글). zero = 무료 등급 한도 0(그 모델을 못 씀).
+export interface GQuota { kind: '' | 'minute' | 'day' | 'zero'; limit: number | null; model: string; retrySec: number | null }
+const QRANK = { zero: 3, day: 2, minute: 1, '': 0 } as const;
+export function gQuota(body: string): GQuota {
+  const out: GQuota = { kind: '', limit: null, model: '', retrySec: null };
+  let msg = String(body || '');
+  try {
+    const j = JSON.parse(msg);
+    const e = (Array.isArray(j) ? j[0] : j)?.error || {};
+    if (typeof e.message === 'string') msg = e.message;
+    for (const d of Array.isArray(e.details) ? e.details : []) {
+      const type = String(d?.['@type'] || '');
+      if (/QuotaFailure$/.test(type)) {
+        for (const v of Array.isArray(d.violations) ? d.violations : []) {
+          const id = `${v?.quotaId || ''} ${v?.quotaMetric || ''}`;
+          const val = v?.quotaValue == null || v.quotaValue === '' ? null : Number(v.quotaValue);
+          const kind = val === 0 ? 'zero' : /PerDay|per_day/i.test(id) ? 'day' : /PerMinute|per_minute/i.test(id) ? 'minute' : '';
+          if (QRANK[kind] > QRANK[out.kind] || (!out.model && QRANK[kind] === QRANK[out.kind])) {
+            out.kind = kind;
+            out.limit = Number.isFinite(val) ? val : null;
+            out.model = String(v?.quotaDimensions?.model || '').slice(0, 60);
+          }
+        }
+      } else if (/RetryInfo$/.test(type)) {
+        const sec = parseFloat(String(d?.retryDelay || ''));
+        if (Number.isFinite(sec)) out.retrySec = sec;
+      }
+    }
+  } catch { /* JSON 아님 — 아래 글에서 찾는다 */ }
+  if (!out.kind) {
+    const lim = msg.match(/limit:\s*(\d+)/i);
+    if (lim) {
+      out.limit = Number(lim[1]);
+      out.kind = out.limit === 0 ? 'zero' : /per_?day/i.test(msg) ? 'day' : /per_?minute/i.test(msg) ? 'minute' : '';
+    }
+  }
+  if (!out.model) { const md = msg.match(/model:\s*([\w.-]+)/i); if (md) out.model = md[1].slice(0, 60); }
+  if (out.retrySec == null) { const rt = msg.match(/retry in ([\d.]+)\s*s/i); if (rt) out.retrySec = Number(rt[1]); }
+  return out;
+}
+
+export type GFail = 'credit' | 'badkey' | 'rate' | 'rate1m' | 'quota0' | 'gemini';
+export interface GNote { status: number; dead: '' | 'bad' | 'credit'; q: GQuota | null; brief: string }
+
+// 키 하나가 왜 안 됐는가(화면에 보일 짧은 한국어).
+export function gKeyReason(n: GNote): string {
+  if (n.dead === 'credit') return '선불 충전금 0원(402)';
+  if (n.dead === 'bad') return '키가 맞지 않음';
+  if (n.status === 429) {
+    const q = n.q || { kind: '', limit: null, model: '', retrySec: null };
+    const m = q.model ? ` · ${q.model}` : '';
+    const lim = q.limit != null ? ` ${q.limit}회` : '';
+    if (q.kind === 'zero') return `무료 등급에서 못 씀(한도 0${m})`;
+    if (q.kind === 'day') return `하루 한도${lim} 다 씀${m}`;
+    if (q.kind === 'minute') return `1분 한도${lim} 걸림${m}`;
+    return '사용 한도 초과(429)';
+  }
+  if (n.status === 0) return '연결 실패';
+  return `${n.status} ${n.brief}`.trim().slice(0, 160);
+}
+
+// 화면에 보일 키 이름 — 사용자가 넣은 키는 '내 키', 나머지는 사이트 키 1·2…
+export function gKeyLabels(keys: string[], userKey = ''): string[] {
+  let n = 0;
+  return keys.map(k => (userKey && k === userKey ? '내 키' : `사이트 키 ${++n}`));
+}
+
+// 끝까지 못 받았을 때의 까닭과 키별 요약 — 모든 키가 죽었으면 credit(하나라도 크레딧 소진)·badkey,
+// 하나라도 충전금 0원이면 credit(고칠 곳이 거기다), 아니면 한도(429) 모양으로 quota0·rate1m·rate, 그 밖은 gemini.
+export function gFailOf(keys: string[], labels: string[], notes: GNote[][]): { e: GFail; msg: string } {
+  const deads = keys.map((_, i) => (notes[i] || []).find(n => n.dead)?.dead || '');
+  let e: GFail;
+  if (keys.length > 0 && deads.every(Boolean)) e = deads.includes('credit') ? 'credit' : 'badkey';
+  else if (deads.includes('credit')) e = 'credit';
+  else {
+    const kinds = notes.flat().filter(n => n.status === 429 && !n.dead).map(n => (n.q ? n.q.kind : ''));
+    if (kinds.length === 0) e = 'gemini';
+    else if (kinds.every(k => k === 'zero')) e = 'quota0';
+    else if (kinds.every(k => k === 'minute')) e = 'rate1m';
+    else e = 'rate';
+  }
+  const parts: string[] = [];
+  keys.forEach((_, i) => {
+    const ns = notes[i] || [];
+    if (ns.length === 0) return;
+    const r429 = ns.filter(n => n.status === 429).sort((a, b) => QRANK[b.q ? b.q.kind : ''] - QRANK[a.q ? a.q.kind : '']);
+    const pick = ns.find(n => n.dead) || r429[0] || ns[ns.length - 1];
+    parts.push(`${labels[i] || `키 ${i + 1}`}: ${gKeyReason(pick)}`);
+  });
+  return { e, msg: parts.join(' · ').slice(0, 400) };
+}
+
+// 모델 × 키를 차례로 불러 처음 받은 답을 돌려준다(세 경로 공용 — ai-search·holdings-photo·tax-photo).
+// 죽은 키(틀림·충전금 0원)는 다른 모델로도 다시 쓰지 않는다 · 한도(429)는 다음 키 · 1분 한도이고 기다릴 시간이 짧으면 한 번만 기다렸다 같은 키로 다시 ·
+// 없는 모델(404)·잠깐 안 됨(5xx)은 다음 모델 · 그 밖의 400 등은 stopOnBadRequest면 그대로 실패, 아니면 다음 모델.
+export async function gFirstOk(o: {
+  keys: string[]; labels: string[]; body: string; stopOnBadRequest: boolean;
+  models?: string[]; wait?: (ms: number) => Promise<unknown>; maxWaitSec?: number;
+}): Promise<{ ok: true; r: Response; model: string } | { ok: false; e: GFail; msg: string }> {
+  const models = o.models || GMODELS;
+  const wait = o.wait || ((ms: number) => new Promise(res => setTimeout(res, ms)));
+  const maxWait = o.maxWaitSec ?? 25;
+  const notes: GNote[][] = o.keys.map(() => []);
+  const dead = new Set<number>();
+  let waited = false;
+  for (const model of models) {
+    for (let i = 0; i < o.keys.length; i++) {
+      if (dead.has(i)) continue;
+      let r: Response;
+      try {
+        r = await fetch(`${GAPI}/models/${model}:streamGenerateContent?alt=sse`, {
+          method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': o.keys[i] }, body: o.body,
+        });
+      } catch { notes[i].push({ status: 0, dead: '', q: null, brief: 'net' }); continue; }
+      if (r.ok && r.body) return { ok: true, r, model };
+      const t = (await r.text().catch(() => '')).slice(0, 20_000);   // 자르고 나서 읽으면 JSON이 깨진다(한도 본문은 길다)
+      const why = gKeyDead(r.status, t);
+      const q = r.status === 429 ? gQuota(t) : null;
+      notes[i].push({ status: r.status, dead: why, q, brief: gErrBrief(t) });
+      if (why) { dead.add(i); continue; }
+      if (r.status === 429) {
+        if (!waited && q && q.kind === 'minute' && q.retrySec != null && q.retrySec <= maxWait) {
+          waited = true;
+          await wait(Math.ceil(q.retrySec * 1000) + 500);
+          i--;   // 같은 키·같은 모델로 한 번 더
+        }
+        continue;
+      }
+      if (r.status === 404 || r.status >= 500) break;
+      if (o.stopOnBadRequest) return { ok: false, e: 'gemini', msg: `${r.status} ${gErrBrief(t)}`.trim() };
+      break;
+    }
+    if (o.keys.length > 0 && o.keys.every((_, i) => dead.has(i))) break;
+  }
+  return { ok: false, ...gFailOf(o.keys, o.labels, notes) };
 }
 export const PHOTO_MAX = 10;
 // 요청 본문 상한(글자 수) — 클라이언트가 사진을 줄여 이 안에 맞춘다(src/taxCalcPaste.ts PHOTO_BODY_BUDGET보다 넉넉히).
