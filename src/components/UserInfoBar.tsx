@@ -16,6 +16,16 @@ const FlowIcon = ({ size = 14 }) => (
   </svg>
 );
 
+// AI 검색 아이콘 — 인라인 SVG(말풍선 + 돋보기). FlowIcon과 같은 이유로 lucide 신규 아이콘 금지.
+const AiSearchIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.8-.9L3 21l1.9-5.2A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z" />
+    <circle cx="11.5" cy="11" r="3" />
+    <path d="m13.7 13.2 2.2 2.2" />
+  </svg>
+);
+
 // 백테스트 아이콘 — 인라인 SVG(축 + 상승 꺾은선). FlowIcon과 같은 이유로 lucide 신규 아이콘 금지.
 const BacktestIcon = ({ size = 14 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -96,6 +106,9 @@ export default function UserInfoBar({
   onAppClose,
   showCalculator,
   onToggleCalculator,
+  // AI 검색 채팅창(2026-11-26) — 로그인한 사용자 모두(내 Gemini 키로 검색). 미전달 시 버튼 없음.
+  showAiSearch = false,
+  onToggleAiSearch,
   // 자금 흐름도 — 기본값 false = fail-closed
   canAccessFlow = false,
   onOpenFlow,
@@ -352,6 +365,19 @@ export default function UserInfoBar({
             className="text-gray-500 hover:text-sky-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
           >
             <RateIcon size={14} />
+          </button>
+        )}
+        {onToggleAiSearch && (
+          <button
+            onClick={onToggleAiSearch}
+            title={showAiSearch ? 'AI 검색 닫기' : 'AI 검색 (구글 Gemini · 듣기)'}
+            className={`p-1.5 rounded border transition-colors flex items-center justify-center ${
+              showAiSearch
+                ? 'text-sky-300 bg-sky-900/20 border-sky-700/40 hover:bg-sky-900/30 hover:text-sky-200'
+                : 'text-gray-500 hover:text-sky-300 hover:bg-gray-800 border-transparent hover:border-gray-700'
+            }`}
+          >
+            <AiSearchIcon size={14} />
           </button>
         )}
         {onToggleCalculator && (

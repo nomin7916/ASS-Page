@@ -31,6 +31,7 @@ src/
 ├── taxPhotoJob.ts       # 과표 계산기 「📷 사진 맡기기」(관리자 전용) 화면 도구: 상태·오류 글·다시 부르기 판단·예약 작업 지침 글(ROUTINE_PROMPT = docs/ai-task/ROUTINE-PROMPT.md) (⚠️ import 0 — verify:ai-tax)
 ├── taxCalcPaste.ts      # 평균 과표 계산기 '사진으로 넣기'(모든 사용자, 2026-11-24 둘째 요청 — 사진만 올리면 끝): 사진 고르자마자 기기에서 JPEG로 줄여(photoBudget·photoFitSize — 합계 3MB) `api/tax-photo.ts`(Edge, 구글 Gemini · 키 = Vercel `GEMINI_API_KEY`(2~9) · 부탁 문장은 서버 `api/_taxPhoto.ts`가 만든다 · 응답 NDJSON을 바로 흘림) → 끝까지 받은 답({d:1})만 parseTaxCalcPaste → plan(그 순간의 이벤트) → 바로 넣기 + '되돌리기' · 날짜·구분별 합친 행(가중평균 단가)·같은 날 같은 수량은 빈칸만 채움·`과표 N` · '다른 방법'(접힘) = AI 앱으로 공유(navigator.share 는 첫 await 보다 먼저) · AI 답 붙여넣기 — ⚠️ 사진은 저장하지 않는다(서버·Drive·기록 0) · 화면은 AI를 직접 부르지 않는다(fetch는 /api/tax-photo 하나) · accept 값은 PASTE_PHOTO_ACCEPT(슬래시·별표를 붙여 쓰면 검사 도구가 주석으로 읽는다) (⚠️ import 0 — verify:tax-paste · #G가 서버 처리부를 가짜 Gemini로 끝까지)
 ├── holdingsPhoto.ts     # 계좌 표 「사진으로 보유 맞추기」(2026-11-26) 순수 로직: AI 답 줄 해석(`보유 | 코드 | 이름 | 수량 | 매입금액 | 평균단가`·잘림)·종목 맞추기(코드→이름→잘린 앞부분)·계획(바꿈/같음/0으로/그대로/새로 추가)·적용·되돌리기·메모 글·새 종목 코드 찾기(검색 답 읽기 codeCandsFrom·후보 고르기·공식 이름 확인 findCodeByName·채우기) (⚠️ import 0 — verify:holdings-photo)
+├── aiSearch.ts          # AI 검색 채팅창 순수 로직: 답 읽기(NDJSON)·마크다운 조각·듣기 문장 조각(speechChunks)·대화 묶음 저장 모양·한도(normalizeSearchStore)·보유 종목(이름·코드만) (⚠️ import 0 · 뒤보기 정규식 금지 — verify:ai-search)
 ├── photoShrink.ts       # 사진을 기기에서 JPEG로 줄이기(shrinkPhotoToB64 — taxCalcPaste의 PHOTO_TRIES·photoFitSize 사용)
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
@@ -48,7 +49,7 @@ src/
 ├── flowMap.ts           # 자금 흐름도 타입 + 순수 로직 (⚠️ @ts-nocheck 금지)
 ├── backtest.ts          # 백테스트 엔진: 타입 + 순수 로직 (⚠️ @ts-nocheck 금지, verify-backtest 미러)
 ├── backtestFetch.ts     # 백테스트 전용 종가 조회 래퍼 (⚠️ stockHistoryMap 병합 금지)
-├── hooks/               # usePortfolioState, useDriveSync, useMarketData,
+├── hooks/               # usePortfolioState, useDriveSync, useMarketData, useSpeech(AI 검색 듣기 — 브라우저 말하기),
 │                        # useHistoryChart, useChartInteraction, useStockData, usePinManager,
 │                        # useFlowMapData, usePhotoCodeFill(사진으로 넣은 새 종목의 코드 찾기)
 └── components/
@@ -74,6 +75,7 @@ src/
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
     ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기
+    ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json)
     ├── AiApiGuide.tsx            # AI API 연동 사용법(구글 Gemini 키 받기, 그림 public/ai-guide/*.svg) — 메모 달력 「AI 연동」·사진 맞추기 창이 함께 씀
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)
     ├── CashTransferModal.tsx    # 현금(예수금) 계좌 간 이관 모달(원금 반영 선택, z=1070)
@@ -183,6 +185,14 @@ src/
   내 키 = 사용자 Index_Data 폴더 `ai_settings.json`(DRIVE_FILES.AI_SETTINGS, `saveDriveFile`만 · STATE·버전 백업·브라우저 저장소 금지 · 관리자 접속 중 읽기/쓰기 안 함)
   → 요청 헤더 `X-Gemini-Key`로만(서버는 저장·기록 안 함). 과표 '사진으로 넣기'(/api/tax-photo)는 그대로 사이트 키.
 - 메모 달력 머리줄 「AI 연동」 = 사용법(그림 5장 `public/ai-guide/`). 검증: `verify:holdings-photo`(가짜 Gemini로 서버 처리부 끝까지 포함).
+
+## AI 검색 채팅창 (`src/aiSearch.ts`·`api/ai-search.ts`·`api/_aiSearch.ts`·`AiSearchChat.tsx`, ⚠️ 회귀 주의 — 2026-11-26)
+
+- 상단 막대 말풍선 아이콘 → 창(늘 떠 있는 창: `KeepAfterOpen`+`Suspense`). 질문 → `/api/ai-search`(Gemini `google_search` 도구 · 키는 사진 맞추기와 같은 규칙
+  `pickHoldKeys` — 관리자 = 내 키 → 사이트 키 · 다른 사용자 = 내 키만) → NDJSON(`{g}` = 출처·검색어·검색 제안 html). 오늘 날짜는 서버가 정한다(KST).
+- 대화 = 내 Drive `ai_search_chats.json`(DRIVE_FILES.AI_SEARCH, `saveDriveFile`만 · STATE·버전 백업·브라우저 저장소 금지 · 관리자 접속 중 읽기/쓰기 안 함).
+  ⚠️ 읽기 실패면 저장하지 않는다(빈 목록으로 덮어 지난 대화를 지운다). 검색 제안 html은 저장하지 않는다(그때만 격리 iframe — scripts·same-origin 금지).
+- 보유 종목은 켰을 때만 이름·코드만. 듣기 = 브라우저 말하기(`useSpeech`, 문장 조각 · 창을 닫으면 멈춤). 검증: `verify:ai-search`(가짜 Gemini로 서버 처리부 끝까지).
 
 ## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 

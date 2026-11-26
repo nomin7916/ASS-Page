@@ -33,6 +33,7 @@ export default function AiApiGuide({ onClose, inline = false }) {
         <div className="rounded-lg border border-sky-700/40 bg-sky-900/15 px-3 py-2 space-y-1">
           <p>계좌 표 오른쪽 위 사진 아이콘(엑셀 아이콘 아래)의 <b className="text-sky-200">사진으로 보유 맞추기</b>는 구글 Gemini AI가 잔고 사진을 읽어 보유수량·투자금액을 맞춥니다.</p>
           <p>관리자는 사이트 키로 바로 씁니다. <b className="text-amber-200">다른 사용자는 본인 구글 계정의 무료 Gemini API 키</b>를 한 번 넣어 두면 본인 무료 한도로 씁니다.</p>
+          <p>위쪽 막대의 말풍선 아이콘 <b className="text-sky-200">AI 검색</b>도 같은 키를 씁니다 — 구글 검색으로 최신 자료를 찾아 답하고, 답을 소리로 들을 수 있습니다(AI 검색 창 ⚙ 설정에서 키를 넣어도 됩니다).</p>
           <a href={AI_KEY_PAGE} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 mt-1 px-2.5 py-1 rounded-md bg-sky-700 hover:bg-sky-600 text-white font-bold text-[12px] transition">
             키 만들러 가기 (aistudio.google.com/apikey) <ExternalLink size={12} />
           </a>

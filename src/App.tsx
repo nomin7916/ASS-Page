@@ -69,6 +69,8 @@ const DividendTaxPage = lazyScreen(() => import('./components/DividendTaxPage'),
 const FloatingCalculator = lazyScreen(() => import('./components/FloatingCalculator'), { inApp: true });
 const CalendarModal = lazyScreen(() => import('./components/CalendarModal'), { inApp: true });
 const FlowBoard = lazyScreen(() => import('./components/FlowBoard'), { inApp: true });
+// AI 검색 채팅창(2026-11-26) — 늘 떠 있는 창과 같다: <KeepAfterOpen open={showAiSearch}>로 감싸 닫아도 대화·받는 중인 답이 남는다.
+const AiSearchChat = lazyScreen(() => import('./components/AiSearchChat'), { inApp: true });
 import { normalizeLedgerBooks, ledgerFingerprint, ledgerBooksHaveContent } from './ledger';
 import { normalizeLedgerSnapshots, ledgerSnapshotsFingerprint, ledgerSnapshotsHaveContent } from './ledger';
 import CardWinFeed from './components/CardWinFeed';
@@ -309,6 +311,7 @@ export default function App() {
   } | null>(null);
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
+  const [showAiSearch, setShowAiSearch] = useState(false);
   // 환율 계산기 통화 선택 — 코드는 항상 3개 보존(3번째를 지웠다 다시 추가해도 직전 선택 복원),
   // 화면에 보이는 개수만 fxSlotCount(2|3)로 분리 저장한다.
   const [fxCurrencies, setFxCurrencies] = useState<string[]>(() => normalizeFxCurrencies(FX_DEFAULT));
@@ -3546,6 +3549,36 @@ export default function App() {
       }
     },
   }), []);
+  // AI 검색 대화(자료)·듣기 설정(2026-11-26) — 사용자 Index_Data 폴더의 ai_search_chats.json(형식·한도는 src/aiSearch.ts normalizeSearchStore).
+  // ⚠️ STATE·버전 백업·브라우저 저장소에 넣지 않는다 · saveDriveFile만 · 관리자 접속(impersonation) 중엔 읽기·쓰기 안 함.
+  // ⚠️ 읽기가 실패하면 canSave=false — 창이 빈 목록으로 덮어써 지난 대화를 지우지 않게(파일이 없을 때만 null + 저장 가능).
+  const aiSearchStoreApi = useMemo(() => ({
+    load: async () => {
+      if (adminViewingAsRef.current || ADMIN_VIEW_EMAIL) return { data: null, canSave: false, error: '관리자 접속 중' };
+      const token = driveTokenRef.current;
+      if (!token) return { data: null, canSave: false, error: 'Drive에 아직 연결되지 않았습니다' };
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+        const data = await loadDriveFile(token, folderId, DRIVE_FILES.AI_SEARCH);
+        return { data, canSave: true };
+      } catch (err) {
+        return { data: null, canSave: false, error: `지난 대화를 불러오지 못했습니다 (${err?.message || err})` };
+      }
+    },
+    save: async (data) => {
+      if (adminViewingAsRef.current || ADMIN_VIEW_EMAIL) return { ok: false, error: '관리자 접속 중에는 저장하지 않습니다' };
+      const token = driveTokenRef.current;
+      if (!token) return { ok: false, error: 'Drive에 아직 연결되지 않아 저장하지 못했습니다' };
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+        await saveDriveFile(token, folderId, DRIVE_FILES.AI_SEARCH, data);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: `Drive에 저장하지 못했습니다 (${err?.message || err})` };
+      }
+    },
+  }), []);
+  const getSearchPortfolios = useCallback(() => portfoliosRef.current, []);
   const openRateWindow = () => {
     if (!rateAccess) return;
     const existing = rateWinRef.current;
@@ -4860,6 +4893,7 @@ export default function App() {
       (admin || userFeatures.feature2) && DividendTaxPage,
       admin && AdminPage,
       admin && AdminPortal,
+      AiSearchChat,
     ].filter(Boolean);
     const idle = (fn) => (window.requestIdleCallback ? window.requestIdleCallback(fn, { timeout: 5000 }) : setTimeout(fn, 1500));
     const next = () => { const C = list.shift(); if (C) C.preload().then(() => idle(next)); };
@@ -5176,6 +5210,8 @@ export default function App() {
           onOpenRate={openRateWindow}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
+          showAiSearch={showAiSearch}
+          onToggleAiSearch={() => setShowAiSearch(v => !v)}
           youtubeUrl={youtubeAccess ? youtubeUrl : ''}
           youtubeEnabled={youtubeAccess}
           notebookLinks={gatedNotebookLinks}
@@ -5790,6 +5826,23 @@ export default function App() {
             setFxCurrencies(normalizeFxCurrencies(codes));
             setFxSlotCount(normalizeFxSlotCount(slots));
           }}
+        />
+        </Suspense>
+        </KeepAfterOpen>
+      </ErrorBoundary>
+      {/* AI 검색 채팅창 — 계산기와 같은 섹션 격리(렌더 예외가 앱 전체 오류 화면이 되지 않게). key = 로그인 계정(계정이 바뀌면 대화를 새로 불러온다). */}
+      <ErrorBoundary label="AI 검색">
+        <KeepAfterOpen open={showAiSearch}>
+        <Suspense fallback={<WindowLoading />}>
+        <AiSearchChat
+          key={(authUser?.email || '').toLowerCase()}
+          open={showAiSearch}
+          onClose={() => setShowAiSearch(false)}
+          keyApi={geminiKeyApi}
+          storeApi={aiSearchStoreApi}
+          isAdmin={(authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()}
+          viewingAs={!!ADMIN_VIEW_EMAIL || !!adminViewingAs}
+          getPortfolios={getSearchPortfolios}
         />
         </Suspense>
         </KeepAfterOpen>
