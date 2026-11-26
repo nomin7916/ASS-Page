@@ -19,6 +19,7 @@ src/
 ├── watchlistQuote.ts    # 관심종목 코드→시장 판정(detectMarket)·시세/이력/최근 분배금 조회(api.ts 재사용)
 ├── watchlistChart.ts    # 관심종목 기간 구간·등락율·비교 차트 행·분배금 파서·보유 매입가(buildHoldings)·보유종목 줄(holdingWatchStocks)·찾기(holdingCatalog·초성 searchHoldingCatalog)·이동평균(movingAverage·withMaRows) (⚠️ import 0 — verify:watchlist 직접 import)
 ├── rebalPreview.ts      # 리밸런싱 수량·예상평가금·예상비중 산식 단일 소스(표 usePortfolioData + 입력 중 말풍선 RebalPreviewBubble) · 말풍선 = 수량(매수·매도)·매수금액/매도금액(부호 없음)·예상평가금·예상비중 + 적립식 0주면 1주 최소 비중(minRatioForOneShare) (⚠️ import 0 — verify:rebal-preview)
+├── liveTodayRow.ts      # 비활성 시장 계좌의 '오늘' 라이브 줄을 새 시세로 맞춤(useHistoryBackfill 효과#1 — ⚠️ "같은 날 1건만(불변)"으로 되돌리지 말 것: 부팅 때 저장된 옛 시세로 굳었다 · 원금은 안 건드림) (⚠️ import 0 — verify:live-today)
 ├── rateMetrics.ts       # 금리 지표 계산: 현재값·1개월 변화·52주 위치·3년 백분위·꺾임 (⚠️ import 0)
 ├── rateSignals.ts       # 금리 판정: RATE_RULES(기준치 단일 소스) + 자산군 7개 evaluate* (⚠️ import 0)
 ├── rateAssets.ts        # 자산군별 종목 목록·MANUAL_INPUTS(주당 장부가/순자산)·배당률 계산 (⚠️ import 0)

@@ -2,6 +2,7 @@
 import { useRef, useEffect } from 'react';
 import { calcPortfolioEvalForDate, resolveHoldings } from '../utils';
 import { getEffectiveDate, getEffectiveDateForAccount, getBackfillBoundaryForAccount, getBackfillBoundaryKR, getKrSettledTodayDate, isKrCutoffAccount, isNonTradingDayForAccount } from './useMarketCalendar';
+import { refreshLiveTodayRow } from '../liveTodayRow';
 
 export const useHistoryBackfill = ({
   stockHistoryMap,
@@ -24,7 +25,9 @@ export const useHistoryBackfill = ({
   const backfillDoneRef = useRef({});
 
   // 비활성 계좌 오늘 평가액 자동 기록
-  //  - 시장 계좌: currentEval 0(가격 미로드)이면 기록 안 함, 같은 날 1건만 기록(불변).
+  //  - 시장 계좌: currentEval 0(가격 미로드)이면 기록 안 함. 오늘 줄이 라이브(isFixed 아님)면 새 시세(currentEval)를 따라
+  //    갱신한다(liveTodayRow.refreshLiveTodayRow). ⚠️ "같은 날 1건만(불변)"으로 되돌리지 말 것 — 부팅 직후 Drive에 저장돼 있던
+  //    시세로 먼저 적힌 줄이 새 시세가 와도 그대로 굳었다(2026-11-26: ISA·연금저축·REITs 오늘 줄 = 그저께 평가액).
   //  - 현금성(마통·simple): 시세 이력이 없어 값은 편집할 때만 바뀐다. 오늘 값이 바뀌면 오늘
   //    스냅샷을 갱신(비움=0 포함)해 carry-forward가 최신 잔액을 반영하고, 비운 계좌가 과거
   //    양수 스냅샷의 유령 잔액으로 남지 않게 한다. (단 한 번도 잔액이 없던 빈 계좌는 0 기록 생략)
@@ -83,7 +86,10 @@ export const useHistoryBackfill = ({
         return { ...p, history: [...hist, { date: recDate, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
       }
       nonActiveHistRecordedRef.current[key] = summary.currentEval;
-      if (idx >= 0) return p;
+      if (idx >= 0) {
+        const nh = refreshLiveTodayRow(hist, idx, summary);
+        return nh ? { ...p, history: nh } : p;
+      }
       return { ...p, history: [...hist, { date: recDate, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
     }));
   }, [portfolioSummaries, activePortfolioId, effectiveDateKey, krEffectiveDateKey, marketHolidays]);

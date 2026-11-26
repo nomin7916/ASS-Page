@@ -17,6 +17,7 @@
     "verify:ai-tax": "node scripts/verify-ai-tax.mjs",
     "verify:dividend": "node scripts/verify-dividend-slots.mjs",
     "verify:dividend-qty": "node scripts/verify-dividend-qty.mjs",
+    "verify:live-today": "node scripts/verify-live-today.mjs",
     "verify:excel": "node scripts/verify-excel.mjs",
     "verify:history": "node scripts/verify-history-dedup.mjs",
     "verify:notice": "node scripts/verify-notice.mjs",
