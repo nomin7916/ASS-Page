@@ -7,7 +7,8 @@
 // ⚠️ 늘 떠 있는 창 — App이 <KeepAfterOpen>으로 감싼다(닫아도 대화·받는 중인 답이 남는다).
 // 여러 AI(2026-11-26 — src/aiProviders.ts): ① 채팅창 아래 「AI」 칸 = 내 키로 다른 AI(/api/ai-chat · 키는 X-AI-Key 헤더로만 · Drive ai_settings.json aiKeys)
 //   ② 「내 구독으로 묻기」 = 그 AI 사이트를 내 계정으로 열고 질문을 넘긴 뒤(주소 + 복사) 「답 붙여넣기」로 이 대화에 저장(API·키 없음).
-// ⚠️ 화면이 부르는 곳은 같은 출처의 /api/ai-search · /api/ai-chat 둘뿐 — AI 회사 주소를 직접 부르지 않는다.
+//   ③ 「PC 자동」(2026-11-26 — src/pcAsk.ts) = 내 PC에서 켜 둔 Claude가 크롬(내 로그인)으로 그 구독 AI에 묻고 답을 우편함(/api/pc-ask)에 넣으면 바로 대화에 넣는다.
+// ⚠️ 화면이 부르는 곳은 같은 출처의 /api/ai-search · /api/ai-chat · /api/pc-ask 셋뿐 — AI 회사 주소를 직접 부르지 않는다.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Plus, Trash2, Pencil, Star, Settings, Lock, BookOpen, ExternalLink, Check, Download, RefreshCw, Maximize2, List, Search } from 'lucide-react';
 import { generateId } from '../utils';
@@ -20,6 +21,7 @@ import {
   GEMINI_PICK, AI_PROVIDERS, AI_COST_LABEL, AI_HANDS, HAND_SHARE, aiProviderById, aiPrefsOf, normalizeAiKeys, looksLikeAiKey, aiKeyWarning, maskAiKey,
   cleanModels, pickModel, aiErrorText, handName, handPrompt, handUrl, cleanPaste, pasteIsQuestion, handModelLabel,
 } from '../aiProviders';
+import { pcTaskPrompt, pcSeenText, pcWaitText, pcAskErrorText, pcModelLabel, pcPending, pcPollDelay, pcTooLate, PC_JOB_RE } from '../pcAsk';
 import { useSpeech } from '../hooks/useSpeech';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
 
@@ -47,6 +49,8 @@ const canShare = () => { try { return typeof navigator !== 'undefined' && typeof
 const apiOf = (m) => (typeof m?.via === 'string' && m.via.startsWith('api:') ? aiProviderById(m.via.slice(4)) : null);
 const vBtn = 'px-2.5 py-1 rounded-md bg-violet-700 hover:bg-violet-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[11.5px] transition';
 const handChip = 'shrink-0 px-2 py-0.5 rounded-full border border-violet-700/60 bg-violet-900/20 text-[11.5px] text-violet-100 hover:bg-violet-800/40 disabled:opacity-40 transition';
+const pcChip = 'shrink-0 px-2 py-0.5 rounded-full border border-teal-600/70 bg-teal-900/30 text-[11.5px] text-teal-100 hover:bg-teal-800/50 disabled:opacity-40 transition';
+const pcBtn = 'px-2.5 py-1 rounded-md bg-teal-700 hover:bg-teal-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[11.5px] transition';
 
 function Inl({ parts }) {
   return (<>{parts.map((p, i) => {
@@ -126,6 +130,10 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
   const [models, setModels] = useState({});
   const [pasteBox, setPasteBox] = useState(null);
   const [handNote, setHandNote] = useState('');
+  const [pcInfo, setPcInfo] = useState({ loaded: false, linked: false, seen: 0, keyAt: 0, error: '' });
+  const [pcJobs, setPcJobs] = useState({});
+  const [pcSetup, setPcSetup] = useState(null);
+  const [pcBusy, setPcBusy] = useState(false);
   const speech = useSpeech();
   const storeRef = useRef(store);
   storeRef.current = store;
@@ -521,6 +529,139 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
     flashNote('아래 「내 구독으로 묻기」에서 쓰는 AI 이름을 눌러 주세요');
     try { inputRef.current && inputRef.current.focus(); } catch { /* 없음 */ }
   };
+  // ── 내 PC로 자동 묻기 — 내 PC의 Claude가 크롬(내 로그인)으로 구독 AI에 묻고 답을 우편함에 넣는다(src/pcAsk.ts · api/_pcAsk.ts) ──
+  const pcCall = async (body) => {
+    const res = await fetch('/api/pc-ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let j = null;
+    try { j = await res.json(); } catch { j = null; }
+    if (!res.ok) return { ok: false, code: res.status === 401 || res.status === 403 ? 'auth' : (j && j.code) || 'store', error: (j && j.error) || `HTTP ${res.status}` };
+    return { ok: true, ...(j || {}) };
+  };
+  const loadPc = async () => {
+    if (viewingAs) return;
+    try {
+      const r = await pcCall({ op: 'status' });
+      setPcInfo(r.ok ? { loaded: true, linked: !!r.linked, seen: Number(r.seen) || 0, keyAt: Number(r.keyAt) || 0, error: '' } : { loaded: true, linked: false, seen: 0, keyAt: 0, error: r.error });
+    } catch { setPcInfo(p => ({ ...p, loaded: true, error: '인터넷 연결을 확인해 주세요' })); }
+  };
+  const makePcKey = async () => {
+    if (viewingAs) return;
+    setPcBusy(true);
+    try {
+      const r = await pcCall({ op: 'newkey' });
+      if (r.ok && r.key) {
+        setPcSetup({ text: pcTaskPrompt(window.location.origin, r.key) });
+        setPcInfo(p => ({ ...p, loaded: true, linked: true, keyAt: Date.now(), error: '' }));
+      } else setPcInfo(p => ({ ...p, error: r.error || '연결 문구를 만들지 못했습니다' }));
+    } catch { setPcInfo(p => ({ ...p, error: '인터넷 연결을 확인해 주세요' })); }
+    setPcBusy(false);
+  };
+  const unlinkMyPc = async () => {
+    setPcBusy(true);
+    try {
+      const r = await pcCall({ op: 'unlink' });
+      if (r.ok) { setPcInfo({ loaded: true, linked: false, seen: 0, keyAt: 0, error: '' }); setPcSetup(null); }
+      else setPcInfo(p => ({ ...p, error: r.error || '연결을 끊지 못했습니다' }));
+    } catch { setPcInfo(p => ({ ...p, error: '인터넷 연결을 확인해 주세요' })); }
+    setPcBusy(false);
+  };
+  const pcActive = !viewingAs && !!(store && store.pcOn) && pcInfo.linked;
+  const togglePc = () => {
+    if (!pcInfo.linked) { setPanel('settings'); flashNote('먼저 ⚙ 설정의 「내 PC로 자동 묻기」에서 PC를 연결해 주세요'); return; }
+    setStore(prev => prev && ({ ...prev, pcOn: !prev.pcOn }));
+    scheduleSave();
+  };
+  // 맡기기 — cutAt이 있으면 그 자리(질문)부터 지우고 다시 맡긴다.
+  const askPc = async (hid, raw, cutAt = null) => {
+    const text = String(raw || '').trim().slice(0, 4000);
+    const s = storeRef.current;
+    if (!text || running || !s || viewingAs) return;
+    const prevChat = activeId ? s.chats.find(c => c.id === activeId) : null;
+    const base = prevChat ? (cutAt == null ? prevChat.msgs : prevChat.msgs.slice(0, cutAt)) : [];
+    const prompt = handPromptOf(text, base);
+    const now = new Date().toISOString();
+    const cid = prevChat ? prevChat.id : generateId();
+    const uMsg = { id: generateId(), role: 'user', text, at: now };
+    const aMsg = { id: generateId(), role: 'model', text: '', at: now, err: 'pc', via: `pc:${hid}`, job: '' };
+    setStore(prev => {
+      if (!prev) return prev;
+      const exists = prev.chats.some(c => c.id === cid);
+      const list = exists
+        ? prev.chats.map(c => (c.id !== cid ? c : { ...c, updatedAt: now, msgs: [...(cutAt == null ? c.msgs : c.msgs.slice(0, cutAt)), uMsg, aMsg] }))
+        : [{ id: cid, title: chatTitleFrom(text), createdAt: now, updatedAt: now, pinned: false, msgs: [uMsg, aMsg] }, ...prev.chats];
+      return { ...prev, chats: list };
+    });
+    setActiveId(cid); setDraft(''); setPanel('chat'); setPasteBox(null);
+    stickBottom.current = true;
+    let r;
+    try { r = await pcCall({ op: 'ask', target: hid, prompt }); } catch { r = { ok: false, code: 'net' }; }
+    if (r.ok && PC_JOB_RE.test(String(r.id || ''))) patchMsg(cid, aMsg.id, { job: r.id });
+    else {
+      patchMsg(cid, aMsg.id, { err: 'pcfail', msg: pcAskErrorText(r.code) });
+      if (r.code === 'nopc') setPcInfo(p => ({ ...p, linked: false }));
+    }
+    scheduleSave();
+  };
+  const cancelPc = (idx) => {
+    const m = msgs[idx];
+    if (m && m.job) pcCall({ op: 'cancel', id: m.job }).catch(() => { /* 우편함은 2일 뒤 스스로 비운다 */ });
+    dropHand(idx);
+  };
+  const pcToHand = (idx) => {
+    const m = msgs[idx];
+    if (!m || !active) return;
+    if (m.job) pcCall({ op: 'cancel', id: m.job }).catch(() => { /* 위와 같음 */ });
+    const hid = String(m.via || '').replace(/^pc:/, '');
+    updateChat(active.id, c => ({ ...c, msgs: c.msgs.map(x => (x.id !== m.id ? x : { ...x, err: 'hand', via: `hand:${hid}`, job: '', msg: '' })) }));
+  };
+  const pcRetry = (idx) => {
+    const m = msgs[idx];
+    const q = msgs[idx - 1];
+    if (!m || !q || q.role !== 'user') return;
+    askPc(String(m.via || '').replace(/^pc:/, '') || 'claude', q.text, idx - 1);
+  };
+  useEffect(() => { if (open) loadPc(); }, [open]);
+  // 맡긴 질문의 답을 기다린다 — 창이 닫혀 있어도(늘 떠 있는 창) · 새로고침 뒤에도(저장된 job 번호로) 이어서.
+  const pcPendKey = store && !viewingAs ? pcPending(store.chats).map(p => p.job).join(',') : '';
+  useEffect(() => {
+    if (!pcPendKey) return undefined;
+    let alive = true;
+    let timer = null;
+    const tick = async () => {
+      const pend = storeRef.current ? pcPending(storeRef.current.chats) : [];
+      if (!alive || pend.length === 0) return;
+      let r = null;
+      try { r = await pcCall({ op: 'get', ids: pend.slice(0, 10).map(p => p.job) }); } catch { r = null; }
+      if (!alive) return;
+      if (r && r.ok) {
+        const byId = {};
+        for (const j of Array.isArray(r.jobs) ? r.jobs : []) byId[j.id] = j;
+        setPcJobs(byId);
+        setPcInfo(p => ({ ...p, seen: Number(r.seen) || p.seen }));
+        let changed = false;
+        for (const p of pend.slice(0, 10)) {
+          const j = byId[p.job];
+          const label = handName(p.hid);
+          if (j && j.st === 'done' && j.a) {
+            patchMsg(p.chatId, p.msgId, { text: j.a, err: '', msg: '', job: '', model: pcModelLabel(label, j.m), at: new Date(Number(j.da) || Date.now()).toISOString() });
+            changed = true;
+          } else if (j && (j.st === 'fail' || j.st === 'cancel' || j.st === 'gone')) {
+            patchMsg(p.chatId, p.msgId, { err: 'pcfail', job: '', msg: j.st === 'fail' ? `PC가 ${label}에 묻지 못했습니다 — ${j.e || '까닭 없음'}` : pcAskErrorText(j.st) });
+            changed = true;
+          } else if (pcTooLate(p.at)) {
+            pcCall({ op: 'cancel', id: p.job }).catch(() => { /* 2일 뒤 스스로 비운다 */ });
+            patchMsg(p.chatId, p.msgId, { err: 'pcfail', job: '', msg: pcAskErrorText('late') });
+            changed = true;
+          }
+        }
+        if (changed) { stickBottom.current = true; scheduleSave(); }
+      }
+      const left = storeRef.current ? pcPending(storeRef.current.chats) : [];
+      if (alive && left.length) timer = setTimeout(tick, pcPollDelay(left));
+    };
+    tick();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [pcPendKey]);
   const downloadChat = (c) => {
     try {
       const blob = new Blob([chatToMarkdown(c)], { type: 'text/markdown;charset=utf-8' });
@@ -550,7 +691,7 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
   const close = () => { speech.stop(); setMini(false); onClose && onClose(); };
   const needKey = pickP ? (aiState.loaded && !pickKey) : (!isAdmin && !viewingAs && keyState.loaded && !keyState.key);
   const pickModels = pickP && models[pickP.id] ? models[pickP.id].list : [];
-  const errText = (m) => { const p = apiOf(m); return p ? aiErrorText(m.err, p.short) : searchErrorText(m.err); };
+  const errText = (m) => { if (m.err === 'pcfail') return m.msg || pcAskErrorText(''); const p = apiOf(m); return p ? aiErrorText(m.err, p.short) : searchErrorText(m.err); };
   const ready = !!store && loadInfo.loaded;
   const sp = speech.speaking;
   const holdCount = store && store.holdOn && getPortfolios ? searchHoldings(getPortfolios()).length : 0;
@@ -725,6 +866,52 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
       <p className="text-[11px] text-gray-500">구독 로그인(아이디·비밀번호·쿠키)을 이 사이트에 넣어 대신 쓰게 하는 방식은 만들지 않았습니다 — 각 회사 약관이 막고 있어 계정이 정지되거나 로그인 정보가 새어 나갈 수 있습니다. 그래서 구독은 그 회사 사이트를 내 브라우저에서 여는 방식으로 씁니다.</p>
     </div>
   );
+  // 내 PC에 맡겨 두고 답을 기다리는 자리(m.err === 'pc') — 답이 오면 위 효과가 바로 넣는다.
+  const pcBox = (m, i) => {
+    const label = handName(String(m.via || '').replace(/^pc:/, ''));
+    return (
+      <div className="rounded-md border border-teal-500/40 bg-teal-500/10 px-2.5 py-2 text-[12px] text-teal-100 space-y-1.5">
+        <p className="animate-pulse">{m.job ? pcWaitText(label, pcJobs[m.job], pcInfo.seen) : '내 PC에 맡기는 중…'}</p>
+        <p className="text-[11px] text-teal-200/70">내 PC의 Claude가 크롬에서 내 {label} 계정으로 묻고, 답이 오면 여기에 바로 넣습니다 — 이 창을 닫아도 됩니다.</p>
+        <div className="flex gap-1.5 flex-wrap">
+          <button onClick={() => pcToHand(i)} className={chip}><ExternalLink size={12} />직접 묻기로 바꾸기</button>
+          <button onClick={() => cancelPc(i)} className={chip}><X size={12} />취소</button>
+        </div>
+      </div>
+    );
+  };
+  const pcSettings = viewingAs ? null : (
+    <div className="rounded-lg border border-teal-600/40 bg-teal-900/10 px-3 py-2 space-y-1.5 text-[12px] text-gray-300">
+      <div className="text-teal-100 font-semibold">내 PC로 자동 묻기 — 내 구독 그대로, 붙여넣기 없이</div>
+      <p className="text-[11.5px]">내 PC에서 켜 둔 <b className="text-teal-100">Claude</b>가 크롬으로 <b className="text-teal-100">내 계정의 ChatGPT · Gemini · Grok · Perplexity …</b> 에 대신 묻고 답을 여기로 보내 줍니다. <b className="text-teal-100">Claude</b>를 고르면 PC의 Claude가 내 Claude 구독으로 직접 답합니다.</p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={pcInfo.linked ? 'text-teal-200' : 'text-gray-400'}>{!pcInfo.loaded ? 'PC 연결을 확인하는 중…' : pcInfo.linked ? pcSeenText(pcInfo.seen) : '아직 PC를 연결하지 않았습니다'}</span>
+        <button disabled={pcBusy} onClick={makePcKey} className={pcBtn}>{pcInfo.linked ? 'PC 연결 문구 새로 만들기' : 'PC 연결 문구 만들기'}</button>
+        {pcInfo.linked && <button disabled={pcBusy} onClick={unlinkMyPc} className={chip}>연결 끊기</button>}
+        {pcInfo.loaded && <button disabled={pcBusy} onClick={loadPc} className={chip}><RefreshCw size={12} />다시 확인</button>}
+      </div>
+      {pcInfo.error && <p className="text-[11.5px] text-red-300">{pcInfo.error}</p>}
+      {pcSetup && (
+        <div className="rounded-md border border-teal-700/50 bg-[#0b1120] px-2.5 py-2 space-y-1.5">
+          <ol className="list-decimal pl-4 space-y-1 text-[11.5px] text-gray-200">
+            <li>PC에서 <b>크롬</b>을 열고 주소창에 <a href="https://claude.ai/chrome" target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:underline">claude.ai/chrome</a> 을 넣어 <b>Claude in Chrome</b> 확장을 설치합니다. 설치 뒤 크롬 오른쪽 위 퍼즐 모양 옆 Claude 아이콘을 눌러 Claude 계정으로 로그인합니다.</li>
+            <li>같은 크롬에서 쓰실 AI 사이트(chatgpt.com · gemini.google.com · grok.com 등)에 들어가 내 계정으로 로그인해 둡니다.</li>
+            <li>PC의 <b>Claude 데스크톱 앱</b>을 엽니다(없으면 <a href="https://claude.ai/download" target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:underline">claude.ai/download</a>). 왼쪽 위 <b>Code</b>(또는 <b>Cowork</b>)를 누르고 새 작업을 엽니다 — 폴더를 물으면 문서 폴더처럼 아무 폴더나 고릅니다.</li>
+            <li>아래 <b>[문구 복사]</b>를 누르고, 그 새 작업의 입력 칸에 붙여 넣어(⌘V · Ctrl+V) 보냅니다. 크롬 사용·명령 실행을 물으면 <b>허용</b>을 누릅니다.</li>
+            <li>그 대화가 「연결됐습니다」라고 하면 이 창 아래 <b>PC 자동</b>을 켜고, 질문을 쓴 뒤 AI 이름을 누릅니다. <b>그 대화 창은 닫지 말고 켜 두세요</b>(PC를 다시 켰으면 1번 없이 3~4번만 다시).</li>
+          </ol>
+          <textarea readOnly rows={5} value={pcSetup.text} onFocus={e => e.target.select()} className="w-full resize-y bg-[#0f1623] border border-gray-700 rounded-md px-2 py-1.5 text-[11px] text-gray-300 font-mono outline-none" />
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button onClick={() => copyText('pcsetup', pcSetup.text)} className={pcBtn}>{copied === 'pcsetup' ? '복사됨' : copied === 'fail:pcsetup' ? '복사 실패 — 칸을 눌러 직접 복사' : '문구 복사'}</button>
+            <button onClick={() => setPcSetup(null)} className={chip}>닫기</button>
+          </div>
+          <p className="text-[11px] text-amber-200/90">이 문구에는 내 PC 열쇠가 들어 있어 지금 한 번만 보여 드립니다 — 남에게 보내지 마세요. 다시 필요하면 「새로 만들기」(앞 문구는 바로 못 쓰게 됩니다).</p>
+        </div>
+      )}
+      <p className="text-[11px] text-gray-500">필요한 것: 켜 둔 PC(맥·윈도) · Claude 데스크톱 앱(Claude 구독) · 크롬 + Claude in Chrome 확장. PC가 꺼져 있으면 맡긴 질문은 PC가 켜진 뒤 처리됩니다(3시간 넘으면 그만둠). 하루 60번까지.</p>
+      <p className="text-[11px] text-amber-200/80">ChatGPT 등 일부 회사는 약관에서 프로그램으로 대신 쓰는 것을 제한합니다 — 계정이 제한될 수 있으니 하루 몇 번 정도로만 쓰세요. <b>Claude</b>를 고르면 내 Claude 구독으로 PC의 Claude가 직접 답해 이런 걱정이 적습니다. 비밀번호는 PC 크롬에만 있고 이 사이트로 오지 않습니다.</p>
+    </div>
+  );
   // 내 구독 사이트에 넘겨 두고 답을 기다리는 자리(m.err === 'hand')
   const handBox = (m, i) => {
     const hid = String(m.via || '').slice(5);
@@ -792,6 +979,7 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
           {keyBox}
           {aiBox}
           {subBox}
+          {pcSettings}
           <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 space-y-1.5">
             <div className="text-gray-200 font-semibold flex items-center gap-1.5"><SpeakerIcon size={14} />듣기</div>
             {!speech.supported ? (
@@ -917,11 +1105,14 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
               {m.text && <MdView text={m.text} />}
               {m.pending && m.text && <span className="inline-block w-2 h-3.5 bg-sky-400/80 animate-pulse align-middle" />}
               {m.err === 'hand' && !m.text && handBox(m, i)}
-              {m.err && m.err !== 'hand' && (
+              {m.err === 'pc' && !m.text && pcBox(m, i)}
+              {m.err && m.err !== 'hand' && m.err !== 'pc' && (
                 <div className={m.err === 'stop' ? 'rounded-md border border-gray-600 bg-gray-800/40 px-2.5 py-1.5 text-[12px] text-gray-300' : 'rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-[12px] text-red-200 space-y-1'}>
                   <p>{errText(m)}</p>
-                  {m.msg && m.err !== 'stop' && <p className="text-[11px] text-red-300/70 break-all">{m.msg}</p>}
+                  {m.msg && m.err !== 'stop' && m.err !== 'pcfail' && <p className="text-[11px] text-red-300/70 break-all">{m.msg}</p>}
                   <div className="flex gap-1.5 flex-wrap">
+                    {m.err === 'pcfail' && i === msgs.length - 1 && !running && !viewingAs && <button onClick={() => pcRetry(i)} className={chip}><RefreshCw size={12} />PC에 다시 맡기기</button>}
+                    {m.err === 'pcfail' && i === msgs.length - 1 && !pcInfo.linked && !viewingAs && <button onClick={() => setPanel('settings')} className={chip}><Settings size={12} />PC 연결</button>}
                     {i === msgs.length - 1 && !running && <button onClick={() => retry(i)} className={chip}><RefreshCw size={12} />다시 묻기</button>}
                     {apiOf(m) ? (<>
                       {(m.err === 'needkey' || m.err === 'badkey' || m.err === 'credit') && <button onClick={() => openAiSettings(apiOf(m).id)} className={chip}><Lock size={12} />키 설정</button>}
@@ -1004,10 +1195,10 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
                 if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229 || isCoarse()) return;
                 e.preventDefault();
                 if (running) return;
-                if (needKey) { if (draft.trim()) flashNote('키가 없습니다 — 아래 「내 구독으로 묻기」에서 AI 이름을 누르거나 ⚙ 설정에서 키를 넣어 주세요'); return; }
+                if (needKey) { if (draft.trim()) flashNote(pcActive ? '아래 AI 이름을 누르면 내 PC가 대신 묻습니다' : '키가 없습니다 — 아래 「내 구독으로 묻기」에서 AI 이름을 누르거나 ⚙ 설정에서 키를 넣어 주세요'); return; }
                 ask(draft);
               }}
-              placeholder={needKey ? '질문을 쓰고 아래 「내 구독으로 묻기」를 누르거나, ⚙ 설정에서 키를 넣어 주세요' : (active ? '이어서 물어보기…' : '검색할 내용을 물어보세요 (예: 오늘 코스피 마감)')}
+              placeholder={needKey ? (pcActive ? '질문을 쓰고 아래 AI 이름을 누르면 내 PC가 대신 묻습니다' : '질문을 쓰고 아래 「내 구독으로 묻기」를 누르거나, ⚙ 설정에서 키를 넣어 주세요') : (active ? '이어서 물어보기…' : '검색할 내용을 물어보세요 (예: 오늘 코스피 마감)')}
               className="flex-1 min-w-0 resize-none bg-[#0b1120] border border-gray-600 focus:border-sky-500 rounded-xl px-3 py-2 text-[13px] text-gray-100 outline-none max-h-32" />
             {running ? (
               <button onClick={stopAsk} title="답 받기 멈추기" className="h-10 px-3 rounded-xl bg-gray-700 hover:bg-gray-600 text-white font-bold text-[12px] inline-flex items-center gap-1 shrink-0"><StopIcon />멈춤</button>
@@ -1016,10 +1207,13 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
             )}
           </div>
           <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap pb-0.5">
-            <span className="shrink-0 text-[11px] text-violet-200/90" title="API 키 없이 — 그 AI 사이트를 내 계정(구독 그대로)으로 열고 질문을 넘깁니다. 답은 복사해 「답 붙여넣기」.">내 구독으로 묻기</span>
-            {canShare() && isCoarse() && <button disabled={!ready || !!running || !draft.trim()} onClick={() => askHand(HAND_SHARE, draft)} title="휴대폰에 깔린 AI 앱으로 질문 보내기" className={handChip}>앱으로 공유</button>}
+            {!viewingAs && <button onClick={togglePc} title={pcInfo.linked ? (pcActive ? 'PC 자동 끄기 — AI 이름을 누르면 그 사이트를 직접 엽니다' : 'PC 자동 켜기 — AI 이름을 누르면 내 PC가 대신 묻고 답을 넣어 줍니다') : '내 PC를 먼저 연결합니다(⚙ 설정)'} className={pcActive ? 'shrink-0 px-2 py-0.5 rounded-full bg-teal-600 text-white text-[11.5px] font-bold transition' : 'shrink-0 px-2 py-0.5 rounded-full border border-gray-600 text-gray-400 hover:text-teal-200 hover:border-teal-600 text-[11.5px] transition'}>PC 자동{pcActive ? ' 켬' : ''}</button>}
+            <span className="shrink-0 text-[11px] text-violet-200/90" title={pcActive ? '내 PC의 Claude가 크롬(내 로그인)으로 그 AI에 묻고 답을 여기에 넣습니다' : 'API 키 없이 — 그 AI 사이트를 내 계정(구독 그대로)으로 열고 질문을 넘깁니다. 답은 복사해 「답 붙여넣기」.'}>{pcActive ? '내 PC가 묻기' : '내 구독으로 묻기'}</span>
+            {!pcActive && canShare() && isCoarse() && <button disabled={!ready || !!running || !draft.trim()} onClick={() => askHand(HAND_SHARE, draft)} title="휴대폰에 깔린 AI 앱으로 질문 보내기" className={handChip}>앱으로 공유</button>}
             {AI_HANDS.map(h => (
-              <button key={h.id} disabled={!ready || !!running || !draft.trim()} onClick={() => askHand(h.id, draft)} title={draft.trim() ? `${h.label}(${h.sub})을 내 계정으로 열고 질문을 넘깁니다` : '먼저 질문을 써 주세요'} className={handChip}>{h.label}</button>
+              <button key={h.id} disabled={!ready || !!running || !draft.trim()} onClick={() => (pcActive ? askPc(h.id, draft) : askHand(h.id, draft))}
+                title={!draft.trim() ? '먼저 질문을 써 주세요' : pcActive ? `내 PC가 ${h.id === 'claude' ? 'Claude(내 구독)로 직접 답합니다' : `크롬에서 내 ${h.label} 계정으로 묻습니다`}` : `${h.label}(${h.sub})을 내 계정으로 열고 질문을 넘깁니다`}
+                className={pcActive ? pcChip : handChip}>{h.label}</button>
             ))}
           </div>
           {handNote && <p className="text-[11px] text-violet-200">{handNote}</p>}

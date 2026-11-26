@@ -35,6 +35,7 @@ src/
 ├── holdingsPhoto.ts     # 계좌 표 「사진으로 보유 맞추기」(2026-11-26) 순수 로직: AI 답 줄 해석(`보유 | 코드 | 이름 | 수량 | 매입금액 | 평균단가`·잘림)·종목 맞추기(코드→이름→잘린 앞부분)·계획(바꿈/같음/0으로/그대로/새로 추가)·적용·되돌리기·메모 글·새 종목 코드 찾기(검색 답 읽기 codeCandsFrom·후보 고르기·공식 이름 확인 findCodeByName·채우기) (⚠️ import 0 — verify:holdings-photo)
 ├── aiSearch.ts          # AI 검색 채팅창 순수 로직: 답 읽기(NDJSON)·마크다운 조각·듣기 문장 조각(speechChunks)·대화 묶음 저장 모양·한도(normalizeSearchStore)·보유 종목(이름·코드만) (⚠️ import 0 · 뒤보기 정규식 금지 — verify:ai-search)
 ├── aiProviders.ts       # AI 검색 창의 여러 AI: 회사 표(AI_PROVIDERS 10곳 — 서버 `api/_aiChat.ts` CHAT_PROVIDERS와 같은 id)·키 모양·고른 AI(aiPrefsOf)·「내 구독으로 묻기」 넘길 곳(AI_HANDS)·넘길 글(handPrompt)·주소(handUrl)·붙여넣기 다듬기 (⚠️ import 0 — verify:ai-chat)
+├── pcAsk.ts             # 「내 PC가 구독 AI에 묻기」 화면 도구: PC 연결 문구(pcTaskPrompt — 열쇠·bash 기다리기·curl 답 넣기)·기다리는 자리(pcPending)·확인 간격·글 (⚠️ import 0 — verify:pc-ask가 문구 속 bash를 실제로 돌린다)
 ├── photoShrink.ts       # 사진을 기기에서 JPEG로 줄이기(shrinkPhotoToB64 — taxCalcPaste의 PHOTO_TRIES·photoFitSize 사용)
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
@@ -216,6 +217,16 @@ src/
   열기만) + **항상 클립보드에 복사**(누른 그 순간, 창을 열기 전) → 답을 복사해 「답 붙여넣기」 → 그 대화에 저장(`via:'hand:<id>'`, 꼬리표 "… 내 계정에서 붙여넣음"). 휴대폰은 「앱으로 공유」.
   기다리는 자리 = `{role:'model', text:'', err:'hand', via}`(빈 답이지만 err가 있어 저장된다). 복사해 둔 질문을 그대로 붙여넣으면 넣지 않는다(`pasteIsQuestion`).
 - ⚠️ **구독 로그인(쿠키·세션 토큰·비밀번호)을 받아 대신 부르는 길은 만들지 않는다**(약관 위반·계정 정지·탈취 위험 — 사용자에게 알린 결정). 구독은 ②로 쓴다. 검증: `verify:ai-chat`(가짜 회사 서버로 처리부 끝까지).
+
+## 내 PC가 구독 AI에 묻기 (`src/pcAsk.ts`·`api/_pcAsk.ts`·`api/pc-ask.ts`·`api/pc-job.ts`, ⚠️ 회귀 주의 — 2026-11-26)
+
+- 사용자 확정: 「PC가 크롬 직접 조작 · 모든 사용자 각자」. AI 검색 창 「PC 자동」 + AI 이름 → `/api/pc-ask`(requireAuth, 사용자 = 토큰 이메일의 해시) → Redis 우편함(사용자별 `pca:*`, 질문·답 2일)
+  → 그 사람 PC의 Claude 대화(설정에서 만든 「PC 연결 문구」를 붙여 넣음)가 `/api/pc-job`(**requirePcKey** — verify:api-auth JOB_GUARDS)으로 가져가 크롬(그 사람 로그인)으로 묻고 답을 넣음 → 창이 `op=get`으로 받아 넣는다.
+  `claude`는 PC의 Claude가 직접 답한다. 창이 닫혀도·새로고침 뒤에도 저장된 `job` 번호로 이어서 기다린다(3시간 넘으면 그만).
+- ⚠️ PC 열쇠 = `<사용자 표시 24자>.<무작위>` — Redis에는 해시만, 화면은 만든 그때 한 번만 보여 주고 **저장하지 않는다**(대화 묶음·Drive·브라우저 저장소 금지). 새로 만들면 앞 열쇠 끝.
+  열쇠로 할 수 있는 일 = 그 사람 질문 받기·답 넣기뿐. 서버는 구독 로그인(비밀번호·쿠키)을 받지도 쓰지도 않는다. 관리자 접속 중엔 숨김.
+- 사이트 목록 `PC_TARGETS` = 화면 `AI_HANDS`(id·주소 대조). 한도: 동시 5 · 하루 60. Redis 아끼기: PC는 처음 10분 20초·그 뒤 60초마다 확인, 확인 시각은 1분에 한 번만 적음.
+  검증: `verify:pc-ask`(가짜 구글·Redis로 처리부 끝까지 + 연결 문구 속 bash·curl을 로컬 서버에 실제로 돌림).
 
 ## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 

@@ -36,7 +36,8 @@ const OPEN_ROUTES = ['market-calendar'];
 const INTERNAL_ROUTES = ['fred'];
 // 구글 토큰 대신 예약 작업 열쇠로 여는 경로 — Claude 예약 작업 전용. 경로마다 문(guard)과 그 문이 있는 공용 파일이 정해져 있다.
 //   ai-job: 과표 사진 맡기기(api/_aiTax.ts requireJobKey) · fund-job: 펀드 기준가 우편함(api/_fundFeed.ts requireFundJobKey, 2026-11-26)
-const JOB_GUARDS = { 'ai-job': ['requireJobKey', '_aiTax'], 'fund-job': ['requireFundJobKey', '_fundFeed'] };
+//   pc-job: 내 PC가 구독 AI에 묻기(api/_pcAsk.ts requirePcKey, 2026-11-26 — 사용자마다 PC 열쇠)
+const JOB_GUARDS = { 'ai-job': ['requireJobKey', '_aiTax'], 'fund-job': ['requireFundJobKey', '_fundFeed'], 'pc-job': ['requirePcKey', '_pcAsk'] };
 const JOB_ROUTES = Object.keys(JOB_GUARDS);
 
 // ── 파트① 소스 가드 ─────────────────────────────────────────
@@ -147,6 +148,7 @@ ok('App.tsx 재발급이 진행 중인 대기자를 덮지 않는다', /register
   ok('변이: 열쇠 경로가 requireJobKey를 빼면 잡는다', routeProblems('ai-job', SRC['ai-job'].replace('const denied = await requireJobKey(request);', '')).length > 0);
   ok('변이: 다른 경로가 requireJobKey로 바꾸면 잡는다', routeProblems('proxy', SRC['proxy'].replace(/requireAuth/g, 'requireJobKey').replace("'./_auth.js'", "'./_aiTax.js'")).length > 0);
   ok('변이: fund-job이 requireFundJobKey를 빼면 잡는다', routeProblems('fund-job', SRC['fund-job'].replace('const denied = await requireFundJobKey(request);', '')).length > 0);
+  ok('변이: pc-job이 requirePcKey를 빼면 잡는다', routeProblems('pc-job', SRC['pc-job'].replace('const denied = await requirePcKey(request);', '')).length > 0);
   ok('변이: fund-job이 다른 공용 파일의 문을 쓰면 잡는다', routeProblems('fund-job', SRC['fund-job'].replace(/requireFundJobKey/g, 'requireJobKey').replace("'./_fundFeed.js'", "'./_aiTax.js'")).length > 0);
   ok('변이: fund-feed가 requireAuth를 빼면 잡는다', routeProblems('fund-feed', SRC['fund-feed'].replace('const denied = await requireAuth(request);', '')).length > 0);
 }

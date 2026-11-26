@@ -14,6 +14,7 @@
     "verify:holdings-photo": "node scripts/verify-holdings-photo.mjs",
     "verify:ai-chat": "node scripts/verify-ai-chat.mjs",
     "verify:ai-search": "node scripts/verify-ai-search.mjs",
+    "verify:pc-ask": "node scripts/verify-pc-ask.mjs",
     "verify:ai-tax": "node scripts/verify-ai-tax.mjs",
     "verify:dividend": "node scripts/verify-dividend-slots.mjs",
     "verify:dividend-qty": "node scripts/verify-dividend-qty.mjs",

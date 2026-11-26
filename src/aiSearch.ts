@@ -266,7 +266,8 @@ export function speechChunks(md: string, max = 120): string[] {
 const ISO = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const oneLine = (s: unknown, max: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
-const VIA_RE = /^(api|hand):[a-z0-9]{1,24}$/;
+const VIA_RE = /^(api|hand|pc):[a-z0-9]{1,24}$/;
+const PC_JOB_RE = /^[A-Za-z0-9_-]{12,40}$/;
 const AI_ID_RE = /^[a-z0-9]{1,24}$/;
 const AI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,119}$/;
 // 고른 AI·모델(키는 여기 없다 — ai_settings.json). 아는 회사인지는 화면(aiProviders.aiPrefsOf)이 다시 가린다.
@@ -317,6 +318,7 @@ function normMsg(m: any): any | null {
   if (role === 'model') {
     if (m.model) out.model = oneLine(m.model, 80);
     // 어느 길로 받은 답인가 — 없음 = Gemini 검색 · api:<회사> = 내 키로 다른 AI · hand:<곳> = 내 구독 사이트에서 붙여넣음(aiProviders.ts)
+    // · pc:<곳> = 내 PC가 크롬으로 그 구독 사이트에 물어 옴(src/pcAsk.ts — 기다리는 동안 err 'pc' + job = 우편함 번호)
     if (VIA_RE.test(String(m.via ?? ''))) out.via = String(m.via);
     const src = cleanSources(m.sources);
     if (src.length) out.sources = src;
@@ -325,7 +327,11 @@ function normMsg(m: any): any | null {
     const err = /^[a-z]{1,12}$/.test(String(m.err ?? '')) ? String(m.err) : '';
     if (m.pending) { if (!text) return null; out.err = 'cut'; }
     else if (err) out.err = err;
-    if (out.err && m.msg) out.msg = oneLine(m.msg, 300);
+    if (out.err === 'pc') {
+      if (PC_JOB_RE.test(String(m.job ?? ''))) out.job = String(m.job);
+      else { out.err = 'pcfail'; out.msg = 'PC에 맡기지 못했습니다'; }
+    }
+    if (out.err && m.msg && !out.msg) out.msg = oneLine(m.msg, 300);
     if (!text && !out.err) return null;
   } else if (!text.trim()) return null;
   return out;
@@ -346,7 +352,7 @@ function normChat(c: any): any | null {
   };
 }
 
-export function normalizeSearchStore(raw: any): { v: 1; chats: any[]; voice: { rate: number; voiceURI: string }; holdOn: boolean; ai: { pick: string; models: Record<string, string>; web: Record<string, boolean>; ctx: boolean } } {
+export function normalizeSearchStore(raw: any): { v: 1; chats: any[]; voice: { rate: number; voiceURI: string }; holdOn: boolean; pcOn: boolean; ai: { pick: string; models: Record<string, string>; web: Record<string, boolean>; ctx: boolean } } {
   const r = raw && typeof raw === 'object' ? raw : {};
   const seen = new Set<string>();
   const chats: any[] = [];
@@ -361,6 +367,7 @@ export function normalizeSearchStore(raw: any): { v: 1; chats: any[]; voice: { r
     chats,
     voice: { rate: SPEECH_RATES.includes(rate) ? rate : 1, voiceURI: oneLine(r.voice?.voiceURI, 200) },
     holdOn: !!r.holdOn,
+    pcOn: !!r.pcOn,
     ai: normAi(r.ai),
   });
 }

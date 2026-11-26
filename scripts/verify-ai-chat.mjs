@@ -285,8 +285,8 @@ ok('#S3 api 상대 import는 .js 확장자(Vercel ESM)', [...srv.matchAll(/from 
 ok('#S4 src/aiProviders.ts·api/_aiChat.ts — import 0 · 뒤보기 정규식 없음(옛 사파리 멈춤)', !/^\s*import\s/m.test(prov) && !/^\s*import\s/m.test(lib) && !/\(\?<[=!]/.test(prov));
 ok('#S5 화면에 사이트를 알리는 헤더를 회사로 보내지 않는다(HTTP-Referer·X-Title 없음)', !/HTTP-Referer|X-Title|Referer/i.test(lib) && !/HTTP-Referer|X-Title/i.test(srv));
 const cFetch = [...chat.matchAll(/fetch\(([^,]+),/g)].map(m => m[1].trim());
-ok(`#S6 화면이 부르는 곳은 같은 출처의 /api/ai-search·/api/ai-chat 뿐(AI 회사를 직접 부르지 않는다) — ${cFetch.join(' | ')}`,
-  cFetch.length === 2 && cFetch.includes("pickP ? '/api/ai-chat' : '/api/ai-search'") && cFetch.includes("'/api/ai-chat'") && (chat.match(/fetch\(/g) || []).length === 2
+ok(`#S6 화면이 부르는 곳은 같은 출처의 /api/ai-search·/api/ai-chat·/api/pc-ask(내 PC 우편함 — verify:pc-ask) 뿐(AI 회사를 직접 부르지 않는다) — ${cFetch.join(' | ')}`,
+  cFetch.length === 3 && cFetch.includes("pickP ? '/api/ai-chat' : '/api/ai-search'") && cFetch.includes("'/api/ai-chat'") && cFetch.includes("'/api/pc-ask'") && (chat.match(/fetch\(/g) || []).length === 3
   && !HOSTS.some(h => chat.includes(h)) && !/generativelanguage/.test(chat));
 ok('#S7 내 키는 헤더로만(X-AI-Key) · 본문에 키 없음 · 브라우저 저장소 금지', /headers\['X-AI-Key'\] = pickKey;/.test(chat) && /headers: \{ 'Content-Type': 'application\/json', 'X-AI-Key': key \}/.test(chat)
   && /body = \{ op: 'chat', provider: pickP\.id, model: pickModelId, web: !!prefs\.web\[pickP\.id\], messages: sendMsgs, holdings \};/.test(chat) && /body: JSON\.stringify\(\{ op: 'models', provider: pid \}\)/.test(chat)
