@@ -160,6 +160,17 @@ if (H) {
   ok('#I2 사진 두 장 맡기기 → 번호 · Redis에 사진 두 칸', qi.status === 200 && [...store.keys()].filter(k => k.includes(`:${qi.id}:`) && k.startsWith('pca:img:')).length === 2);
   const ti = await J(pc('take', AKEY));
   eq('#I3 PC가 받는 질문에 사진 수(imgs) · claude', [ti.id, ti.target, ti.imgs], [qi.id, 'claude', 2]);
+  // 사용자 신고 2026-11-26: 사진 규칙 전에 연결한 PC 대화가 imgs만 보고 '사진 없음' → 질문 JSON에 받는 주소·받는 법을 싣는다.
+  const viaUrl = Array.isArray(ti.imgUrls) && ti.imgUrls.length === 2
+    ? await H.J.default(new Request(ti.imgUrls[1], { method: 'GET', headers: { 'x-pc-key': AKEY } })) : null;
+  ok('#I3b 질문 JSON의 imgUrls(2개) 주소로 그대로 받으면 사진 · imgHow에 열쇠 머리말·실패 길 · 열쇠 글자는 싣지 않음',
+    !!viaUrl && viaUrl.status === 200 && Buffer.from(await viaUrl.arrayBuffer()).equals(PNG)
+    && ti.imgUrls[0] === `https://nominfi1.vercel.app/api/pc-job?op=img&id=${qi.id}&n=1`
+    && typeof ti.imgHow === 'string' && ti.imgHow.includes('X-PC-Key') && ti.imgHow.includes('op=fail') && ti.imgHow.includes(ti.imgUrls[0])
+    && !JSON.stringify(ti).includes(AKEY.split('.')[1]));
+  eq('#I3c 사진 없는 질문엔 imgUrls·imgHow가 없다 · 이상한 값엔 null · 장수는 한도까지', [
+    'imgUrls' in t1 || 'imgHow' in t1, H.L.takeImgInfo('https://x', qi.id, 0), H.L.takeImgInfo('https://x', 'bad id!', 2), H.L.takeImgInfo('https://x/', qi.id, 9).imgUrls.length,
+  ], [false, null, null, H.L.PC_IMG_N]);
   const im1 = await pc('img', AKEY, { q: `&id=${qi.id}&n=1`, method: 'GET' });
   const im1b = Buffer.from(await im1.arrayBuffer());
   eq('#I4 사진 받기 = 그림 그대로(형식 포함)', [im1.status, im1.headers.get('content-type'), im1b.equals(PNG)], [200, 'image/png', true]);

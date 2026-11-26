@@ -258,6 +258,21 @@ export async function jobImage(u: string, id: string, n: number): Promise<{ mime
   return { mime, b64: String(b64) };
 }
 
+// PC 쪽 — take 응답에 싣는 사진 받는 법(사진이 든 질문만). 사용자 신고 2026-11-26 「자산검증에서 사진을 올려도 반영이 안 된다」:
+//   사진 기능 전에 연결 문구를 붙여 넣은 PC 대화는 `imgs:1`만 보고 받는 주소를 몰라 '사진 없음'으로 답했다(→ 아무것도 안 들어감).
+//   그래서 질문 JSON 자체에 주소와 받는 법을 싣는다 — 어느 때 연결한 PC든 규칙 추가 없이 받는다. 열쇠는 싣지 않는다(PC가 이미 가진 것).
+// ⚠️ 주소는 op=img 길과 같아야 한다(verify:pc-ask #I3b가 이 주소로 실제로 받아 본다).
+export function takeImgInfo(origin: string, id: string, n: number): { imgUrls: string[]; imgHow: string } | null {
+  const k = Math.min(PC_IMG_N, Math.max(0, Math.floor(Number(n) || 0)));
+  if (k < 1 || !JOB_ID_RE.test(id)) return null;
+  const O = String(origin || '').replace(/\/+$/, '');
+  const imgUrls = Array.from({ length: k }, (_, i) => `${O}/api/pc-job?op=img&id=${id}&n=${i + 1}`);
+  const imgHow = `사진 ${k}장이 함께 온 질문입니다. imgUrls의 주소마다 질문을 받을 때 쓴 X-PC-Key 머리말 그대로 GET으로 받아 그림 파일로 저장한 뒤`
+    + ` (예: curl -s "${imgUrls[0]}" -H "X-PC-Key: <PC 열쇠>" -o pcask-img-1.jpg) 파일 읽기 도구로 직접 열어 보고, 웹 검색 없이 prompt가 정한 형식 그대로 답해 op=done 으로 보냅니다(모델 이름은 Claude).`
+    + ` 사진을 받지 못했거나 열지 못했으면 아무것도 지어내지 말고 op=fail 로 보냅니다(까닭: 사진을 열지 못함). 다 보낸 뒤 pcask-img-*.jpg 파일은 지웁니다.`;
+  return { imgUrls, imgHow };
+}
+
 // PC 쪽 — 가장 오래 기다린 질문 하나(취소된 것은 건너뛴다).
 export async function takeJob(u: string, now = Date.now()): Promise<PcJob | null | undefined> {
   for (let i = 0; i < 6; i++) {
