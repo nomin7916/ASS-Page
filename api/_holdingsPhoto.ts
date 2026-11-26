@@ -26,7 +26,8 @@ export function pickHoldKeys(isAdmin: boolean, userKey: string, siteKeys: string
   return out;
 }
 
-export interface HoldReq { account: string; cands: { code: string; name: string }[]; images: { mime: string; data: string }[] }
+// kind: 'hold' = 잔고 화면(보유 맞추기) · 'trades' = 주문·체결내역 화면(자산 평가액 추이 「주문내역 사진으로 매매 넣기」, 2026-11-26)
+export interface HoldReq { kind: 'hold' | 'trades'; account: string; cands: { code: string; name: string }[]; images: { mime: string; data: string }[] }
 
 export function checkHoldReq(body: any): HoldReq | { error: string } {
   if (!body || typeof body !== 'object') return { error: '요청 형식이 틀렸습니다' };
@@ -50,7 +51,8 @@ export function checkHoldReq(body: any): HoldReq | { error: string } {
     if (data.length < 100 || !B64.test(data)) return { error: '사진 자료가 깨졌습니다' };
     images.push({ mime, data });
   }
-  return { account, cands, images };
+  const kind = body.kind === 'trades' ? 'trades' : 'hold';
+  return { kind, account, cands, images };
 }
 
 // Gemini에 줄 부탁 문장 — ⚠️ 예시 줄은 verify:holdings-photo 가 parseHoldingsText로 실제로 읽어 본다.
@@ -84,9 +86,40 @@ export function buildHoldPrompt({ account, cands }: { account: string; cands: { 
   ].join('\n');
 }
 
-export function holdGeminiBody(req: HoldReq): string {
+// 주문내역 사진 — 체결된 매매마다 한 줄. ⚠️ 예시 줄은 verify:trade-photo 가 src/tradePhoto.ts parseTradeText로 실제로 읽어 본다.
+// today(KST, 서버가 정한다) = 연도 없는 날짜(11.17)를 읽을 기준. 화면은 연도가 없으면 오늘 이전의 가장 가까운 날로 정한다.
+export function buildTradePrompt({ account, cands, today }: { account: string; cands: { code: string; name: string }[]; today: string }): string {
+  const list = cands.length > 0
+    ? cands.map(c => `${c.code || '-'} ${c.name || ''}`.trim()).join('\n')
+    : '(목록 없음)';
+  return [
+    `첨부한 증권사 앱의 주문내역·체결내역·거래내역 화면 사진을 읽어, 체결된 매매마다 아래 형식의 줄 하나로만 답하세요. 설명·머리말·표·코드블록 없이 결과 줄만 씁니다.`,
+    `매매 | 날짜 | 코드 | 종목명 | 구분 | 체결수량 | 체결단가`,
+    ``,
+    `- 날짜는 사진에 연도가 보이면 YYYY-MM-DD, 연도가 없으면 MM-DD로 씁니다(오늘은 ${today || '알 수 없음'}).`,
+    `- 줄마다 종목명이 없고 화면 위(제목)에만 종목명이 있으면 그 이름을 모든 줄에 씁니다. 잘려 보이면 보이는 데까지 씁니다.`,
+    `- 아래 [이 계좌 종목 목록]에 같은 종목이 있으면 코드 자리에 그 코드를, 없으면 '-'를 씁니다. 사진의 이름이 잘려 있어도 앞부분이 같으면 같은 종목입니다. 코드를 지어내지 마세요.`,
+    `- 구분은 '매수' 또는 '매도'만 씁니다.`,
+    `- 체결수량은 '체결수량'(실제로 체결된 수량)입니다. '주문수량'이 아닙니다. 체결수량이 0이거나 미체결·취소·거부·정정 원주문인 줄은 쓰지 않습니다.`,
+    `- 체결단가는 '평균체결가'·'체결단가'·'체결가'입니다. '주문단가'·'주문가격'이 아닙니다. 사진에 체결가가 없으면 '-'를 씁니다.`,
+    `- 같은 날 같은 종목을 여러 번 체결했으면 합치지 말고 사진에 보이는 줄마다 하나씩 씁니다.`,
+    `- 숫자는 사진에 보이는 그대로(쉼표 가능) 씁니다. 읽기 어려운 숫자는 지어내지 마세요.`,
+    `- 사진이 여러 장이라 같은 줄이 두 장에 겹쳐 보이면 한 번만 씁니다.`,
+    `- 계좌번호·이름 같은 개인정보는 쓰지 않습니다.`,
+    `- 체결된 매매가 하나도 안 보이면 '없음' 한 줄만 씁니다.`,
+    ``,
+    `[이 계좌 종목 목록]${account ? ` 계좌: ${account}` : ''}`,
+    list,
+    ``,
+    `예)`,
+    `매매 | 11-24 | 0091P0 | TIGER 머니마켓액티브 | 매도 | 50 | 103,920`,
+    `매매 | 2026-11-17 | - | SOL 미국원자력SMR | 매수 | 30 | 13,050`,
+  ].join('\n');
+}
+
+export function holdGeminiBody(req: HoldReq, today = ''): string {
   const parts: any[] = req.images.map(im => ({ inline_data: { mime_type: im.mime, data: im.data } }));
-  parts.push({ text: buildHoldPrompt(req) });
+  parts.push({ text: req.kind === 'trades' ? buildTradePrompt({ account: req.account, cands: req.cands, today }) : buildHoldPrompt(req) });
   return JSON.stringify({
     contents: [{ role: 'user', parts }],
     generationConfig: { temperature: 0, maxOutputTokens: 8192 },

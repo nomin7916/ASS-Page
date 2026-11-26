@@ -21,6 +21,7 @@ src/
 ├── rebalPreview.ts      # 리밸런싱 수량·예상평가금·예상비중 산식 단일 소스(표 usePortfolioData + 입력 중 말풍선 RebalPreviewBubble) · 말풍선 = 수량(매수·매도)·매수금액/매도금액(부호 없음)·예상평가금·예상비중 + 적립식 0주면 1주 최소 비중(minRatioForOneShare) (⚠️ import 0 — verify:rebal-preview)
 ├── liveTodayRow.ts      # 비활성 시장 계좌의 '오늘' 라이브 줄을 새 시세로 맞춤(useHistoryBackfill 효과#1 — ⚠️ "같은 날 1건만(불변)"으로 되돌리지 말 것: 부팅 때 저장된 옛 시세로 굳었다 · 원금은 안 건드림) (⚠️ import 0 — verify:live-today)
 ├── backdatedTrade.ts    # 자산검증(추이 표 날짜 클릭)에서 지난 날짜 수량 변경 = 그날의 매매: 투자금액 식(매수 + 늘어난 수량×단가 · 매도 × 남은÷원래)·그 뒤 기록과 계좌 표에 같은 차이·예수금은 고를 때만·표에서 먼저 고쳤으면 '옮기기' (⚠️ import 0 · 마지막 기록과 계좌 표에 같은 차이를 더할 것 — 갈리면 App 구성 변경 효과가 오늘 날짜로 되돌림 기록을 만든다 — verify:backdated-trade)
+├── tradePhoto.ts        # 추이 머리줄 📷 「주문내역 사진으로 매매 넣기」: AI 답 줄(`매매 | 날짜 | 코드 | 종목명 | 구분 | 체결수량 | 체결단가`)·연도 없는 날짜·같은 날 체결 합치기(가중평균)·날짜순(매도 먼저) backdatedTrade로 넣기·두 번 막기(그날 기록 trades·그날 표 수정)·표가 이미 맞으면 옮기기·되돌리기 (⚠️ utils·backdatedTrade·holdingsPhoto만 .ts import — verify:trade-photo)
 ├── rateMetrics.ts       # 금리 지표 계산: 현재값·1개월 변화·52주 위치·3년 백분위·꺾임 (⚠️ import 0)
 ├── rateSignals.ts       # 금리 판정: RATE_RULES(기준치 단일 소스) + 자산군 7개 evaluate* (⚠️ import 0)
 ├── rateAssets.ts        # 자산군별 종목 목록·MANUAL_INPUTS(주당 장부가/순자산)·배당률 계산 (⚠️ import 0)
@@ -79,6 +80,7 @@ src/
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
     ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기
+    ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — 같은 키 규칙·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기
     ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json) · 다른 AI(내 키 → /api/ai-chat)·「내 구독으로 묻기」(AI 사이트 열기 + 답 붙여넣기)
     ├── AiApiGuide.tsx            # AI API 연동 사용법(구글 Gemini 키 받기, 그림 public/ai-guide/*.svg) — 메모 달력 「AI 연동」·사진 맞추기 창이 함께 씀
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)

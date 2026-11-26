@@ -40,6 +40,7 @@ import CashTransferModal from './components/CashTransferModal';
 import UnlockPinModal from './components/UnlockPinModal';
 import PasteModal from './components/PasteModal';
 import HoldingsPhotoSync from './components/HoldingsPhotoSync';
+import TradePhotoSync from './components/TradePhotoSync';
 import { usePhotoCodeFill } from './hooks/usePhotoCodeFill';
 import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
 import PortfolioStatsPanel from './components/PortfolioStatsPanel';
@@ -623,6 +624,7 @@ export default function App() {
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
   // 📷 사진으로 보유 맞추기 — 연 순간의 계좌 id(열린 동안 다른 계좌로 바꿔도 그 계좌에만 쓴다). null = 닫힘
   const [holdPhotoPid, setHoldPhotoPid] = useState(null);
+  const [tradePhotoPid, setTradePhotoPid] = useState(null);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   // 종목 계좌 간 이관 — 대상 항목 id(모달 열림 여부 겸용)
   const [transferItemId, setTransferItemId] = useState(null);
@@ -5501,6 +5503,7 @@ export default function App() {
             refetchStockHistory={refetchStockHistory}
             onExpand={() => openCardWindow('stats', activePortfolioId)}
             cardWindowOpen={cardWinOpenSet.has(`stats:${activePortfolioId}`)}
+            onOpenTradePhoto={['simple', 'matong'].includes(activePortfolioAccountType) ? undefined : () => setTradePhotoPid(activePortfolioId)}
           />
 
           <DepositPanel
@@ -5880,6 +5883,15 @@ export default function App() {
         viewingAs={!!ADMIN_VIEW_EMAIL}
         keyApi={geminiKeyApi}
         onOpenCalendarGuide
+      />
+      <TradePhotoSync
+        open={!!tradePhotoPid}
+        onClose={() => setTradePhotoPid(null)}
+        account={portfolios.find(p => p.id === tradePhotoPid) || null}
+        patchAccount={(fn) => { const pid = tradePhotoPid; if (pid) setPortfolios(prev => prev.map(p => (p.id !== pid ? p : fn(p)))); }}
+        isAdmin={(authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()}
+        viewingAs={!!ADMIN_VIEW_EMAIL || !!adminViewingAs}
+        keyApi={geminiKeyApi}
       />
       <PasteModal
         isPasteModalOpen={isPasteModalOpen}

@@ -131,8 +131,16 @@ export const planBackdatedTrade = (p: any, args: any): any => {
     if (r15(num(st.items[st.itemIdx].quantity)) === newQty) { stopAt = k; break; }
   }
   // ⚠️ 투자금액 칸에 값이 있을 때만(옛 행은 매입단가 × 수량이라 표에서 수량을 고친 순간 원가가 이미 따라 바뀌었다 → 또 빼면 두 번).
-  const moveAvailable = kind === 'invest' && num(baseItem.investAmount) > 0
+  let moveAvailable = kind === 'invest' && num(baseItem.investAmount) > 0
     && !!liveItem && r15(num(liveItem.quantity)) === newQty && stopAt >= 0;
+  // 여러 건을 한꺼번에 옮길 때(주문내역 사진 — src/tradePhoto.ts)는 멈출 기록 날짜를 호출부가 정해 준다
+  // (그 종목의 매매 전부를 반영한 수량이 처음 나타난 기록). 그 기록부터는 수량을 안 바꾼다.
+  if (args.stopDate) {
+    const sd = String(args.stopDate);
+    const sIdx = sd === 'live' ? chain.length - 1 : chain.findIndex((st: any) => st.at === 'snap' && st.date >= sd);
+    moveAvailable = kind === 'invest' && sIdx >= 0;
+    stopAt = moveAvailable ? sIdx : -1;
+  }
   const mode = args.mode === 'add' ? 'add' : args.mode === 'move' ? (moveAvailable ? 'move' : 'add') : (moveAvailable ? 'move' : 'add');
 
   // 상태마다 더할 차이를 정한다.
@@ -173,7 +181,7 @@ export const planBackdatedTrade = (p: any, args: any): any => {
   const liveCashBefore = liveDepIdx >= 0 ? num(liveSt.items[liveDepIdx].depositAmount) : null;
 
   return {
-    ok: true, accountType, date, key, kind, usd, baseIndex, mode, moveAvailable,
+    ok: true, accountType, date, key, kind, usd, baseIndex, mode, moveAvailable, src: args.src === 'photo' ? 'photo' : 'hand',
     side: dq > 0 ? 'buy' : 'sell',
     oldQty, newQty, dq, price, amount, oldCost, newCost, dc, realized,
     avgBefore: oldQty > 0 ? oldCost / oldQty : 0,
@@ -227,9 +235,13 @@ export const applyBackdatedTrade = (p: any, plan: any, baseItems: any[]): any =>
     items = addCash(items, st.op.dcash);
     if (items !== s.items) snaps[st.snapIdx] = { ...s, items };
   }
+  // 그날 기록에 매매 한 건을 남긴다(trades) — 같은 주문내역 사진을 다시 올려도 두 번 넣지 않는다(tradePhoto 중복 판정).
+  const rec = { k: plan.key, side: plan.side, qty: Math.abs(plan.dq), price: plan.price, src: plan.src || 'hand' };
   const idx = snaps.findIndex((s: any) => s && s.date === plan.date);
-  if (idx >= 0) snaps[idx] = { ...snaps[idx], kind: 'manual', items: dayItems };
-  else snaps.push({ date: plan.date, kind: 'manual', items: dayItems });
+  if (idx >= 0) {
+    const prevTrades = Array.isArray(snaps[idx].trades) ? snaps[idx].trades : [];
+    snaps[idx] = { ...snaps[idx], kind: 'manual', items: dayItems, trades: [...prevTrades, rec] };
+  } else snaps.push({ date: plan.date, kind: 'manual', items: dayItems, trades: [rec] });
   // ③ 계좌 표(오늘)
   const liveSt = plan.states[plan.states.length - 1];
   let live = Array.isArray(p.portfolio) ? p.portfolio : [];

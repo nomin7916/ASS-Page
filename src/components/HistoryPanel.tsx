@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
-import { HelpCircle, X } from 'lucide-react';
+import { HelpCircle, X, Camera } from 'lucide-react';
 import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, holdReasonText, spanFromText, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines, krwFlowRateOf, usdOfKrwFrame } from '../utils';
 import HistPeriodSeg from './HistPeriodSeg';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
@@ -38,6 +38,7 @@ export default function HistoryPanel({
   histPeriod = 'day',      // ⚠️ 기본값 필수 — 렌더 지점이 App.tsx와 CardWindow 둘이라
   setHistPeriod,           //    한쪽이 prop을 빠뜨리면 undefined가 되어 그 화면만 조용히 압축된다
   histPeriodNote,          // 별도 창: "이 창의 기간 설정은 저장되지 않습니다"
+  onOpenTradePhoto,        // 「📷 주문내역 사진으로 매매 넣기」 창 열기(App 탭만 — 카드 별도 창에는 미전달 = 버튼 없음)
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -483,6 +484,9 @@ export default function HistoryPanel({
                 <span className="min-w-0 truncate">📈 자산 평가액 추이</span>
                 {isLoading && <span className="inline-block animate-spin text-sky-400 text-base leading-none">↻</span>}
               </button>
+              {onOpenTradePhoto && (
+                <button onClick={onOpenTradePhoto} className="text-gray-500 hover:text-sky-400 transition-colors" title="주문내역 사진으로 매매 넣기 — 증권사 주문(체결)내역 사진을 올리면 그날 수량·투자금액을 바꾸고 계좌 표까지 맞춥니다"><Camera size={14} /></button>
+              )}
               <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={14} /></button>
               <CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="통계·히스토리" />
             </div>

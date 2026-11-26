@@ -1,0 +1,324 @@
+// @ts-nocheck
+// 자산 평가액 추이 「📷 주문내역 사진으로 매매 넣기」(사용자 요청 2026-11-26) — 증권사 주문·체결내역 사진을 올리면 체결된 매매마다
+// 그날의 보유수량·투자금액을 바꾸고 그 뒤 기록과 계좌 표까지 맞춘다(자산검증 「매매 반영」과 같은 함수 — src/tradePhoto.ts → backdatedTrade).
+// 사진 고르기 → 기기에서 줄이기 → /api/holdings-photo(kind 'trades', 구글 Gemini) → 끝까지 받은 답({d:1})만 → 바로 넣기 + [되돌리기].
+// 키: 사진으로 보유 맞추기와 같다(관리자 = 사이트 키 · 다른 사용자 = 내 Gemini 키 — App의 keyApi가 내 Drive ai_settings.json에서 읽고 쓴다).
+// ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 patchAccount(앱 탭이 최신 계좌 위에서 다시 계산)로만.
+import React, { useEffect, useRef, useState } from 'react';
+import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen } from 'lucide-react';
+import { formatNumber, formatShortDate } from '../utils';
+import { getTodayKST } from '../hooks/useMarketCalendar';
+import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
+import { syncCandidates, holdErrorText, looksLikeGeminiKey, maskKey } from '../holdingsPhoto';
+import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, TRADE_STATUS_TEXT } from '../tradePhoto';
+import { shrinkPhotoToB64 } from '../photoShrink';
+import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
+
+const fmtQty = (n) => (Number(n) || 0).toLocaleString('ko-KR', { maximumFractionDigits: 4 });
+
+export default function TradePhotoSync({ open, onClose, account = null, isAdmin = false, viewingAs = false, keyApi = null, patchAccount }) {
+  const [run, setRun] = useState({ phase: 'idle' });
+  const [cashOn, setCashOn] = useState(false);
+  const [keyState, setKeyState] = useState({ loaded: false, key: '', canSave: false, error: '' });
+  const [keyInput, setKeyInput] = useState('');
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [keyMsg, setKeyMsg] = useState('');
+  const [showGuide, setShowGuide] = useState(false);
+  const [pickNote, setPickNote] = useState('');
+  const runId = useRef(0);
+  const abortRef = useRef(null);
+  const accountRef = useRef(account);
+  accountRef.current = account;
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    if (!keyApi || isAdmin || viewingAs) { setKeyState({ loaded: true, key: '', canSave: false, error: '' }); return; }
+    keyApi.load().then((r) => { if (alive) setKeyState({ loaded: true, key: r?.key || '', canSave: !!r?.canSave, error: r?.error || '' }); })
+      .catch((e) => { if (alive) setKeyState({ loaded: true, key: '', canSave: false, error: String(e?.message || e) }); });
+    return () => { alive = false; };
+  }, [open, keyApi, isAdmin, viewingAs]);
+
+  useEffect(() => () => { runId.current += 1; if (abortRef.current) { try { abortRef.current.abort(); } catch { /* 끝남 */ } } }, []);
+
+  if (!open) return null;
+
+  const accountName = account?.name || '';
+  const accountType = account?.accountType || 'portfolio';
+  const isUsd = accountType === 'overseas';
+  const money = (n) => (isUsd
+    ? `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `${formatNumber(Math.round(Number(n) || 0))}원`);
+
+  const close = () => {
+    runId.current += 1;
+    if (abortRef.current) { try { abortRef.current.abort(); } catch { /* 끝남 */ } abortRef.current = null; }
+    setRun({ phase: 'idle' });
+    setPickNote('');
+    setShowGuide(false);
+    onClose && onClose();
+  };
+
+  const needKey = !isAdmin && !viewingAs && !keyState.key;
+  const busy = run.phase === 'shrink' || run.phase === 'read';
+
+  const saveKey = async (value) => {
+    if (!keyApi) return;
+    const k = String(value || '').trim();
+    if (k && !looksLikeGeminiKey(k)) { setKeyMsg('키 모양이 아닙니다 — AI 스튜디오에서 [복사]한 글자를 그대로 붙여넣어 주세요'); return; }
+    setKeyBusy(true); setKeyMsg('');
+    try {
+      const r = await keyApi.save(k);
+      if (r?.ok) { setKeyState(s => ({ ...s, key: k })); setKeyInput(''); setKeyMsg('저장했습니다'); }
+      else setKeyMsg(r?.error || '저장하지 못했습니다');
+    } catch (e) { setKeyMsg(`저장하지 못했습니다 (${e?.message || e})`); }
+    setKeyBusy(false);
+  };
+
+  const pickPhotos = (e) => {
+    const list = Array.from(e.target.files || []);
+    e.target.value = '';
+    const { add, notImage, over } = mergePastePhotos([], list);
+    setPickNote([
+      notImage > 0 ? `사진이 아닌 파일 ${notImage}개는 뺐습니다` : '',
+      over > 0 ? `한 번에 ${PASTE_PHOTO_MAX}장까지라 ${over}장은 뺐습니다` : '',
+    ].filter(Boolean).join(' · '));
+    if (add.length === 0) return;
+    readAndApply(add);
+  };
+
+  // ⚠️ 답을 끝까지 받은({d:1}) 때만 넣는다 — 끊긴 글로 넣으면 뒤쪽 매매가 빠진 채 계좌 표가 바뀐다.
+  const readAndApply = async (files) => {
+    const id = ++runId.current;
+    const live = () => runId.current === id;
+    if (abortRef.current) { try { abortRef.current.abort(); } catch { /* 끝남 */ } }
+    const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    abortRef.current = ac;
+    const n = files.length;
+    const cash = cashOn;
+    setRun({ phase: 'shrink', n });
+    let images = [];
+    try {
+      const budget = photoBudget(n);
+      for (const f of files) {
+        images.push({ mime: 'image/jpeg', data: await shrinkPhotoToB64(f, budget) });
+        if (!live()) return;
+      }
+    } catch (err) {
+      if (live()) setRun({ phase: 'error', n, code: err && err.message === 'big' ? 'big' : 'decode' });
+      return;
+    }
+    if (!live()) return;
+    setRun({ phase: 'read', n, got: 0 });
+    let st = photoReadInit();
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (keyState.key) headers['X-Gemini-Key'] = keyState.key;
+      const res = await fetch('/api/holdings-photo', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ kind: 'trades', account: accountName, cands: syncCandidates(accountRef.current?.portfolio || []), images }),
+        signal: ac ? ac.signal : undefined,
+      });
+      images = [];
+      if (!res.ok) {
+        let msg = '';
+        try { msg = String((await res.json()).error || ''); } catch { /* 글 아님 */ }
+        const code = res.status === 401 || res.status === 403 ? 'auth' : 'gemini';
+        if (live()) setRun({ phase: 'error', n, code, msg: msg || `HTTP ${res.status}` });
+        return;
+      }
+      if (res.body && res.body.getReader) {
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          st = photoReadStep(st, dec.decode(value, { stream: true }));
+          if (!live()) { try { reader.cancel(); } catch { /* 무시 */ } return; }
+          const got = st.text.length;
+          setRun(r => (r.phase === 'read' ? { ...r, got } : r));
+        }
+        st = photoReadStep(st, dec.decode(), true);
+      } else {
+        st = photoReadStep(st, await res.text(), true);
+      }
+    } catch (err) {
+      if (!live() || (err && err.name === 'AbortError')) return;
+      setRun({ phase: 'error', n, code: 'net' });
+      return;
+    }
+    if (!live()) return;
+    if (st.error || !st.done) {
+      setRun({ phase: 'error', n, code: st.error || 'cut', msg: st.msg, text: st.text });
+      return;
+    }
+    const today = getTodayKST();
+    const parsed = parseTradeText(st.text.trim(), today);
+    const groups = groupTrades(parsed.rows);
+    const acct = accountRef.current;
+    const out = acct ? runTradePhoto(acct, groups, { accountType: acct.accountType, cashOn: cash, today }) : null;
+    let undo = null;
+    if (out && out.applied > 0 && patchAccount) {
+      undo = tradePhotoUndo(acct);
+      patchAccount(p => runTradePhoto(p, groups, { accountType: p.accountType, cashOn: cash, today }).next);
+    }
+    setRun({ phase: 'done', n, parsed, out, undo, model: st.model });
+  };
+
+  const undoApply = () => {
+    const u = run.undo;
+    if (!u || !patchAccount) return;
+    patchAccount(p => undoTradePhoto(p, u));
+    setRun(r => ({ ...r, phase: 'undone', undo: null }));
+  };
+
+  const out = run.out;
+  const results = out ? out.results : [];
+  const skippedN = results.filter(r => r.status !== 'ok').length;
+
+  return (
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 px-3" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}>
+      <div className="relative w-full max-w-[680px] max-h-[92vh] flex flex-col overflow-hidden rounded-2xl border border-sky-700/50 bg-[#0f1623] shadow-2xl">
+        {showGuide ? (
+          <AiApiGuide inline onClose={() => setShowGuide(false)} />
+        ) : (<>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Camera size={16} className="text-sky-300 shrink-0" />
+            <span className="text-gray-100 font-semibold text-sm truncate">주문내역 사진으로 매매 넣기{accountName ? ` — ${accountName}` : ''}</span>
+          </div>
+          <button onClick={close} title="닫기" className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition"><X size={16} /></button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 text-[12.5px] text-gray-300 leading-relaxed">
+          <div className="space-y-1">
+            <p>증권사 앱의 <b className="text-gray-100">주문내역(체결내역) 화면</b>을 캡처해 올리면, 체결된 매매마다 <b className="text-blue-200">그날의 보유수량·투자금액</b>을 바꾸고 그 뒤 날짜와 <b className="text-blue-200">계좌 표</b>까지 맞춥니다.</p>
+            <p className="text-gray-400">매수 = 투자금액 + 체결수량 × 평균체결가 · 매도 = 평균단가 그대로 판 수량만큼 원가를 뺍니다. 같은 날 여러 번 체결한 것은 합칩니다. 이미 넣은 매매는 건너뜁니다.</p>
+          </div>
+
+          <label className="flex items-start gap-2 rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 cursor-pointer">
+            <input type="checkbox" className="mt-1" checked={cashOn} disabled={busy} onChange={e => setCashOn(e.target.checked)} />
+            <span>
+              <span className="text-gray-200">매매 대금을 예수금에도 반영 (매수 −, 매도 +)</span>
+              <span className="block text-[11px] text-gray-500">예수금을 증권사 잔고로 따로 맞춰 두셨다면 체크하지 마세요.</span>
+            </span>
+          </label>
+
+          {isAdmin || viewingAs ? (
+            <p className="text-[11.5px] text-emerald-300/90">{viewingAs ? '관리자 접속 중 — 사이트 키로 읽습니다.' : '관리자 — 사이트 키로 읽습니다.'}</p>
+          ) : (
+            <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 space-y-1.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="flex items-center gap-1.5 text-gray-200 font-semibold"><Lock size={13} className="text-amber-300" />내 Gemini API 키</span>
+                <button onClick={() => setShowGuide(true)} className="flex items-center gap-1 text-[11.5px] text-amber-200 hover:text-amber-100 underline-offset-2 hover:underline"><BookOpen size={12} />키 받는 법(그림)</button>
+              </div>
+              {!keyState.loaded ? (
+                <p className="text-gray-500">키를 확인하는 중…</p>
+              ) : keyState.key ? (
+                <p className="text-emerald-300">✓ 저장됨 <span className="font-mono text-gray-300">{maskKey(keyState.key)}</span> <span className="text-gray-500">(바꾸기는 계좌 표 「사진으로 보유 맞추기」 창에서)</span></p>
+              ) : (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <input type="password" autoComplete="off" spellCheck={false} value={keyInput} onChange={e => setKeyInput(e.target.value)} placeholder="AIza… 로 시작하는 키 붙여넣기"
+                      className="flex-1 min-w-0 bg-[#0b1120] border border-gray-600 focus:border-sky-500 rounded-md px-2.5 py-1.5 text-[12.5px] text-gray-100 font-mono outline-none" />
+                    <button disabled={keyBusy || !keyState.canSave || !keyInput.trim()} onClick={() => saveKey(keyInput)} className="px-3 py-1.5 rounded-md bg-sky-700 hover:bg-sky-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px] shrink-0">저장</button>
+                  </div>
+                  <p className="text-[11px] text-gray-500">
+                    <a href={AI_KEY_PAGE} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-sky-300 hover:underline">aistudio.google.com/apikey <ExternalLink size={10} /></a>
+                    {' '}에서 무료로 만든 키를 넣으면 내 무료 한도로 씁니다. 키는 내 구글 Drive(Index_Data 폴더)에만 저장됩니다.
+                  </p>
+                  {!keyState.canSave && <p className="text-[11px] text-amber-300/90">{keyState.error || 'Drive에 연결된 뒤 저장할 수 있습니다'}</p>}
+                </div>
+              )}
+              {keyMsg && <p className="text-[11.5px] text-sky-200">{keyMsg}</p>}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || needKey ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-700 hover:bg-sky-600 text-white cursor-pointer'}`}
+              title={needKey ? '먼저 내 Gemini API 키를 넣어 주세요' : '주문내역 사진을 고르면 바로 넣습니다'}>
+              <Camera size={14} />{busy ? '읽는 중…' : '주문내역 사진 고르기'}
+              <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy || needKey} onChange={pickPhotos} className="sr-only" />
+            </label>
+            <span className="text-[11px] text-gray-500">한 번에 {PASTE_PHOTO_MAX}장까지 · 사진은 저장하지 않습니다</span>
+          </div>
+          {pickNote && <p className="text-[11.5px] text-amber-300/90">{pickNote}</p>}
+
+          {run.phase === 'shrink' && <p className="text-sky-200">사진 {run.n}장을 줄이는 중…</p>}
+          {run.phase === 'read' && <p className="text-sky-200 animate-pulse">AI가 사진 {run.n}장을 읽는 중…{run.got > 0 ? ` (${run.got}자 받음)` : ''}</p>}
+          {run.phase === 'error' && (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 space-y-1">
+              <p className="text-red-200">{holdErrorText(run.code)}</p>
+              {run.msg && <p className="text-[11px] text-red-300/70 break-all">{run.msg}</p>}
+              {(run.code === 'needkey' || run.code === 'badkey' || run.code === 'credit' || run.code === 'quota0') && !isAdmin && <button onClick={() => setShowGuide(true)} className="text-[11.5px] text-amber-200 underline">키 받는 법 보기</button>}
+            </div>
+          )}
+
+          {(run.phase === 'done' || run.phase === 'undone') && out && (
+            <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 space-y-2">
+              {results.length === 0 ? (
+                <p className="text-amber-200">사진에서 체결된 매매를 찾지 못했습니다 — 주문내역(체결내역) 화면이 보이게 다시 찍어 주세요.</p>
+              ) : out.applied > 0 ? (
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className={run.phase === 'undone' ? 'text-gray-400' : 'text-emerald-300 font-semibold'}>
+                    {run.phase === 'undone' ? '되돌렸습니다 — 넣기 전으로 돌아갔습니다.' : `넣었습니다 — 매매 ${out.applied}건${skippedN ? ` · 건너뜀 ${skippedN}건` : ''}`}
+                  </p>
+                  {run.phase === 'done' && run.undo && (
+                    <button onClick={undoApply} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-100 text-[12px] font-bold"><RotateCcw size={12} />되돌리기</button>
+                  )}
+                </div>
+              ) : (
+                <p className="text-gray-300">넣을 매매가 없습니다 — 아래 까닭을 확인해 주세요.</p>
+              )}
+              {results.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px] min-w-[440px]">
+                    <thead><tr className="text-gray-500 border-b border-gray-700/60">
+                      <th className="text-left py-1 pr-2 font-normal">날짜</th><th className="text-left py-1 px-2 font-normal">종목</th>
+                      <th className="text-right py-1 px-2 font-normal">매매</th><th className="text-right py-1 px-2 font-normal">체결가</th>
+                      <th className="text-right py-1 px-2 font-normal">그날 보유</th><th className="text-right py-1 pl-2 font-normal">처리</th>
+                    </tr></thead>
+                    <tbody>
+                      {results.map((r, i) => (
+                        <tr key={`${r.date}-${r.k}-${r.side}-${i}`} className="border-b border-gray-800/60 align-top" title={r.fills > 1 ? `체결 ${r.fills}번을 합침` : undefined}>
+                          <td className="py-1 pr-2 text-gray-300 whitespace-nowrap">{r.date ? formatShortDate(r.date) : (r.rawDate || '-')}</td>
+                          <td className="py-1 px-2 text-gray-200 max-w-[96px] sm:max-w-[170px] truncate">{r.itemName || r.name || r.code}</td>
+                          <td className={`py-1 px-2 text-right whitespace-nowrap font-semibold ${r.side === 'buy' ? 'text-red-300' : 'text-blue-300'}`}>{r.side === 'buy' ? '매수' : '매도'} {fmtQty(r.qty)}주</td>
+                          <td className="py-1 px-2 text-right text-gray-300 whitespace-nowrap tabular-nums">{r.price > 0 ? money(r.price) : '-'}</td>
+                          <td className="py-1 px-2 text-right text-gray-300 whitespace-nowrap tabular-nums">{r.status === 'ok' ? `${fmtQty(r.before)} → ${fmtQty(r.after)}` : '-'}</td>
+                          <td className={`py-1 pl-2 text-right whitespace-nowrap font-semibold ${r.status === 'ok' ? 'text-emerald-300' : r.status === 'dup' || r.status === 'dayedit' ? 'text-gray-500' : 'text-amber-300'}`}>{TRADE_STATUS_TEXT[r.status] || r.status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {out.applied > 0 && out.live.length > 0 && (
+                <ul className="text-[11.5px] text-gray-300 space-y-0.5">
+                  {out.live.map(l => (
+                    <li key={l.k}>계좌 표 · <b className="text-gray-100">{l.name}</b>: 수량 {fmtQty(l.qtyBefore)} → <b className="text-gray-100">{fmtQty(l.qtyAfter)}</b>주 · 투자금액 {money(l.costBefore)} → <b className="text-gray-100">{money(l.costAfter)}</b></li>
+                  ))}
+                  {out.cash && <li>계좌 표 · 예수금: {money(out.cash.before)} → <b className="text-gray-100">{money(out.cash.after)}</b></li>}
+                </ul>
+              )}
+              {out.moved.length > 0 && (
+                <p className="text-[11.5px] text-emerald-300/90">{out.moved.join(', ')} — 계좌 표가 이미 매매를 모두 반영한 수량이라, 그 변경을 매매 날짜로 옮겼습니다(표 수량은 그대로, 투자금액만 맞춤).</p>
+              )}
+              {results.some(r => r.status === 'noitem' || r.status === 'notyet') && (
+                <p className="text-[11.5px] text-gray-400">이 계좌에 없던 종목의 매매는 넣지 않았습니다 — 자산 평가액 추이에서 그 날짜를 눌러 「종목 추가」로 먼저 넣은 뒤 사진을 다시 올려 주세요.</p>
+              )}
+              {run.parsed && run.parsed.skipped.length > 0 && (
+                <details className="text-[11.5px] text-gray-500">
+                  <summary className="cursor-pointer">읽지 못한 줄 {run.parsed.skipped.length}개</summary>
+                  <ul className="mt-1 space-y-0.5">{run.parsed.skipped.map((s, i) => <li key={i} className="break-all">· {s.line} — <span className="text-amber-300/80">{s.reason}</span></li>)}</ul>
+                </details>
+              )}
+              {run.model && <p className="text-[10.5px] text-gray-600">읽은 AI: {run.model}</p>}
+            </div>
+          )}
+        </div>
+        </>)}
+      </div>
+    </div>
+  );
+}

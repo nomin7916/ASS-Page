@@ -1,5 +1,6 @@
 // Vercel Edge Function — 계좌 표 「📷 사진으로 보유 맞추기」(사용자 요청 2026-11-26)
-// POST { account, cands:[{code,name}], images:[{mime,data(base64)}] } (+ 헤더 X-Gemini-Key = 내 키, 선택)
+// POST { kind?, account, cands:[{code,name}], images:[{mime,data(base64)}] } (+ 헤더 X-Gemini-Key = 내 키, 선택)
+//   kind 'trades' = 주문·체결내역 사진(자산 평가액 추이 「주문내역 사진으로 매매 넣기」 — src/tradePhoto.ts parseTradeText 형식으로 답한다).
 //   → 구글 Gemini가 잔고 사진을 읽어 parseHoldingsText(src/holdingsPhoto.ts) 형식의 줄로 답한다.
 // 응답 = 줄마다 JSON 하나(NDJSON, /api/tax-photo 와 같은 모양): {"s":1} · {"k":1} · {"t":"글"} · {"m":"모델"} ·
 //        {"e":"needkey"|"badkey"|"credit"|"nokey"|"rate"|"block"|"gemini","msg"} · {"d":1}. 요청 검사에서 걸리면 JSON {error} + 400/413.
@@ -36,7 +37,7 @@ export default async function handler(request: Request): Promise<Response> {
   const userKey = userGeminiKey(request.headers.get(USER_KEY_HEADER));
   const keys = pickHoldKeys(isAdmin, userKey, geminiKeys(process.env as Record<string, string | undefined>));
   const labels = gKeyLabels(keys, userKey);
-  const gBody = holdGeminiBody(req);
+  const gBody = holdGeminiBody(req, new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10));
 
   const enc = new TextEncoder();
   const stream = new ReadableStream({
