@@ -58,7 +58,7 @@ export function parseTradeText(text: string, today: string): TradeParsed {
   const skipped: TradeSkip[] = [];
   let none = false;
   for (const raw of String(text ?? '').split(/\r?\n/)) {
-    const line = raw.replace(/^[\s*>`-]+/, '').trim();
+    const line = raw.replace(/^[\s*>`|-]+/, '').trim();
     if (!line) continue;
     if (/^없음\.?$/.test(line)) { none = true; continue; }
     if (!/^매매\s*\|/.test(line)) continue;
@@ -74,6 +74,32 @@ export function parseTradeText(text: string, today: string): TradeParsed {
     rows.push({ date: normTradeDate(rawDate, today), rawDate, code, name, side, qty, price: Math.max(0, num(priceRaw)), line });
   }
   return { rows, skipped, none: none && rows.length === 0 };
+}
+
+// 구독 AI(Gemini 앱·Claude 앱)에 사진과 함께 줄 부탁 글 — API 키 없이 읽는 길(사용자 요청 2026-11-26: Gemini Pro·Claude 구독).
+// ⚠️ 답 줄 형식은 서버 부탁 문장(api/_holdingsPhoto.ts buildTradePrompt)과 같아야 한다 — verify:trade-photo #P10이 대조한다.
+export const TRADE_LINE_FORMAT = '매매 | 날짜 | 코드 | 종목명 | 구분 | 체결수량 | 체결단가';
+export function tradeAskPrompt({ cands, today }: { cands: { code: string; name: string }[]; today: string }): string {
+  const list = (cands || []).length > 0 ? cands.map(c => `${c.code || '-'} ${c.name || ''}`.trim()).join('\n') : '(목록 없음)';
+  return [
+    `첨부한 증권사 앱의 주문내역·체결내역 사진을 읽어, 체결된 매매마다 아래 형식의 줄 하나로만 답해 주세요. 설명·머리말·표·코드블록 없이 결과 줄만 씁니다.`,
+    TRADE_LINE_FORMAT,
+    ``,
+    `- 날짜는 YYYY-MM-DD로 씁니다. 사진에 연도가 없으면 오늘(${today}) 이전의 가장 가까운 날로 정합니다.`,
+    `- 줄마다 종목명이 없고 화면 위(제목)에만 있으면 그 이름을 모든 줄에 씁니다.`,
+    `- 아래 [종목 목록]에 같은 종목이 있으면 코드 자리에 그 코드를, 없으면 '-'를 씁니다. 코드를 지어내지 마세요.`,
+    `- 구분은 '매수' 또는 '매도'만 씁니다.`,
+    `- 체결수량은 '체결수량'(실제 체결)입니다. '주문수량'이 아닙니다. 미체결·취소·거부 줄은 빼 주세요.`,
+    `- 체결단가는 '평균체결가'·'체결단가'입니다. '주문단가'가 아닙니다.`,
+    `- 같은 날 여러 번 체결했으면 합치지 말고 줄마다 씁니다.`,
+    `- 계좌번호·이름 같은 개인정보는 쓰지 않습니다.`,
+    ``,
+    `[종목 목록]`,
+    list,
+    ``,
+    `예)`,
+    `매매 | ${today.slice(0, 4) || '2026'}-11-24 | 0091P0 | TIGER 머니마켓액티브 | 매도 | 50 | 103,920`,
+  ].join('\n');
 }
 
 // 같은 날·같은 종목·같은 구분 = 한 건(수량 합 · 단가 = 체결가가 있는 줄의 수량 가중평균).

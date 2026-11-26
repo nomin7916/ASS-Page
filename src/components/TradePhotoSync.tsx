@@ -5,12 +5,13 @@
 // 키: 사진으로 보유 맞추기와 같다(관리자 = 사이트 키 · 다른 사용자 = 내 Gemini 키 — App의 keyApi가 내 Drive ai_settings.json에서 읽고 쓴다).
 // ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 patchAccount(앱 탭이 최신 계좌 위에서 다시 계산)로만.
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen } from 'lucide-react';
+import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, Copy, ClipboardPaste, Bot } from 'lucide-react';
 import { formatNumber, formatShortDate } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
 import { syncCandidates, holdErrorText, looksLikeGeminiKey, maskKey } from '../holdingsPhoto';
-import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, TRADE_STATUS_TEXT } from '../tradePhoto';
+import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, tradeAskPrompt, TRADE_STATUS_TEXT } from '../tradePhoto';
+import { aiHandById } from '../aiProviders';
 import { shrinkPhotoToB64 } from '../photoShrink';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
 
@@ -25,6 +26,11 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
   const [keyMsg, setKeyMsg] = useState('');
   const [showGuide, setShowGuide] = useState(false);
   const [pickNote, setPickNote] = useState('');
+  const [keyEdit, setKeyEdit] = useState(false);
+  // 구독 AI로 읽기(API 키 없이) — 사진을 Gemini·Claude 앱에 직접 올리고 답 줄을 붙여 넣는다.
+  const [showSub, setShowSub] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [subNote, setSubNote] = useState('');
   const runId = useRef(0);
   const abortRef = useRef(null);
   const accountRef = useRef(account);
@@ -33,11 +39,11 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    if (!keyApi || isAdmin || viewingAs) { setKeyState({ loaded: true, key: '', canSave: false, error: '' }); return; }
+    if (!keyApi || viewingAs) { setKeyState({ loaded: true, key: '', canSave: false, error: '' }); return; }
     keyApi.load().then((r) => { if (alive) setKeyState({ loaded: true, key: r?.key || '', canSave: !!r?.canSave, error: r?.error || '' }); })
       .catch((e) => { if (alive) setKeyState({ loaded: true, key: '', canSave: false, error: String(e?.message || e) }); });
     return () => { alive = false; };
-  }, [open, keyApi, isAdmin, viewingAs]);
+  }, [open, keyApi, viewingAs]);
 
   useEffect(() => () => { runId.current += 1; if (abortRef.current) { try { abortRef.current.abort(); } catch { /* 끝남 */ } } }, []);
 
@@ -69,7 +75,7 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
     setKeyBusy(true); setKeyMsg('');
     try {
       const r = await keyApi.save(k);
-      if (r?.ok) { setKeyState(s => ({ ...s, key: k })); setKeyInput(''); setKeyMsg('저장했습니다'); }
+      if (r?.ok) { setKeyState(s => ({ ...s, key: k })); setKeyInput(''); setKeyEdit(false); setKeyMsg(k ? '저장했습니다' : '키를 지웠습니다'); }
       else setKeyMsg(r?.error || '저장하지 못했습니다');
     } catch (e) { setKeyMsg(`저장하지 못했습니다 (${e?.message || e})`); }
     setKeyBusy(false);
@@ -153,8 +159,13 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
       setRun({ phase: 'error', n, code: st.error || 'cut', msg: st.msg, text: st.text });
       return;
     }
+    applyText(st.text, n, st.model, cash);
+  };
+
+  // 읽은 글(사이트 AI의 답 · 구독 AI 답 붙여넣기) → 해석 → 넣기. 두 길이 같은 함수를 지난다.
+  const applyText = (text, n, model, cash) => {
     const today = getTodayKST();
-    const parsed = parseTradeText(st.text.trim(), today);
+    const parsed = parseTradeText(String(text || '').trim(), today);
     const groups = groupTrades(parsed.rows);
     const acct = accountRef.current;
     const out = acct ? runTradePhoto(acct, groups, { accountType: acct.accountType, cashOn: cash, today }) : null;
@@ -163,7 +174,26 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
       undo = tradePhotoUndo(acct);
       patchAccount(p => runTradePhoto(p, groups, { accountType: p.accountType, cashOn: cash, today }).next);
     }
-    setRun({ phase: 'done', n, parsed, out, undo, model: st.model });
+    setRun({ phase: 'done', n, parsed, out, undo, model });
+  };
+
+  const subPrompt = () => tradeAskPrompt({ cands: syncCandidates(accountRef.current?.portfolio || []), today: getTodayKST() });
+  const copySubPrompt = async () => {
+    try { await navigator.clipboard.writeText(subPrompt()); setSubNote('copied'); }
+    catch { setSubNote('manual'); }
+  };
+  const pasteFromClipboard = async () => {
+    try {
+      const t = navigator.clipboard && navigator.clipboard.readText ? await navigator.clipboard.readText() : null;
+      if (t == null) throw new Error('unsupported');
+      setPasteText(String(t));
+      setSubNote(String(t).trim() ? '' : 'empty');
+    } catch { setSubNote('nopaste'); }
+  };
+  const applyPasted = () => {
+    if (busy) return;
+    runId.current += 1;
+    applyText(pasteText, 0, '내 구독 AI(붙여넣기)', cashOn);
   };
 
   const undoApply = () => {
@@ -204,24 +234,30 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
             </span>
           </label>
 
-          {isAdmin || viewingAs ? (
-            <p className="text-[11.5px] text-emerald-300/90">{viewingAs ? '관리자 접속 중 — 사이트 키로 읽습니다.' : '관리자 — 사이트 키로 읽습니다.'}</p>
+          {viewingAs ? (
+            <p className="text-[11.5px] text-emerald-300/90">관리자 접속 중 — 사이트 키로 읽습니다(사용자의 키는 읽거나 저장하지 않습니다).</p>
           ) : (
             <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 space-y-1.5">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="flex items-center gap-1.5 text-gray-200 font-semibold"><Lock size={13} className="text-amber-300" />내 Gemini API 키</span>
                 <button onClick={() => setShowGuide(true)} className="flex items-center gap-1 text-[11.5px] text-amber-200 hover:text-amber-100 underline-offset-2 hover:underline"><BookOpen size={12} />키 받는 법(그림)</button>
               </div>
+              {isAdmin && <p className="text-[11.5px] text-emerald-300/90">관리자 — 내 키가 있으면 먼저 쓰고, 없으면 사이트 키로 읽습니다.</p>}
               {!keyState.loaded ? (
                 <p className="text-gray-500">키를 확인하는 중…</p>
-              ) : keyState.key ? (
-                <p className="text-emerald-300">✓ 저장됨 <span className="font-mono text-gray-300">{maskKey(keyState.key)}</span> <span className="text-gray-500">(바꾸기는 계좌 표 「사진으로 보유 맞추기」 창에서)</span></p>
+              ) : keyState.key && !keyEdit ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-emerald-300">✓ 저장됨 <span className="font-mono text-gray-300">{maskKey(keyState.key)}</span></span>
+                  {keyState.canSave && <button onClick={() => { setKeyEdit(true); setKeyMsg(''); }} className="px-2 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-800 text-[11.5px]">바꾸기</button>}
+                  {keyState.canSave && <button disabled={keyBusy} onClick={() => saveKey('')} className="px-2 py-0.5 rounded border border-gray-600 text-gray-400 hover:text-red-300 hover:bg-gray-800 text-[11.5px]">키 지우기</button>}
+                </div>
               ) : (
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <input type="password" autoComplete="off" spellCheck={false} value={keyInput} onChange={e => setKeyInput(e.target.value)} placeholder="AIza… 로 시작하는 키 붙여넣기"
                       className="flex-1 min-w-0 bg-[#0b1120] border border-gray-600 focus:border-sky-500 rounded-md px-2.5 py-1.5 text-[12.5px] text-gray-100 font-mono outline-none" />
                     <button disabled={keyBusy || !keyState.canSave || !keyInput.trim()} onClick={() => saveKey(keyInput)} className="px-3 py-1.5 rounded-md bg-sky-700 hover:bg-sky-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px] shrink-0">저장</button>
+                    {keyEdit && <button onClick={() => { setKeyEdit(false); setKeyInput(''); }} className="px-2 py-1.5 rounded-md border border-gray-600 text-gray-400 text-[12px] shrink-0">취소</button>}
                   </div>
                   <p className="text-[11px] text-gray-500">
                     <a href={AI_KEY_PAGE} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-sky-300 hover:underline">aistudio.google.com/apikey <ExternalLink size={10} /></a>
@@ -244,13 +280,55 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
           </div>
           {pickNote && <p className="text-[11.5px] text-amber-300/90">{pickNote}</p>}
 
+          <div className="rounded-lg border border-gray-700/70 bg-gray-900/40">
+            <button onClick={() => setShowSub(v => !v)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left">
+              <span className="flex items-center gap-1.5 text-gray-200 font-semibold"><Bot size={14} className="text-violet-300" />구독 중인 AI로 읽기 <span className="font-normal text-gray-500">— API 키 없이 · Gemini·Claude 앱</span></span>
+              <span className="text-gray-500 text-[11px]">{showSub ? '▲' : '▼'}</span>
+            </button>
+            {showSub && (
+              <div className="px-3 pb-3 space-y-2 border-t border-gray-800">
+                <ol className="list-decimal pl-5 space-y-1.5 pt-2 text-[12px] text-gray-300">
+                  <li>
+                    <button onClick={copySubPrompt} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-700/70 hover:bg-violet-600/70 text-white font-bold text-[11.5px]"><Copy size={11} />부탁 글 복사</button>
+                    {' '}를 누릅니다.{subNote === 'copied' && <span className="text-emerald-300"> ✓ 복사했습니다</span>}
+                  </li>
+                  <li>
+                    {['gemini', 'claude'].map(id => { const h = aiHandById(id); return h ? (
+                      <a key={id} href={h.open} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 mr-1.5 px-2 py-0.5 rounded-md border border-gray-600 text-gray-200 hover:bg-gray-800 text-[11.5px]">{h.label} 열기 <ExternalLink size={10} /></a>
+                    ) : null; })}
+                    → 주문내역 <b className="text-gray-100">사진을 올리고</b>, 복사한 글을 붙여 넣어 보냅니다. <span className="text-gray-500">휴대폰은 사진첩에서 그 사진을 Gemini·Claude 앱으로 공유해도 됩니다.</span>
+                  </li>
+                  <li>AI 답의 <b className="text-gray-100">「매매 | …」 줄</b>을 복사해 아래 칸에 붙여 넣고 「넣기」를 누릅니다.</li>
+                </ol>
+                {subNote === 'manual' && (
+                  <textarea readOnly value={subPrompt()} rows={5} onFocus={e => e.target.select()} className="w-full bg-[#0b1120] border border-gray-700 rounded-md px-2 py-1.5 text-[11px] text-gray-300 font-mono" />
+                )}
+                {subNote === 'manual' && <p className="text-[11px] text-amber-300/90">복사가 막혀 있습니다 — 위 글을 길게 눌러(또는 Ctrl+C) 복사해 주세요.</p>}
+                <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={4} placeholder={'매매 | 2026-11-17 | 0177R0 | 종목명 | 매수 | 30 | 7,090\n…'}
+                  className="w-full bg-[#0b1120] border border-gray-600 focus:border-violet-500 rounded-md px-2 py-1.5 text-[12px] text-gray-100 font-mono outline-none" />
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={pasteFromClipboard} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-gray-600 text-gray-300 hover:bg-gray-800 text-[12px]"><ClipboardPaste size={12} />클립보드에서 붙여넣기</button>
+                  <button disabled={busy || !pasteText.trim()} onClick={applyPasted} className="px-3 py-1 rounded-md bg-violet-700 hover:bg-violet-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px]">넣기</button>
+                  {subNote === 'empty' && <span className="text-[11px] text-amber-300/90">클립보드가 비어 있습니다</span>}
+                  {subNote === 'nopaste' && <span className="text-[11px] text-amber-300/90">칸을 길게 눌러(또는 Ctrl+V) 붙여 넣어 주세요</span>}
+                </div>
+                <p className="text-[11px] text-gray-500">사이트는 구독 계정에 접속하지 않습니다 — 사진은 직접 쓰시는 AI 앱에만 올라가고, 여기엔 답 글만 붙여 넣습니다.</p>
+              </div>
+            )}
+          </div>
+
           {run.phase === 'shrink' && <p className="text-sky-200">사진 {run.n}장을 줄이는 중…</p>}
           {run.phase === 'read' && <p className="text-sky-200 animate-pulse">AI가 사진 {run.n}장을 읽는 중…{run.got > 0 ? ` (${run.got}자 받음)` : ''}</p>}
           {run.phase === 'error' && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 space-y-1">
               <p className="text-red-200">{holdErrorText(run.code)}</p>
               {run.msg && <p className="text-[11px] text-red-300/70 break-all">{run.msg}</p>}
-              {(run.code === 'needkey' || run.code === 'badkey' || run.code === 'credit' || run.code === 'quota0') && !isAdmin && <button onClick={() => setShowGuide(true)} className="text-[11.5px] text-amber-200 underline">키 받는 법 보기</button>}
+              {['needkey', 'nokey', 'badkey', 'credit', 'quota0', 'rate', 'rate1m'].includes(run.code) && !viewingAs && (
+                <div className="flex items-center gap-3 flex-wrap pt-0.5">
+                  <button onClick={() => setShowGuide(true)} className="text-[11.5px] text-amber-200 underline">무료 Gemini 키 받는 법 보기</button>
+                  <button onClick={() => setShowSub(true)} className="text-[11.5px] text-sky-200 underline">키 없이 구독 AI(Gemini·Claude 앱)로 읽기</button>
+                </div>
+              )}
             </div>
           )}
 

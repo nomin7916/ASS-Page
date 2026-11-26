@@ -80,7 +80,7 @@ src/
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
     ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기
-    ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — 같은 키 규칙·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기
+    ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — 같은 키 규칙(관리자도 내 키 칸 — 사이트 키가 없어도 됨)·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기 · 「구독 중인 AI로 읽기」(API 키 없이: 부탁 글 `tradeAskPrompt` 복사 → Gemini·Claude 앱에 사진 → 답 줄 붙여넣기 → 같은 applyText)
     ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json) · 다른 AI(내 키 → /api/ai-chat)·「내 구독으로 묻기」(AI 사이트 열기 + 답 붙여넣기)
     ├── AiApiGuide.tsx            # AI API 연동 사용법(구글 Gemini 키 받기, 그림 public/ai-guide/*.svg) — 메모 달력 「AI 연동」·사진 맞추기 창이 함께 씀
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)

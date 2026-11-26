@@ -86,6 +86,15 @@ if (T && U && S) {
     const req = S.checkHoldReq({ kind: 'trades', account: 'AI', cands: [], images: [img] });
     const gb = JSON.parse(S.holdGeminiBody(req, TODAY));
     eq('#P8 kind trades → 주문내역 부탁 문장 · 없으면 잔고(hold)', [req.kind, gb.contents[0].parts[1].text === S.buildTradePrompt({ account: 'AI', cands: [], today: TODAY }), S.checkHoldReq({ images: [img] }).kind], ['trades', true, 'hold']);
+    // #P10 구독 AI(Gemini·Claude 앱)에 줄 부탁 글 — 답 줄 형식이 서버 부탁 문장과 같고, 예시 줄이 해석된다
+    const ask = T.tradeAskPrompt({ cands: [{ code: '0177R0', name: NAME }], today: TODAY });
+    const fmtLine = (t) => t.split('\n').find(l => l.startsWith('매매 |'));
+    eq('#P10 답 줄 형식 = 서버 부탁 문장 · 예시 줄 해석', [fmtLine(ask), fmtLine(pr) === T.TRADE_LINE_FORMAT, T.parseTradeText(ask.split('예)')[1], TODAY).rows.map(r => [r.date, r.side, r.qty])],
+      [T.TRADE_LINE_FORMAT, true, [['2026-11-24', 'sell', 50]]]);
+    ok('#P10 부탁 글 — 오늘 날짜 · 종목 목록 · 체결수량·평균체결가 · 개인정보 안 씀', ask.includes(TODAY) && ask.includes(`0177R0 ${NAME}`) && ask.includes("'주문수량'이 아닙니다") && ask.includes("'주문단가'가 아닙니다") && ask.includes('계좌번호'));
+    // #P11 채팅 AI가 표·코드블록·글머리로 감싸 답해도 읽는다
+    const chat = ['```', `| 매매 | 2026-11-24 | 0177R0 | ${NAME} | 매도 | 50 | 7,490 |`, `- 매매 | 2026-11-23 | 0177R0 | ${NAME} | 매수 | 5 | 6,960`, '```', '위와 같이 정리했습니다.'].join('\n');
+    eq('#P11 표(|…|)·글머리(-)·코드블록 안의 줄도 읽음, 설명 글은 무시', T.parseTradeText(chat, TODAY).rows.map(r => [r.date, r.side, r.qty, r.price]), [['2026-11-24', 'sell', 50, 7490], ['2026-11-23', 'buy', 5, 6960]]);
     eq('#P9 잘린 이름도 하나뿐이면 맞춤 · 겹치면 안 맞춤', [
       T.matchTradeIndex({ code: '', name: 'TIGER 반도체T' }, mkLive()), T.matchTradeIndex({ code: '', name: 'TIGER 반도체TOP10' }, mkLive()),
       T.matchTradeIndex({ code: '', name: '반도체' }, mkLive()), T.matchTradeIndex({ code: '0190G0', name: '?' }, mkLive()),
@@ -186,6 +195,12 @@ ok('#W7 적용은 앱 탭의 최신 계좌 위에서 다시 계산(patchAccount 
 ok('#W8 추이 머리줄 카메라 버튼(prop이 있을 때만)', /import \{[^}]*Camera[^}]*\} from 'lucide-react'/.test(hp) && /\{onOpenTradePhoto && \(/.test(hp) && /onClick=\{onOpenTradePhoto\}/.test(hp));
 ok('#W9 App이 창을 붙이고 버튼을 넘긴다(간편·마통 계좌 제외)', /import TradePhotoSync from '\.\/components\/TradePhotoSync'/.test(app) && /<TradePhotoSync[\s\S]{0,400}patchAccount=/.test(app) && /onOpenTradePhoto=\{\['simple', 'matong'\]\.includes\(activePortfolioAccountType\) \? undefined : \(\) => setTradePhotoPid\(activePortfolioId\)\}/.test(app));
 ok('#W10 카드 별도 창에는 버튼 없음(onOpenTradePhoto 미전달)', !/onOpenTradePhoto/.test(cw));
+ok('#W12 관리자도 내 키 칸이 보이고 내 키를 먼저 보낸다(사이트 키가 없을 때 막히지 않게) — 관리자 접속 중만 숨김',
+  /if \(!keyApi \|\| viewingAs\) \{/.test(win) && /\{viewingAs \? \(/.test(win) && /if \(keyState\.key\) headers\['X-Gemini-Key'\] = keyState\.key/.test(win));
+ok('#W13 구독 AI 길 = 부탁 글 복사(tradeAskPrompt) + Gemini·Claude 열기(aiHandById) + 붙여넣기 → 같은 applyText → runTradePhoto',
+  /import \{[^}]*tradeAskPrompt[^}]*\} from '\.\.\/tradePhoto'/.test(win) && /import \{ aiHandById \} from '\.\.\/aiProviders'/.test(win)
+  && /applyText\(pasteText,/.test(win) && /applyText\(st\.text,/.test(win) && /const applyText = [\s\S]{0,400}runTradePhoto\(acct, groups/.test(win));
+ok('#W14 키·한도 오류에서 무료 키 받는 법과 구독 AI 길을 함께 보여 준다(nokey 포함)', /\['needkey', 'nokey', 'badkey', 'credit', 'quota0', 'rate', 'rate1m'\]\.includes\(run\.code\)/.test(win) && /setShowSub\(true\)/.test(win));
 ok('#W11 package.json에 verify:trade-photo 등록', pkg.scripts['verify:trade-photo'] === 'node scripts/verify-trade-photo.mjs');
 
 console.log(`\n  총 ${pass + fail}건 — 통과 ${pass} / 실패 ${fail}`);
