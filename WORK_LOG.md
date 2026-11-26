@@ -22,6 +22,9 @@
 - 이어서(사용자: "어떻게든 뭐든 해봐" + 맥에서 AI 검색 「PC 자동」이 Gemini로 돌고 있는 화면): 「내 PC의 Claude로 읽기」 — PC 우편함에 사진(4장·각 850,000자)을 실어
   PC의 Claude(구독)가 직접 읽게 함(`/api/pc-ask` imgs · `/api/pc-job?op=img` · 연결 문구에 사진 받기 단계 · 이미 돌던 대화용 「규칙 추가」 글). 사진은 답·실패·취소 때 바로 지움.
   verify:pc-ask 68(연결 문구 속 사진 받기 curl을 실제로 돌려 파일 일치) · verify:trade-photo 50 · 저장소 밖 실제 빌드 통과 · 크로미움(가짜 우편함) 넣기·오류 0.
+- 이어서(사용자 확정: "이 작업은 관리자만 · 다른 사용자는 자신의 구독 AI와 연동 · 최대한 무료"): PC 읽기 칸·상태 조회 관리자만 + 서버도 사진 든 질문 관리자만(403 admin).
+  다른 사용자 화면은 「내 AI로 읽기」가 맨 위·펼침 — 무료 계정으로 사진을 올릴 수 있는 AI 7곳(Gemini·ChatGPT·Claude·Copilot·Grok·Le Chat·DeepSeek) · 휴대폰 공유 창 ·
+  내 무료 Gemini 키는 '선택'. verify:pc-ask 69 · verify:trade-photo 53.
 
 ## 2026-11-26 — AI 검색 「PC 자동」: 내 PC가 크롬으로 내 구독 AI에 묻고 답을 넣는다(모든 사용자 각자)
 

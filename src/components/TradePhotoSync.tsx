@@ -8,14 +8,22 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, Copy, ClipboardPaste, Bot, Monitor } from 'lucide-react';
 import { formatNumber, formatShortDate } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
-import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
+import { mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
 import { syncCandidates, holdErrorText, looksLikeGeminiKey, maskKey } from '../holdingsPhoto';
-import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, tradeAskPrompt, TRADE_STATUS_TEXT } from '../tradePhoto';
+import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, tradeAskPrompt, TRADE_STATUS_TEXT, PHOTO_AI_IDS } from '../tradePhoto';
 import { aiHandById } from '../aiProviders';
 import { pcOnline, pcSeenText, pcWaitText, pcAskErrorText, pcTooLate, pcModelLabel, pcPhotoAddendum, PC_POLL_FAST, PC_POLL_SLOW, PC_FAST_FOR, PC_PHOTO_N, PC_PHOTO_CHARS } from '../pcAsk';
 import { shrinkPhotoToB64 } from '../photoShrink';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
 
+const SHARE_NOTE = {
+  sent: '보냈습니다 — AI 답의 「매매 | …」 줄을 복사해 아래 칸에 붙여 넣어 주세요.',
+  bare: '사진만 보냈습니다 — 부탁 글은 복사해 두었으니 AI 앱 입력 칸에 붙여 넣어 보내 주세요.',
+  nosupport: '이 기기에서는 공유 창을 열 수 없습니다 — 위 AI를 열어 사진을 올려 주세요(부탁 글은 복사해 두었습니다).',
+  cancel: '보내기를 취소했습니다.',
+  fail: '공유 창을 열지 못했습니다 — 위 AI를 열어 사진을 올려 주세요.',
+};
+const canShareFiles = (() => { try { return typeof navigator !== 'undefined' && typeof navigator.share === 'function' && typeof navigator.canShare === 'function'; } catch { return false; } })();
 const fmtQty = (n) => (Number(n) || 0).toLocaleString('ko-KR', { maximumFractionDigits: 4 });
 
 export default function TradePhotoSync({ open, onClose, account = null, isAdmin = false, viewingAs = false, keyApi = null, patchAccount }) {
@@ -29,7 +37,9 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
   const [pickNote, setPickNote] = useState('');
   const [keyEdit, setKeyEdit] = useState(false);
   // 구독 AI로 읽기(API 키 없이) — 사진을 Gemini·Claude 앱에 직접 올리고 답 줄을 붙여 넣는다.
-  const [showSub, setShowSub] = useState(false);
+  const [showSub, setShowSub] = useState(!isAdmin);
+  const [sharePhotos, setSharePhotos] = useState([]);
+  const [shareNote, setShareNote] = useState('');
   const [pasteText, setPasteText] = useState('');
   const [subNote, setSubNote] = useState('');
   // 내 PC의 Claude로 읽기(키 없이) — AI 검색 「PC 자동」과 같은 우편함(/api/pc-ask). 사진은 PC의 Claude가 직접 읽는다.
@@ -56,14 +66,14 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
 
   // PC 연결 상태 — 관리자 접속(impersonation) 중엔 안 본다(우편함은 로그인한 본인 것).
   useEffect(() => {
-    if (!open || viewingAs) return;
+    if (!open || viewingAs || !isAdmin) return;
     let alive = true;
     fetch('/api/pc-ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'status' }) })
       .then(r => r.json().catch(() => ({})).then(j => ({ ok: r.ok, j })))
       .then(({ ok, j }) => { if (alive) setPcState({ loaded: true, linked: ok && !!j.linked, seen: Number(j.seen) || 0 }); })
       .catch(() => { if (alive) setPcState({ loaded: true, linked: false, seen: 0 }); });
     return () => { alive = false; };
-  }, [open, viewingAs]);
+  }, [open, viewingAs, isAdmin]);
 
   // PC에 맡긴 사진 — 답이 오면 같은 넣기(applyText)로. 창을 닫아 두면 다시 열 때 이어서 기다린다.
   useEffect(() => {
@@ -266,6 +276,29 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
     catch { setAddNote('manual'); }
   };
 
+  // 휴대폰 — 고른 사진 + 부탁 글을 기기의 공유 창으로 AI 앱에 보낸다.
+  // ⚠️ navigator.share 는 누른 바로 그 순간에만 열린다(아이폰 사파리) — await 보다 먼저 부른다(KrEtfTaxMatrix와 같은 규약).
+  const pickForShare = (e) => {
+    const list = Array.from(e.target.files || []);
+    e.target.value = '';
+    setSharePhotos(mergePastePhotos([], list).add);
+    setShareNote('');
+  };
+  const shareToAi = async () => {
+    const prompt = subPrompt();
+    const share = photoShareData(navigator, sharePhotos, prompt);
+    let sharing = null;
+    if (share) { try { sharing = navigator.share(share.data); } catch (err) { sharing = Promise.reject(err); } }
+    const copying = navigator.clipboard && navigator.clipboard.writeText
+      ? navigator.clipboard.writeText(prompt).then(() => true, () => false)
+      : Promise.resolve(false);
+    if (!sharing) { await copying; setShareNote('nosupport'); return; }
+    let note = share.withText ? 'sent' : 'bare';
+    try { await sharing; } catch (err) { note = err && err.name === 'AbortError' ? 'cancel' : 'fail'; }
+    if (await copying) setSubNote('copied');
+    setShareNote(note);
+  };
+
   const subPrompt = () => tradeAskPrompt({ cands: syncCandidates(accountRef.current?.portfolio || []), today: getTodayKST() });
   const copySubPrompt = async () => {
     try { await navigator.clipboard.writeText(subPrompt()); setSubNote('copied'); }
@@ -296,6 +329,60 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
   const results = out ? out.results : [];
   const skippedN = results.filter(r => r.status !== 'ok').length;
 
+  const subSection = (
+          <div className="rounded-lg border border-violet-700/40 bg-gray-900/40">
+            <button onClick={() => setShowSub(v => !v)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left">
+              <span className="flex items-center gap-1.5 text-gray-200 font-semibold"><Bot size={14} className="text-violet-300" />내 AI로 읽기 <span className="font-normal text-gray-500">— API 키 없이 · 각자 쓰는 AI 앱(무료 가능)</span></span>
+              <span className="text-gray-500 text-[11px]">{showSub ? '▲' : '▼'}</span>
+            </button>
+            {showSub && (
+              <div className="px-3 pb-3 space-y-2 border-t border-gray-800">
+                <ol className="list-decimal pl-5 space-y-1.5 pt-2 text-[12px] text-gray-300">
+                  <li>
+                    <button onClick={copySubPrompt} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-700/70 hover:bg-violet-600/70 text-white font-bold text-[11.5px]"><Copy size={11} />부탁 글 복사</button>
+                    {' '}를 누릅니다.{subNote === 'copied' && <span className="text-emerald-300"> ✓ 복사했습니다</span>}
+                  </li>
+                  <li>
+                    쓰시는 AI를 엽니다 → 주문내역 <b className="text-gray-100">사진을 올리고</b>, 복사한 글을 붙여 넣어 보냅니다.
+                    <span className="flex flex-wrap gap-1.5 mt-1">
+                      {PHOTO_AI_IDS.map(id => { const h = aiHandById(id); return h ? (
+                        <a key={id} href={h.open} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md border border-gray-600 text-gray-200 hover:bg-gray-800 text-[11.5px]">{h.label} <ExternalLink size={10} /></a>
+                      ) : null; })}
+                    </span>
+                    <span className="block text-[11px] text-gray-500 mt-0.5">모두 무료 계정으로 사진을 올릴 수 있습니다(하루 횟수 제한은 회사마다 다릅니다) · 유료 구독이 있으면 그 계정 그대로 씁니다.</span>
+                    {canShareFiles && (
+                      <span className="block mt-1.5">
+                        <span className="text-gray-400">휴대폰: </span>
+                        <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-gray-600 text-gray-200 hover:bg-gray-800 text-[11.5px] cursor-pointer">
+                          <Camera size={11} />{sharePhotos.length ? `사진 ${sharePhotos.length}장 고름` : '사진 고르기'}
+                          <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple onChange={pickForShare} className="sr-only" />
+                        </label>
+                        {' '}
+                        <button disabled={sharePhotos.length === 0} onClick={shareToAi} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-700/70 hover:bg-violet-600/70 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[11.5px]">AI 앱으로 보내기</button>
+                        {shareNote && <span className="block text-[11px] text-amber-300/90 mt-0.5">{SHARE_NOTE[shareNote] || ''}</span>}
+                      </span>
+                    )}
+                  </li>
+                  <li>AI 답의 <b className="text-gray-100">「매매 | …」 줄</b>을 복사해 아래 칸에 붙여 넣고 「넣기」를 누릅니다.</li>
+                </ol>
+                {subNote === 'manual' && (
+                  <textarea readOnly value={subPrompt()} rows={5} onFocus={e => e.target.select()} className="w-full bg-[#0b1120] border border-gray-700 rounded-md px-2 py-1.5 text-[11px] text-gray-300 font-mono" />
+                )}
+                {subNote === 'manual' && <p className="text-[11px] text-amber-300/90">복사가 막혀 있습니다 — 위 글을 길게 눌러(또는 Ctrl+C) 복사해 주세요.</p>}
+                <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={4} placeholder={'매매 | 2026-11-17 | 0177R0 | 종목명 | 매수 | 30 | 7,090\n…'}
+                  className="w-full bg-[#0b1120] border border-gray-600 focus:border-violet-500 rounded-md px-2 py-1.5 text-[12px] text-gray-100 font-mono outline-none" />
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={pasteFromClipboard} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-gray-600 text-gray-300 hover:bg-gray-800 text-[12px]"><ClipboardPaste size={12} />클립보드에서 붙여넣기</button>
+                  <button disabled={busy || !pasteText.trim()} onClick={applyPasted} className="px-3 py-1 rounded-md bg-violet-700 hover:bg-violet-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px]">넣기</button>
+                  {subNote === 'empty' && <span className="text-[11px] text-amber-300/90">클립보드가 비어 있습니다</span>}
+                  {subNote === 'nopaste' && <span className="text-[11px] text-amber-300/90">칸을 길게 눌러(또는 Ctrl+V) 붙여 넣어 주세요</span>}
+                </div>
+                <p className="text-[11px] text-gray-500">사이트는 구독 계정에 접속하지 않습니다 — 사진은 직접 쓰시는 AI 앱에만 올라가고, 여기엔 답 글만 붙여 넣습니다.</p>
+              </div>
+            )}
+          </div>
+  );
+
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 px-3" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}>
       <div className="relative w-full max-w-[680px] max-h-[92vh] flex flex-col overflow-hidden rounded-2xl border border-sky-700/50 bg-[#0f1623] shadow-2xl">
@@ -323,6 +410,8 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
             </span>
           </label>
 
+          {!isAdmin && subSection}
+
           {viewingAs ? (
             <p className="text-[11.5px] text-emerald-300/90">관리자 접속 중 — 사이트 키로 읽습니다(사용자의 키는 읽거나 저장하지 않습니다).</p>
           ) : (
@@ -331,7 +420,8 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
                 <span className="flex items-center gap-1.5 text-gray-200 font-semibold"><Lock size={13} className="text-amber-300" />내 Gemini API 키</span>
                 <button onClick={() => setShowGuide(true)} className="flex items-center gap-1 text-[11.5px] text-amber-200 hover:text-amber-100 underline-offset-2 hover:underline"><BookOpen size={12} />키 받는 법(그림)</button>
               </div>
-              {isAdmin && <p className="text-[11.5px] text-emerald-300/90">관리자 — 내 키가 있으면 먼저 쓰고, 없으면 사이트 키로 읽습니다.</p>}
+              {isAdmin ? <p className="text-[11.5px] text-emerald-300/90">관리자 — 내 키가 있으면 먼저 쓰고, 없으면 사이트 키로 읽습니다.</p>
+                : <p className="text-[11.5px] text-gray-400">선택 — 구글 계정으로 무료 키를 만들어 넣으면, 위 붙여넣기 없이 사진만 고르면 바로 읽습니다.</p>}
               {!keyState.loaded ? (
                 <p className="text-gray-500">키를 확인하는 중…</p>
               ) : keyState.key && !keyEdit ? (
@@ -369,7 +459,7 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
           </div>
           {pickNote && <p className="text-[11.5px] text-amber-300/90">{pickNote}</p>}
 
-          {!viewingAs && (
+          {isAdmin && !viewingAs && (
             <div className="rounded-lg border border-emerald-700/50 bg-emerald-950/20 px-3 py-2 space-y-1.5">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="flex items-center gap-1.5 text-gray-200 font-semibold"><Monitor size={14} className="text-emerald-300" />내 PC의 Claude로 읽기 <span className="font-normal text-gray-500">— 키 없이 · 구독으로 자동</span></span>
@@ -409,42 +499,7 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
             </div>
           )}
 
-          <div className="rounded-lg border border-gray-700/70 bg-gray-900/40">
-            <button onClick={() => setShowSub(v => !v)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left">
-              <span className="flex items-center gap-1.5 text-gray-200 font-semibold"><Bot size={14} className="text-violet-300" />구독 중인 AI로 읽기 <span className="font-normal text-gray-500">— API 키 없이 · Gemini·Claude 앱</span></span>
-              <span className="text-gray-500 text-[11px]">{showSub ? '▲' : '▼'}</span>
-            </button>
-            {showSub && (
-              <div className="px-3 pb-3 space-y-2 border-t border-gray-800">
-                <ol className="list-decimal pl-5 space-y-1.5 pt-2 text-[12px] text-gray-300">
-                  <li>
-                    <button onClick={copySubPrompt} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-700/70 hover:bg-violet-600/70 text-white font-bold text-[11.5px]"><Copy size={11} />부탁 글 복사</button>
-                    {' '}를 누릅니다.{subNote === 'copied' && <span className="text-emerald-300"> ✓ 복사했습니다</span>}
-                  </li>
-                  <li>
-                    {['gemini', 'claude'].map(id => { const h = aiHandById(id); return h ? (
-                      <a key={id} href={h.open} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 mr-1.5 px-2 py-0.5 rounded-md border border-gray-600 text-gray-200 hover:bg-gray-800 text-[11.5px]">{h.label} 열기 <ExternalLink size={10} /></a>
-                    ) : null; })}
-                    → 주문내역 <b className="text-gray-100">사진을 올리고</b>, 복사한 글을 붙여 넣어 보냅니다. <span className="text-gray-500">휴대폰은 사진첩에서 그 사진을 Gemini·Claude 앱으로 공유해도 됩니다.</span>
-                  </li>
-                  <li>AI 답의 <b className="text-gray-100">「매매 | …」 줄</b>을 복사해 아래 칸에 붙여 넣고 「넣기」를 누릅니다.</li>
-                </ol>
-                {subNote === 'manual' && (
-                  <textarea readOnly value={subPrompt()} rows={5} onFocus={e => e.target.select()} className="w-full bg-[#0b1120] border border-gray-700 rounded-md px-2 py-1.5 text-[11px] text-gray-300 font-mono" />
-                )}
-                {subNote === 'manual' && <p className="text-[11px] text-amber-300/90">복사가 막혀 있습니다 — 위 글을 길게 눌러(또는 Ctrl+C) 복사해 주세요.</p>}
-                <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={4} placeholder={'매매 | 2026-11-17 | 0177R0 | 종목명 | 매수 | 30 | 7,090\n…'}
-                  className="w-full bg-[#0b1120] border border-gray-600 focus:border-violet-500 rounded-md px-2 py-1.5 text-[12px] text-gray-100 font-mono outline-none" />
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={pasteFromClipboard} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-gray-600 text-gray-300 hover:bg-gray-800 text-[12px]"><ClipboardPaste size={12} />클립보드에서 붙여넣기</button>
-                  <button disabled={busy || !pasteText.trim()} onClick={applyPasted} className="px-3 py-1 rounded-md bg-violet-700 hover:bg-violet-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px]">넣기</button>
-                  {subNote === 'empty' && <span className="text-[11px] text-amber-300/90">클립보드가 비어 있습니다</span>}
-                  {subNote === 'nopaste' && <span className="text-[11px] text-amber-300/90">칸을 길게 눌러(또는 Ctrl+V) 붙여 넣어 주세요</span>}
-                </div>
-                <p className="text-[11px] text-gray-500">사이트는 구독 계정에 접속하지 않습니다 — 사진은 직접 쓰시는 AI 앱에만 올라가고, 여기엔 답 글만 붙여 넣습니다.</p>
-              </div>
-            )}
-          </div>
+          {isAdmin && subSection}
 
           {run.phase === 'shrink' && <p className="text-sky-200">사진 {run.n}장을 줄이는 중…</p>}
           {run.phase === 'read' && <p className="text-sky-200 animate-pulse">AI가 사진 {run.n}장을 읽는 중…{run.got > 0 ? ` (${run.got}자 받음)` : ''}</p>}

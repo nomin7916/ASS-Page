@@ -92,6 +92,9 @@ if (T && U && S) {
     eq('#P10 답 줄 형식 = 서버 부탁 문장 · 예시 줄 해석', [fmtLine(ask), fmtLine(pr) === T.TRADE_LINE_FORMAT, T.parseTradeText(ask.split('예)')[1], TODAY).rows.map(r => [r.date, r.side, r.qty])],
       [T.TRADE_LINE_FORMAT, true, [['2026-11-24', 'sell', 50]]]);
     ok('#P10 부탁 글 — 오늘 날짜 · 종목 목록 · 체결수량·평균체결가 · 개인정보 안 씀', ask.includes(TODAY) && ask.includes(`0177R0 ${NAME}`) && ask.includes("'주문수량'이 아닙니다") && ask.includes("'주문단가'가 아닙니다") && ask.includes('계좌번호'));
+    // #P12 사진을 읽힐 무료 AI 목록 = 화면 AI_HANDS에 있는 id(주소는 그 표 하나)
+    const PV = await import(pathToFileURL(join(ROOT, 'src/aiProviders.ts')).href);
+    ok('#P12 PHOTO_AI_IDS 전부 AI_HANDS에 있음 · Gemini가 맨 앞', T.PHOTO_AI_IDS.length >= 5 && T.PHOTO_AI_IDS.every(id => !!PV.aiHandById(id)) && T.PHOTO_AI_IDS[0] === 'gemini');
     // #P11 채팅 AI가 표·코드블록·글머리로 감싸 답해도 읽는다
     const chat = ['```', `| 매매 | 2026-11-24 | 0177R0 | ${NAME} | 매도 | 50 | 7,490 |`, `- 매매 | 2026-11-23 | 0177R0 | ${NAME} | 매수 | 5 | 6,960`, '```', '위와 같이 정리했습니다.'].join('\n');
     eq('#P11 표(|…|)·글머리(-)·코드블록 안의 줄도 읽음, 설명 글은 무시', T.parseTradeText(chat, TODAY).rows.map(r => [r.date, r.side, r.qty, r.price]), [['2026-11-24', 'sell', 50, 7490], ['2026-11-23', 'buy', 5, 6960]]);
@@ -205,7 +208,14 @@ ok('#W14 키·한도 오류에서 무료 키 받는 법과 구독 AI 길을 함�
 ok('#W15 내 PC의 Claude로 읽기 — pcAsk 도구 import · 사진은 target claude + imgs · 한도 PC_PHOTO_N/CHARS · 답은 같은 applyText · 관리자 접속 중 숨김',
   /import \{[^}]*pcWaitText[^}]*pcPhotoAddendum[^}]*PC_PHOTO_N[^}]*PC_PHOTO_CHARS[^}]*\} from '\.\.\/pcAsk'/.test(win)
   && /op: 'ask', target: 'claude', prompt, imgs/.test(win) && /Math\.min\(photoBudget\(files\.length\), PC_PHOTO_CHARS\)/.test(win)
-  && /applyText\(text, job0\.n,/.test(win) && /\{!viewingAs && \(\s*<div className="rounded-lg border border-emerald/.test(win));
+  && /applyText\(text, job0\.n,/.test(win) && /\{isAdmin && !viewingAs && \(\s*<div className="rounded-lg border border-emerald/.test(win));
+ok('#W16 PC 읽기는 관리자만 — 칸(isAdmin) · 상태 조회도 관리자만 · 서버도 403(사진 든 질문)',
+  /if \(!open \|\| viewingAs \|\| !isAdmin\) return;\s*let alive = true;\s*fetch\('\/api\/pc-ask'/.test(win)
+  && /c\.imgs\.length > 0 && email\.toLowerCase\(\) !== ADMIN_EMAIL\.toLowerCase\(\)\) return json\(403/.test(stripComments(read('api/pc-ask.ts'))));
+ok('#W17 다른 사용자 = 「내 AI로 읽기」가 맨 위·펼침 · 관리자는 아래 — 무료 AI 목록(PHOTO_AI_IDS) · 휴대폰 공유(share는 await 전)',
+  /useState\(!isAdmin\)/.test(win) && /\{!isAdmin && subSection\}/.test(win) && /\{isAdmin && subSection\}/.test(win)
+  && win.indexOf('{!isAdmin && subSection}') < win.indexOf('{viewingAs ? (') && /PHOTO_AI_IDS\.map\(id =>/.test(win)
+  && /const share = photoShareData\(navigator, sharePhotos, prompt\);\s*let sharing = null;\s*if \(share\) \{ try \{ sharing = navigator\.share\(share\.data\)/.test(win));
 ok('#W11 package.json에 verify:trade-photo 등록', pkg.scripts['verify:trade-photo'] === 'node scripts/verify-trade-photo.mjs');
 
 console.log(`\n  총 ${pass + fail}건 — 통과 ${pass} / 실패 ${fail}`);

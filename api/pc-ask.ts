@@ -3,8 +3,9 @@
 //   status → {linked, keyAt, seen} · newkey → {key}(한 번만 보여 줌 · 앞 열쇠는 바로 끝) · unlink
 //   ask {target, prompt, imgs?} → {id} · get {ids:[…]} → {jobs, seen} · cancel {id}
 //   imgs = [{mime, data(base64)}] 4장까지 — 사진이 든 질문은 PC의 Claude만(자산 평가액 추이 「주문내역 사진」, 2026-11-26)
+//   ⚠️ 사진이 든 질문은 관리자만(사용자 확정 2026-11-26 — 다른 사용자는 각자 쓰는 AI 앱으로 읽어 답을 붙여 넣는다) → 403 code 'admin'
 export const config = { runtime: 'edge' };
-import { requireAuth, callerEmail } from './_auth.js';
+import { requireAuth, callerEmail, ADMIN_EMAIL } from './_auth.js';
 import { json, storeOn, userTag, pcStatus, mintPcKey, unlinkPc, checkAsk, askJob, jobsView, cancelJob, ASK_BODY_MAX } from './_pcAsk.js';
 
 export default async function handler(request: Request): Promise<Response> {
@@ -38,6 +39,7 @@ export default async function handler(request: Request): Promise<Response> {
   if (op === 'ask') {
     const c = checkAsk(b);
     if ('error' in c) return json(400, { error: c.error, code: 'bad' });
+    if (c.imgs.length > 0 && email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) return json(403, { error: '사진 읽기(내 PC)는 관리자만 씁니다', code: 'admin' });
     const r = await askJob(u, c.t, c.p, Date.now(), c.imgs);
     if ('error' in r) return json(r.code === 'store' ? 503 : r.code === 'nopc' ? 409 : 429, r);
     return json(200, r);

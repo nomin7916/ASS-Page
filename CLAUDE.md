@@ -80,7 +80,7 @@ src/
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
     ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기
-    ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — 같은 키 규칙(관리자도 내 키 칸 — 사이트 키가 없어도 됨)·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기 · 「구독 중인 AI로 읽기」(API 키 없이: 부탁 글 `tradeAskPrompt` 복사 → Gemini·Claude 앱에 사진 → 답 줄 붙여넣기 → 같은 applyText) · 「내 PC의 Claude로 읽기」(PC 우편함 `/api/pc-ask` target claude + imgs → PC의 Claude가 읽어 답 → 같은 applyText)
+    ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — 같은 키 규칙(관리자도 내 키 칸 — 사이트 키가 없어도 됨)·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기 · 「구독 중인 AI로 읽기」(API 키 없이: 부탁 글 `tradeAskPrompt` 복사 → Gemini·Claude 앱에 사진 → 답 줄 붙여넣기 → 같은 applyText) · 「내 PC의 Claude로 읽기」(**관리자만** — PC 우편함 `/api/pc-ask` target claude + imgs → PC의 Claude가 읽어 답 → 같은 applyText) · ⚠️ 다른 사용자 = 「내 AI로 읽기」가 맨 위·펼침(무료 AI `PHOTO_AI_IDS` 7곳 · 휴대폰 공유) + 선택으로 내 무료 Gemini 키(사용자 확정 2026-11-26)
     ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json) · 다른 AI(내 키 → /api/ai-chat)·「내 구독으로 묻기」(AI 사이트 열기 + 답 붙여넣기)
     ├── AiApiGuide.tsx            # AI API 연동 사용법(구글 Gemini 키 받기, 그림 public/ai-guide/*.svg) — 메모 달력 「AI 연동」·사진 맞추기 창이 함께 씀
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)
@@ -226,7 +226,7 @@ src/
   → 그 사람 PC의 Claude 대화(설정에서 만든 「PC 연결 문구」를 붙여 넣음)가 `/api/pc-job`(**requirePcKey** — verify:api-auth JOB_GUARDS)으로 가져가 크롬(그 사람 로그인)으로 묻고 답을 넣음 → 창이 `op=get`으로 받아 넣는다.
   `claude`는 PC의 Claude가 직접 답한다. 창이 닫혀도·새로고침 뒤에도 저장된 `job` 번호로 이어서 기다린다(3시간 넘으면 그만).
 - **사진이 든 질문**(2026-11-26, 주문내역 사진 창 `TradePhotoSync`): `ask {target:'claude', imgs ≤ PC_IMG_N(4)·각 ≤ PC_IMG_MAX(850,000자)}` → 사진은 `pca:img:*`(질문과 같은 2일)
-  → `take`가 `imgs` 수를 알리고 PC가 `GET /api/pc-job?op=img&id&n`(그림 자체)로 받아 직접 읽는다. ⚠️ 사진은 claude만(다른 AI 사이트에 올리는 크롬 조작 금지) ·
+  → `take`가 `imgs` 수를 알리고 PC가 `GET /api/pc-job?op=img&id&n`(그림 자체)로 받아 직접 읽는다. ⚠️ **사진이 든 질문은 관리자만**(pc-ask 403 `admin`) · 사진은 claude만(다른 AI 사이트에 올리는 크롬 조작 금지) ·
   답·실패·취소 때 사진을 바로 지운다. 이 기능 전에 붙인 PC 대화는 「규칙 추가」 글(`pcPhotoAddendum` — 열쇠 없음)을 한 번 붙여 넣는다.
 - ⚠️ PC 열쇠 = `<사용자 표시 24자>.<무작위>` — Redis에는 해시만, 화면은 만든 그때 한 번만 보여 주고 **저장하지 않는다**(대화 묶음·Drive·브라우저 저장소 금지). 새로 만들면 앞 열쇠 끝.
   열쇠로 할 수 있는 일 = 그 사람 질문 받기·답 넣기뿐. 서버는 구독 로그인(비밀번호·쿠키)을 받지도 쓰지도 않는다. 관리자 접속 중엔 숨김.

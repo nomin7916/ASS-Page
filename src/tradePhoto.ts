@@ -78,6 +78,9 @@ export function parseTradeText(text: string, today: string): TradeParsed {
 
 // 구독 AI(Gemini 앱·Claude 앱)에 사진과 함께 줄 부탁 글 — API 키 없이 읽는 길(사용자 요청 2026-11-26: Gemini Pro·Claude 구독).
 // ⚠️ 답 줄 형식은 서버 부탁 문장(api/_holdingsPhoto.ts buildTradePrompt)과 같아야 한다 — verify:trade-photo #P10이 대조한다.
+// 사진을 읽힐 AI(다른 사용자는 이 길만 — 사용자 확정 2026-11-26: "각자 구독 AI와 연동 · 최대한 무료"). 전부 무료 계정으로 사진을 올릴 수 있는 곳,
+// 차례 = 무료로 사진 읽기가 넉넉한 순. id는 src/aiProviders.ts AI_HANDS의 id(주소는 그 표 하나 — verify:trade-photo #P12).
+export const PHOTO_AI_IDS = ['gemini', 'chatgpt', 'claude', 'copilot', 'grok', 'lechat', 'deepseek'];
 export const TRADE_LINE_FORMAT = '매매 | 날짜 | 코드 | 종목명 | 구분 | 체결수량 | 체결단가';
 export function tradeAskPrompt({ cands, today }: { cands: { code: string; name: string }[]; today: string }): string {
   const list = (cands || []).length > 0 ? cands.map(c => `${c.code || '-'} ${c.name || ''}`.trim()).join('\n') : '(목록 없음)';
