@@ -143,5 +143,39 @@ ok('#G3 fundGapEval은 펀드가 아닌 공백을 거절한다(주식·ETF 구�
 ok('#G4 fundGapEval은 마지막 기준가(lastNavOnOrBefore)를 쓴다 — currentPrice 아님',
   /lastNavOnOrBefore\(stockHistoryMap, it\.code, date, cache\)/.test(fg) && !/currentPrice/.test(fg));
 
+// ── 펀드 기준가 조회 경로(2026-11-26 둘째 요청 — 미래에셋·funetf가 해외 서버를 막아 한 달간 0건) ──
+console.log('\n── 파트③ 펀드 조회 경로 가드 ──');
+const fp = read('api/fund-proxy.ts');
+const fpCode = stripComments(fp);
+ok('#R1 api/fund-proxy.ts는 서울(icn1)에서만 실행한다', /export const config = \{ runtime: 'edge', regions: \['icn1'\] \};/.test(fpCode));
+ok('#R2 허용 주소는 미래에셋·funetf뿐(열린 중계 금지)',
+  /const ALLOWED_HOSTS = \['investments\.miraeasset\.com', 'www\.funetf\.co\.kr', 'funetf\.co\.kr'\];/.test(fpCode)
+  && /!ALLOWED_HOSTS\.includes\(targetUrl\.hostname\)/.test(fpCode) && /targetUrl\.protocol !== 'https:'/.test(fpCode));
+ok('#R3 브라우저 흉내(Mozilla User-Agent·Referer 위조)를 하지 않는다', !/Mozilla/.test(fpCode) && !/Referer/.test(fpCode));
+const apiSrc = stripComments(read('src/api.ts'));
+const fnBody = (name) => { const i = apiSrc.indexOf(`export const ${name} = async`); return i < 0 ? '' : apiSrc.slice(i, apiSrc.indexOf('\nexport const ', i + 10)); };
+const beforeProxy = (body) => { const a = body.indexOf('fundProxyUrl('); const b = body.indexOf('`/api/proxy?url='); return a > 0 && b > 0 && a < b; };
+for (const name of ['fetchFundInfo', 'fetchFundNavHistory', 'fetchMiraeFundInfo', 'fetchMiraeFundNavHistory']) {
+  ok(`#R4 ${name}: 서울 경로(fundProxyUrl)를 /api/proxy보다 먼저 시도`, beforeProxy(fnBody(name)));
+}
+{
+  const mi = fnBody('fetchMiraeFundInfo');
+  ok('#R4b fetchMiraeFundInfo의 세 단계(이름·현재가 페이지·기준가 목록) 모두 서울 경로를 쓴다', (mi.match(/fundProxyUrl\(/g) || []).length === 3);
+}
+ok('#R5 fundProxyUrl은 /api/fund-proxy를 가리킨다', /const fundProxyUrl = \(u: string\) => `\/api\/fund-proxy\?url=\$\{encodeURIComponent\(u\)\}`;/.test(apiSrc));
+const sd = stripComments(read('src/hooks/useStockData.ts'));
+ok('#R6 펀드 이력은 증분(마지막 기준가 14일 전부터)으로 받는다',
+  /const incremental = !force && startCovered && tradingKeys\.length > 30 && latest < lastTradingDay;/.test(sd)
+  && /const fetchFrom = incremental \? shiftIsoDays\(latest, -14\) : histStartDate;/.test(sd)
+  && /fetchMiraeFundNavHistory\(code, fetchFrom, today\)/.test(sd) && /fetchFundNavHistory\(code, fetchFrom, today\)/.test(sd));
+ok('#R7 증분 결과는 replace(기존 날짜 보존 병합)로 스테이징된다 — 과거 기준가를 지우지 않는다',
+  /stage\(code, \{ replace: hist \|\| null, deleteKeys: staleWeekendKeys \}\);/.test(sd));
+{
+  // replace가 '덮어쓰기 병합'이라는 전제 자체를 실행으로 확인(전제가 바뀌면 증분이 과거를 지운다)
+  const S = await import(pathToFileURL(join(ROOT, 'src/stockHistorySync.ts')).href);
+  const next = S.applyStagedMerges({ 'MA:F': { '2022-04-01': 1000, '2026-10-27': 1500 } }, { 'MA:F': { replace: { '2026-10-27': 1501, '2026-11-25': 1400 } } });
+  eq('#R8 replace 증분 병합: 옛 날짜 보존 + 겹친 날 정정 + 새 날 추가', next['MA:F'], { '2022-04-01': 1000, '2026-10-27': 1501, '2026-11-25': 1400 });
+}
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

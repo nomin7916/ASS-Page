@@ -283,12 +283,17 @@ export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; 
 };
 
 // ── funetf.co.kr 펀드 기준가 조회 ─────────────────────────────────────────
+// 펀드 기준가 전용 서울(icn1) 중계 — 미래에셋·funetf가 해외 서버(/api/proxy의 싱가포르)를 막는다(2026-10-28~).
+// ⚠️ 이 경로를 /api/proxy보다 **앞에** 둘 것 — 뒤로 보내면 막힌 경로에서 시간만 쓰고 펀드 기준가가 다시 멈춘다(api/fund-proxy.ts).
+const fundProxyUrl = (u: string) => `/api/fund-proxy?url=${encodeURIComponent(u)}`;
+
 export const fetchFundInfo = async (code: string): Promise<{ name: string; price: number; changeRate: number } | null> => {
   if (!code || code.trim().length < 8) return null;
   const c = code.trim().toUpperCase();
 
   const targetUrl = `https://www.funetf.co.kr/product/fund/view/${c}`;
   const proxies = [
+    fundProxyUrl(targetUrl),
     `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
     `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
@@ -375,6 +380,7 @@ export const fetchFundNavHistory = async (
   const apiUrl = `https://www.funetf.co.kr/api/public/product/view/fundnav?gijunYmd=${today}&wGijunYmd=${today}&fundCd=${c}&schNavTerm=A&schNavStDt=${start}&schNavEdDt=${end}&schCtenDvsn=MK_VIEW`;
   const proxies = [
     apiUrl,
+    fundProxyUrl(apiUrl),
     `/api/proxy?url=${encodeURIComponent(apiUrl)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`,
     `https://corsproxy.io/?url=${encodeURIComponent(apiUrl)}`,
@@ -452,7 +458,7 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
   let viewPagePrice = 0;
   // 펀드명: JSON API → view 페이지 title 순으로 시도
   const infoUrl = `https://investments.miraeasset.com/magi/fund/getBasicInfo.do?fundCd=${code}&fundGb=2&_=${Date.now()}`;
-  for (const infoProxy of [infoUrl, `/api/proxy?url=${encodeURIComponent(infoUrl)}`]) {
+  for (const infoProxy of [infoUrl, fundProxyUrl(infoUrl), `/api/proxy?url=${encodeURIComponent(infoUrl)}`]) {
     try {
       const res = await fetch(infoProxy, { signal: AbortSignal.timeout(6000) });
       if (!res.ok) continue;
@@ -464,7 +470,7 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
     } catch { continue; }
   }
   // view 페이지: 이름 폴백 + 현재가 파싱 (basePrices API보다 빠르게 반영됨)
-  for (const proxy of [viewUrl, `/api/proxy?url=${encodeURIComponent(viewUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(viewUrl)}`]) {
+  for (const proxy of [viewUrl, fundProxyUrl(viewUrl), `/api/proxy?url=${encodeURIComponent(viewUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(viewUrl)}`]) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
@@ -499,7 +505,7 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
   }
 
   // 기준가: basePrices list 에서 최신 2행 파싱 → 등락액 계산
-  for (const proxy of [priceUrl, `/api/proxy?url=${encodeURIComponent(priceUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(priceUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(priceUrl)}`]) {
+  for (const proxy of [priceUrl, fundProxyUrl(priceUrl), `/api/proxy?url=${encodeURIComponent(priceUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(priceUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(priceUrl)}`]) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
       if (!res.ok) continue;
@@ -559,7 +565,7 @@ export const fetchMiraeFundNavHistory = async (
 
   const fetchPage = async (page: number): Promise<string | null> => {
     const url = makeUrl(page);
-    for (const proxy of [url, `/api/proxy?url=${encodeURIComponent(url)}`]) {
+    for (const proxy of [url, fundProxyUrl(url), `/api/proxy?url=${encodeURIComponent(url)}`]) {
       try {
         const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
         if (!res.ok) continue;

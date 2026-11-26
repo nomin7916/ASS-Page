@@ -1426,11 +1426,17 @@ export function useStockData({
             || fundWideFetchedRef.current.has(code);
           // 최신성 + 시작 커버리지 모두 충족해야 fresh. force=true면 무조건 재조회.
           const fresh = !force && (tradingKeys.length > 30 && latest >= lastTradingDay && startCovered);
+          // 증분: 시작 구간은 이미 있고 최근만 비었으면 **마지막 기준가 14일 전부터만** 받는다(겹치게 — 정정 흡수).
+          // ⚠️ 비운 날마다 가입일(실측 2022-04-01)부터 전부 다시 받지 말 것 — 미래에셋은 한 쪽 10행이라 100쪽 넘게
+          //    긁게 되고, 그 많은 요청이 막힘·시간 초과를 부른다(2026-11 기준가가 한 달 멈춘 계좌). replace는 기존 날짜를
+          //    지우지 않고 덮어쓰기만 한다(applyStagedMerges — Object.assign)라 짧은 구간을 받아도 과거가 보존된다.
+          const incremental = !force && startCovered && tradingKeys.length > 30 && latest < lastTradingDay;
+          const fetchFrom = incremental ? shiftIsoDays(latest, -14) : histStartDate;
 
           const hist = fresh ? null : (code.startsWith('MA:')
-            ? await fetchMiraeFundNavHistory(code, histStartDate, today)
-            : await fetchFundNavHistory(code, histStartDate, today));
-          if (hist) fundWideFetchedRef.current.add(code);
+            ? await fetchMiraeFundNavHistory(code, fetchFrom, today)
+            : await fetchFundNavHistory(code, fetchFrom, today));
+          if (hist && !incremental) fundWideFetchedRef.current.add(code);
 
           // 기존 맵에 남아있는 비거래일 키(과거 라이브 stamp 잔재) 정리 — 실제
           // NAV는 거래일에만 존재하므로 비거래일 키는 검증 불일치를 유발한다.
