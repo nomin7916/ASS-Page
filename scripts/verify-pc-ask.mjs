@@ -384,7 +384,8 @@ ok('#S3 관리자 접속 중엔 PC 자동을 숨긴다(관리자 우편함을 �
   && /\{!viewingAs && <button onClick=\{togglePc\}/.test(chat) && /if \(!text \|\| running \|\| !s \|\| viewingAs\) return;/.test(chat));
 ok('#S4 답 기다리기 — 저장된 번호(pcPending)로 · 끝난 답만 넣고 실패·취소·없어짐·3시간은 실패 글', /const pcPendKey = store && !viewingAs \? pcPending\(store\.chats\)/.test(chat)
   && /if \(j && j\.st === 'done' && j\.a\) \{/.test(chat) && /pcTooLate\(p\.at, Date\.now\(\), p\.cloud\)/.test(chat) && /\}, \[pcPendKey\]\);/.test(chat));
-ok('#S5 PC 자동이 켜져 있으면 AI 이름 = 맡기기, 꺼져 있으면 그대로 사이트 열기', /onClick=\{\(\) => \(pcActive \? askPc\(h\.id, draft\) : askHand\(h\.id, draft\)\)\}/.test(chat));
+ok('#S5 PC 자동이 켜져 있으면 AI 이름 = 맡기기(Claude는 클라우드가 되면 클라우드), 꺼져 있으면 그대로 사이트 열기', /onClick=\{\(\) => \(pcActive \? pcHand\(h\.id, draft\) : askHand\(h\.id, draft\)\)\}/.test(chat)
+  && /const pcHand = \(hid, raw\) => \(hid === 'claude' && cloudOn \? askPc\('claude', raw, null, \{ cloud: true \}\) : askPc\(hid, raw\)\);/.test(chat));
 ok('#S6 서버 창 쪽 — 첫 줄 requireAuth · 사용자 = 로그인 토큰 이메일(본문의 이메일을 믿지 않음)', /export default async function handler\(request: Request\): Promise<Response> \{\s*const denied = await requireAuth\(request\);\s*if \(denied\) return denied;/.test(srvA)
   && /const email = await callerEmail\(request\);/.test(srvA) && /const u = await userTag\(email\);/.test(srvA) && !/b\?\.email|body\.email/.test(srvA));
 ok('#S7 서버 PC 쪽 — 첫 줄 requirePcKey · 사용자 = 열쇠 앞부분(해시가 맞을 때만 여기까지 온다) · CORS 없음',
@@ -392,8 +393,8 @@ ok('#S7 서버 PC 쪽 — 첫 줄 requirePcKey · 사용자 = 열쇠 앞부분(�
 ok('#S8 공용 파일 import 0 · 상대 import는 .js', !/^\s*import\s/m.test(lib) && !/^\s*import\s/m.test(cl) && [...(srvA + srvJ).matchAll(/from '(\.\/[^']+)'/g)].every(m => m[1].endsWith('.js')));
 ok('#S9 열쇠 비교는 해시 · 같은 길이 비교(safeEqual)', /safeEqual\(hash, rec\.h\)/.test(lib) && /const hash = await sha256Hex\(k\.r\);/.test(lib));
 // 사용자 신고 2026-11-26: 「PC 자동 켬」인데 Enter·검색이 Gemini로 가서 한도 오류만 쌓였다.
-ok('#S10 보내기(Enter·단추·예시 질문) = send — 클라우드 Claude를 골랐으면 클라우드 · PC 자동 켬이면 PC(PC가 멈췄고 클라우드가 되면 클라우드) · 아니면 고른 AI',
-  /const send = \(raw = draft\) => \{\s*if \(cloudPick\) askPc\('claude', raw, null, \{ cloud: true \}\);\s*else if \(pcActive && cloudOn && !pcOnline\(pcInfo\.seen\)\) askPc\('claude', raw, null, \{ cloud: true, note: [^}]+\}\);\s*else if \(pcActive\) askPc\('claude', raw\);\s*else ask\(raw\);\s*\};/.test(chat)
+ok('#S10 보내기(Enter·단추·예시 질문) = send — 클라우드 Claude를 골랐거나 PC 자동 켬이면 Claude(클라우드가 되면 클라우드 — PC 허용 창 없이 · 없을 때만 PC) · 아니면 고른 AI',
+  /const send = \(raw = draft\) => \{\s*if \(cloudPick \|\| \(pcActive && cloudOn\)\) askPc\('claude', raw, null, \{ cloud: true \}\);\s*else if \(pcActive\) askPc\('claude', raw\);\s*else ask\(raw\);\s*\};/.test(chat)
   && /if \(cloudPick \|\| pcActive\) \{ send\(\); return; \}/.test(chat) && /<button onClick=\{\(\) => send\(\)\} disabled=/.test(chat) && /onClick=\{\(\) => send\(a\.text\)\}/.test(chat));
 ok('#S11 클라우드 Claude는 서버가 허락할 때만(관리자 + 예약 작업 — status.cloud) · 관리자 접속 중 숨김 · Gemini 한도면 넘김',
   /const cloudOn = !viewingAs && !!pcInfo\.cloud;/.test(chat) && /const cloudPick = cloudOn && prefs\.pick === CLOUD_PICK;/.test(chat)

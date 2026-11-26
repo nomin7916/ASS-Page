@@ -239,7 +239,8 @@ src/
 - **클라우드 Claude(PC 없이, 2026-11-26 — 학습 사이트와 같은 길)**: 관리자 + Claude 예약 작업 연결(`status.cloud`)이면 AI 고르기 「Claude · 클라우드」·Gemini 한도 오류(`CLOUD_FALLBACK`) 때 자동 ·
   오류 말풍선 「클라우드 Claude로 묻기」 → `pc-ask {cloud:true}` → 같은 우편함(`pca:job`, **PC 줄 `pca:q`엔 넣지 않음** · 일마다 열쇠 해시 `kh`) + 「[ASS-PAGE-과표 사진 읽기 · API]」
   예약 작업을 `종류=search`로 부름(`cloudFireText`) → 작업이 `docs/ai-task/TAX-PHOTO.md`「AI 검색」절대로 `scripts/ai-task/aisearch.mjs`로 `/api/pc-cloud`(**requireCloudKey**)에서 받고 답을 넣음.
-  화면 자리 = `via:'cloud:claude'`(30분 넘으면 그만). ⚠️ **「PC 자동 켬」이면 Enter·보내기 = 내 PC의 Claude**(`send`) — Gemini로 가던 것(사용자 신고 2026-11-26) 되돌리지 말 것(verify:pc-ask #S10).
+  화면 자리 = `via:'cloud:claude'`(30분 넘으면 그만). ⚠️ **「PC 자동 켬」이면 Enter·보내기 = Claude**(`send`) — Gemini로 가던 것(사용자 신고 2026-11-26) 되돌리지 말 것.
+  ⚠️ **Claude 질문은 클라우드가 되면 늘 클라우드**(`send`·`pcHand`) — 맥미니 도우미는 웹 검색·크롬마다 「허용」을 물었다(사용자 요청 "권한 요청 없이 조용히"). PC는 ChatGPT 등 다른 구독 사이트만(verify:pc-ask #S5·#S10).
 
 ## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 

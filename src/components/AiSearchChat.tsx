@@ -21,7 +21,7 @@ import {
   GEMINI_PICK, CLOUD_PICK, AI_PROVIDERS, AI_COST_LABEL, AI_HANDS, HAND_SHARE, aiProviderById, aiPrefsOf, normalizeAiKeys, looksLikeAiKey, aiKeyWarning, maskAiKey,
   cleanModels, pickModel, aiErrorText, handName, handPrompt, handUrl, cleanPaste, pasteIsQuestion, handModelLabel,
 } from '../aiProviders';
-import { pcTaskPrompt, pcSeenText, pcWaitText, pcAskErrorText, pcModelLabel, pcPending, pcPollDelay, pcTooLate, PC_JOB_RE, cloudWaitText, isCloudVia, CLOUD_MODEL_LABEL, pcOnline } from '../pcAsk';
+import { pcTaskPrompt, pcSeenText, pcWaitText, pcAskErrorText, pcModelLabel, pcPending, pcPollDelay, pcTooLate, PC_JOB_RE, cloudWaitText, isCloudVia, CLOUD_MODEL_LABEL } from '../pcAsk';
 import { useSpeech } from '../hooks/useSpeech';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
 
@@ -578,15 +578,18 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
   // 클라우드 Claude(2026-11-26 — 학습 사이트처럼 PC 없이): 관리자 + Claude 예약 작업 연결(서버 status.cloud)일 때만.
   const cloudOn = !viewingAs && !!pcInfo.cloud;
   const cloudPick = cloudOn && prefs.pick === CLOUD_PICK;
-  // 보내기(Enter·보내기 단추) — 클라우드 Claude를 골랐으면 그리로 · 「PC 자동 켬」이면 내 PC의 Claude로(PC가 3분 넘게 확인하지 않았고
-  //   클라우드를 쓸 수 있으면 클라우드로) · 아니면 고른 AI(기본 Gemini 검색).
+  // 보내기(Enter·보내기 단추) — 클라우드 Claude를 골랐거나 「PC 자동 켬」이면 Claude에게(클라우드를 쓸 수 있으면 클라우드 · 없을 때만 내 PC)
+  //   · 아니면 고른 AI(기본 Gemini 검색 — 한도면 클라우드로 넘김).
   //   ⚠️ 「PC 자동 켬」인데 Enter가 Gemini로 가던 것(2026-11-26 사용자 신고 — 한도 오류만 쌓임)으로 되돌리지 말 것.
+  //   ⚠️ Claude 질문을 클라우드보다 PC에 먼저 보내지 말 것 — 맥미니 도우미 대화는 웹 검색·크롬마다 「허용」을 물어 사용자가 매번 눌러야 했다
+  //      (사용자 요청 2026-11-26 "권한 요청 없이 조용히 — 학습 사이트처럼"). PC는 Claude가 아닌 구독 AI 사이트(ChatGPT 등)를 크롬으로 물을 때만.
   const send = (raw = draft) => {
-    if (cloudPick) askPc('claude', raw, null, { cloud: true });
-    else if (pcActive && cloudOn && !pcOnline(pcInfo.seen)) askPc('claude', raw, null, { cloud: true, note: 'PC 도우미 대화가 멈춰 있어 클라우드 Claude(내 구독)에 맡겼습니다.' });
+    if (cloudPick || (pcActive && cloudOn)) askPc('claude', raw, null, { cloud: true });
     else if (pcActive) askPc('claude', raw);
     else ask(raw);
   };
+  // AI 이름 단추(PC 자동 켬) — Claude는 클라우드가 되면 클라우드(조용히) · 다른 AI는 내 PC 크롬.
+  const pcHand = (hid, raw) => (hid === 'claude' && cloudOn ? askPc('claude', raw, null, { cloud: true }) : askPc(hid, raw));
   const togglePc = () => {
     if (!pcInfo.linked) { setPanel('settings'); flashNote('먼저 ⚙ 설정의 「내 PC로 자동 묻기」에서 PC를 연결해 주세요'); return; }
     setStore(prev => prev && ({ ...prev, pcOn: !prev.pcOn }));
@@ -1236,12 +1239,12 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
                 if (needKey) { if (draft.trim()) flashNote('키가 없습니다 — 아래 「내 구독으로 묻기」에서 AI 이름을 누르거나 ⚙ 설정에서 키를 넣어 주세요'); return; }
                 send();
               }}
-              placeholder={cloudPick ? '클라우드 Claude(내 구독)에 물어보세요 — PC 없이 웹 검색으로 답합니다' : pcActive ? '질문을 쓰고 Enter — 내 PC의 Claude가 받습니다(다른 AI는 아래 이름을 누르세요)' : needKey ? '질문을 쓰고 아래 「내 구독으로 묻기」를 누르거나, ⚙ 설정에서 키를 넣어 주세요' : (active ? '이어서 물어보기…' : '검색할 내용을 물어보세요 (예: 오늘 코스피 마감)')}
+              placeholder={cloudPick || (pcActive && cloudOn) ? '클라우드 Claude(내 구독)에 물어보세요 — PC·허용 없이 웹 검색으로 답합니다' : pcActive ? '질문을 쓰고 Enter — 내 PC의 Claude가 받습니다(다른 AI는 아래 이름을 누르세요)' : needKey ? '질문을 쓰고 아래 「내 구독으로 묻기」를 누르거나, ⚙ 설정에서 키를 넣어 주세요' : (active ? '이어서 물어보기…' : '검색할 내용을 물어보세요 (예: 오늘 코스피 마감)')}
               className="flex-1 min-w-0 resize-none bg-[#0b1120] border border-gray-600 focus:border-sky-500 rounded-xl px-3 py-2 text-[13px] text-gray-100 outline-none max-h-32" />
             {running ? (
               <button onClick={stopAsk} title="답 받기 멈추기" className="h-10 px-3 rounded-xl bg-gray-700 hover:bg-gray-600 text-white font-bold text-[12px] inline-flex items-center gap-1 shrink-0"><StopIcon />멈춤</button>
             ) : (
-              <button onClick={() => send()} disabled={!ready || (needKey && !cloudPick && !pcActive) || !draft.trim()} title={cloudPick ? '클라우드 Claude에 묻기(PC 없이)' : pcActive ? '내 PC의 Claude에 맡기기' : pickP ? `${pickP.short}에 묻기` : '검색'} className="h-10 px-3 rounded-xl bg-sky-700 hover:bg-sky-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px] inline-flex items-center gap-1 shrink-0"><SendIcon />{cloudPick ? 'Claude' : pcActive ? 'PC로' : pickP ? '묻기' : '검색'}</button>
+              <button onClick={() => send()} disabled={!ready || (needKey && !cloudPick && !pcActive) || !draft.trim()} title={cloudPick || (pcActive && cloudOn) ? '클라우드 Claude에 묻기(PC 없이)' : pcActive ? '내 PC의 Claude에 맡기기' : pickP ? `${pickP.short}에 묻기` : '검색'} className="h-10 px-3 rounded-xl bg-sky-700 hover:bg-sky-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px] inline-flex items-center gap-1 shrink-0"><SendIcon />{cloudPick || (pcActive && cloudOn) ? 'Claude' : pcActive ? 'PC로' : pickP ? '묻기' : '검색'}</button>
             )}
           </div>
           <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap pb-0.5">
@@ -1249,8 +1252,8 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
             <span className="shrink-0 text-[11px] text-violet-200/90" title={pcActive ? '내 PC의 Claude가 크롬(내 로그인)으로 그 AI에 묻고 답을 여기에 넣습니다' : 'API 키 없이 — 그 AI 사이트를 내 계정(구독 그대로)으로 열고 질문을 넘깁니다. 답은 복사해 「답 붙여넣기」.'}>{pcActive ? '내 PC가 묻기' : '내 구독으로 묻기'}</span>
             {!pcActive && canShare() && isCoarse() && <button disabled={!ready || !!running || !draft.trim()} onClick={() => askHand(HAND_SHARE, draft)} title="휴대폰에 깔린 AI 앱으로 질문 보내기" className={handChip}>앱으로 공유</button>}
             {AI_HANDS.map(h => (
-              <button key={h.id} disabled={!ready || !!running || !draft.trim()} onClick={() => (pcActive ? askPc(h.id, draft) : askHand(h.id, draft))}
-                title={!draft.trim() ? '먼저 질문을 써 주세요' : pcActive ? `내 PC가 ${h.id === 'claude' ? 'Claude(내 구독)로 직접 답합니다' : `크롬에서 내 ${h.label} 계정으로 묻습니다`}` : `${h.label}(${h.sub})을 내 계정으로 열고 질문을 넘깁니다`}
+              <button key={h.id} disabled={!ready || !!running || !draft.trim()} onClick={() => (pcActive ? pcHand(h.id, draft) : askHand(h.id, draft))}
+                title={!draft.trim() ? '먼저 질문을 써 주세요' : pcActive ? (h.id === 'claude' ? (cloudOn ? '클라우드 Claude(내 구독)가 조용히 답합니다 — PC·허용 없이' : '내 PC가 Claude(내 구독)로 직접 답합니다') : `내 PC가 크롬에서 내 ${h.label} 계정으로 묻습니다(PC의 허용이 필요할 수 있음)`) : `${h.label}(${h.sub})을 내 계정으로 열고 질문을 넘깁니다`}
                 className={pcActive ? pcChip : handChip}>{h.label}</button>
             ))}
           </div>
