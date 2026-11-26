@@ -5439,7 +5439,7 @@ export default function App() {
             categoryView={categoryViewTable}
             onCategoryViewChange={setCategoryViewTable}
             onCodeChanged={(id) => inheritSharedCategoryFor(activePortfolioId, id)}
-            onPhotoSync={activePortfolioAccountType === 'overseas' ? null : () => setHoldPhotoPid(activePortfolioId)}
+            onPhotoSync={() => setHoldPhotoPid(activePortfolioId)}
           />
         )}
 
@@ -5883,6 +5883,7 @@ export default function App() {
         viewingAs={!!ADMIN_VIEW_EMAIL}
         keyApi={geminiKeyApi}
         onOpenCalendarGuide
+        usd={(portfolios.find(p => p.id === holdPhotoPid)?.accountType) === 'overseas'}
       />
       <TradePhotoSync
         open={!!tradePhotoPid}

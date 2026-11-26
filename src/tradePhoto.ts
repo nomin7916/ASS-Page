@@ -51,7 +51,8 @@ export function normTradeDate(raw: unknown, today: string): string {
   return realDate(ty - 1, +m[1], +m[2]);
 }
 
-const CODE_RE = /^[0-9A-Za-z]{4,12}$/;
+// 국내·펀드 코드(4~12) + 해외 티커(3자 이하 영문·점 갈래) — ⚠️ src/holdingsPhoto.ts와 같은 식
+const CODE_RE = /^(?:[0-9A-Za-z]{4,12}|[A-Za-z]{1,3}|[A-Za-z]{1,4}\.[A-Za-z]{1,2})$/;
 
 export function parseTradeText(text: string, today: string): TradeParsed {
   const rows: TradeRow[] = [];

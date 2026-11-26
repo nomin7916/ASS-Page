@@ -389,7 +389,8 @@ ok("#S2 쓰기 경로 — syncNote는 글(빈 글 = 필드 삭제), cleanNum으�
   && ups.indexOf("if (field === 'syncNote')") < ups.indexOf('const num = cleanNum(value);'));
 ok('#S3 표 — 📷 버튼(onPhotoSync)과 종목명 칸 📝 메모(마우스 올림 title + 눌러 보기·지우기)', /onPhotoSync = null \}\) => \{/.test(pt) && /\{onPhotoSync && <button onClick=\{onPhotoSync\}/.test(pt)
   && /\{item\.syncNote && \(/.test(pt) && /title=\{`\$\{item\.syncNote\}/.test(pt) && /onUpdate\(notePop\.id, 'syncNote', ''\)/.test(pt) && /import \{[^}]*\bImagePlus\b[^}]*\} from 'lucide-react'/.test(pt));
-ok('#S4 App — 해외계좌 제외 · 연 계좌 id에만 쓴다 · 창과 키 API 연결', /onPhotoSync=\{activePortfolioAccountType === 'overseas' \? null : \(\) => setHoldPhotoPid\(activePortfolioId\)\}/.test(app)
+ok('#S4 App — 해외계좌도(2026-11-26 — 달러 원가 usd 모드) · 연 계좌 id에만 쓴다 · 창과 키 API 연결', /onPhotoSync=\{\(\) => setHoldPhotoPid\(activePortfolioId\)\}/.test(app)
+  && /usd=\{\(portfolios\.find\(p => p\.id === holdPhotoPid\)\?\.accountType\) === 'overseas'\}/.test(app)
   && /<HoldingsPhotoSync[\s\S]*?applyItems=\{\(fn\) => \{ const pid = holdPhotoPid;/.test(app) && /keyApi=\{geminiKeyApi\}/.test(app)
   && /import HoldingsPhotoSync from '\.\/components\/HoldingsPhotoSync';/.test(app));
 const keyApi = app.slice(app.indexOf('const geminiKeyApi = useMemo('), app.indexOf('}), []);', app.indexOf('const geminiKeyApi = useMemo(')));
@@ -401,7 +402,7 @@ ok('#S6 화면은 /api/holdings-photo 하나만 부른다(구글을 직접 부�
   (hp.match(/fetch\(/g) || []).length === 1 && /fetch\('\/api\/holdings-photo'/.test(hp) && !/generativelanguage/.test(hp) && /headers\['X-Gemini-Key'\] = keyState\.key/.test(hp)
   && !/geminiKey|X-Gemini-Key/.test(hp.slice(hp.indexOf("body: JSON.stringify({ account"), hp.indexOf("body: JSON.stringify({ account") + 160)));
 ok('#S7 끝까지 받은 답만 맞춘다(끊긴 글로 맞추면 뒤쪽 종목이 0이 된다)', /if \(st\.error \|\| !st\.done\) \{[\s\S]{0,140}return;\s*\}[\s\S]*?planHoldingsSync\(/.test(hp));
-ok('#S8 적용·되돌리기는 applyItems(최신 prev 위) — 새 행 id는 두 번 계산해도 같게', /applyItems\(prev => applyHoldingsPlan\(prev, plan, \{ newId: idGen\(\), today \}\)\.next\)/.test(hp) && /applyItems\(prev => undoHoldingsPlan\(prev, u\)\)/.test(hp));
+ok('#S8 적용·되돌리기는 applyItems(최신 prev 위) — 새 행 id는 두 번 계산해도 같게', /applyItems\(prev => applyHoldingsPlan\(prev, plan, \{ newId: idGen\(\), today, usd \}\)\.next\)/.test(hp) && /applyItems\(prev => undoHoldingsPlan\(prev, u\)\)/.test(hp));
 ok('#S9 서버 — 관리자 판별은 로그인 토큰의 이메일 · 내 키는 헤더에서만', /const isAdmin = \(await callerEmail\(request\)\)\.toLowerCase\(\) === ADMIN_EMAIL\.toLowerCase\(\);/.test(srv)
   && /userGeminiKey\(request\.headers\.get\(USER_KEY_HEADER\)\)/.test(srv) && /send\(\{ e: isAdmin \? 'nokey' : 'needkey' \}\)/.test(srv));
 ok('#S10 메모 달력 — ✨ AI 연동 버튼이 사용법 창을 연다', /import AiApiGuide from '\.\/AiApiGuide';/.test(cal) && /setAiGuideOpen\(o => !o\)/.test(cal) && /\{aiGuideOpen && <AiApiGuide onClose=\{\(\) => setAiGuideOpen\(false\)\} \/>\}/.test(cal));

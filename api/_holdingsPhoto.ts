@@ -10,7 +10,8 @@ export const USER_KEY_HEADER = 'x-gemini-key';
 export const HOLD_PHOTO_MAX = 10;
 const IMG_MIME = /^image\/(jpeg|png|webp)$/;
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
-const CODE_RE = /^[0-9A-Za-z]{4,12}$/;
+// 국내·펀드 코드(4~12) + 해외 티커(3자 이하 영문·점 갈래) — ⚠️ src/holdingsPhoto.ts와 같은 식
+const CODE_RE = /^(?:[0-9A-Za-z]{4,12}|[A-Za-z]{1,3}|[A-Za-z]{1,4}\.[A-Za-z]{1,2})$/;
 const KEY_RE = /^[A-Za-z0-9._-]{30,200}$/;
 
 export function userGeminiKey(headerValue: string | null | undefined): string {
@@ -27,7 +28,8 @@ export function pickHoldKeys(isAdmin: boolean, userKey: string, siteKeys: string
 }
 
 // kind: 'hold' = 잔고 화면(보유 맞추기) · 'trades' = 주문·체결내역 화면(자산 평가액 추이 「주문내역 사진으로 매매 넣기」, 2026-11-26)
-export interface HoldReq { kind: 'hold' | 'trades'; account: string; cands: { code: string; name: string }[]; images: { mime: string; data: string }[] }
+// cur 'usd' = 해외 계좌(2026-11-26) — 금액·단가를 외화(USD) 그대로 · 코드 자리에 사진의 티커
+export interface HoldReq { kind: 'hold' | 'trades'; account: string; cands: { code: string; name: string }[]; images: { mime: string; data: string }[]; cur?: 'usd' | '' }
 
 export function checkHoldReq(body: any): HoldReq | { error: string } {
   if (!body || typeof body !== 'object') return { error: '요청 형식이 틀렸습니다' };
@@ -52,11 +54,12 @@ export function checkHoldReq(body: any): HoldReq | { error: string } {
     images.push({ mime, data });
   }
   const kind = body.kind === 'trades' ? 'trades' : 'hold';
-  return { kind, account, cands, images };
+  const cur = body.cur === 'usd' ? 'usd' : '';
+  return { kind, account, cands, images, cur };
 }
 
 // Gemini에 줄 부탁 문장 — ⚠️ 예시 줄은 verify:holdings-photo 가 parseHoldingsText로 실제로 읽어 본다.
-export function buildHoldPrompt({ account, cands }: { account: string; cands: { code: string; name: string }[] }): string {
+export function buildHoldPrompt({ account, cands, cur = '' }: { account: string; cands: { code: string; name: string }[]; cur?: 'usd' | '' }): string {
   const list = cands.length > 0
     ? cands.map(c => `${c.code || '-'} ${c.name || ''}`.trim()).join('\n')
     : '(목록 없음)';
@@ -75,6 +78,10 @@ export function buildHoldPrompt({ account, cands }: { account: string; cands: { 
     `- 사진이 여러 장이라 같은 종목이 두 장에 겹쳐 보이면 숫자가 다 보이는 것을 한 번만 씁니다.`,
     `- 예수금·현금·합계·총평가 줄은 쓰지 않습니다.`,
     `- 보유 종목이 하나도 안 보이면 '없음' 한 줄만 씁니다.`,
+    ...(cur === 'usd' ? [
+      `- 해외 계좌입니다. 매입금액·평균단가는 외화(USD) 금액을 소수점까지 그대로 씁니다. 화면 금액이 원화(정수, '원화' 보기)이면 매입금액·평균단가 자리에 '-'를 씁니다.`,
+      `- 목록에 없는 종목은 코드 자리에 사진에 보이는 티커(예: GPIQ)를 씁니다. 티커가 안 보이면 '-'.`,
+    ] : []),
     ``,
     `[이 계좌 종목 목록]${account ? ` 계좌: ${account}` : ''}`,
     list,
@@ -88,7 +95,7 @@ export function buildHoldPrompt({ account, cands }: { account: string; cands: { 
 
 // 주문내역 사진 — 체결된 매매마다 한 줄. ⚠️ 예시 줄은 verify:trade-photo 가 src/tradePhoto.ts parseTradeText로 실제로 읽어 본다.
 // today(KST, 서버가 정한다) = 연도 없는 날짜(11.17)를 읽을 기준. 화면은 연도가 없으면 오늘 이전의 가장 가까운 날로 정한다.
-export function buildTradePrompt({ account, cands, today }: { account: string; cands: { code: string; name: string }[]; today: string }): string {
+export function buildTradePrompt({ account, cands, today, cur = '' }: { account: string; cands: { code: string; name: string }[]; today: string; cur?: 'usd' | '' }): string {
   const list = cands.length > 0
     ? cands.map(c => `${c.code || '-'} ${c.name || ''}`.trim()).join('\n')
     : '(목록 없음)';
@@ -107,6 +114,10 @@ export function buildTradePrompt({ account, cands, today }: { account: string; c
     `- 사진이 여러 장이라 같은 줄이 두 장에 겹쳐 보이면 한 번만 씁니다.`,
     `- 계좌번호·이름 같은 개인정보는 쓰지 않습니다.`,
     `- 체결된 매매가 하나도 안 보이면 '없음' 한 줄만 씁니다.`,
+    ...(cur === 'usd' ? [
+      `- 해외 계좌입니다. 체결단가는 외화(USD) 단가를 소수점까지 그대로 씁니다(환율·원화 금액이 아닙니다). 코드 자리에는 목록의 코드, 없으면 사진의 티커를 씁니다.`,
+      `- 줄마다 종목명·티커가 안 보이면(종목 칸이 화면 밖) 코드·종목명 자리에 '-'를 씁니다. 지어내지 마세요.`,
+    ] : []),
     ``,
     `[이 계좌 종목 목록]${account ? ` 계좌: ${account}` : ''}`,
     list,
@@ -119,7 +130,7 @@ export function buildTradePrompt({ account, cands, today }: { account: string; c
 
 export function holdGeminiBody(req: HoldReq, today = ''): string {
   const parts: any[] = req.images.map(im => ({ inline_data: { mime_type: im.mime, data: im.data } }));
-  parts.push({ text: req.kind === 'trades' ? buildTradePrompt({ account: req.account, cands: req.cands, today }) : buildHoldPrompt(req) });
+  parts.push({ text: req.kind === 'trades' ? buildTradePrompt({ account: req.account, cands: req.cands, today, cur: req.cur || '' }) : buildHoldPrompt({ account: req.account, cands: req.cands, cur: req.cur || '' }) });
   return JSON.stringify({
     contents: [{ role: 'user', parts }],
     generationConfig: { temperature: 0, maxOutputTokens: 8192 },

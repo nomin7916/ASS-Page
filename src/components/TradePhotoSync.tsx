@@ -11,7 +11,7 @@ import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, photoShareData, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
 import { syncCandidates, holdErrorText, looksLikeGeminiKey, maskKey } from '../holdingsPhoto';
 import { parseTradeText, groupTrades, runTradePhoto, tradePhotoUndo, undoTradePhoto, tradeAskPrompt, anchorToHoldings, skippedResult, TRADE_STATUS_TEXT, PHOTO_AI_IDS } from '../tradePhoto';
-import { classifyOcr, parseOcrTrades, parseOcrHoldings, mergeOcrPhotos, checkOcrTrades, splitOcrTrades, ocrHoldBad, OCR_FLAG_TEXT } from '../tradeOcr';
+import { classifyOcr, parseOcrTrades, parseOcrHoldings, mergeOcrPhotos, checkOcrTrades, splitOcrTrades, ocrHoldBad, OCR_FLAG_TEXT, guessOcrCodes } from '../tradeOcr';
 import { loadOcrEngine, ocrFile } from '../screenOcr';
 import { aiHandById } from '../aiProviders';
 import { pcOnline, pcSeenText, pcWaitText, pcAskErrorText, pcTooLate, pcModelLabel, pcPhotoAddendum, PC_POLL_FAST, PC_POLL_SLOW, PC_FAST_FOR, PC_PHOTO_N, PC_PHOTO_CHARS } from '../pcAsk';
@@ -191,7 +191,7 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
       const res = await fetch('/api/holdings-photo', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ kind: 'trades', account: accountName, cands: syncCandidates(accountRef.current?.portfolio || []), images }),
+        body: JSON.stringify({ kind: 'trades', account: accountName, cands: syncCandidates(accountRef.current?.portfolio || []), images, cur: accountRef.current?.accountType === 'overseas' ? 'usd' : '' }),
         signal: ac ? ac.signal : undefined,
       });
       images = [];
@@ -270,8 +270,11 @@ export default function TradePhotoSync({ open, onClose, account = null, isAdmin 
       else unknown++;
     }
     if (!live() || !acct) return;
+    // 프로그램이 주문·거래내역 표를 하나도 못 찾았으면 AI(2순위)로 — 쓸 수 있을 때만(관리자 · 내 Gemini 키). 사용자 확정 2026-11-26: 사진은 OCR 1순위 · AI 2순위.
+    if (perTrades.every(list => list.length === 0) && holds.length === 0 && !needKey) { readAndApply(add); return; }
     const closeOf = (code, date) => { const m = shmRef.current && shmRef.current[code]; const v = m ? m[date] : 0; return Number(v && typeof v === 'object' ? v.close : v) || 0; };
-    const { okText, checks } = splitOcrTrades(checkOcrTrades(mergeOcrPhotos(perTrades), closeOf));
+    // 종목명이 안 보이는 거래내역(키움 해외 「전체」 — 종목명 칸이 화면 밖)은 그날 종가와 체결가로 이 계좌 종목을 찾는다(하나뿐일 때만)
+    const { okText, checks } = splitOcrTrades(checkOcrTrades(guessOcrCodes(mergeOcrPhotos(perTrades), cands, closeOf), closeOf));
     const groups = groupTrades(parseTradeText(okText, today).rows);
     const goodHolds = holds.filter(h => !ocrHoldBad(h));
     const anc = goodHolds.length ? anchorToHoldings(acct, groups, goodHolds) : { apply: groups, skipped: [], anchors: [] };

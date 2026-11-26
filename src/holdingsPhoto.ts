@@ -27,7 +27,9 @@ export interface HoldPlanRow {
 }
 export type HoldOutcome = 'apply' | 'same' | 'none' | 'mismatch';
 export interface HoldPlan { rows: HoldPlanRow[]; outcome: HoldOutcome }
-export interface HoldUndo { restore: Record<string, { quantity: unknown; investAmount: unknown; syncNote: unknown }>; added: string[] }
+export interface HoldUndo { restore: Record<string, { quantity: unknown; investAmount: unknown; syncNote: unknown; investAmountUsd?: unknown; purchasePrice?: unknown; usd?: boolean }>; added: string[] }
+// usd = 해외 계좌(투자금액 = investAmountUsd 달러, 매입단가 미러 함께) — 사진은 키움 해외잔고 「외화」 화면처럼 달러 금액이어야 한다.
+export interface HoldOpts { keepUnseen?: boolean; usd?: boolean }
 
 const num = (v: unknown): number => {
   if (v === '' || v == null) return 0;
@@ -35,7 +37,15 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 const fmt = (n: number): string => Math.round(n).toLocaleString('en-US');
-const CODE_RE = /^[0-9A-Za-z]{4,12}$/;
+// 국내 6자리·펀드 코드(4~12) + 해외 티커(QQQ·F·BRK.B — 3자 이하 영문, 점 갈래). ⚠️ api/_holdingsPhoto.ts·src/tradePhoto.ts와 같은 식.
+const CODE_RE = /^(?:[0-9A-Za-z]{4,12}|[A-Za-z]{1,3}|[A-Za-z]{1,4}\.[A-Za-z]{1,2})$/;
+const TICKER_RE = /^[A-Z]{1,5}(?:\.[A-Z]{1,2})?$/;
+// 해외 주식 행의 원가(USD) — utils.overseasInvestAmount와 같은 규칙(저장값 investAmountUsd, 없으면 매입단가 미러 × 수량). 이 파일은 import 0.
+const usdCostOf = (it: any): number => {
+  const u = it?.investAmountUsd;
+  if (u !== null && u !== undefined && u !== '') return num(u);
+  return Math.round(num(it?.purchasePrice) * num(it?.quantity) * 100) / 100;
+};
 const CUT_RE = /^(잘림|잘려|안\s*보임|-)$/;
 
 // 종목 이름 비교용 — 띄어쓰기·점·괄호 등을 걷고 대문자로.
@@ -147,7 +157,10 @@ export function matchHolding(row: HoldRow, items: any[], used: Set<string>): any
 }
 
 // opts.keepUnseen — 프로그램 글자 인식(AI 없이, src/tradeOcr.ts)으로 읽었을 때: 한 줄을 놓쳤을 수 있으니 사진에 안 보인 종목을 0으로 하지 않는다.
-export function planHoldingsSync(parsed: HoldParsed, items: any[], opts?: { keepUnseen?: boolean }): HoldPlan {
+export function planHoldingsSync(parsed: HoldParsed, items: any[], opts?: HoldOpts): HoldPlan {
+  const usd = !!(opts && opts.usd);
+  const costOf = (it: any) => (usd ? usdCostOf(it) : num(it.investAmount));
+  const roundC = (n: number) => (usd ? Math.round(n * 100) : Math.round(n));
   const rows: HoldPlanRow[] = [];
   const used = new Set<string>();
   const targets = syncTargets(items);
@@ -157,22 +170,25 @@ export function planHoldingsSync(parsed: HoldParsed, items: any[], opts?: { keep
     if (it) {
       used.add(it.id);
       matched++;
-      const before = { qty: num(it.quantity), invest: num(it.investAmount) };
+      const before = { qty: num(it.quantity), invest: costOf(it) };
       const name = String(it.name || r.name), code = String(it.code || '');
       if (r.cut || r.unread) { rows.push({ kind: 'cut', itemId: it.id, name, code, before, after: before, note: r.unread ? `숫자를 읽지 못함(${r.unread}) — 그대로 둠` : '사진 아래가 잘려 숫자를 읽지 못함 — 그대로 둠' }); continue; }
       const after = { qty: r.qty, invest: r.invest };
-      const same = before.qty === after.qty && Math.round(before.invest) === Math.round(after.invest);
+      const same = before.qty === after.qty && roundC(before.invest) === roundC(after.invest);
       rows.push({ kind: same ? 'same' : 'update', itemId: it.id, name, code, before, after, note: '' });
       continue;
     }
     if (r.cut || r.unread) { rows.push({ kind: 'bad', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: 0, invest: 0 }, note: r.unread ? `이 계좌에 없는 종목인데 숫자를 읽지 못해(${r.unread}) 넣지 않음` : '이 계좌에 없는 종목인데 숫자가 잘려 넣지 않음 — 그 종목이 다 보이게 한 장 더 찍어 주세요' }); continue; }
-    rows.push({ kind: 'add', name: r.name, code: '', before: { qty: 0, invest: 0 }, after: { qty: r.qty, invest: r.invest }, note: '새 종목 — 종목코드는 다른 계좌의 같은 이름 종목 → 이름 검색 순으로 찾아 넣습니다' });
+    // 해외 = 사진의 티커(GPIQ)를 그대로 코드로(글자 인식이 영문 대문자로 읽은 것만) · 국내 = 코드 비움(틀린 코드는 남의 시세를 끌어온다 → usePhotoCodeFill이 이름으로 찾음)
+    const tk = usd && TICKER_RE.test(r.code) ? r.code : '';
+    rows.push({ kind: 'add', name: r.name, code: tk, before: { qty: 0, invest: 0 }, after: { qty: r.qty, invest: r.invest },
+      note: usd ? (tk ? `새 종목 — 사진의 티커 ${tk}를 코드로 넣습니다(시세가 이상하면 코드 칸을 고쳐 주세요)` : '새 종목 — 티커를 못 읽어 코드 칸이 비어 있습니다(직접 넣어 주세요)') : '새 종목 — 종목코드는 다른 계좌의 같은 이름 종목 → 이름 검색 순으로 찾아 넣습니다' });
   }
   const keepUnseen = !!(opts && opts.keepUnseen);
   const listContinues = parsed.rows.some(r => r.cut) || keepUnseen;
   for (const it of targets) {
     if (used.has(it.id)) continue;
-    const before = { qty: num(it.quantity), invest: num(it.investAmount) };
+    const before = { qty: num(it.quantity), invest: costOf(it) };
     if (!(before.qty > 0)) continue;
     if (listContinues) {
       rows.push({ kind: 'keep', itemId: it.id, name: String(it.name || it.code || ''), code: String(it.code || ''), before, after: before, note: keepUnseen && !parsed.rows.some(r => r.cut) ? '사진에 안 보임 — 프로그램 읽기(AI 없이)는 안 보인 종목을 0으로 하지 않음(판 종목이면 직접 0으로)' : '사진에 안 보임 — 목록이 사진 아래로 이어져(잘린 종목) 0으로 하지 않음' });
@@ -199,8 +215,9 @@ const mmdd = (today: string): string => {
 };
 
 // 종목명 칸에 마우스를 올리면 보이는 메모(syncNote) 글.
-export function zeroNote(today: string, before: { qty: number; invest: number }): string {
-  return `${mmdd(today)} 사진 맞추기 — 사진에 없어 보유수량·투자금액을 0으로 맞췄습니다 (이전 ${fmt(before.qty)}주 · ${fmt(before.invest)}원)`;
+export function zeroNote(today: string, before: { qty: number; invest: number }, usd = false): string {
+  const amt = usd ? `$${before.invest.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : `${fmt(before.invest)}원`;
+  return `${mmdd(today)} 사진 맞추기 — 사진에 없어 보유수량·투자금액을 0으로 맞췄습니다 (이전 ${fmt(before.qty)}주 · ${amt})`;
 }
 export function addNote(today: string): string {
   return `${mmdd(today)} 사진 맞추기 — 사진에서 새로 추가한 종목입니다. 이름으로 종목코드를 찾는 중입니다(못 찾으면 표에서 코드를 넣어 주세요)`;
@@ -383,7 +400,8 @@ export function markPhotoCodeMiss(items: any[], id: string, why: string, today: 
 }
 
 // 계획대로 바꾼 항목 배열 + 되돌리기 정보. 시세 필드는 건드리지 않는다(앱 탭이 최신 prev 위에서 부른다).
-export function applyHoldingsPlan(items: any[], plan: HoldPlan, opts: { newId: () => string; today: string }): { next: any[]; undo: HoldUndo } {
+export function applyHoldingsPlan(items: any[], plan: HoldPlan, opts: { newId: () => string; today: string; usd?: boolean }): { next: any[]; undo: HoldUndo } {
+  const usd = !!opts.usd;
   const undo: HoldUndo = { restore: {}, added: [] };
   if (plan.outcome !== 'apply') return { next: items, undo };
   const byId = new Map<string, HoldPlanRow>();
@@ -391,6 +409,15 @@ export function applyHoldingsPlan(items: any[], plan: HoldPlan, opts: { newId: (
   const next = (Array.isArray(items) ? items : []).map(it => {
     const r = it && byId.get(it.id);
     if (!r) return it;
+    if (usd) {
+      // 해외: 투자금액(USD) 저장 칸 + 매입단가 미러(수량 > 0일 때만 — 0으로 나누면 Infinity가 저장된다). 원화 investAmount는 건드리지 않는다.
+      undo.restore[it.id] = { quantity: it.quantity, investAmount: it.investAmount, syncNote: it.syncNote, investAmountUsd: it.investAmountUsd, purchasePrice: it.purchasePrice, usd: true };
+      const out: any = { ...it, quantity: r.after.qty, investAmountUsd: r.after.invest };
+      if (r.after.qty > 0 && Number.isFinite(r.after.invest)) out.purchasePrice = r.after.invest / r.after.qty;
+      if (r.kind === 'zero') out.syncNote = zeroNote(opts.today, r.before, true);
+      else delete out.syncNote;
+      return out;
+    }
     undo.restore[it.id] = { quantity: it.quantity, investAmount: it.investAmount, syncNote: it.syncNote };
     const out: any = { ...it, quantity: r.after.qty, investAmount: r.after.invest };
     if (r.kind === 'zero') out.syncNote = zeroNote(opts.today, r.before);
@@ -402,7 +429,11 @@ export function applyHoldingsPlan(items: any[], plan: HoldPlan, opts: { newId: (
     if (r.kind !== 'add') continue;
     const id = opts.newId();
     undo.added.push(id);
-    added.push({
+    added.push(usd ? {
+      id, type: 'stock', category: '주식', assetClass: 'D', code: r.code || '', name: r.name,
+      currentPrice: 0, changeRate: 0, purchasePrice: r.after.qty > 0 ? r.after.invest / r.after.qty : 0, investAmount: 0, investAmountUsd: r.after.invest, quantity: r.after.qty,
+      targetRatio: 0, isManual: true, syncNote: `${mmdd(opts.today)} ${PHOTO_ADD_MARK}${r.code ? ` — 티커 ${r.code}(사진)` : ' — 티커를 직접 넣어 주세요'}`,
+    } : {
       id, type: 'stock', category: '주식', assetClass: 'D', code: '', name: r.name,
       currentPrice: 0, changeRate: 0, purchasePrice: 0, investAmount: r.after.invest, quantity: r.after.qty,
       targetRatio: 0, isManual: true, syncNote: addNote(opts.today),
@@ -419,6 +450,7 @@ export function undoHoldingsPlan(items: any[], undo: HoldUndo): any[] {
     const r = it && restore[it.id];
     if (!r) return it;
     const out: any = { ...it, quantity: r.quantity, investAmount: r.investAmount };
+    if (r.usd) { out.investAmountUsd = r.investAmountUsd; out.purchasePrice = r.purchasePrice; if (r.investAmountUsd === undefined) delete out.investAmountUsd; }
     if (r.syncNote == null || r.syncNote === '') delete out.syncNote; else out.syncNote = r.syncNote;
     return out;
   });

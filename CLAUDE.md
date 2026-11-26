@@ -23,7 +23,7 @@ src/
 ├── backdatedTrade.ts    # 자산검증(추이 표 날짜 클릭)에서 지난 날짜 수량 변경 = 그날의 매매: 투자금액 식(매수 + 늘어난 수량×단가 · 매도 × 남은÷원래)·그 뒤 기록과 계좌 표에 같은 차이·예수금은 고를 때만·표에서 먼저 고쳤으면 '옮기기' (⚠️ import 0 · 마지막 기록과 계좌 표에 같은 차이를 더할 것 — 갈리면 App 구성 변경 효과가 오늘 날짜로 되돌림 기록을 만든다 — verify:backdated-trade)
 ├── tradePhoto.ts        # 추이 머리줄 📷 「주문내역 사진으로 매매 넣기」: AI 답 줄(`매매 | 날짜 | 코드 | 종목명 | 구분 | 체결수량 | 체결단가`)·연도 없는 날짜·같은 날 체결 합치기(가중평균)·날짜순(매도 먼저) backdatedTrade로 넣기·두 번 막기(그날 기록 trades·그날 표 수정)·표가 이미 맞으면 옮기기·되돌리기 (⚠️ utils·backdatedTrade·holdingsPhoto만 .ts import — verify:trade-photo)
 ├── screenOcr.ts         # 사진 글자 인식(AI 없이·무료·사진은 기기 밖으로 안 나감) — 학습 사이트(pe-study) 「글자 입히기」의 PP-OCRv5 + ONNX Runtime Web을 `public/ocr/pp5/`로 옮겨 씀(처음 한 번 약 17MB) · 어두운 화면·색 글자용 회색(grayForOcr) (⚠️ 엔진 파일은 고치지 말고 새 폴더로 · 사진을 서버로 보내지 않는다)
-├── tradeOcr.ts          # 글자 인식 결과 → 표 구조: 주문내역(머리줄 칸 자리 → 날짜·구분·체결수량·평균체결가, 종목명은 행 칸 또는 화면 제목) · 잔고(종목마다 두 줄 — 위아래 머리줄 차례로 칸 구분, 붙어 읽힌 쉼표 숫자 나눔) · 프로그램 검수(확신·머리줄·그날 종가 ±15%·수량×평균단가≈매입금액) · 과세 화면(과표기준가격·전일배당전과표기준가격 → 그날 과표·그 달 배당 과표 `parseOcrTaxBase` — 이어진 날짜 검사로 잘려 읽힌 날짜 복구)·과표 계산기 한 종목 `ocrTaxRead` (⚠️ verify:trade-ocr — 실제 PP-OCR 출력 고정본)
+├── tradeOcr.ts          # 글자 인식 결과 → 표 구조: 주문내역(머리줄 칸 자리 → 날짜·구분·체결수량·평균체결가, 종목명은 행 칸 또는 화면 제목) · 잔고(종목마다 두 줄 — 위아래 머리줄 차례로 칸 구분, 붙어 읽힌 쉼표 숫자 나눔) · 프로그램 검수(확신·머리줄·그날 종가 ±15%·수량×평균단가≈매입금액) · 과세 화면(과표기준가격·전일배당전과표기준가격 → 그날 과표·그 달 배당 과표 `parseOcrTaxBase` — 이어진 날짜 검사로 잘려 읽힌 날짜 복구)·과표 계산기 한 종목 `ocrTaxRead` · 키움 해외(잔고 외화/원화 — 이름 여러 줄+티커 줄, 거래내역 두 줄 머리줄 + 수량×단가=거래금액(외) 검수) · 이름 없는 체결 = 그날 종가 2% 안 종목이 하나뿐일 때 `guessOcrCodes` (⚠️ verify:trade-ocr — 실제 PP-OCR 출력 고정본)
 ├── rateMetrics.ts       # 금리 지표 계산: 현재값·1개월 변화·52주 위치·3년 백분위·꺾임 (⚠️ import 0)
 ├── rateSignals.ts       # 금리 판정: RATE_RULES(기준치 단일 소스) + 자산군 7개 evaluate* (⚠️ import 0)
 ├── rateAssets.ts        # 자산군별 종목 목록·MANUAL_INPUTS(주당 장부가/순자산)·배당률 계산 (⚠️ import 0)
@@ -82,8 +82,8 @@ src/
     ├── DriveBackupModal.tsx      # Drive 백업 관리 모달
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
-    ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 맨 위 「프로그램으로 읽기」(AI 없이 · `planHoldingsSync(…, {keepUnseen})` = 안 보인 종목 0으로 안 함 · 자체 검사 어긋난 종목 그대로) · 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기
-    ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — **맨 위 = 프로그램 읽기**(주문내역·잔고 사진 함께 → 잔고 수량 기준으로 아직 표에 없는 매매만 `anchorToHoldings` → 같은 넣기 · 확인 필요 줄은 넣지 않고 붙여넣기 칸으로) · 「AI로 읽기·검수」(접힘, 사용자 확정: AI는 최종 검수만) 안에 — 같은 키 규칙(관리자도 내 키 칸 — 사이트 키가 없어도 됨)·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기 · 「구독 중인 AI로 읽기」(API 키 없이: 부탁 글 `tradeAskPrompt` 복사 → Gemini·Claude 앱에 사진 → 답 줄 붙여넣기 → 같은 applyText) · 「내 PC의 Claude로 읽기」(**관리자만** — PC 우편함 `/api/pc-ask` target claude + imgs → PC의 Claude가 읽어 답 → 같은 applyText) · ⚠️ 다른 사용자 = 「내 AI로 읽기」가 맨 위·펼침(무료 AI `PHOTO_AI_IDS` 7곳 · 휴대폰 공유) + 선택으로 내 무료 Gemini 키(사용자 확정 2026-11-26)
+    ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 맨 위 「프로그램으로 읽기」(AI 없이 · `planHoldingsSync(…, {keepUnseen})` = 안 보인 종목 0으로 안 함 · 자체 검사 어긋난 종목 그대로) · 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기 · 프로그램이 잔고 표를 못 찾으면 AI 자동(관리자·내 키일 때 — OCR 1순위 · AI 2순위)
+    ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — **맨 위 = 프로그램 읽기**(주문내역·잔고 사진 함께 → 잔고 수량 기준으로 아직 표에 없는 매매만 `anchorToHoldings` → 같은 넣기 · 확인 필요 줄은 넣지 않고 붙여넣기 칸으로) · 「AI로 읽기·검수」(접힘, 사용자 확정: AI는 최종 검수만) 안에 — 같은 키 규칙(관리자도 내 키 칸 — 사이트 키가 없어도 됨)·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기 · 「구독 중인 AI로 읽기」(API 키 없이: 부탁 글 `tradeAskPrompt` 복사 → Gemini·Claude 앱에 사진 → 답 줄 붙여넣기 → 같은 applyText) · 「내 PC의 Claude로 읽기」(**관리자만** — PC 우편함 `/api/pc-ask` target claude + imgs → PC의 Claude가 읽어 답 → 같은 applyText) · ⚠️ 다른 사용자 = 「내 AI로 읽기」가 맨 위·펼침(무료 AI `PHOTO_AI_IDS` 7곳 · 휴대폰 공유) + 선택으로 내 무료 Gemini 키(사용자 확정 2026-11-26) · 프로그램이 표를 못 찾으면 AI 자동(쓸 수 있을 때) · 해외 계좌는 AI에 달러(cur usd)
     ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json) · 다른 AI(내 키 → /api/ai-chat)·「내 구독으로 묻기」(AI 사이트 열기 + 답 붙여넣기)
     ├── AiApiGuide.tsx            # AI API 연동 사용법(구글 Gemini 키 받기, 그림 public/ai-guide/*.svg) — 메모 달력 「AI 연동」·사진 맞추기 창이 함께 씀
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)
@@ -179,7 +179,7 @@ src/
 
 ## 사진으로 보유 맞추기 (`src/holdingsPhoto.ts`·`api/holdings-photo.ts`·`api/_holdingsPhoto.ts`, ⚠️ 회귀 주의 — 2026-11-26)
 
-- 계좌 표 머리 아이콘 칸(엑셀 아래 사진 아이콘, 해외계좌 제외) → 잔고 사진 → `/api/holdings-photo`(Gemini) → 끝까지 받은 답(`{d:1}`)만 맞춘다 → 바로 적용 + 「되돌리기」.
+- 계좌 표 머리 아이콘 칸(엑셀 아래 사진 아이콘 — 해외 계좌도, 2026-11-26: 키움 해외잔고 「외화」 화면의 달러 매입금액 → `investAmountUsd` + 매입단가 미러 · 원화 화면은 넣지 않음 · 새 종목은 사진의 티커를 코드로) → 잔고 사진 → `/api/holdings-photo`(Gemini) → 끝까지 받은 답(`{d:1}`)만 맞춘다 → 바로 적용 + 「되돌리기」.
   주식 행만 대상(예수금·펀드·예적금·현금 행 제외). 사진에 없는 종목(수량>0) = 수량·투자금액 0 + 항목 `syncNote` 메모(이전 수량·금액 — 종목명 칸 📝, title 호버·눌러 보기/지우기).
   새 종목 = 새 행(코드 비움 — 틀린 코드는 남의 시세를 끌어온다) → 부팅 정착 뒤 `hooks/usePhotoCodeFill`이 **이름으로 코드를 찾아 채운다**
   (2026-11-26 사용자 신고·요청: 새 계좌를 사진으로 맞췄더니 현재가 0·수익률 -100%). 차례: ① **다른 계좌(같은 계좌 포함)에 이름이 같은 종목**이 있으면 그 코드(`knownCodeFor` —

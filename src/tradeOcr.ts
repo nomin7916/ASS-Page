@@ -10,7 +10,7 @@ import { normName } from './holdingsPhoto.ts';
 
 export interface OcrLineIn { text: string; conf: number; x0: number; y0: number; x1: number; y1: number }
 export type OcrFlag = 'lowconf' | 'noheader' | 'orderprice' | 'farclose' | 'noprice' | 'nodate' | 'noname' | 'selfcheck' | 'cut' | 'dateorder';
-export interface OcrTrade { rawDate: string; date: string; code: string; name: string; side: 'buy' | 'sell'; qty: number; price: number; conf: number; flags: OcrFlag[]; src: string }
+export interface OcrTrade { rawDate: string; date: string; code: string; name: string; side: 'buy' | 'sell'; qty: number; price: number; conf: number; flags: OcrFlag[]; src: string; guess?: boolean }
 export interface OcrParsed { trades: OcrTrade[]; header: boolean; title: string }
 
 export const OCR_LOWCONF = 0.85;
@@ -112,7 +112,98 @@ export function matchCand(text: string, cands: { code: string; name: string }[])
 }
 const isWordy = (t: string) => /[가-힣A-Za-z]/.test(t) && !NUM_RE.test(t.replace(/[원%+\s]/g, ''));
 
+// ── 두 줄 머리줄 거래내역(키움 해외 「거래내역」: 거래일자/처리시간 · 거래종류/적요명 · 거래단가·환율/거래수량 · 거래금액/거래금액(외)) ──
+// 한 거래 = 위·아래 두 줄. 위 줄 칸은 위 머리줄, 아래 줄 칸은 아래 머리줄에서 가장 가까운 것. 거래종류가 '매매'가 아닌 줄(입금·환전·배당)은 뺀다.
+// 프로그램 검수: 거래수량 × 거래단가 ≈ 거래금액(외)(0.5% 안) — 숫자 하나를 잘못 읽으면 어긋난다(selfcheck).
+// 종목명 칸이 화면 밖이면(「전체」 보기) 이름 없음(noname) → 화면(TradePhotoSync)이 guessOcrCodes로 그날 종가와 맞춰 찾는다.
+type TCol2 = 'date' | 'time' | 'kind' | 'side' | 'price' | 'qty' | 'amt' | 'amtF' | 'name';
+const HEAD2: [RegExp, TCol2][] = [
+  [/^(거래|주문|체결|매매)?(일자|날짜)$/, 'date'],
+  [/^(처리|체결|주문|거래)?시간$/, 'time'],
+  [/^거래(종류|구분)$/, 'kind'],
+  [/^적요(명)?$|^(매매)?구분$/, 'side'],
+  [/^(거래|체결|평균체결)?단가(\/?환율)?$|^체결가$/, 'price'],
+  [/^(거래|체결)?수량$/, 'qty'],
+  [/^거래금액(외|\(외\))$/, 'amtF'],
+  [/^거래금액$/, 'amt'],
+  [/^종목(명)?$/, 'name'],
+];
+const head2Of = (t: string): TCol2 | null => {
+  const w = t.replace(/[\s·:]/g, '').replace(/\((외)\)/, '$1');
+  for (const [re, c] of HEAD2) if (re.test(w)) return c;
+  return null;
+};
+function parseOcrTrades2(lines: OcrLineIn[], cands: { code: string; name: string }[], today: string): OcrParsed | null {
+  const ts = ptoks(lines || []);
+  const heads = ts.filter(k => !k.lnum).map(k => ({ k, c: head2Of(k.t) })).filter(x => x.c) as { k: PTok; c: TCol2 }[];
+  const has = (c: TCol2) => heads.some(x => x.c === c);
+  if (!(has('date') && has('qty') && has('price'))) return null;
+  const qh = heads.find(x => x.c === 'qty') as { k: PTok; c: TCol2 }, ph = heads.find(x => x.c === 'price') as { k: PTok; c: TCol2 };
+  const lh = qh.k.y1 - qh.k.y0;
+  if (Math.abs(qh.k.yc - ph.k.yc) < 0.6 * lh) return null;   // 한 줄 머리줄 → 기존 해석
+  const band = heads.filter(x => Math.abs(x.k.yc - qh.k.yc) < 3 * lh);
+  const midY = (Math.min(...band.map(x => x.k.yc)) + Math.max(...band.map(x => x.k.yc))) / 2;
+  const top = band.filter(x => x.k.yc < midY), bot = band.filter(x => x.k.yc >= midY);
+  const hb = Math.max(...band.map(x => x.k.y1));
+  const body = lines.filter(l => l.y0 > hb - 0.002);
+  const trades: OcrTrade[] = [];
+  const nearOf = (k: Tok, list: { k: PTok; c: TCol2 }[]) => list.reduce((b, x) => (Math.abs(x.k.xc - k.xc) < Math.abs(b.k.xc - k.xc) ? x : b)).c;
+  // 날짜 줄 = 거래일자 칸에 있는 날짜만(「55.14」 같은 금액이 짧은 날짜 꼴로 읽혀도 거래를 나누지 않게)
+  const dates = body.filter(l => DATE_RE.test(l.text.trim()) && nearOf({ t: l.text, xc: (l.x0 + l.x1) / 2, conf: l.conf }, top) === 'date').sort((a, b) => a.y0 - b.y0);
+  dates.forEach((dl, i) => {
+    const h = dl.y1 - dl.y0;
+    const lo = dl.y0 - 0.4 * h, hi = i + 1 < dates.length ? dates[i + 1].y0 - 0.4 * h : 1.01;
+    const rows = ocrRows(body.filter(l => (l.y0 + l.y1) / 2 >= lo && (l.y0 + l.y1) / 2 < hi));
+    if (rows.length === 0) return;
+    const got: Partial<Record<TCol2, Tok[]>> = {};
+    rows.slice(0, 2).forEach((row, ri) => {
+      for (const k of row.flatMap(toksOf)) (got[nearOf(k, ri === 0 ? top : bot)] ||= []).push(k);
+    });
+    const all = rows.flatMap(r => r.flatMap(toksOf));
+    const sideTok = all.find(k => /^(매수|매도)$/.test(k.t));
+    const kindTok = (got.kind || []).find(k => isWordy(k.t));
+    if (!sideTok || (kindTok && !/매매/.test(kindTok.t))) return;
+    const numIn = (c: TCol2) => (got[c] || []).find(k => NUM_RE.test(k.t.replace(/[원주$]/g, '')));
+    const pT = numIn('price'), qT = numIn('qty'), aT = numIn('amtF');
+    const qty = qT ? num(qT.t) : 0, price = pT ? num(pT.t) : 0, amtF = aT ? num(aT.t) : 0;
+    if (!(qty > 0)) return;
+    // 수량 × 단가 = 거래금액(외)이 맞으면 두 숫자는 서로 확인된 것 — 한 자리 수량(「1」)의 낮은 글자 확신은 보지 않는다
+    const agree = price > 0 && amtF > 0 && Math.abs(qty * price / amtF - 1) <= 0.005;
+    const used = (agree ? [sideTok] : [sideTok, pT, qT]).filter(Boolean) as Tok[];
+    const conf = Math.min(dl.conf, ...used.map(k => k.conf));
+    const flags: OcrFlag[] = [];
+    if (conf < OCR_LOWCONF) flags.push('lowconf');
+    if (!(price > 0)) flags.push('noprice');
+    else if (amtF > 0 && Math.abs(qty * price / amtF - 1) > 0.005) flags.push('selfcheck');
+    const date = normTradeDate(dl.text.trim(), today);
+    if (!date) flags.push('nodate');
+    const nameText = (got.name || []).filter(k => isWordy(k.t)).map(k => k.t).join(' ');
+    const m = nameText ? matchCand(nameText, cands) : null;
+    if (!m) flags.push('noname');
+    trades.push({ rawDate: dl.text.trim(), date, code: m ? m.code : '', name: m ? m.name : nameText, side: (sideTok.t === '매수' ? 'buy' : 'sell'), qty, price, conf, flags, src: rows.map(r => r.map(l => l.text).join(' ')).join(' / ') });
+  });
+  return { trades, header: true, title: '' };
+}
+
+// 이름 없는 체결 → 그날(또는 그 앞 4일 — 해외는 한국 날짜가 미국 거래일보다 하루 뒤) 종가와 체결가가 2% 안인 이 계좌 종목이 **하나뿐**이면 그 종목(guess).
+// 둘 이상이거나 없으면 그대로(확인 필요). closeOf(code, date) = 그날 종가(없으면 0).
+export const OCR_GUESS_TOL = 0.02;
+export function guessOcrCodes(trades: OcrTrade[], cands: { code: string; name: string }[], closeOf: (code: string, date: string) => number): OcrTrade[] {
+  return trades.map(t => {
+    if (t.code || !t.date || !(t.price > 0) || !t.flags.includes('noname')) return t;
+    const d0 = dayNum(t.date);
+    const hit = cands.filter(c => c.code && [0, 1, 2, 3, 4].some(back => {
+      const cl = Number(closeOf(c.code, dayStr(d0 - back))) || 0;
+      return cl > 0 && Math.abs(t.price / cl - 1) <= OCR_GUESS_TOL;
+    }));
+    if (hit.length !== 1) return t;
+    return { ...t, code: hit[0].code, name: hit[0].name, flags: t.flags.filter(f => f !== 'noname'), guess: true };
+  });
+}
+
 export function parseOcrTrades(lines: OcrLineIn[], cands: { code: string; name: string }[], today: string): OcrParsed {
+  const two = parseOcrTrades2(lines, cands, today);
+  if (two) return two;
   const rows = ocrRows(lines || []);
   const trades: OcrTrade[] = [];
   let cols: { c: Col; xc: number }[] | null = null;
@@ -211,11 +302,11 @@ export function splitOcrTrades(trades: OcrTrade[]): { okText: string; checkText:
 
 // ── 잔고(보유) 화면 — MY자산·잔고처럼 종목마다 두 줄(종목명/주문가능·보유수량 · 평가손익/수익률 · 평가금액/매입금액 · 현재가/평균단가)이거나 한 줄 ──
 // 머리줄 낱말의 가로 자리로 칸을 잡고, 같은 가로 자리에 머리줄이 위아래 둘이면(평가금액 위 · 매입금액 아래) 종목 칸 안의 숫자도 위아래 차례로 나눈다.
-export interface OcrHold { code: string; name: string; qty: number; invest: number; avg: number; conf: number; flags: OcrFlag[]; cut?: boolean }
+export interface OcrHold { code: string; name: string; qty: number; invest: number; avg: number; conf: number; flags: OcrFlag[]; cut?: boolean; ticker?: string; usd?: boolean }
 type HCol = 'name' | 'qty' | 'avail' | 'invest' | 'avg' | 'eval' | 'pl' | 'rate' | 'cur';
 const HHEAD: [RegExp, HCol][] = [
   [/^종목(명)?$/, 'name'],
-  [/^주문가능(수량)?$|^매도가능(수량)?$/, 'avail'],
+  [/^주문가능(수량)?$|^매도가능(수량)?$|^가능수량$/, 'avail'],
   [/^보유(수량)?$|^잔고(수량)?$|^수량$/, 'qty'],
   [/^매입(금액|원가)$|^매수금액$|^투자(금액|원금)$/, 'invest'],
   [/^평균(단가|매입가|매수가)$|^매입(단가|가)$/, 'avg'],
@@ -229,10 +320,16 @@ const hheadOf = (t: string): HCol | null => {
   for (const [re, c] of HHEAD) if (re.test(s)) return c;
   return null;
 };
-interface PTok extends Tok { yc: number; y0: number; y1: number }
+// li = 원래 글줄 번호 · lnum = 그 글줄에 숫자가 있음(머리줄 낱말은 글자만 있는 줄에서만 — 키움 원화 잔고 위 요약 「매입금액 189,890,144」를 머리줄로 보지 않게)
+interface PTok extends Tok { yc: number; y0: number; y1: number; li: number; lnum: boolean }
 function ptoks(lines: OcrLineIn[]): PTok[] {
-  return lines.flatMap(l => toksOf(l).map(k => ({ ...k, yc: (l.y0 + l.y1) / 2, y0: l.y0, y1: l.y1 })));
+  return lines.flatMap((l, li) => {
+    const ks = toksOf(l);
+    const lnum = ks.some(k => NUM_RE.test(k.t.replace(/[원주%]$/, '')));
+    return ks.map(k => ({ ...k, yc: (l.y0 + l.y1) / 2, y0: l.y0, y1: l.y1, li, lnum }));
+  });
 }
+const TICKER_RE = /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/;
 export function classifyOcr(lines: OcrLineIn[]): 'orders' | 'holdings' | 'unknown' {
   const ts = ptoks(lines || []);
   const hs = new Set(ts.map(k => hheadOf(k.t)).filter(Boolean));
@@ -246,28 +343,42 @@ export function classifyOcr(lines: OcrLineIn[]): 'orders' | 'holdings' | 'unknow
 
 export function parseOcrHoldings(lines: OcrLineIn[], cands: { code: string; name: string }[]): { holds: OcrHold[]; header: boolean } {
   const ts = ptoks(lines || []);
-  const heads = ts.map(k => ({ k, c: hheadOf(k.t) })).filter(x => x.c) as { k: PTok; c: HCol }[];
-  const anchor = heads.find(x => x.c === 'qty') || heads.find(x => x.c === 'invest');
-  if (!anchor) return { holds: [], header: false };
+  const heads = ts.filter(k => !k.lnum).map(k => ({ k, c: hheadOf(k.t) })).filter(x => x.c) as { k: PTok; c: HCol }[];
+  // 기준 머리줄 = 보유수량·매입금액 낱말 중 둘레(±0.07)에 머리줄 낱말이 가장 많은 것 — 화면 위 탭 「일반 잔고」의 '잔고' 같은 외톨이 낱말은 머리줄이 아니다
+  const near = (a: { k: PTok }) => heads.filter(x => Math.abs(x.k.yc - a.k.yc) < 0.07).length;
+  const anchor = heads.filter(x => x.c === 'qty' || x.c === 'invest').reduce((b: { k: PTok; c: HCol } | null, x) => (!b || near(x) > near(b) || (near(x) === near(b) && x.c === 'qty' && b.c !== 'qty') ? x : b), null);
+  if (!anchor || near(anchor) < 2) return { holds: [], header: false };
   const band = heads.filter(x => Math.abs(x.k.yc - anchor.k.yc) < 0.07);
   const hb = Math.max(...band.map(x => x.k.y1));
   const cols = band.map(x => ({ c: x.c, xc: x.k.xc, yc: x.k.yc }));
   const numCols = cols.filter(c => c.c !== 'name');
   const isNum = (t: string) => NUM_RE.test(t.replace(/[원주%]$/, ''));
   const body = ts.filter(k => k.y0 > hb - 0.002);
-  const nameToks = body.filter(k => isWordy(k.t) && !hheadOf(k.t) && !/합계|총|예수금|평가|매매비용|현금/.test(k.t) && !isNum(k.t));
-  // 같은 줄의 이름 조각은 하나로
-  const names: { t: string; y0: number; y1: number; yc: number; conf: number }[] = [];
-  for (const k of nameToks.sort((a, b) => a.yc - b.yc || a.xc - b.xc)) {
+  // 종목 이름 = 이름 낱말이 든 글줄 통째(「나스닥 100 코」의 100도 이름) · 위아래로 붙은 줄은 한 이름(키움: 「나스닥 100 코」/「어 프리미엄 인…」/「GPIQ」)
+  const nameLi = new Set(body.filter(k => isWordy(k.t) && !hheadOf(k.t) && !/합계|총|예수금|평가|매매비용|현금/.test(k.t) && !isNum(k.t)).map(k => k.li));
+  const nameLines = [...nameLi].map(li => lines[li]).sort((a, b) => (a.y0 + a.y1) / 2 - (b.y0 + b.y1) / 2 || a.x0 - b.x0);
+  const names: { t: string; y0: number; y1: number; yc: number; conf: number; h: number; parts: string[] }[] = [];
+  for (const l of nameLines) {
     const last = names[names.length - 1];
-    if (last && Math.abs(last.yc - k.yc) < 0.5 * (k.y1 - k.y0)) { last.t += ' ' + k.t; last.conf = Math.min(last.conf, k.conf); }
-    else names.push({ t: k.t, y0: k.y0, y1: k.y1, yc: k.yc, conf: k.conf });
+    const h = l.y1 - l.y0, yc = (l.y0 + l.y1) / 2;
+    if (last && Math.abs(last.yc - yc) < 0.5 * h) { last.parts[last.parts.length - 1] += ' ' + l.text.trim(); last.conf = Math.min(last.conf, l.conf); continue; }
+    if (last && l.y0 - last.y1 < 0.5 * Math.min(h, last.h)) { last.parts.push(l.text.trim()); last.y1 = Math.max(last.y1, l.y1); last.conf = Math.min(last.conf, l.conf); continue; }
+    names.push({ t: '', y0: l.y0, y1: l.y1, yc, conf: l.conf, h, parts: [l.text.trim()] });
   }
+  for (const nm of names) {
+    // 한글로 끝나고 한글로 이어지는 줄바꿈은 글자 단위로 잘린 것(「코」/「어」 = 코어) — 붙인다
+    nm.t = nm.parts.reduce((acc, p) => (!acc ? p : /[가-힣]$/.test(acc) && /^[가-힣]/.test(p) ? acc + p : acc + ' ' + p), '').replace(/\.{2,}|…/g, '').trim();
+  }
+  const nameToksLi = nameLi;
   const holds: OcrHold[] = [];
   names.forEach((nm, i) => {
-    const h = nm.y1 - nm.y0;
+    const h = nm.h;
     const top = nm.y0 - 0.6 * h, bot = i + 1 < names.length ? names[i + 1].y0 - 0.6 * h : 1.01;
-    const nums = body.filter(k => k.yc >= top && k.yc < bot && isNum(k.t));
+    const nums = body.filter(k => k.yc >= top && k.yc < bot && isNum(k.t) && !nameToksLi.has(k.li));
+    // 이름 덩어리 마지막 줄이 티커(GPIQ)면 따로 — 해외 종목 코드
+    const lastPart = nm.parts[nm.parts.length - 1];
+    const ticker = nm.parts.length > 1 && TICKER_RE.test(lastPart) ? lastPart : (TICKER_RE.test(nm.t) ? nm.t : '');
+    const shownName = ticker && nm.parts.length > 1 ? nm.parts.slice(0, -1).reduce((acc, p) => (!acc ? p : /[가-힣]$/.test(acc) && /^[가-힣]/.test(p) ? acc + p : acc + ' ' + p), '').replace(/\.{2,}|…/g, '').trim() : nm.t;
     const nearestX = (k: PTok) => { let b = numCols[0], d = 9; for (const c of numCols) { const dd = Math.abs(c.xc - k.xc); if (dd < d) { d = dd; b = c; } } return b.xc; };
     const valueOf = (key: HCol): { v: number; conf: number } | null => {
       const col = numCols.find(c => c.c === key);
@@ -277,12 +388,12 @@ export function parseOcrHoldings(lines: OcrLineIn[], cands: { code: string; name
       const mine = nums.filter(k => xs.has(nearestX(k))).sort((a, b) => a.yc - b.yc);
       const idx = stack.indexOf(col);
       const pick = mine.length === stack.length ? mine[idx] : (stack.length === 1 && mine.length >= 1 ? mine[0] : null);
-      return pick ? { v: num(pick.t.replace(/[원주%]$/, '')), conf: pick.conf } : null;
+      return pick ? { v: num(pick.t.replace(/[원주%]$/, '')), conf: pick.conf, dec: /\.\d/.test(pick.t) } : null;
     };
     const q = valueOf('qty'), inv = valueOf('invest'), avg = valueOf('avg');
     const m0 = matchCand(nm.t, cands);
     if (!q || !(q.v >= 0)) {   // 이름은 보이는데 숫자 줄이 없다 = 사진 아래가 잘림 → 그 종목은 그대로(0으로 하지 않게 '잘림' 줄)
-      holds.push({ code: m0 ? m0.code : '', name: m0 ? m0.name : nm.t.trim(), qty: 0, invest: 0, avg: 0, conf: nm.conf, flags: ['cut'], cut: true });
+      holds.push({ code: m0 ? m0.code : '', name: m0 ? m0.name : shownName, qty: 0, invest: 0, avg: 0, conf: nm.conf, flags: ['cut'], cut: true, ticker });
       return;
     }
     const flags: OcrFlag[] = [];
@@ -291,7 +402,8 @@ export function parseOcrHoldings(lines: OcrLineIn[], cands: { code: string; name
     if (conf < OCR_LOWCONF) flags.push('lowconf');
     const m = m0;
     if (!m) flags.push('noname');
-    holds.push({ code: m ? m.code : '', name: m ? m.name : nm.t.trim(), qty: q.v, invest: inv ? inv.v : 0, avg: avg ? avg.v : 0, conf, flags });
+    // 외화 화면(키움 해외잔고 「외화」) — 매입금액이 소수(141,150.7800)로 보인다 · 원화 화면은 정수
+    holds.push({ code: m ? m.code : '', name: m ? m.name : shownName, qty: q.v, invest: inv ? inv.v : 0, avg: avg ? avg.v : 0, conf, flags, ticker, usd: !!((inv && inv.dec) || (avg && avg.dec)) });
   });
   return { holds, header: true };
 }
@@ -299,8 +411,8 @@ export function parseOcrHoldings(lines: OcrLineIn[], cands: { code: string; name
 // 확인이 필요한 줄(글자 확신 낮음·자체 검사 어긋남·잘림)은 '잘림'으로 — 그 종목은 바꾸지 않는다.
 export const ocrHoldBad = (h: OcrHold) => !!h.cut || h.flags.includes('lowconf') || h.flags.includes('selfcheck');
 export const ocrHoldLine = (h: OcrHold) => ocrHoldBad(h)
-  ? `보유 | ${h.code || '-'} | ${h.name} | 잘림`
-  : `보유 | ${h.code || '-'} | ${h.name} | ${h.qty} | ${h.invest > 0 ? h.invest : '-'} | ${h.avg > 0 ? h.avg : '-'}`;
+  ? `보유 | ${h.code || h.ticker || '-'} | ${h.name} | 잘림`
+  : `보유 | ${h.code || h.ticker || '-'} | ${h.name} | ${h.qty} | ${h.invest > 0 ? h.invest : '-'} | ${h.avg > 0 ? h.avg : '-'}`;
 
 // ── 평균 과표 계산기(한 종목) 「주문내역 사진 올리기」 1순위(2026-11-26 사용자 확정: 사진은 OCR 먼저, AI는 그다음) ──
 // 주문내역 사진 → 이 종목 체결만 계산기 붙여넣기 줄(`2026-11-24 매도 50주 7490원` — taxCalcPaste.parseTaxCalcPaste가 읽는 꼴).

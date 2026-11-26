@@ -25,9 +25,12 @@ const KIND_LABEL = {
   bad: { t: '넣지 않음', c: 'text-red-300' },
 };
 const KIND_ORDER = { update: 0, zero: 1, add: 2, bad: 3, keep: 4, cut: 5, same: 6 };
-const qtyAmt = (v) => `${formatNumber(v.qty)}주 · ${formatNumber(Math.round(v.invest))}원`;
+const qtyAmt = (v, usd) => (usd
+  ? `${formatNumber(v.qty)}주 · $${Number(v.invest || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  : `${formatNumber(v.qty)}주 · ${formatNumber(Math.round(v.invest))}원`);
 
-export default function HoldingsPhotoSync({ open, onClose, accountName = '', items = [], applyItems, isAdmin = false, viewingAs = false, keyApi = null, onOpenCalendarGuide = null }) {
+// usd = 해외 계좌(2026-11-26 — 키움 해외잔고 「외화」 화면 사진 → 보유수량·투자금액(USD, investAmountUsd + 매입단가 미러)). 원화 화면은 넣지 않는다(달러 원가를 알 수 없다).
+export default function HoldingsPhotoSync({ open, onClose, accountName = '', items = [], applyItems, isAdmin = false, viewingAs = false, keyApi = null, onOpenCalendarGuide = null, usd = false }) {
   const [run, setRun] = useState({ phase: 'idle' });
   const [keyState, setKeyState] = useState({ loaded: false, key: '', canSave: false, error: '' });
   const [keyInput, setKeyInput] = useState('');
@@ -93,14 +96,14 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
   };
 
   // ⚠️ 답을 끝까지 받은({d:1}) 때만 넣는다 — 중간에 끊긴 글로 맞추면 뒤쪽 종목이 '사진에 없음'으로 0이 된다.
-  const readAndApply = async (files) => {
+  const readAndApply = async (files, fromOcr = false) => {
     const id = ++runId.current;
     const live = () => runId.current === id;
     if (abortRef.current) { try { abortRef.current.abort(); } catch { /* 끝남 */ } }
     const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
     abortRef.current = ac;
     const n = files.length;
-    setRun({ phase: 'shrink', n });
+    setRun({ phase: 'shrink', n, fromOcr });
     let images = [];
     try {
       const budget = photoBudget(n);
@@ -113,7 +116,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       return;
     }
     if (!live()) return;
-    setRun({ phase: 'read', n, got: 0 });
+    setRun({ phase: 'read', n, got: 0, fromOcr });
     let st = photoReadInit();
     try {
       const headers = { 'Content-Type': 'application/json' };
@@ -121,7 +124,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       const res = await fetch('/api/holdings-photo', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ account: accountName || '', cands: syncCandidates(itemsRef.current), images }),
+        body: JSON.stringify({ account: accountName || '', cands: syncCandidates(itemsRef.current), images, cur: usd ? 'usd' : '' }),
         signal: ac ? ac.signal : undefined,
       });
       images = [];
@@ -163,14 +166,14 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
   // 읽은 글(AI 답 · 프로그램 글자 인식) → 해석 → 계획 → 바로 넣기. ocr = 프로그램 읽기 정보(안 보인 종목을 0으로 하지 않음).
   const applyHoldText = (text, n, model, ocr) => {
     const parsed = parseHoldingsText(text);
-    const plan = planHoldingsSync(parsed, itemsRef.current, ocr ? { keepUnseen: true } : undefined);
+    const plan = planHoldingsSync(parsed, itemsRef.current, ocr || usd ? { keepUnseen: !!ocr, usd } : undefined);
     let undo = null;
     if (plan.outcome === 'apply' && applyItems) {
       const today = getTodayKST();
       const ids = plan.rows.filter(r => r.kind === 'add').map(() => generateId());
       const idGen = () => { let i = 0; return () => ids[i++]; };
-      undo = applyHoldingsPlan(itemsRef.current, plan, { newId: idGen(), today }).undo;
-      applyItems(prev => applyHoldingsPlan(prev, plan, { newId: idGen(), today }).next);
+      undo = applyHoldingsPlan(itemsRef.current, plan, { newId: idGen(), today, usd }).undo;
+      applyItems(prev => applyHoldingsPlan(prev, plan, { newId: idGen(), today, usd }).next);
     }
     setRun({ phase: 'done', n, text, plan, parsed, counts: holdCounts(plan), model, undo, ocr });
   };
@@ -208,11 +211,22 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       else unknown++;
     }
     if (!live()) return;
+    // 해외 계좌 = 외화(USD) 화면만 — 원화 화면의 매입금액은 원화라 달러 원가로 쓸 수 없다(키움: 잔고 화면 「원화」 버튼을 눌러 「외화」로 바꿔 찍기)
+    let krwShots = 0;
+    if (usd) {
+      const keep = holds.filter(h => h.cut || h.usd);
+      krwShots = holds.length - keep.length;
+      holds.length = 0;
+      holds.push(...keep);
+      if (keep.length === 0 && krwShots > 0) { setRun({ phase: 'error', n, code: 'ocr', msg: '원화 화면입니다 — 해외 계좌는 달러 금액이 필요합니다. 키움 해외잔고에서 「원화」 버튼을 눌러 「외화」로 바꾼 화면을 찍어 올려 주세요(원화 화면은 보유수량만 같고 매입금액이 원화입니다).' }); return; }
+    }
+    // 프로그램이 잔고 표를 못 찾았으면 AI(2순위)로 — 쓸 수 있을 때만(관리자 · 내 Gemini 키). 사용자 확정 2026-11-26: 사진은 OCR 1순위 · AI 2순위.
+    if (holds.length === 0 && !needKey) { readAndApply(add, true); return; }
     if (holds.length === 0) { setRun({ phase: 'error', n, code: 'ocr', msg: '사진에서 잔고(보유종목) 표를 찾지 못했습니다 — 종목명·보유수량·매입금액 머리줄이 보이게 찍어 주세요(또는 아래 AI로 읽기).' }); return; }
     // 겹쳐 찍은 사진의 같은 종목은 한 번만(먼저 읽은 것)
     const seen = new Set();
     const uniq = holds.filter(h => { const k = h.code || h.name; if (seen.has(k)) return false; seen.add(k); return true; });
-    applyHoldText(uniq.map(ocrHoldLine).join('\n'), n, '프로그램 글자 인식(AI 없이)', { bad: uniq.filter(ocrHoldBad), unknown });
+    applyHoldText(uniq.map(ocrHoldLine).join('\n'), n, '프로그램 글자 인식(AI 없이)', { bad: uniq.filter(ocrHoldBad), unknown, krwShots });
   };
 
   const undoApply = () => {
@@ -245,6 +259,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 text-[12.5px] text-gray-300 leading-relaxed">
           <div className="space-y-1">
             <p>증권사 앱의 <b className="text-gray-100">잔고(보유종목) 화면</b>을 캡처해 올리면, 이 계좌 종목의 <b className="text-blue-200">보유수량·투자금액(매입금액)</b>을 사진대로 맞춥니다.</p>
+            {usd && <p className="text-amber-200/90">해외 계좌 — 키움 해외잔고에서 「원화」 버튼을 눌러 <b>「외화」</b>로 바꾼 화면(매입금액이 달러)을 찍어 주세요. 원화 화면은 넣지 않습니다(달러 원가를 알 수 없어서).</p>}
             <p className="text-gray-400">목록이 길면 내려 가며 찍은 사진을 <b className="text-gray-200">한 번에 모두</b> 고르세요. 사진에 없는 종목은 판 것으로 보고 0으로 하고, 종목명 칸에 📝 메모(마우스를 올리면 보임)를 남깁니다.</p>
           </div>
 
@@ -308,6 +323,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
               ? `글자 인식 엔진을 받는 중… ${Math.round((run.f || 0) * 100)}% (처음 한 번만)`
               : `사진 ${run.i}/${run.n}장 글자를 읽는 중… ${Math.round((run.f || 0) * 100)}%`}</p>
           )}
+          {(run.phase === 'shrink' || run.phase === 'read') && run.fromOcr && <p className="text-[11.5px] text-gray-400">프로그램이 잔고 표를 찾지 못해 AI로 읽습니다.</p>}
           {run.phase === 'shrink' && <p className="text-sky-200">사진 {run.n}장을 줄이는 중…</p>}
           {run.phase === 'read' && <p className="text-sky-200 animate-pulse">AI가 사진 {run.n}장을 읽는 중…{run.got > 0 ? ` (${run.got}자 받음)` : ''}</p>}
           {run.phase === 'error' && (
@@ -340,8 +356,8 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
                       {rows.map((r, i) => (
                         <tr key={`${r.itemId || r.name}-${i}`} className="border-b border-gray-800/60 align-top" title={r.note || undefined}>
                           <td className="py-1 pr-2 text-gray-200 max-w-[180px] truncate">{r.name || r.code}</td>
-                          <td className="py-1 px-2 text-right text-gray-400 whitespace-nowrap tabular-nums">{r.kind === 'add' || r.kind === 'bad' ? '-' : qtyAmt(r.before)}</td>
-                          <td className="py-1 px-2 text-right text-gray-200 whitespace-nowrap tabular-nums">{r.kind === 'bad' ? '-' : qtyAmt(r.after)}</td>
+                          <td className="py-1 px-2 text-right text-gray-400 whitespace-nowrap tabular-nums">{r.kind === 'add' || r.kind === 'bad' ? '-' : qtyAmt(r.before, usd)}</td>
+                          <td className="py-1 px-2 text-right text-gray-200 whitespace-nowrap tabular-nums">{r.kind === 'bad' ? '-' : qtyAmt(r.after, usd)}</td>
                           <td className={`py-1 pl-2 text-right whitespace-nowrap font-semibold ${KIND_LABEL[r.kind].c}`}>{KIND_LABEL[r.kind].t}</td>
                         </tr>
                       ))}
@@ -370,6 +386,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
                   <ul className="list-disc pl-4">{run.ocr.bad.map((h, i) => <li key={i}>{h.name} — {h.flags.filter(f => f !== 'noname').map(f => OCR_FLAG_TEXT[f]).join(' · ')}</li>)}</ul>
                 </div>
               )}
+              {run.ocr && run.ocr.krwShots > 0 && <p className="text-[11.5px] text-amber-300/90">원화 화면 {run.ocr.krwShots}종목은 넣지 않았습니다 — 해외 계좌는 「외화」로 바꿔 찍은 화면의 달러 매입금액으로 맞춥니다.</p>}
               {run.ocr && run.ocr.unknown > 0 && <p className="text-[11.5px] text-amber-300/90">잔고 표를 찾지 못한 사진 {run.ocr.unknown}장은 건너뛰었습니다.</p>}
               {run.model && <p className="text-[10.5px] text-gray-600">읽은 AI: {run.model}</p>}
             </div>
