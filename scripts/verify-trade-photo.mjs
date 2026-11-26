@@ -211,7 +211,8 @@ ok('#W15 내 PC의 Claude로 읽기 — pcAsk 도구 import · 사진은 target 
   && /applyText\(text, job0\.n,/.test(win) && /\{isAdmin && !viewingAs && \(\s*<div className="rounded-lg border border-emerald/.test(win));
 ok('#W16 PC 읽기는 관리자만 — 칸(isAdmin) · 상태 조회도 관리자만 · 서버도 403(사진 든 질문)',
   /if \(!open \|\| viewingAs \|\| !isAdmin\) return;\s*let alive = true;\s*fetch\('\/api\/pc-ask'/.test(win)
-  && /c\.imgs\.length > 0 && email\.toLowerCase\(\) !== ADMIN_EMAIL\.toLowerCase\(\)\) return json\(403/.test(stripComments(read('api/pc-ask.ts'))));
+  && /const isAdmin = email\.toLowerCase\(\) === ADMIN_EMAIL\.toLowerCase\(\);/.test(stripComments(read('api/pc-ask.ts')))
+  && /c\.imgs\.length > 0 && !isAdmin\) return json\(403/.test(stripComments(read('api/pc-ask.ts'))));
 ok('#W17 맨 위 = 프로그램 읽기(사진 올리기) · AI 방법(내 AI·Gemini 키·내 PC)은 「AI로 읽기·검수」 접힘 안 — 무료 AI 목록(PHOTO_AI_IDS) · 휴대폰 공유(share는 await 전)',
   /const \[showAi, setShowAi\] = useState\(false\)/.test(win) && /\{showAi && \(\s*<div[^>]*>\s*\{subSection\}/.test(win)
   && win.indexOf('onChange={readByOcr}') < win.indexOf('{showAi && (') && /PHOTO_AI_IDS\.map\(id =>/.test(win)

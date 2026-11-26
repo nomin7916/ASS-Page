@@ -11,6 +11,8 @@ export const PC_FAST_FOR = 2 * 60_000;
 export const PC_GIVE_UP = 3 * 3_600_000;      // 이만큼 지나도 답이 없으면 기다리기를 그만둔다
 export const PC_ONLINE_MS = 3 * 60_000;       // PC는 20초(처음 10분)·60초마다 묻고 서버는 1분마다 시각을 적는다
 export const PC_TAKE_SLOW = 10 * 60_000;
+export const CLOUD_GIVE_UP = 30 * 60_000;     // 클라우드 Claude가 이만큼 답하지 않으면 그만둔다(보통 1~3분)
+export const CLOUD_TAKE_SLOW = 8 * 60_000;
 // 기다리기 — 처음 10분은 20초마다(이어 묻기가 잦다), 그 뒤 60초마다(우편함 Redis 사용량) · 30×20초 + 90×60초 = 100분(백그라운드 명령 2시간 한도 안)
 export const PC_LOOP_ROUNDS = 120;
 export const PC_LOOP_FAST = 20;
@@ -119,8 +121,28 @@ export function pcWaitText(label: string, job: any, seen: number, now = Date.now
   return '';
 }
 
+// 클라우드 Claude(2026-11-26 — PC 없이, 관리자 Claude 예약 작업을 API로 부름) 기다리는 자리의 한 줄.
+export function cloudWaitText(job: any, now = Date.now()): string {
+  if (!job || job.st === 'wait') return '클라우드 Claude를 불렀습니다 — 작업이 시작되면 웹 검색으로 찾아 답합니다(보통 1~3분).';
+  if (job.st === 'take') {
+    const d = now - (Number(job.ta) || now);
+    if (d > CLOUD_TAKE_SLOW) return `클라우드 Claude가 찾은 지 ${Math.round(d / 60_000)}분이 지났습니다 — 조금 더 기다려 주세요.`;
+    return '클라우드 Claude가 웹에서 찾아 답을 쓰는 중입니다…';
+  }
+  return '';
+}
+export const isCloudVia = (via: unknown) => String(via || '').startsWith('cloud:');
+export const CLOUD_MODEL_LABEL = 'Claude · 클라우드(내 구독)';
+
 export function pcAskErrorText(code: string): string {
   switch (code) {
+    case 'admin': return '클라우드 Claude는 관리자만 씁니다.';
+    case 'noroutine': return 'Claude 예약 작업이 연결되지 않았습니다 — 분배금 현황 「과표 계산」의 「⚙ Claude 연결」에서 연결해 주세요.';
+    case 'ctoken': return 'Claude 예약 작업 토큰이 맞지 않습니다(만료·삭제) — 「과표 계산」의 「⚙ Claude 연결」에서 다시 연결해 주세요.';
+    case 'crate': return 'Claude 쪽 한도에 걸려 예약 작업을 부르지 못했습니다 — 잠시 뒤 다시 맡겨 주세요.';
+    case 'cfire': return 'Claude 예약 작업을 부르지 못했습니다 — 잠시 뒤 다시 맡겨 주세요.';
+    case 'hour': return '클라우드 Claude는 한 시간에 부를 수 있는 횟수를 다 썼습니다 — 잠시 뒤 다시 맡겨 주세요.';
+    case 'cloudlate': return '클라우드 Claude가 30분 넘게 답을 넣지 않아 기다리기를 그만두었습니다 — 다시 맡겨 주세요.';
     case 'nopc': return 'PC가 아직 연결되지 않았습니다 — ⚙ 설정 「내 PC로 자동 묻기」에서 연결 문구를 받아 PC의 Claude에 붙여 넣어 주세요.';
     case 'busy': return 'PC에 맡겨 둔 질문이 많습니다 — 앞 질문의 답이 온 뒤 다시 맡겨 주세요.';
     case 'day': return '오늘 PC에 맡길 수 있는 횟수를 다 썼습니다 — 내일 다시 맡겨 주세요.';
@@ -140,11 +162,11 @@ export function pcModelLabel(label: string, model: string): string {
 }
 
 // 대화 묶음 전체에서 PC 답을 기다리는 자리들(err 'pc' + job).
-export function pcPending(chats: any[]): { chatId: string; msgId: string; job: string; at: string; hid: string }[] {
-  const out: { chatId: string; msgId: string; job: string; at: string; hid: string }[] = [];
+export function pcPending(chats: any[]): { chatId: string; msgId: string; job: string; at: string; hid: string; cloud: boolean }[] {
+  const out: { chatId: string; msgId: string; job: string; at: string; hid: string; cloud: boolean }[] = [];
   for (const c of Array.isArray(chats) ? chats : []) {
     for (const m of Array.isArray(c?.msgs) ? c.msgs : []) {
-      if (m && m.role === 'model' && m.err === 'pc' && PC_JOB_RE.test(String(m.job || ''))) out.push({ chatId: c.id, msgId: m.id, job: m.job, at: String(m.at || ''), hid: String(m.via || '').replace(/^pc:/, '') });
+      if (m && m.role === 'model' && m.err === 'pc' && PC_JOB_RE.test(String(m.job || ''))) out.push({ chatId: c.id, msgId: m.id, job: m.job, at: String(m.at || ''), hid: String(m.via || '').replace(/^(pc|cloud):/, ''), cloud: isCloudVia(m.via) });
     }
   }
   return out;
@@ -155,7 +177,7 @@ export function pcPollDelay(pending: { at: string }[], now = Date.now()): number
   const newest = Math.max(0, ...pending.map(p => Date.parse(p.at) || 0));
   return now - newest < PC_FAST_FOR ? PC_POLL_FAST : PC_POLL_SLOW;
 }
-export function pcTooLate(at: string, now = Date.now()): boolean {
+export function pcTooLate(at: string, now = Date.now(), cloud = false): boolean {
   const t = Date.parse(at);
-  return Number.isFinite(t) && now - t > PC_GIVE_UP;
+  return Number.isFinite(t) && now - t > (cloud ? CLOUD_GIVE_UP : PC_GIVE_UP);
 }

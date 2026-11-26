@@ -165,7 +165,7 @@ src/
 
 - 모든 `api/*.ts` 경로는 처리부 **첫 줄**이 `const denied = await requireAuth(req); if (denied) return denied;`(새 경로도).
   예외는 `market-calendar`뿐(로그인 화면에서 부름·비밀 키 없음 — 대신 연도 범위를 작년-4~+10년으로 묶는다).
-  그리고 `ai-job`(Claude 예약 작업 전용) — 첫 줄이 `requireJobKey`(일마다의 열쇠, Redis엔 해시만) · `fund-job`(펀드 기준가 우편함 — 첫 줄 `requireFundJobKey`). verify:api-auth `JOB_GUARDS`.
+  그리고 `ai-job`(Claude 예약 작업 전용) — 첫 줄이 `requireJobKey`(일마다의 열쇠, Redis엔 해시만) · `fund-job`(펀드 기준가 우편함 — 첫 줄 `requireFundJobKey`) · `pc-job`(`requirePcKey`) · `pc-cloud`(AI 검색 클라우드 Claude — `requireCloudKey`). verify:api-auth `JOB_GUARDS`.
 - 헤더 `X-App-Token`(구글 로그인 액세스 토큰) → tokeninfo `aud`=GOOGLE_CLIENT_ID·`email_verified`(인스턴스 메모리 캐시: 통과 ≤10분·거부 1분).
   ⚠️ `Authorization`으로 바꾸지 말 것 — Vercel CDN이 그 요청은 캐시하지 않는다. CDN 캐시 적중은 토큰 없이 나간다(공개 시세·함수 미실행 = 키 한도 0).
 - 서버끼리(`history`·`indicators` → `fred`)는 `internalAuthHeaders()`(서버 비밀값 해시). `allowInternal`은 `fred`만.
@@ -236,6 +236,10 @@ src/
   열쇠로 할 수 있는 일 = 그 사람 질문 받기·답 넣기뿐. 서버는 구독 로그인(비밀번호·쿠키)을 받지도 쓰지도 않는다. 관리자 접속 중엔 숨김.
 - 사이트 목록 `PC_TARGETS` = 화면 `AI_HANDS`(id·주소 대조). 한도: 동시 5 · 하루 60. Redis 아끼기: PC는 처음 10분 20초·그 뒤 60초마다 확인, 확인 시각은 1분에 한 번만 적음.
   검증: `verify:pc-ask`(가짜 구글·Redis로 처리부 끝까지 + 연결 문구 속 bash·curl을 로컬 서버에 실제로 돌림).
+- **클라우드 Claude(PC 없이, 2026-11-26 — 학습 사이트와 같은 길)**: 관리자 + Claude 예약 작업 연결(`status.cloud`)이면 AI 고르기 「Claude · 클라우드」·Gemini 한도 오류(`CLOUD_FALLBACK`) 때 자동 ·
+  오류 말풍선 「클라우드 Claude로 묻기」 → `pc-ask {cloud:true}` → 같은 우편함(`pca:job`, **PC 줄 `pca:q`엔 넣지 않음** · 일마다 열쇠 해시 `kh`) + 「[ASS-PAGE-과표 사진 읽기 · API]」
+  예약 작업을 `종류=search`로 부름(`cloudFireText`) → 작업이 `docs/ai-task/TAX-PHOTO.md`「AI 검색」절대로 `scripts/ai-task/aisearch.mjs`로 `/api/pc-cloud`(**requireCloudKey**)에서 받고 답을 넣음.
+  화면 자리 = `via:'cloud:claude'`(30분 넘으면 그만). ⚠️ **「PC 자동 켬」이면 Enter·보내기 = 내 PC의 Claude**(`send`) — Gemini로 가던 것(사용자 신고 2026-11-26) 되돌리지 말 것(verify:pc-ask #S10).
 
 ## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 

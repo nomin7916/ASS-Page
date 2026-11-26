@@ -18,12 +18,15 @@ import {
   chatMatches, chatToMarkdown, chatFileName, searchHoldings, EXAMPLE_ASKS, HOLD_ASK, QUICK_ASKS, SPEECH_RATES,
 } from '../aiSearch';
 import {
-  GEMINI_PICK, AI_PROVIDERS, AI_COST_LABEL, AI_HANDS, HAND_SHARE, aiProviderById, aiPrefsOf, normalizeAiKeys, looksLikeAiKey, aiKeyWarning, maskAiKey,
+  GEMINI_PICK, CLOUD_PICK, AI_PROVIDERS, AI_COST_LABEL, AI_HANDS, HAND_SHARE, aiProviderById, aiPrefsOf, normalizeAiKeys, looksLikeAiKey, aiKeyWarning, maskAiKey,
   cleanModels, pickModel, aiErrorText, handName, handPrompt, handUrl, cleanPaste, pasteIsQuestion, handModelLabel,
 } from '../aiProviders';
-import { pcTaskPrompt, pcSeenText, pcWaitText, pcAskErrorText, pcModelLabel, pcPending, pcPollDelay, pcTooLate, PC_JOB_RE } from '../pcAsk';
+import { pcTaskPrompt, pcSeenText, pcWaitText, pcAskErrorText, pcModelLabel, pcPending, pcPollDelay, pcTooLate, PC_JOB_RE, cloudWaitText, isCloudVia, CLOUD_MODEL_LABEL, pcOnline } from '../pcAsk';
 import { useSpeech } from '../hooks/useSpeech';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
+
+// Gemini 검색이 이 까닭으로 못 하면 클라우드 Claude로 넘긴다(관리자 + 예약 작업 연결일 때만, 2026-11-26).
+const CLOUD_FALLBACK = new Set(['rate', 'rate1m', 'quota0', 'credit', 'nokey', 'badkey']);
 
 // 아이콘 — lucide 0.577.0에 있는지 확인할 수 없는 것은 인라인 SVG(UserInfoBar FlowIcon과 같은 이유).
 const Svg = ({ size = 14, children }) => (
@@ -130,7 +133,7 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
   const [models, setModels] = useState({});
   const [pasteBox, setPasteBox] = useState(null);
   const [handNote, setHandNote] = useState('');
-  const [pcInfo, setPcInfo] = useState({ loaded: false, linked: false, seen: 0, keyAt: 0, error: '' });
+  const [pcInfo, setPcInfo] = useState({ loaded: false, linked: false, seen: 0, keyAt: 0, error: '', cloud: false });
   const [pcJobs, setPcJobs] = useState({});
   const [pcSetup, setPcSetup] = useState(null);
   const [pcBusy, setPcBusy] = useState(false);
@@ -266,11 +269,17 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
     const modelLabel = () => (pickP ? `${pickP.short} · ${st.model || pickModelId}`.slice(0, 80) : st.model);
     const failCode = pickP ? 'fail' : 'gemini';
     const paint = () => { const t = Date.now(); if (t - painted < 90) return; painted = t; patchMsg(cid, aMsg.id, { text: st.text, model: modelLabel() }); };
+    // Gemini 검색이 한도·키 때문에 못 하면(관리자 + 클라우드 Claude 연결) 그 질문을 클라우드 Claude에 바로 넘긴다 — 실패한 자리를 바꿔 넣는다.
+    const toCloud = (err) => {
+      if (pickP || !cloudOn || !CLOUD_FALLBACK.has(err)) return;
+      setTimeout(() => askPc('claude', text, base.length, { cloud: true, chatId: cid, note: `Gemini가 답하지 못해(${err === 'rate' ? '하루 무료 한도' : err === 'rate1m' ? '1분 한도' : '키·한도'}) 클라우드 Claude(내 구독)에 넘겼습니다.` }), 0);
+    };
     const finish = (patch) => {
       patchMsg(cid, aMsg.id, { pending: false, model: modelLabel(), ...patch });
       setRunning(null);
       if (abortRef.current === ac) abortRef.current = null;
       scheduleSave();
+      if (patch.err && !patch.text) toCloud(patch.err);
     };
     try {
       const headers = { 'Content-Type': 'application/json' };
@@ -541,7 +550,7 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
     if (viewingAs) return;
     try {
       const r = await pcCall({ op: 'status' });
-      setPcInfo(r.ok ? { loaded: true, linked: !!r.linked, seen: Number(r.seen) || 0, keyAt: Number(r.keyAt) || 0, error: '' } : { loaded: true, linked: false, seen: 0, keyAt: 0, error: r.error });
+      setPcInfo(r.ok ? { loaded: true, linked: !!r.linked, seen: Number(r.seen) || 0, keyAt: Number(r.keyAt) || 0, error: '', cloud: !!r.cloud } : { loaded: true, linked: false, seen: 0, keyAt: 0, error: r.error, cloud: false });
     } catch { setPcInfo(p => ({ ...p, loaded: true, error: '인터넷 연결을 확인해 주세요' })); }
   };
   const makePcKey = async () => {
@@ -560,29 +569,44 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
     setPcBusy(true);
     try {
       const r = await pcCall({ op: 'unlink' });
-      if (r.ok) { setPcInfo({ loaded: true, linked: false, seen: 0, keyAt: 0, error: '' }); setPcSetup(null); }
+      if (r.ok) { setPcInfo(p => ({ ...p, loaded: true, linked: false, seen: 0, keyAt: 0, error: '' })); setPcSetup(null); }
       else setPcInfo(p => ({ ...p, error: r.error || '연결을 끊지 못했습니다' }));
     } catch { setPcInfo(p => ({ ...p, error: '인터넷 연결을 확인해 주세요' })); }
     setPcBusy(false);
   };
   const pcActive = !viewingAs && !!(store && store.pcOn) && pcInfo.linked;
+  // 클라우드 Claude(2026-11-26 — 학습 사이트처럼 PC 없이): 관리자 + Claude 예약 작업 연결(서버 status.cloud)일 때만.
+  const cloudOn = !viewingAs && !!pcInfo.cloud;
+  const cloudPick = cloudOn && prefs.pick === CLOUD_PICK;
+  // 보내기(Enter·보내기 단추) — 클라우드 Claude를 골랐으면 그리로 · 「PC 자동 켬」이면 내 PC의 Claude로(PC가 3분 넘게 확인하지 않았고
+  //   클라우드를 쓸 수 있으면 클라우드로) · 아니면 고른 AI(기본 Gemini 검색).
+  //   ⚠️ 「PC 자동 켬」인데 Enter가 Gemini로 가던 것(2026-11-26 사용자 신고 — 한도 오류만 쌓임)으로 되돌리지 말 것.
+  const send = (raw = draft) => {
+    if (cloudPick) askPc('claude', raw, null, { cloud: true });
+    else if (pcActive && cloudOn && !pcOnline(pcInfo.seen)) askPc('claude', raw, null, { cloud: true, note: 'PC 도우미 대화가 멈춰 있어 클라우드 Claude(내 구독)에 맡겼습니다.' });
+    else if (pcActive) askPc('claude', raw);
+    else ask(raw);
+  };
   const togglePc = () => {
     if (!pcInfo.linked) { setPanel('settings'); flashNote('먼저 ⚙ 설정의 「내 PC로 자동 묻기」에서 PC를 연결해 주세요'); return; }
     setStore(prev => prev && ({ ...prev, pcOn: !prev.pcOn }));
     scheduleSave();
   };
   // 맡기기 — cutAt이 있으면 그 자리(질문)부터 지우고 다시 맡긴다.
-  const askPc = async (hid, raw, cutAt = null) => {
+  // opt.cloud = 클라우드 Claude(PC 대신 관리자 Claude 예약 작업) · opt.chatId = 그 대화에(Gemini 한도 → 넘길 때) · opt.note = 기다리는 자리에 한 줄
+  const askPc = async (hid, raw, cutAt = null, opt = {}) => {
     const text = String(raw || '').trim().slice(0, 4000);
     const s = storeRef.current;
     if (!text || running || !s || viewingAs) return;
-    const prevChat = activeId ? s.chats.find(c => c.id === activeId) : null;
+    const cloud = !!opt.cloud;
+    const chatId = opt.chatId || activeId;
+    const prevChat = chatId ? s.chats.find(c => c.id === chatId) : null;
     const base = prevChat ? (cutAt == null ? prevChat.msgs : prevChat.msgs.slice(0, cutAt)) : [];
     const prompt = handPromptOf(text, base);
     const now = new Date().toISOString();
-    const cid = prevChat ? prevChat.id : generateId();
+    const cid = prevChat ? prevChat.id : (opt.chatId || generateId());
     const uMsg = { id: generateId(), role: 'user', text, at: now };
-    const aMsg = { id: generateId(), role: 'model', text: '', at: now, err: 'pc', via: `pc:${hid}`, job: '' };
+    const aMsg = { id: generateId(), role: 'model', text: '', at: now, err: 'pc', via: cloud ? 'cloud:claude' : `pc:${hid}`, job: '', ...(opt.note ? { msg: opt.note } : {}) };
     setStore(prev => {
       if (!prev) return prev;
       const exists = prev.chats.some(c => c.id === cid);
@@ -594,11 +618,12 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
     setActiveId(cid); setDraft(''); setPanel('chat'); setPasteBox(null);
     stickBottom.current = true;
     let r;
-    try { r = await pcCall({ op: 'ask', target: hid, prompt }); } catch { r = { ok: false, code: 'net' }; }
+    try { r = await pcCall(cloud ? { op: 'ask', target: 'claude', prompt, cloud: true } : { op: 'ask', target: hid, prompt }); } catch { r = { ok: false, code: 'net' }; }
     if (r.ok && PC_JOB_RE.test(String(r.id || ''))) patchMsg(cid, aMsg.id, { job: r.id });
     else {
       patchMsg(cid, aMsg.id, { err: 'pcfail', msg: pcAskErrorText(r.code) });
-      if (r.code === 'nopc') setPcInfo(p => ({ ...p, linked: false }));
+      if (r.code === 'nopc' && !cloud) setPcInfo(p => ({ ...p, linked: false }));
+      if (cloud && (r.code === 'noroutine' || r.code === 'admin')) setPcInfo(p => ({ ...p, cloud: false }));
     }
     scheduleSave();
   };
@@ -611,14 +636,14 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
     const m = msgs[idx];
     if (!m || !active) return;
     if (m.job) pcCall({ op: 'cancel', id: m.job }).catch(() => { /* 위와 같음 */ });
-    const hid = String(m.via || '').replace(/^pc:/, '');
+    const hid = String(m.via || '').replace(/^(pc|cloud):/, '');
     updateChat(active.id, c => ({ ...c, msgs: c.msgs.map(x => (x.id !== m.id ? x : { ...x, err: 'hand', via: `hand:${hid}`, job: '', msg: '' })) }));
   };
   const pcRetry = (idx) => {
     const m = msgs[idx];
     const q = msgs[idx - 1];
     if (!m || !q || q.role !== 'user') return;
-    askPc(String(m.via || '').replace(/^pc:/, '') || 'claude', q.text, idx - 1);
+    askPc(String(m.via || '').replace(/^(pc|cloud):/, '') || 'claude', q.text, idx - 1, { cloud: isCloudVia(m.via) });
   };
   useEffect(() => { if (open) loadPc(); }, [open]);
   // 맡긴 질문의 답을 기다린다 — 창이 닫혀 있어도(늘 떠 있는 창) · 새로고침 뒤에도(저장된 job 번호로) 이어서.
@@ -643,14 +668,14 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
           const j = byId[p.job];
           const label = handName(p.hid);
           if (j && j.st === 'done' && j.a) {
-            patchMsg(p.chatId, p.msgId, { text: j.a, err: '', msg: '', job: '', model: pcModelLabel(label, j.m), at: new Date(Number(j.da) || Date.now()).toISOString() });
+            patchMsg(p.chatId, p.msgId, { text: j.a, err: '', msg: '', job: '', model: p.cloud ? CLOUD_MODEL_LABEL : pcModelLabel(label, j.m), at: new Date(Number(j.da) || Date.now()).toISOString() });
             changed = true;
           } else if (j && (j.st === 'fail' || j.st === 'cancel' || j.st === 'gone')) {
-            patchMsg(p.chatId, p.msgId, { err: 'pcfail', job: '', msg: j.st === 'fail' ? `PC가 ${label}에 묻지 못했습니다 — ${j.e || '까닭 없음'}` : pcAskErrorText(j.st) });
+            patchMsg(p.chatId, p.msgId, { err: 'pcfail', job: '', msg: j.st === 'fail' ? (p.cloud ? `클라우드 Claude가 답하지 못했습니다 — ${j.e || '까닭 없음'}` : `PC가 ${label}에 묻지 못했습니다 — ${j.e || '까닭 없음'}`) : pcAskErrorText(j.st) });
             changed = true;
-          } else if (pcTooLate(p.at)) {
+          } else if (pcTooLate(p.at, Date.now(), p.cloud)) {
             pcCall({ op: 'cancel', id: p.job }).catch(() => { /* 2일 뒤 스스로 비운다 */ });
-            patchMsg(p.chatId, p.msgId, { err: 'pcfail', job: '', msg: pcAskErrorText('late') });
+            patchMsg(p.chatId, p.msgId, { err: 'pcfail', job: '', msg: pcAskErrorText(p.cloud ? 'cloudlate' : 'late') });
             changed = true;
           }
         }
@@ -868,7 +893,17 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
   );
   // 내 PC에 맡겨 두고 답을 기다리는 자리(m.err === 'pc') — 답이 오면 위 효과가 바로 넣는다.
   const pcBox = (m, i) => {
-    const label = handName(String(m.via || '').replace(/^pc:/, ''));
+    const label = handName(String(m.via || '').replace(/^(pc|cloud):/, ''));
+    if (isCloudVia(m.via)) return (
+      <div className="rounded-md border border-teal-500/40 bg-teal-500/10 px-2.5 py-2 text-[12px] text-teal-100 space-y-1.5">
+        {m.msg && <p className="text-[11px] text-amber-200/90">{m.msg}</p>}
+        <p className="animate-pulse">{m.job ? cloudWaitText(pcJobs[m.job]) : '클라우드 Claude에 맡기는 중…'}</p>
+        <p className="text-[11px] text-teal-200/70">PC 없이 — 내 Claude 구독의 예약 작업이 웹 검색으로 찾아 답하고, 답이 오면 여기에 바로 넣습니다. 이 창을 닫아도 됩니다.</p>
+        <div className="flex gap-1.5 flex-wrap">
+          <button onClick={() => cancelPc(i)} className={chip}><X size={12} />취소</button>
+        </div>
+      </div>
+    );
     return (
       <div className="rounded-md border border-teal-500/40 bg-teal-500/10 px-2.5 py-2 text-[12px] text-teal-100 space-y-1.5">
         <p className="animate-pulse">{m.job ? pcWaitText(label, pcJobs[m.job], pcInfo.seen) : '내 PC에 맡기는 중…'}</p>
@@ -1090,7 +1125,7 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
               )}
               <div className="flex flex-wrap gap-1.5 justify-center">
                 {[...(store && store.holdOn ? [HOLD_ASK] : []), ...EXAMPLE_ASKS].map(q => (
-                  <button key={q} disabled={!!running} onClick={() => (needKey ? setDraft(q) : ask(q))} className="px-2.5 py-1.5 rounded-full border border-gray-700 bg-gray-900/40 text-[12px] text-gray-300 hover:border-sky-600 hover:text-white disabled:opacity-40 transition">{q}</button>
+                  <button key={q} disabled={!!running} onClick={() => (needKey && !cloudPick && !pcActive ? setDraft(q) : send(q))} className="px-2.5 py-1.5 rounded-full border border-gray-700 bg-gray-900/40 text-[12px] text-gray-300 hover:border-sky-600 hover:text-white disabled:opacity-40 transition">{q}</button>
                 ))}
               </div>
             </div>
@@ -1111,8 +1146,8 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
                   <p>{errText(m)}</p>
                   {m.msg && m.err !== 'stop' && m.err !== 'pcfail' && <p className="text-[11px] text-red-300/70 break-all">{m.msg}</p>}
                   <div className="flex gap-1.5 flex-wrap">
-                    {m.err === 'pcfail' && i === msgs.length - 1 && !running && !viewingAs && <button onClick={() => pcRetry(i)} className={chip}><RefreshCw size={12} />PC에 다시 맡기기</button>}
-                    {m.err === 'pcfail' && i === msgs.length - 1 && !pcInfo.linked && !viewingAs && <button onClick={() => setPanel('settings')} className={chip}><Settings size={12} />PC 연결</button>}
+                    {m.err === 'pcfail' && i === msgs.length - 1 && !running && !viewingAs && <button onClick={() => pcRetry(i)} className={chip}><RefreshCw size={12} />{isCloudVia(m.via) ? '다시 맡기기' : 'PC에 다시 맡기기'}</button>}
+                    {m.err === 'pcfail' && !isCloudVia(m.via) && i === msgs.length - 1 && !pcInfo.linked && !viewingAs && <button onClick={() => setPanel('settings')} className={chip}><Settings size={12} />PC 연결</button>}
                     {i === msgs.length - 1 && !running && <button onClick={() => retry(i)} className={chip}><RefreshCw size={12} />다시 묻기</button>}
                     {apiOf(m) ? (<>
                       {(m.err === 'needkey' || m.err === 'badkey' || m.err === 'credit') && <button onClick={() => openAiSettings(apiOf(m).id)} className={chip}><Lock size={12} />키 설정</button>}
@@ -1123,6 +1158,7 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
                       {(m.err === 'credit' || m.err === 'quota0') && <a href="https://aistudio.google.com/projects" target="_blank" rel="noopener noreferrer" className={chip}><ExternalLink size={12} />AI Studio 열기</a>}
                       {(m.err === 'rate' || m.err === 'rate1m' || m.err === 'quota0') && <a href="https://ai.dev/rate-limit" target="_blank" rel="noopener noreferrer" className={chip}><ExternalLink size={12} />한도 보기</a>}
                     </>)}
+                    {cloudOn && m.err !== 'stop' && i === msgs.length - 1 && !running && msgs[i - 1] && msgs[i - 1].role === 'user' && !(m.err === 'pcfail' && isCloudVia(m.via)) && <button onClick={() => askPc('claude', msgs[i - 1].text, i - 1, { cloud: true })} className={chip}>클라우드 Claude로 묻기</button>}
                     {m.err !== 'stop' && i === msgs.length - 1 && !running && msgs[i - 1] && msgs[i - 1].role === 'user' && <button onClick={() => toHand(i)} className={chip}>내 구독 AI로 묻기</button>}
                   </div>
                 </div>
@@ -1160,7 +1196,7 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
           )))}
           {active && lastMsg && lastMsg.role === 'model' && !lastMsg.pending && !lastMsg.err && !running && (
             <div className="flex flex-wrap gap-1.5">
-              {QUICK_ASKS.map(a => <button key={a.label} onClick={() => ask(a.text)} className="px-2.5 py-1 rounded-full border border-sky-800/60 bg-sky-900/20 text-[11.5px] text-sky-200 hover:bg-sky-900/40">{a.label}</button>)}
+              {QUICK_ASKS.map(a => <button key={a.label} onClick={() => send(a.text)} className="px-2.5 py-1 rounded-full border border-sky-800/60 bg-sky-900/20 text-[11.5px] text-sky-200 hover:bg-sky-900/40">{a.label}</button>)}
               <button onClick={() => copyText(`c:${active.id}`, chatToMarkdown(active))} className="px-2.5 py-1 rounded-full border border-gray-700 text-[11.5px] text-gray-300 hover:text-white">{copied === `c:${active.id}` ? '대화 전체 복사됨' : '대화 전체 복사'}</button>
               <button onClick={() => downloadChat(active)} className="px-2.5 py-1 rounded-full border border-gray-700 text-[11.5px] text-gray-300 hover:text-white inline-flex items-center gap-1"><Download size={11} />내려받기</button>
             </div>
@@ -1170,9 +1206,10 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
         <div className="shrink-0 border-t border-gray-800 px-3 py-2 space-y-1">
           <div className="flex items-center gap-1.5 text-[11.5px]">
             <span className="text-gray-500 shrink-0">AI</span>
-            <select value={pickP ? pickP.id : GEMINI_PICK} disabled={!store || viewingAs} onChange={e => setAi({ pick: e.target.value })} title="물어볼 AI — 다른 AI는 ⚙ 설정의 「다른 AI 연결」에 내 키를 넣으면 씁니다"
+            <select value={pickP ? pickP.id : cloudPick ? CLOUD_PICK : GEMINI_PICK} disabled={!store || viewingAs} onChange={e => setAi({ pick: e.target.value })} title="물어볼 AI — 다른 AI는 ⚙ 설정의 「다른 AI 연결」에 내 키를 넣으면 씁니다"
               className="min-w-0 max-w-[58%] bg-[#0b1120] border border-gray-700 rounded-md px-1.5 py-1 text-[11.5px] text-gray-100 outline-none">
               <option value={GEMINI_PICK}>Gemini · 구글 검색</option>
+              {cloudOn && <option value={CLOUD_PICK}>Claude · 클라우드(내 구독 · PC 없이)</option>}
               {AI_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.short} · {AI_COST_LABEL[p.cost]}{aiState.loaded && !aiState.keys[p.id] ? ' (키 필요)' : ''}</option>)}
             </select>
             {pickP && (pickModels.length > 0 && pickModels.some(x => x.id === pickModelId) ? (
@@ -1195,15 +1232,16 @@ export default function AiSearchChat({ open, onClose, keyApi = null, storeApi = 
                 if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229 || isCoarse()) return;
                 e.preventDefault();
                 if (running) return;
-                if (needKey) { if (draft.trim()) flashNote(pcActive ? '아래 AI 이름을 누르면 내 PC가 대신 묻습니다' : '키가 없습니다 — 아래 「내 구독으로 묻기」에서 AI 이름을 누르거나 ⚙ 설정에서 키를 넣어 주세요'); return; }
-                ask(draft);
+                if (cloudPick || pcActive) { send(); return; }
+                if (needKey) { if (draft.trim()) flashNote('키가 없습니다 — 아래 「내 구독으로 묻기」에서 AI 이름을 누르거나 ⚙ 설정에서 키를 넣어 주세요'); return; }
+                send();
               }}
-              placeholder={needKey ? (pcActive ? '질문을 쓰고 아래 AI 이름을 누르면 내 PC가 대신 묻습니다' : '질문을 쓰고 아래 「내 구독으로 묻기」를 누르거나, ⚙ 설정에서 키를 넣어 주세요') : (active ? '이어서 물어보기…' : '검색할 내용을 물어보세요 (예: 오늘 코스피 마감)')}
+              placeholder={cloudPick ? '클라우드 Claude(내 구독)에 물어보세요 — PC 없이 웹 검색으로 답합니다' : pcActive ? '질문을 쓰고 Enter — 내 PC의 Claude가 받습니다(다른 AI는 아래 이름을 누르세요)' : needKey ? '질문을 쓰고 아래 「내 구독으로 묻기」를 누르거나, ⚙ 설정에서 키를 넣어 주세요' : (active ? '이어서 물어보기…' : '검색할 내용을 물어보세요 (예: 오늘 코스피 마감)')}
               className="flex-1 min-w-0 resize-none bg-[#0b1120] border border-gray-600 focus:border-sky-500 rounded-xl px-3 py-2 text-[13px] text-gray-100 outline-none max-h-32" />
             {running ? (
               <button onClick={stopAsk} title="답 받기 멈추기" className="h-10 px-3 rounded-xl bg-gray-700 hover:bg-gray-600 text-white font-bold text-[12px] inline-flex items-center gap-1 shrink-0"><StopIcon />멈춤</button>
             ) : (
-              <button onClick={() => ask(draft)} disabled={!ready || needKey || !draft.trim()} title={pickP ? `${pickP.short}에 묻기` : '검색'} className="h-10 px-3 rounded-xl bg-sky-700 hover:bg-sky-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px] inline-flex items-center gap-1 shrink-0"><SendIcon />{pickP ? '묻기' : '검색'}</button>
+              <button onClick={() => send()} disabled={!ready || (needKey && !cloudPick && !pcActive) || !draft.trim()} title={cloudPick ? '클라우드 Claude에 묻기(PC 없이)' : pcActive ? '내 PC의 Claude에 맡기기' : pickP ? `${pickP.short}에 묻기` : '검색'} className="h-10 px-3 rounded-xl bg-sky-700 hover:bg-sky-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold text-[12px] inline-flex items-center gap-1 shrink-0"><SendIcon />{cloudPick ? 'Claude' : pcActive ? 'PC로' : pickP ? '묻기' : '검색'}</button>
             )}
           </div>
           <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap pb-0.5">

@@ -33,6 +33,8 @@ const ADMIN_TOK = 'ya29.admin-token-0123456789abcdefgh';
 // ── 가짜 바깥 세계 ──
 const store = new Map();
 let H = null;
+const fires = [];   // 클라우드 Claude — 예약 작업 부르기(api.anthropic.com) 기록
+let fireReply = () => Response.json({ type: 'routine_fire', claude_code_session_url: 'https://claude.ai/code/session_test' });
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url);
@@ -58,6 +60,7 @@ globalThis.fetch = async (url, init = {}) => {
     if (c === 'LLEN') { const l = store.get(a[0]); return r(Array.isArray(l) ? l.length : 0); }
     throw new Error(`가짜 Redis가 모르는 명령 ${c}`);
   }
+  if (u.startsWith('https://api.anthropic.com/v1/claude_code/routines/')) { fires.push({ u, init }); return fireReply(); }
   if (u.startsWith('http://127.0.0.1')) return realFetch(url, init);
   throw new Error(`예상 밖 fetch ${u}`);
 };
@@ -71,6 +74,9 @@ try {
   H = {
     A: await import(pathToFileURL(join(ROOT, 'api/pc-ask.ts')).href),
     J: await import(pathToFileURL(join(ROOT, 'api/pc-job.ts')).href),
+    K: await import(pathToFileURL(join(ROOT, 'api/pc-cloud.ts')).href),
+    T: await import(pathToFileURL(join(ROOT, 'api/_aiTax.ts')).href),
+    Q: await import(pathToFileURL(join(ROOT, 'scripts/ai-task/aisearch.mjs')).href),
     L: await import(pathToFileURL(join(ROOT, 'api/_pcAsk.ts')).href),
     C: await import(pathToFileURL(join(ROOT, 'src/pcAsk.ts')).href),
     S: await import(pathToFileURL(join(ROOT, 'src/aiSearch.ts')).href),
@@ -198,6 +204,74 @@ if (H) {
   await J(site({ op: 'unlink' }));
   H.L.forgetCaches();
   eq('#B17 연결 끊기 → 열쇠 끝 · 상태 = 연결 안 됨', [(await J(pc('take', nk2))).status, (await J(site({ op: 'status' }))).linked], [401, false]);
+
+  // 클라우드 Claude(2026-11-26 — 학습 사이트처럼 PC 없이 · 관리자 Claude 예약 작업을 API로 부름)
+  console.log('\n[파트①-클라우드] PC 없이 클라우드 Claude');
+  const cloudAsk = (prompt, tok = ADMIN_TOK) => J(site({ op: 'ask', target: 'claude', prompt, cloud: true }, tok));
+  const cl = (op, rid, key, body) => J(H.K.default(new Request(`https://14ass-page-eea5.vercel.app/api/pc-cloud?op=${op}${rid ? `&rid=${encodeURIComponent(rid)}` : ''}`, {
+    method: body === undefined ? 'GET' : 'POST', headers: { ...(key ? { 'x-job-key': key } : {}), 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+  })));
+  eq('#K1 예약 작업이 없으면 status.cloud = false(관리자도) · 맡기기 409 noroutine', [(await J(site({ op: 'status' }, ADMIN_TOK))).cloud, (await cloudAsk('q')).code], [false, 'noroutine']);
+  process.env.AI_TAX_ROUTINE_URL = 'https://api.anthropic.com/v1/claude_code/routines/trig_01TESTROUTINE0000000000/fire';
+  process.env.AI_TAX_ROUTINE_TOKEN = 'sk-ant-oat01-' + 'T'.repeat(40);
+  eq('#K2 예약 작업이 있으면 관리자만 status.cloud = true', [(await J(site({ op: 'status' }, ADMIN_TOK))).cloud, (await J(site({ op: 'status' }))).cloud], [true, false]);
+  const kNot = await cloudAsk('q', USER_TOK);
+  eq('#K3 다른 사용자 클라우드 맡기기 → 403 admin · 예약 작업을 부르지 않음', [kNot.status, kNot.code, fires.length], [403, 'admin', 0]);
+  eq('#K3 사진·다른 AI는 받지 않음', [(await J(site({ op: 'ask', target: 'chatgpt', prompt: 'q', cloud: true }, ADMIN_TOK))).status, fires.length], [400, 0]);
+  const PROMPT = '[앞에서 나눈 대화]\n질문: 441640\n\n441640 이 종목 최근 흐름';
+  const k1 = await cloudAsk(PROMPT);
+  const f1 = fires[0];
+  const ftext = f1 ? JSON.parse(f1.init.body).text : '';
+  const fv = Object.fromEntries(ftext.split('\n').filter(l => /^[^=\s]+=/.test(l)).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  ok('#K4 관리자 맡기기 → 번호 · 예약 작업 한 번(토큰은 헤더로) · 본문 = 종류 search · 사이트 = JOB_SITE · 번호 = 사용자.번호 · 열쇠 43자',
+    k1.status === 200 && k1.cloud === true && H.C.PC_JOB_RE.test(k1.id || '') && fires.length === 1 && f1.u === H.T.FIRE_URL('trig_01TESTROUTINE0000000000')
+    && f1.init.headers.Authorization === `Bearer ${process.env.AI_TAX_ROUTINE_TOKEN}` && !ftext.includes(process.env.AI_TAX_ROUTINE_TOKEN)
+    && fv['종류'] === 'search' && fv['사이트'] === H.T.JOB_SITE && fv['번호'].endsWith(`.${k1.id}`) && H.L.CLOUD_RID_RE.test(fv['번호']) && H.L.CLOUD_KEY_RE.test(fv['열쇠'] || '')
+    && ftext.includes('docs/ai-task/TAX-PHOTO.md') && ftext.includes('"AI 검색"'));
+  const RID = fv['번호'], CKEY = fv['열쇠'];
+  ok('#K4 Redis엔 열쇠 그대로 없음(해시만) · 질문 우편함 줄(PC가 가져가는 줄)에 넣지 않음', ![...store.values()].some(v => String(v).includes(CKEY))
+    && ![...store.entries()].some(([k, v]) => k.startsWith('pca:q:') && Array.isArray(v) && v.includes(k1.id)));
+  eq('#K5 내 PC는 클라우드 질문을 가져가지 않는다', (await J(pc('take', AKEY))).none, true);
+  eq('#K5 화면이 보는 상태 = wait', (await J(site({ op: 'get', ids: [k1.id] }, ADMIN_TOK))).jobs[0].st, 'wait');
+  eq('#K6 열쇠 없음·틀림·남의 번호·번호 없음 → 401', [
+    (await cl('take', RID, '')).status, (await cl('take', RID, 'A'.repeat(43))).status, (await cl('take', RID.split('.')[0] + '.' + 'zzzzzzzzzzzzzzzz', CKEY)).status, (await cl('take', '', CKEY)).status,
+  ], [401, 401, 401, 401]);
+  const tk = await cl('take', RID, CKEY);
+  eq('#K7 받기 = 질문 그대로(앞 대화 포함) · 오늘(KST) · 화면 상태 take', [tk.status, tk.q, /^\d{4}-\d{2}-\d{2}$/.test(tk.today), (await J(site({ op: 'get', ids: [k1.id] }, ADMIN_TOK))).jobs[0].st], [200, PROMPT, true, 'take']);
+  eq('#K7 다시 받아도 같은 질문(작업이 다시 돌아도)', (await cl('take', RID, CKEY)).q, PROMPT);
+  eq('#K8 빈 답 → 400', (await cl('done', RID, CKEY, { a: '  ' })).status, 400);
+  const CANS = '**441640** — KODEX …\n\n- 최근 1개월 +3.2% (2026-11-26 기준)\n\n**출처**\n- [네이버 금융](https://finance.naver.com/)';
+  eq('#K8 답 넣기', (await cl('done', RID, CKEY, { a: CANS, m: 'Claude<b>' })).ok, true);
+  const gk = (await J(site({ op: 'get', ids: [k1.id] }, ADMIN_TOK))).jobs[0];
+  eq('#K9 화면이 받는 답 = 그대로 · 끝난 뒤 열쇠는 닫힘(410)', [gk.st, gk.a, gk.m, (await cl('done', RID, CKEY, { a: 'x' })).status, (await cl('take', RID, CKEY)).status], ['done', CANS, 'Claudeb', 410, 410]);
+  const k2 = await cloudAsk('q2');
+  const fv2 = Object.fromEntries(JSON.parse(fires[1].init.body).text.split('\n').filter(l => l.includes('=')).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  eq('#K10 일마다 새 열쇠 — 앞 일의 열쇠로는 새 일을 못 연다', [(await cl('take', fv2['번호'], CKEY)).status, fv2['열쇠'] !== CKEY], [401, true]);
+  await J(site({ op: 'cancel', id: k2.id }, ADMIN_TOK));
+  eq('#K10 화면에서 취소 → 작업은 410(그만둠)', (await cl('take', fv2['번호'], fv2['열쇠'])).status, 410);
+  const k3 = await cloudAsk('q3');
+  const fv3 = Object.fromEntries(JSON.parse(fires[2].init.body).text.split('\n').filter(l => l.includes('=')).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  await cl('take', fv3['번호'], fv3['열쇠']);
+  const fl = await cl('fail', fv3['번호'], fv3['열쇠'], { e: '웹 검색을 쓸 수 없었습니다' });
+  const gf = (await J(site({ op: 'get', ids: [k3.id] }, ADMIN_TOK))).jobs[0];
+  eq('#K11 작업이 못 함을 알림 → 화면이 까닭을 본다', [fl.ok, gf.st, gf.e], [true, 'fail', '웹 검색을 쓸 수 없었습니다']);
+  fireReply = () => Response.json({ error: { type: 'authentication_error' } }, { status: 401 });
+  const k4 = await cloudAsk('q4');
+  const g4 = (await J(site({ op: 'get', ids: [k4.id] }, ADMIN_TOK))).jobs[0];
+  eq('#K12 예약 작업 토큰이 틀리면 502 ctoken · 그 질문은 실패로 남음(기다리지 않음)', [k4.status, k4.code, g4.st, /부르지 못했습니다\(token 401\)/.test(g4.e || '')], [502, 'ctoken', 'fail', true]);
+  fireReply = () => Response.json({}, { status: 429 });
+  eq('#K12 Claude 쪽 한도 → crate', (await cloudAsk('q5')).code, 'crate');
+  fireReply = () => Response.json({ claude_code_session_url: 'https://claude.ai/code/session_test' });
+  const hourKey = [...store.keys()].find(k => k.startsWith('pca:ch:'));
+  store.set(hourKey, String(H.L.CLOUD_HOUR_MAX));
+  const nFires = fires.length;
+  eq(`#K13 한 시간에 ${H.L.CLOUD_HOUR_MAX}번 — 넘으면 hour · 부르지 않음`, [(await cloudAsk('q6')).code, fires.length], ['hour', nFires]);
+  store.set(hourKey, '1');
+  ok('#K14 예약 작업 도구(aisearch.mjs) — 사이트 = JOB_SITE · 번호 모양 = 서버가 만든 번호 · 답 검사(빈 답·열쇠 섞임·너무 김)',
+    H.Q.SITE === H.T.JOB_SITE && H.Q.RID_RE.test(RID) && H.Q.ANSWER_MAX === H.L.ANSWER_MAX
+    && H.Q.checkAnswer(' ') !== '' && H.Q.checkAnswer(`답 ${CKEY}`, CKEY) !== '' && H.Q.checkAnswer('x'.repeat(H.L.ANSWER_MAX + 1)) !== '' && H.Q.checkAnswer('정상 답', CKEY) === '');
+  delete process.env.AI_TAX_ROUTINE_URL;
+  delete process.env.AI_TAX_ROUTINE_TOKEN;
   eq('#B18 로그인 없이 창 쪽 → 401', (await J(site({ op: 'status' }, 'ya29.bad-token-xxxxxxxxxxxxxxxxxxxx'))).status, 401);
   eq('#B19 PC 쪽은 POST만(ping 빼고)', (await J(pc('take', otherKey, { method: 'GET' }))).status, 405);
 
@@ -280,7 +354,13 @@ if (H) {
     && C.pcWaitText('ChatGPT', { st: 'take', ta: now - 15 * 60_000 }, now, now).includes('15분'));
   eq('#C4 답 모델 글', [C.pcModelLabel('ChatGPT', 'GPT-5'), C.pcModelLabel('Claude', 'Claude'), C.pcModelLabel('Gemini', '')], ['ChatGPT GPT-5 · 내 PC가 물어 옴', 'Claude · 내 PC가 물어 옴', 'Gemini · 내 PC가 물어 옴']);
   const chats = [{ id: 'c1', msgs: [{ id: 'u', role: 'user', text: 'q' }, { id: 'm1', role: 'model', text: '', err: 'pc', via: 'pc:gemini', job: 'abcdefghijkl1234', at: '2026-11-26T09:59:00.000Z' }, { id: 'm2', role: 'model', text: '', err: 'pc', job: '' }, { id: 'm3', role: 'model', text: 'x', err: 'hand' }] }];
-  eq('#C5 기다리는 자리 = err pc + 번호', C.pcPending(chats), [{ chatId: 'c1', msgId: 'm1', job: 'abcdefghijkl1234', at: '2026-11-26T09:59:00.000Z', hid: 'gemini' }]);
+  eq('#C5 기다리는 자리 = err pc + 번호', C.pcPending(chats), [{ chatId: 'c1', msgId: 'm1', job: 'abcdefghijkl1234', at: '2026-11-26T09:59:00.000Z', hid: 'gemini', cloud: false }]);
+  const cchats = [{ id: 'c2', msgs: [{ id: 'm9', role: 'model', text: '', err: 'pc', via: 'cloud:claude', job: 'abcdefghijkl5678', at: '2026-11-26T09:59:00.000Z' }] }];
+  eq('#C5b 클라우드 기다리는 자리 = hid claude · cloud · 30분이면 그만(PC는 3시간)', [C.pcPending(cchats)[0].hid, C.pcPending(cchats)[0].cloud, C.pcTooLate('2026-11-26T09:29:00.000Z', now, true), C.pcTooLate('2026-11-26T09:31:00.000Z', now, true), C.pcTooLate('2026-11-26T09:29:00.000Z', now)], ['claude', true, true, false, false]);
+  const cs = S.normalizeSearchStore({ chats: [{ id: 'c2', msgs: [{ id: 'u', role: 'user', text: 'q' }, { id: 'm9', role: 'model', text: '', err: 'pc', via: 'cloud:claude', job: 'abcdefghijkl5678', msg: 'Gemini가 답하지 못해 넘겼습니다' }] }], ai: { pick: 'cloud' } });
+  eq('#C5c 저장 — 클라우드 자리(via cloud:claude · 번호 · 넘긴 까닭) · 고른 AI = cloud', [cs.chats[0].msgs[1].via, cs.chats[0].msgs[1].job, cs.chats[0].msgs[1].msg, P.aiPrefsOf(cs.ai).pick, P.aiPrefsOf({ pick: 'zzz' }).pick], ['cloud:claude', 'abcdefghijkl5678', 'Gemini가 답하지 못해 넘겼습니다', 'cloud', 'gemini']);
+  ok('#C5d 클라우드 기다리는 글 · 오류 글(연결 안 됨·토큰·한도)', C.cloudWaitText({ st: 'wait' }, now).includes('1~3분') && C.cloudWaitText({ st: 'take', ta: now - 60_000 }, now).includes('찾아')
+    && C.cloudWaitText({ st: 'take', ta: now - 9 * 60_000 }, now).includes('9분') && ['noroutine', 'ctoken', 'crate', 'cfire', 'hour', 'cloudlate', 'admin'].every(c => C.pcAskErrorText(c) !== C.pcAskErrorText('zzz')));
   eq('#C6 확인 간격 — 막 맡겼으면 4초 · 아니면 10초 · 3시간 지나면 그만', [C.pcPollDelay([{ at: '2026-11-26T09:59:00.000Z' }], now), C.pcPollDelay([{ at: '2026-11-26T09:50:00.000Z' }], now), C.pcTooLate('2026-11-26T06:59:00.000Z', now), C.pcTooLate('2026-11-26T07:01:00.000Z', now)], [4000, 10000, true, false]);
   const n = S.normalizeSearchStore({ pcOn: 1, chats: [{ id: 'c1', updatedAt: '2026-11-26T09:59:00.000Z', msgs: [{ id: 'u', role: 'user', text: 'q' }, { id: 'm1', role: 'model', text: '', err: 'pc', via: 'pc:gemini', job: 'abcdefghijkl1234' }, { id: 'u2', role: 'user', text: 'q2' }, { id: 'm2', role: 'model', text: '', err: 'pc', via: 'pc:chatgpt', job: '' }] }] });
   const ms = n.chats[0].msgs;
@@ -296,14 +376,14 @@ const srvJ = stripComments(read('api/pc-job.ts'));
 const lib = stripComments(read('api/_pcAsk.ts'));
 const cl = stripComments(read('src/pcAsk.ts'));
 ok('#S1 화면 → /api/pc-ask 하나(우편함) · 맡기기 본문 = AI 이름 + 넘길 글(handPrompt — 보유 종목은 켰을 때 이름만)',
-  /fetch\('\/api\/pc-ask', \{ method: 'POST'/.test(chat) && /pcCall\(\{ op: 'ask', target: hid, prompt \}\)/.test(chat) && /const prompt = handPromptOf\(text, base\);/.test(chat));
+  /fetch\('\/api\/pc-ask', \{ method: 'POST'/.test(chat) && /pcCall\(cloud \? \{ op: 'ask', target: 'claude', prompt, cloud: true \} : \{ op: 'ask', target: hid, prompt \}\)/.test(chat) && /const prompt = handPromptOf\(text, base\);/.test(chat));
 ok('#S2 PC 열쇠·연결 문구는 저장하지 않는다(대화 묶음·Drive·브라우저 저장소에 넣지 않음 — 만든 그때 한 번만 보여 줌)',
   /setPcSetup\(\{ text: pcTaskPrompt\(window\.location\.origin, r\.key\) \}\)/.test(chat) && !/pcSetup[^\n]*setStore|setStore[^\n]*pcSetup|localStorage|sessionStorage/.test(chat)
   && !/\bkey\b/.test(stripComments(read('src/aiSearch.ts')).slice(stripComments(read('src/aiSearch.ts')).indexOf('export function normalizeSearchStore'), stripComments(read('src/aiSearch.ts')).indexOf('export function trimSearchStore'))));
 ok('#S3 관리자 접속 중엔 PC 자동을 숨긴다(관리자 우편함을 쓰지 않게)', /const pcActive = !viewingAs && /.test(chat) && /const pcSettings = viewingAs \? null : \(/.test(chat)
   && /\{!viewingAs && <button onClick=\{togglePc\}/.test(chat) && /if \(!text \|\| running \|\| !s \|\| viewingAs\) return;/.test(chat));
 ok('#S4 답 기다리기 — 저장된 번호(pcPending)로 · 끝난 답만 넣고 실패·취소·없어짐·3시간은 실패 글', /const pcPendKey = store && !viewingAs \? pcPending\(store\.chats\)/.test(chat)
-  && /if \(j && j\.st === 'done' && j\.a\) \{/.test(chat) && /pcTooLate\(p\.at\)/.test(chat) && /\}, \[pcPendKey\]\);/.test(chat));
+  && /if \(j && j\.st === 'done' && j\.a\) \{/.test(chat) && /pcTooLate\(p\.at, Date\.now\(\), p\.cloud\)/.test(chat) && /\}, \[pcPendKey\]\);/.test(chat));
 ok('#S5 PC 자동이 켜져 있으면 AI 이름 = 맡기기, 꺼져 있으면 그대로 사이트 열기', /onClick=\{\(\) => \(pcActive \? askPc\(h\.id, draft\) : askHand\(h\.id, draft\)\)\}/.test(chat));
 ok('#S6 서버 창 쪽 — 첫 줄 requireAuth · 사용자 = 로그인 토큰 이메일(본문의 이메일을 믿지 않음)', /export default async function handler\(request: Request\): Promise<Response> \{\s*const denied = await requireAuth\(request\);\s*if \(denied\) return denied;/.test(srvA)
   && /const email = await callerEmail\(request\);/.test(srvA) && /const u = await userTag\(email\);/.test(srvA) && !/b\?\.email|body\.email/.test(srvA));
@@ -311,6 +391,22 @@ ok('#S7 서버 PC 쪽 — 첫 줄 requirePcKey · 사용자 = 열쇠 앞부분(�
   /export default async function handler\(request: Request\): Promise<Response> \{\s*const denied = await requirePcKey\(request\);\s*if \(denied\) return denied;\s*const u = pcUserOf\(request\);/.test(srvJ) && !/Access-Control/.test(srvJ + lib));
 ok('#S8 공용 파일 import 0 · 상대 import는 .js', !/^\s*import\s/m.test(lib) && !/^\s*import\s/m.test(cl) && [...(srvA + srvJ).matchAll(/from '(\.\/[^']+)'/g)].every(m => m[1].endsWith('.js')));
 ok('#S9 열쇠 비교는 해시 · 같은 길이 비교(safeEqual)', /safeEqual\(hash, rec\.h\)/.test(lib) && /const hash = await sha256Hex\(k\.r\);/.test(lib));
+// 사용자 신고 2026-11-26: 「PC 자동 켬」인데 Enter·검색이 Gemini로 가서 한도 오류만 쌓였다.
+ok('#S10 보내기(Enter·단추·예시 질문) = send — 클라우드 Claude를 골랐으면 클라우드 · PC 자동 켬이면 PC(PC가 멈췄고 클라우드가 되면 클라우드) · 아니면 고른 AI',
+  /const send = \(raw = draft\) => \{\s*if \(cloudPick\) askPc\('claude', raw, null, \{ cloud: true \}\);\s*else if \(pcActive && cloudOn && !pcOnline\(pcInfo\.seen\)\) askPc\('claude', raw, null, \{ cloud: true, note: [^}]+\}\);\s*else if \(pcActive\) askPc\('claude', raw\);\s*else ask\(raw\);\s*\};/.test(chat)
+  && /if \(cloudPick \|\| pcActive\) \{ send\(\); return; \}/.test(chat) && /<button onClick=\{\(\) => send\(\)\} disabled=/.test(chat) && /onClick=\{\(\) => send\(a\.text\)\}/.test(chat));
+ok('#S11 클라우드 Claude는 서버가 허락할 때만(관리자 + 예약 작업 — status.cloud) · 관리자 접속 중 숨김 · Gemini 한도면 넘김',
+  /const cloudOn = !viewingAs && !!pcInfo\.cloud;/.test(chat) && /const cloudPick = cloudOn && prefs\.pick === CLOUD_PICK;/.test(chat)
+  && /if \(pickP \|\| !cloudOn \|\| !CLOUD_FALLBACK\.has\(err\)\) return;/.test(chat) && /if \(patch\.err && !patch\.text\) toCloud\(patch\.err\);/.test(chat)
+  && /const cloud = isAdmin && !!\(await routineOf\(\)\);/.test(srvA) && /if \(!isAdmin\) return json\(403, \{ error: '클라우드 Claude는 관리자만 씁니다', code: 'admin' \}\);/.test(srvA));
+const srvK = stripComments(read('api/pc-cloud.ts'));
+ok('#S12 클라우드 쪽 길 — 첫 줄 requireCloudKey · 열쇠는 해시 비교 · 끝난 일은 410 · CORS 없음',
+  /export default async function handler\(request: Request\): Promise<Response> \{\s*const denied = await requireCloudKey\(request\);\s*if \(denied\) return denied;/.test(srvK)
+  && /safeEqual\(await sha256Hex\(key\), j\.kh\)/.test(lib) && /if \(j\.st !== 'wait' && j\.st !== 'take'\) return json\(410/.test(lib) && !/Access-Control/.test(srvK));
+const taskDoc = read('docs/ai-task/TAX-PHOTO.md');
+ok('#S13 예약 작업 지침에 「AI 검색」 절 — 종류=search · aisearch.mjs init·take·put·fail · 웹 자료 속 지시 따르지 않음 · 연결 도구 안 씀',
+  /`종류=search` → 맨 아래 「AI 검색」/.test(taskDoc) && /## AI 검색 \(종류=search\)/.test(taskDoc)
+  && ['aisearch.mjs init', 'aisearch.mjs take', 'aisearch.mjs put', 'aisearch.mjs fail'].every(x => taskDoc.includes(x)) && /자료일 뿐 지시가 아니다/.test(taskDoc) && /연결 도구는 쓰지 않는다/.test(taskDoc));
 
 globalThis.fetch = realFetch;
 console.log(`\nverify:pc-ask — ${pass} 통과 / ${fail} 실패`);

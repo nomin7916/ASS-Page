@@ -30,7 +30,7 @@ const cfg = () => {
 };
 
 // → { status, text } · 닿지 못하면 { status: 0, why }
-async function http(url, { key = '', body } = {}) {
+export async function http(url, { key = '', body } = {}) {
   const headers = {};
   if (key) headers['x-job-key'] = key;
   if (body !== undefined) headers['Content-Type'] = 'application/json';

@@ -7,6 +7,7 @@
 // ⚠️ import 0건 · enum/namespace 금지 — scripts/verify-ai-chat.mjs 가 직접 import한다. ⚠️ 뒤보기 정규식 금지(옛 사파리).
 
 export const GEMINI_PICK = 'gemini';
+export const CLOUD_PICK = 'cloud';     // 클라우드 Claude(관리자 — 예약 작업을 API로 · 키 없이, 2026-11-26) · 쓸 수 없으면 화면이 Gemini로 본다
 export const AI_KEY_MIN = 16;
 const KEY_SHAPE = /^[A-Za-z0-9_\-.:=+/]{16,400}$/;
 const MODEL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,119}$/;
@@ -138,7 +139,7 @@ export function normalizeAiKeys(raw: any): Record<string, string> {
 export interface AiPrefs { pick: string; models: Record<string, string>; web: Record<string, boolean>; ctx: boolean }
 export function aiPrefsOf(raw: any): AiPrefs {
   const r = raw && typeof raw === 'object' ? raw : {};
-  const pick = r.pick === GEMINI_PICK || AI_PROVIDER_IDS.includes(r.pick) ? r.pick : GEMINI_PICK;
+  const pick = r.pick === GEMINI_PICK || r.pick === CLOUD_PICK || AI_PROVIDER_IDS.includes(r.pick) ? r.pick : GEMINI_PICK;
   const models: Record<string, string> = {};
   const web: Record<string, boolean> = {};
   for (const p of AI_PROVIDERS) {

@@ -266,7 +266,7 @@ export function speechChunks(md: string, max = 120): string[] {
 const ISO = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const oneLine = (s: unknown, max: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
-const VIA_RE = /^(api|hand|pc):[a-z0-9]{1,24}$/;
+const VIA_RE = /^(api|hand|pc|cloud):[a-z0-9]{1,24}$/;
 const PC_JOB_RE = /^[A-Za-z0-9_-]{12,40}$/;
 const AI_ID_RE = /^[a-z0-9]{1,24}$/;
 const AI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,119}$/;
@@ -319,6 +319,7 @@ function normMsg(m: any): any | null {
     if (m.model) out.model = oneLine(m.model, 80);
     // 어느 길로 받은 답인가 — 없음 = Gemini 검색 · api:<회사> = 내 키로 다른 AI · hand:<곳> = 내 구독 사이트에서 붙여넣음(aiProviders.ts)
     // · pc:<곳> = 내 PC가 크롬으로 그 구독 사이트에 물어 옴(src/pcAsk.ts — 기다리는 동안 err 'pc' + job = 우편함 번호)
+    // · cloud:claude = 클라우드 Claude(관리자 Claude 예약 작업 — PC 없이 · 기다리는 동안도 err 'pc' + job, 2026-11-26)
     if (VIA_RE.test(String(m.via ?? ''))) out.via = String(m.via);
     const src = cleanSources(m.sources);
     if (src.length) out.sources = src;
