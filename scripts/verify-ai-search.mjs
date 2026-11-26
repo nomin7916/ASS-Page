@@ -326,9 +326,9 @@ ok('#S4 읽기 실패 = 저장 금지(빈 목록으로 덮어 지난 대화를 �
 ok('#S5 미리 받기 목록에 창이 있다(맨 끝 — 앞 순서는 verify:split #W4)', /admin && AdminPortal,\s*AiSearchChat,\s*\]\.filter\(Boolean\)/.test(app));
 ok('#S6 상단 막대 — AI 검색 버튼(인라인 아이콘) · App이 열고 닫는다', /\{onToggleAiSearch && \(\s*<button\s*onClick=\{onToggleAiSearch\}/.test(bar) && /const AiSearchIcon = /.test(bar)
   && /onToggleAiSearch=\{\(\) => setShowAiSearch\(v => !v\)\}/.test(app) && /const \[showAiSearch, setShowAiSearch\] = useState\(false\);/.test(app));
-ok('#S7 화면은 /api/ai-search 하나만 부른다(구글을 직접 부르지 않음) · 내 키는 X-Gemini-Key 헤더로만',
-  (chat.match(/fetch\(/g) || []).length === 1 && /fetch\('\/api\/ai-search'/.test(chat) && !/generativelanguage/.test(chat)
-  && /headers\['X-Gemini-Key'\] = keyRef\.current/.test(chat) && /body: JSON\.stringify\(\{ messages: sendMsgs, holdings \}\)/.test(chat));
+ok('#S7 화면은 같은 출처의 /api/ai-search(Gemini 검색)·/api/ai-chat(다른 AI — verify:ai-chat)만 부른다(AI 회사를 직접 부르지 않음) · 내 Gemini 키는 X-Gemini-Key 헤더로만',
+  (chat.match(/fetch\(/g) || []).length === 2 && /fetch\(pickP \? '\/api\/ai-chat' : '\/api\/ai-search',/.test(chat) && /fetch\('\/api\/ai-chat',/.test(chat) && !/generativelanguage|https?:\/\/api\./.test(chat)
+  && /else if \(keyRef\.current && !viewingAs\) headers\['X-Gemini-Key'\] = keyRef\.current;/.test(chat) && /let body = \{ messages: sendMsgs, holdings \};/.test(chat) && /body: JSON\.stringify\(body\)/.test(chat));
 ok('#S8 답 글은 React 요소로만(innerHTML 금지) · 검색 제안은 스크립트·같은 출처 없는 격리 틀', !/dangerouslySetInnerHTML|innerHTML/.test(chat)
   && /sandbox="allow-popups allow-popups-to-escape-sandbox"/.test(chat) && !/allow-scripts|allow-same-origin/.test(chat));
 ok('#S9 보유 종목은 켰을 때만 · 이름·코드만(searchHoldings)', /const holdings = s\.holdOn && getPortfolios \? searchHoldings\(getPortfolios\(\)\) : \[\];/.test(chat));

@@ -16,6 +16,7 @@ import { applySettingsFile, buildSettingsFile } from './rateSettings';
 import { HIST_FILE_NAMES } from './rateHistStore';
 import { RATE_RULES } from './rateSignals';
 import { MANUAL_INPUTS } from './rateAssets';
+import { normalizeAiKeys } from './aiProviders';
 import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, uploadHtmlStudyMaterial, deleteDriveFileById, driveFileExists, updateDriveFileIfExists, getOrCreateAdminFolder } from './driveStorage';
 import { ensureFundJobKeyFile } from './fundFeed';
 import { MIGRATION_FILES, buildMigrationPreview, migrationErrorPreview, prepareMigratedState, migrationBackupName } from './accountMigration';
@@ -3514,7 +3515,8 @@ export default function App() {
   // ⚠️ STATE·버전 백업에 넣지 않는다(백업 22본에 키가 복제된다) · saveDriveFile만(루트 저장 가드 경유).
   // ⚠️ 관리자 접속(impersonation) 중에는 사용자의 키를 읽지도 쓰지도 않는다(그 탭은 관리자 토큰 → 서버가 사이트 키로 읽는다).
   // 한 번 읽으면 이 탭 메모리에 계정별로 둔다(브라우저 저장소 금지 — 같은 기기에서 여러 계정이 번갈아 로그인한다).
-  const aiKeyCacheRef = useRef({ email: '', key: '', loaded: false });
+  // 같은 파일에 다른 AI 키(aiKeys { <회사 id>: 키 } — src/aiProviders.ts)도 둔다 → 한쪽을 저장할 때 다른 쪽을 지우지 않게 둘 다 기억한다.
+  const aiKeyCacheRef = useRef({ email: '', key: '', aiKeys: {}, loaded: false });
   const authEmailRef = useRef('');
   authEmailRef.current = (authUser?.email || '').toLowerCase();
   const geminiKeyApi = useMemo(() => ({
@@ -3529,7 +3531,7 @@ export default function App() {
         const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
         const data = await loadDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS);
         const key = typeof data?.geminiKey === 'string' ? data.geminiKey.trim() : '';
-        aiKeyCacheRef.current = { email, key, loaded: true };
+        aiKeyCacheRef.current = { email, key, aiKeys: normalizeAiKeys(data?.aiKeys), loaded: true };
         return { key, canSave: true };
       } catch (err) {
         return { key: '', canSave: false, error: `키를 불러오지 못했습니다 (${err?.message || err})` };
@@ -3542,9 +3544,58 @@ export default function App() {
       try {
         const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
         const k = String(key || '').trim();
-        await saveDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS, { geminiKey: k, updatedAt: new Date().toISOString() });
-        aiKeyCacheRef.current = { email: authEmailRef.current, key: k, loaded: true };
+        const email = authEmailRef.current;
+        let c = aiKeyCacheRef.current;
+        // 다른 AI 키(aiKeys)를 지우지 않게 — 아직 읽지 않았으면 먼저 읽는다(읽기가 실패하면 저장하지 않는다).
+        if (!c.loaded || c.email !== email) {
+          const cur = await loadDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS);
+          c = { email, key: '', aiKeys: normalizeAiKeys(cur?.aiKeys), loaded: true };
+        }
+        await saveDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS, { geminiKey: k, aiKeys: c.aiKeys, updatedAt: new Date().toISOString() });
+        aiKeyCacheRef.current = { email, key: k, aiKeys: c.aiKeys, loaded: true };
         return { ok: true };
+      } catch (err) {
+        return { ok: false, error: `저장하지 못했습니다 (${err?.message || err})` };
+      }
+    },
+  }), []);
+  // 다른 AI 키(AI 검색 「다른 AI 연결」, 2026-11-26) — 같은 ai_settings.json 의 aiKeys. 규칙은 Gemini 키와 같다:
+  // ⚠️ saveDriveFile만 · STATE·버전 백업·브라우저 저장소 금지 · 관리자 접속(impersonation) 중 읽기·쓰기 안 함 · 서버로는 요청 헤더 X-AI-Key 로만.
+  const aiKeysApi = useMemo(() => ({
+    load: async () => {
+      if (adminViewingAsRef.current || ADMIN_VIEW_EMAIL) return { keys: {}, canSave: false, error: '관리자 접속 중' };
+      const email = authEmailRef.current;
+      const c = aiKeyCacheRef.current;
+      if (c.loaded && c.email === email) return { keys: { ...c.aiKeys }, canSave: !!driveTokenRef.current };
+      const token = driveTokenRef.current;
+      if (!token) return { keys: {}, canSave: false, error: 'Drive에 아직 연결되지 않았습니다 — 잠시 뒤 다시 열어 주세요' };
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+        const data = await loadDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS);
+        const aiKeys = normalizeAiKeys(data?.aiKeys);
+        aiKeyCacheRef.current = { email, key: typeof data?.geminiKey === 'string' ? data.geminiKey.trim() : '', aiKeys, loaded: true };
+        return { keys: { ...aiKeys }, canSave: true };
+      } catch (err) {
+        return { keys: {}, canSave: false, error: `키를 불러오지 못했습니다 (${err?.message || err})` };
+      }
+    },
+    save: async (keys) => {
+      if (adminViewingAsRef.current || ADMIN_VIEW_EMAIL) return { ok: false, error: '관리자 접속 중에는 저장하지 않습니다' };
+      const token = driveTokenRef.current;
+      if (!token) return { ok: false, error: 'Drive에 아직 연결되지 않았습니다' };
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolderRef.current(token);
+        const email = authEmailRef.current;
+        let c = aiKeyCacheRef.current;
+        // Gemini 키를 지우지 않게 — 아직 읽지 않았으면 먼저 읽는다(읽기가 실패하면 저장하지 않는다).
+        if (!c.loaded || c.email !== email) {
+          const cur = await loadDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS);
+          c = { email, key: typeof cur?.geminiKey === 'string' ? cur.geminiKey.trim() : '', aiKeys: {}, loaded: true };
+        }
+        const aiKeys = normalizeAiKeys(keys);
+        await saveDriveFile(token, folderId, DRIVE_FILES.AI_SETTINGS, { geminiKey: c.key, aiKeys, updatedAt: new Date().toISOString() });
+        aiKeyCacheRef.current = { email, key: c.key, aiKeys, loaded: true };
+        return { ok: true, keys: { ...aiKeys } };
       } catch (err) {
         return { ok: false, error: `저장하지 못했습니다 (${err?.message || err})` };
       }
@@ -5868,6 +5919,7 @@ export default function App() {
           isAdmin={(authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()}
           viewingAs={!!ADMIN_VIEW_EMAIL || !!adminViewingAs}
           getPortfolios={getSearchPortfolios}
+          aiApi={aiKeysApi}
         />
         </Suspense>
         </KeepAfterOpen>

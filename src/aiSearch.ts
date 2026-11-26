@@ -266,6 +266,22 @@ export function speechChunks(md: string, max = 120): string[] {
 const ISO = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const oneLine = (s: unknown, max: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+const VIA_RE = /^(api|hand):[a-z0-9]{1,24}$/;
+const AI_ID_RE = /^[a-z0-9]{1,24}$/;
+const AI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,119}$/;
+// 고른 AI·모델(키는 여기 없다 — ai_settings.json). 아는 회사인지는 화면(aiProviders.aiPrefsOf)이 다시 가린다.
+function normAi(raw: any): { pick: string; models: Record<string, string>; web: Record<string, boolean>; ctx: boolean } {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const models: Record<string, string> = {};
+  const web: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(r.models && typeof r.models === 'object' ? r.models : {}).slice(0, 40)) {
+    if (AI_ID_RE.test(k) && typeof v === 'string' && AI_MODEL_RE.test(v)) models[k] = v;
+  }
+  for (const [k, v] of Object.entries(r.web && typeof r.web === 'object' ? r.web : {}).slice(0, 40)) {
+    if (AI_ID_RE.test(k) && typeof v === 'boolean') web[k] = v;
+  }
+  return { pick: AI_ID_RE.test(String(r.pick ?? '')) ? String(r.pick) : 'gemini', models, web, ctx: !!r.ctx };
+}
 export function cleanSources(a: any): { uri: string; title: string }[] {
   const out: { uri: string; title: string }[] = [];
   for (const s of Array.isArray(a) ? a : []) {
@@ -299,7 +315,9 @@ function normMsg(m: any): any | null {
   const text = String(m.text ?? '').slice(0, MSG_TEXT_MAX);
   const out: any = { id: ID_RE.test(String(m.id)) ? String(m.id) : `m${Math.random().toString(36).slice(2, 10)}`, role, text, at: ISO.test(String(m.at)) ? String(m.at) : '' };
   if (role === 'model') {
-    if (m.model) out.model = oneLine(m.model, 60);
+    if (m.model) out.model = oneLine(m.model, 80);
+    // 어느 길로 받은 답인가 — 없음 = Gemini 검색 · api:<회사> = 내 키로 다른 AI · hand:<곳> = 내 구독 사이트에서 붙여넣음(aiProviders.ts)
+    if (VIA_RE.test(String(m.via ?? ''))) out.via = String(m.via);
     const src = cleanSources(m.sources);
     if (src.length) out.sources = src;
     const qs = cleanQueries(m.queries);
@@ -328,7 +346,7 @@ function normChat(c: any): any | null {
   };
 }
 
-export function normalizeSearchStore(raw: any): { v: 1; chats: any[]; voice: { rate: number; voiceURI: string }; holdOn: boolean } {
+export function normalizeSearchStore(raw: any): { v: 1; chats: any[]; voice: { rate: number; voiceURI: string }; holdOn: boolean; ai: { pick: string; models: Record<string, string>; web: Record<string, boolean>; ctx: boolean } } {
   const r = raw && typeof raw === 'object' ? raw : {};
   const seen = new Set<string>();
   const chats: any[] = [];
@@ -343,6 +361,7 @@ export function normalizeSearchStore(raw: any): { v: 1; chats: any[]; voice: { r
     chats,
     voice: { rate: SPEECH_RATES.includes(rate) ? rate : 1, voiceURI: oneLine(r.voice?.voiceURI, 200) },
     holdOn: !!r.holdOn,
+    ai: normAi(r.ai),
   });
 }
 

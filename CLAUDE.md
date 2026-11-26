@@ -32,6 +32,7 @@ src/
 ├── taxCalcPaste.ts      # 평균 과표 계산기 '사진으로 넣기'(모든 사용자, 2026-11-24 둘째 요청 — 사진만 올리면 끝): 사진 고르자마자 기기에서 JPEG로 줄여(photoBudget·photoFitSize — 합계 3MB) `api/tax-photo.ts`(Edge, 구글 Gemini · 키 = Vercel `GEMINI_API_KEY`(2~9) · 부탁 문장은 서버 `api/_taxPhoto.ts`가 만든다 · 응답 NDJSON을 바로 흘림) → 끝까지 받은 답({d:1})만 parseTaxCalcPaste → plan(그 순간의 이벤트) → 바로 넣기 + '되돌리기' · 날짜·구분별 합친 행(가중평균 단가)·같은 날 같은 수량은 빈칸만 채움·`과표 N` · '다른 방법'(접힘) = AI 앱으로 공유(navigator.share 는 첫 await 보다 먼저) · AI 답 붙여넣기 — ⚠️ 사진은 저장하지 않는다(서버·Drive·기록 0) · 화면은 AI를 직접 부르지 않는다(fetch는 /api/tax-photo 하나) · accept 값은 PASTE_PHOTO_ACCEPT(슬래시·별표를 붙여 쓰면 검사 도구가 주석으로 읽는다) (⚠️ import 0 — verify:tax-paste · #G가 서버 처리부를 가짜 Gemini로 끝까지)
 ├── holdingsPhoto.ts     # 계좌 표 「사진으로 보유 맞추기」(2026-11-26) 순수 로직: AI 답 줄 해석(`보유 | 코드 | 이름 | 수량 | 매입금액 | 평균단가`·잘림)·종목 맞추기(코드→이름→잘린 앞부분)·계획(바꿈/같음/0으로/그대로/새로 추가)·적용·되돌리기·메모 글·새 종목 코드 찾기(검색 답 읽기 codeCandsFrom·후보 고르기·공식 이름 확인 findCodeByName·채우기) (⚠️ import 0 — verify:holdings-photo)
 ├── aiSearch.ts          # AI 검색 채팅창 순수 로직: 답 읽기(NDJSON)·마크다운 조각·듣기 문장 조각(speechChunks)·대화 묶음 저장 모양·한도(normalizeSearchStore)·보유 종목(이름·코드만) (⚠️ import 0 · 뒤보기 정규식 금지 — verify:ai-search)
+├── aiProviders.ts       # AI 검색 창의 여러 AI: 회사 표(AI_PROVIDERS 10곳 — 서버 `api/_aiChat.ts` CHAT_PROVIDERS와 같은 id)·키 모양·고른 AI(aiPrefsOf)·「내 구독으로 묻기」 넘길 곳(AI_HANDS)·넘길 글(handPrompt)·주소(handUrl)·붙여넣기 다듬기 (⚠️ import 0 — verify:ai-chat)
 ├── photoShrink.ts       # 사진을 기기에서 JPEG로 줄이기(shrinkPhotoToB64 — taxCalcPaste의 PHOTO_TRIES·photoFitSize 사용)
 ├── dividendYear.ts      # 분배금 현황 연도 버튼(2026~작년, 최근 5개 + 드롭다운) (⚠️ import 0 — verify:dividend 직접 import)
 ├── userCategory.ts      # 사용자 구분(항목 userCategory)·보기 전환(자산군|사용자) 묶음 규칙 (⚠️ import 0 — verify:user-category)
@@ -75,7 +76,7 @@ src/
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
     ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기
-    ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json)
+    ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json) · 다른 AI(내 키 → /api/ai-chat)·「내 구독으로 묻기」(AI 사이트 열기 + 답 붙여넣기)
     ├── AiApiGuide.tsx            # AI API 연동 사용법(구글 Gemini 키 받기, 그림 public/ai-guide/*.svg) — 메모 달력 「AI 연동」·사진 맞추기 창이 함께 씀
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)
     ├── CashTransferModal.tsx    # 현금(예수금) 계좌 간 이관 모달(원금 반영 선택, z=1070)
@@ -198,6 +199,21 @@ src/
   실패 = `gFailOf` → `credit`(모든 키 죽음 중 크레딧 소진이 있거나, 한 키라도 충전금 0원)·`badkey`·`quota0`·`rate1m`·`rate`·`gemini` + 키별 까닭 한 줄(`gKeyLabels` 내 키·사이트 키 N).
   ⚠️ 오류 본문은 **끝까지(2만 자) 읽고 나서** 가린다 — 600자에서 자르면 429 JSON이 깨져 원문만 보였다(2026-11-26 둘째 신고). ⚠️ 402를 `break`(다음 모델)로 되돌리지 말 것.
 - 구독(Google AI Pro) ≠ API: 앱 한도와 무관. AI Pro의 월 $10 GDP 크레딧은 AI Studio 선불 지갑 잔액(최소 $5)이 있어야 Gemini API에 쓰인다 — 안내는 `AiApiGuide`「Google AI Pro 구독이 있다면」.
+
+## 여러 AI 연결 — 각자 본인 계정으로 (`src/aiProviders.ts`·`api/ai-chat.ts`·`api/_aiChat.ts`, ⚠️ 회귀 주의 — 2026-11-26)
+
+- 사용자 요청: Gemini·Grok·Genspark·Claude 등 "모든 AI를 각 사용자의 개인 계정으로 · 무료 모델 · 구독 모델 · API가 아니어도". 길은 둘이고 Gemini 검색(`/api/ai-search`)은 그대로다.
+- **① 다른 AI 연결(내 키)**: AI 검색 창 ⚙ 설정에서 회사별 키 → 입력 칸 위 AI 고르기 → `/api/ai-chat`(Edge, 첫 줄 requireAuth)이 그 회사로 넘긴다.
+  OpenAI 꼴(OpenRouter·Groq·GitHub Models·Cerebras·Mistral·Poe·OpenAI·xAI·DeepSeek)과 Claude(Messages API)를 같은 NDJSON으로 바꿔 화면의 `searchReadStep`이 읽는다.
+  ⚠️ 보내는 곳은 `CHAT_PROVIDERS` 표의 주소뿐(화면이 주소를 주지 못한다 · `redirect:'error'`) · **사이트 키(환경 변수)를 쓰지 않는다** — 내 키가 없으면 `needkey`로 끝.
+  ⚠️ 키는 요청 헤더 `X-AI-Key`로만(서버는 저장·기록 안 함 · 오류 글의 키는 가림) · 회사로 사이트 주소를 알리는 헤더(HTTP-Referer·X-Title)를 보내지 않는다.
+  ⚠️ 회사를 더하면 `AI_PROVIDERS`·`CHAT_PROVIDERS`·verify:ai-chat 의 `HOSTS` 세 곳을 같이 고친다. `op:'models'`(모델 목록)가 곧 키 시험이다.
+- 키 = 내 Drive `ai_settings.json`의 `aiKeys{회사:키}`(Gemini 키 `geminiKey`와 같은 파일). ⚠️ App의 `geminiKeyApi.save`·`aiKeysApi.save`는 **서로의 칸을 함께 써야** 한다
+  (안 읽은 채 저장하면 먼저 읽는다 — 빼면 한쪽 키가 지워진다). 고른 AI·모델·웹 검색은 대화 묶음 `ai_search_chats.json`의 `ai`(키 없음). 관리자 접속 중엔 Gemini 고정.
+- **② 내 구독으로 묻기(API 없이)**: 질문을 쓰고 AI 이름을 누르면 그 AI 사이트를 새 창(`noopener,noreferrer`)으로 열고 질문을 주소에 싣는다(`handUrl` — 칸이 없는 Gemini·DeepSeek·뤼튼은
+  열기만) + **항상 클립보드에 복사**(누른 그 순간, 창을 열기 전) → 답을 복사해 「답 붙여넣기」 → 그 대화에 저장(`via:'hand:<id>'`, 꼬리표 "… 내 계정에서 붙여넣음"). 휴대폰은 「앱으로 공유」.
+  기다리는 자리 = `{role:'model', text:'', err:'hand', via}`(빈 답이지만 err가 있어 저장된다). 복사해 둔 질문을 그대로 붙여넣으면 넣지 않는다(`pasteIsQuestion`).
+- ⚠️ **구독 로그인(쿠키·세션 토큰·비밀번호)을 받아 대신 부르는 길은 만들지 않는다**(약관 위반·계정 정지·탈취 위험 — 사용자에게 알린 결정). 구독은 ②로 쓴다. 검증: `verify:ai-chat`(가짜 회사 서버로 처리부 끝까지).
 
 ## 과표 사진 맡기기 (관리자 전용 · `api/ai-tax.ts`·`api/ai-job.ts`·`api/_aiTax.ts`·`src/components/TaxPhotoJobs.tsx`, ⚠️ 회귀 주의 — 2026-11-24 · 2026-11-25 머리줄로)
 

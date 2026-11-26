@@ -1,5 +1,5 @@
 // @ts-nocheck
-// ✨ AI API 연동 사용법(구글 Gemini) — 메모 달력 머리줄 버튼과 계좌 표 「📷 사진으로 보유 맞추기」 창이 같은 내용을 띄운다
+// ✨ AI API 연동 사용법(구글 Gemini + 다른 AI 안내 한 칸) — 메모 달력 머리줄 버튼과 계좌 표 「📷 사진으로 보유 맞추기」 창이 같은 내용을 띄운다
 // (사용자 요청 2026-11-26: "구글 재미나이 api 사용법을 사진으로 만들어서 메모달력에 별도로").
 // 그림은 public/ai-guide/*.svg(설명용 예시 그림 — 구글 화면을 베낀 것이 아니다). 읽기만 하는 안내라 저장·호출 없음.
 import React from 'react';
@@ -58,6 +58,15 @@ export default function AiApiGuide({ onClose, inline = false }) {
           <a href="https://aistudio.google.com/projects" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-700 hover:bg-amber-600 text-white font-bold text-[12px] transition">
             AI Studio 프로젝트·결제 열기 <ExternalLink size={12} />
           </a>
+        </div>
+        <div className="rounded-lg border border-violet-600/40 bg-violet-900/10 px-3 py-2 space-y-1.5">
+          <div className="text-violet-200 font-semibold">Gemini 말고 다른 AI — ChatGPT · Claude · Grok · Genspark · Perplexity …</div>
+          <p>AI 검색 창에서 두 가지 길로 씁니다. 둘 다 <b className="text-gray-200">각자 본인 계정</b>으로 쓰고, 다른 사용자와 섞이지 않습니다.</p>
+          <ol className="list-decimal pl-5 space-y-0.5">
+            <li><b className="text-violet-200">내 구독으로 묻기 (API 키 없이)</b> — 질문을 쓰고 입력 칸 아래의 AI 이름을 누르면, 그 AI 사이트가 <b className="text-gray-200">내 로그인(무료·구독 그대로)</b>으로 열리고 질문이 들어갑니다. 답을 복사해 돌아와 「답 붙여넣기」를 누르면 이 대화에 저장돼 듣기·복사·이어 묻기가 됩니다.</li>
+            <li><b className="text-violet-200">다른 AI 연결 (내 계정 키)</b> — AI 검색 창 ⚙ 설정에서 회사별 키를 넣으면 사이트 안에서 바로 답을 받습니다. 카드 없이 되는 무료: OpenRouter · Groq · GitHub Models · Cerebras · Mistral. 유료(충전·구독 포인트): Claude · OpenAI · Grok · DeepSeek · Poe.</li>
+          </ol>
+          <p className="text-gray-400">ChatGPT Plus · Claude Pro · SuperGrok · Genspark 같은 <b className="text-gray-300">구독은 그 회사의 앱·사이트에서만</b> 쓰이고 API 키와는 따로입니다(구글과 같습니다) — 그래서 구독은 1번 길로 씁니다. 구독 로그인(비밀번호·쿠키)을 이 사이트에 넣는 방식은 약관 위반·계정 정지 위험이 있어 만들지 않았습니다.</p>
         </div>
         <div className="rounded-lg border border-gray-700/60 bg-gray-900/40 px-3 py-2 space-y-1.5">
           <div className="text-gray-100 font-semibold">자주 묻는 것</div>
