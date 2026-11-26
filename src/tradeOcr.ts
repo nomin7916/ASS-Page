@@ -330,6 +330,13 @@ function ptoks(lines: OcrLineIn[]): PTok[] {
   });
 }
 const TICKER_RE = /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/;
+// 증권사 앱의 표 밖 글 — 지수 막대(「지수」「실시간」 꼬리표)·아래 단추 줄(낱말 둘 이상: 메뉴·관심종목·현재가·주문·차트·계좌·투자…). 종목 이름에는 이런 낱말이 둘씩 나오지 않는다.
+const TICKER_BAR_RE = /^(지수|실시간)$/;
+const CHROME_RE = /^(메뉴|전체메뉴|홈|관심|관심종목|현재가|주문|차트|계좌|투자|투지|더보기|검색|설정|알림|혜택|잔고|MY|마이)$/;
+export function isChromeName(parts: string[]): boolean {
+  const ws = parts.join(' ').split(/\s+/).filter(Boolean);
+  return ws.some(w => TICKER_BAR_RE.test(w)) || ws.filter(w => CHROME_RE.test(w)).length >= 2;
+}
 export function classifyOcr(lines: OcrLineIn[]): 'orders' | 'holdings' | 'unknown' {
   const ts = ptoks(lines || []);
   const hs = new Set(ts.map(k => hheadOf(k.t)).filter(Boolean));
@@ -369,11 +376,23 @@ export function parseOcrHoldings(lines: OcrLineIn[], cands: { code: string; name
     // 한글로 끝나고 한글로 이어지는 줄바꿈은 글자 단위로 잘린 것(「코」/「어」 = 코어) — 붙인다
     nm.t = nm.parts.reduce((acc, p) => (!acc ? p : /[가-힣]$/.test(acc) && /^[가-힣]/.test(p) ? acc + p : acc + ' ' + p), '').replace(/\.{2,}|…/g, '').trim();
   }
+  // 표 밖 글은 종목이 아니다(사용자 사진 2026-11-26 키움 해외잔고: 화면 아래 「지수 실시간 나스닥 23,585.80」 막대 · 「메뉴 관심종목 현재가 주문 차트 계좌 투자」 단추 줄이
+  //   '잘린 종목'으로 읽혀 「넣지 않음」 두 줄이 생겼다) — ① 앞 종목과 머리줄 높이의 2배(최소 0.08)보다 멀리 떨어진 글부터는 표가 끝난 것 ② 지수 막대·단추 줄 낱말.
+  //   표 밖 글도 바로 위 종목 숫자 범위의 끝으로는 쓴다(지수 막대 숫자가 마지막 종목에 섞이지 않게).
+  const headSpan = hb - Math.min(...band.map(x => x.k.y0));
+  const gapMax = Math.max(2 * headSpan, 0.08);
+  const out = names.map(nm => isChromeName(nm.parts));
+  for (let i = 1, ended = false; i < names.length; i++) {
+    if (!ended && names[i].y0 - names[i - 1].y1 > gapMax) ended = true;
+    if (ended) out[i] = true;
+  }
   const nameToksLi = nameLi;
   const holds: OcrHold[] = [];
   names.forEach((nm, i) => {
+    if (out[i]) return;
     const h = nm.h;
-    const top = nm.y0 - 0.6 * h, bot = i + 1 < names.length ? names[i + 1].y0 - 0.6 * h : 1.01;
+    // 숫자 범위 = 이름 위 조금 ~ 다음 글 위(표 밖 글 포함) · 많아야 이름 위부터 행 높이(머리줄 높이)의 1.6배 — 표 아래 이름 없는 숫자(지수 막대 등)가 섞이지 않게
+    const top = nm.y0 - 0.6 * h, bot = Math.min(i + 1 < names.length ? names[i + 1].y0 - 0.6 * h : 1.01, nm.y0 + 1.6 * Math.max(headSpan, nm.y1 - nm.y0));
     const nums = body.filter(k => k.yc >= top && k.yc < bot && isNum(k.t) && !nameToksLi.has(k.li));
     // 이름 덩어리 마지막 줄이 티커(GPIQ)면 따로 — 해외 종목 코드
     const lastPart = nm.parts[nm.parts.length - 1];

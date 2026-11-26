@@ -223,10 +223,12 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
     let krwShots = 0;
     if (usd) {
       const keep = holds.filter(h => h.cut || h.usd);
+      const krwNames = holds.filter(h => !h.cut && !h.usd).map(h => h.ticker || h.code || h.name);
       krwShots = holds.length - keep.length;
       holds.length = 0;
       holds.push(...keep);
-      if (keep.length === 0 && krwShots > 0 && !cash) { setRun({ phase: 'error', n, code: 'ocr', msg: '원화 화면입니다 — 해외 계좌는 달러 금액이 필요합니다. 키움 해외잔고에서 「원화」 버튼을 눌러 「외화」로 바꾼 화면을 찍어 올려 주세요(원화 화면은 보유수량만 같고 매입금액이 원화입니다).' }); return; }
+      // 숫자가 다 보이는 줄이 모두 원화 = 원화 화면(잘린 줄은 원화·외화를 가릴 수 없다) — 「다른 계좌 사진」이 아니라 원화 화면이라고 알린다(사용자 사진 2026-11-26)
+      if (!keep.some(h => !h.cut) && krwShots > 0 && !cash) { setRun({ phase: 'error', n, code: 'ocr', msg: `원화 화면입니다 — 사진 속 종목(${krwNames.join('·')})은 찾았지만 넣지 않았습니다. 원화 매입금액은 환율에 따라 바뀌어 달러 원가로 쓸 수 없습니다 — 키움 해외잔고에서 「원화」 버튼을 눌러 「외화」로 바꾼 화면을 찍어 올려 주세요.` }); return; }
     }
     // 프로그램이 잔고 표를 못 찾았으면 AI(2순위)로 — 쓸 수 있을 때만(관리자 · 내 Gemini 키). 사용자 확정 2026-11-26: 사진은 OCR 1순위 · AI 2순위.
     const cashPlan = planCashSync(cash, itemsRef.current);
@@ -274,7 +276,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 text-[12.5px] text-gray-300 leading-relaxed">
           <div className="space-y-1">
             <p>증권사 앱의 <b className="text-gray-100">잔고(보유종목) 화면</b>을 캡처해 올리면, 이 계좌 종목의 <b className="text-blue-200">보유수량·투자금액(매입금액)</b>을 사진대로 맞춥니다.</p>
-            {usd && <p className="text-amber-200/90">해외 계좌 — 키움 해외잔고에서 「원화」 버튼을 눌러 <b>「외화」</b>로 바꾼 화면(매입금액이 달러)을 찍어 주세요. 원화 화면은 넣지 않습니다(달러 원가를 알 수 없어서).</p>}
+            {usd && <p className="text-amber-200/90">해외 계좌 — 키움 해외잔고에서 「원화」 버튼을 눌러 <b>「외화」</b>로 바꾼 화면(매입금액이 달러)을 찍어 주세요. 원화 화면은 넣지 않습니다(원화 매입금액은 환율에 따라 바뀌어서). 종목은 한글 이름 아래 티커(예: GPIQ)로 맞춥니다.</p>}
             <p className="text-gray-400">목록이 길면 내려 가며 찍은 사진을 <b className="text-gray-200">한 번에 모두</b> 고르세요. 사진에 없는 종목은 판 것으로 보고 0으로 하고, 종목명 칸에 📝 메모(마우스를 올리면 보임)를 남깁니다.</p>
           </div>
 
