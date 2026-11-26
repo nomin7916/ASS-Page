@@ -229,7 +229,7 @@ if (H) {
   eq('fundFeedRows — 이상한 코드는 부르지 않는다', await C.fundFeedRows('../x', now), null);
   const wb = calls.filter(u => u === '/api/fund-feed').length;
   C.fundFeedWant('MA:53663O', '2026-11-01', now); C.fundFeedWant('MA:53663O', '2026-11-01', now + 1000);
-  await new Promise(r => setTimeout(r, 30));
+  await C._fundFeedWantSettled();
   eq('fundFeedWant — 코드마다 10분에 한 번', calls.filter(u => u === '/api/fund-feed').length - wb, 1);
 
   if (H.API) {
@@ -242,7 +242,11 @@ if (H) {
     eq('fetchMiraeFundNavHistory — 구간만 자른다', hist2, { '2026-11-26': 1305 });
     const info = await H.API.fetchMiraeFundInfo('MA:53663O');
     eq('fetchMiraeFundInfo — 막힘 → 최신 2거래일(이름은 비워 둠)', info && [info.name, info.price, info.navDate, info.prevNavDate, info.prevNavPrice, info.changeAmount], ['', 1305, '2026-11-26', '2026-11-25', 1302.5, 2.5]);
+    // fundFeedWant는 앱이 기다리지 않는 요청이다 — 앞 요청이 끝난 뒤 부르고, 목록을 보기 전에 그 요청이 끝나기를 기다린다
+    // (안 기다리면 서버의 목록 쓰기와 이 확인이 경쟁해 가끔 실패했다 — 2026-11-26 8번 중 1번).
+    await C._fundFeedWantSettled();
     eq('fetchMiraeFundNavHistory — 우편함에도 없는 코드 → null', await H.API.fetchMiraeFundNavHistory('MA:11111A', '2026-10-01', '2026-11-26'), null);
+    await C._fundFeedWantSettled();
     ok('막힌 코드는 목록에 올라간다(다음 예약 작업이 읽게)', !!JSON.parse(store.get('ffd:want')).items['MA:11111A']);
   }
 }

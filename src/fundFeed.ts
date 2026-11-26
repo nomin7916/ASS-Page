@@ -59,17 +59,25 @@ export function fundFeedRows(code: string, now = Date.now()): Promise<Record<str
 }
 
 // 직접 조회가 막힌 코드를 우편함 목록에 올린다 — 예약 작업이 이 목록을 크롬에서 읽는다. 코드마다 10분에 한 번.
+// 앱은 이 요청을 기다리지 않는다(기준가 받기를 늦추지 않으려고). 보낸 요청은 wantBusy에 두어 시험이 끝을 기다린다.
 const wantAt = new Map<string, number>();
+const wantBusy = new Set<Promise<void>>();
 export function fundFeedWant(code: string, from: string, now = Date.now()): void {
   if (!FUND_FEED_CODE_RE.test(code)) return;
   if (now - (wantAt.get(code) || 0) < WANT_GAP_MS) return;
   wantAt.set(code, now);
-  fetch('/api/fund-feed', {
+  const p: Promise<void> = fetch('/api/fund-feed', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ op: 'want', items: [{ code, from }] }),
     signal: AbortSignal.timeout(8000),
-  }).catch(() => {});
+  }).then(() => {}, () => {}).finally(() => { wantBusy.delete(p); });
+  wantBusy.add(p);
+}
+
+// 시험용 — 보낸 목록 올리기가 모두 끝날 때까지(서버가 목록을 다 쓴 뒤) 기다린다
+export async function _fundFeedWantSettled(): Promise<void> {
+  while (wantBusy.size) await Promise.all([...wantBusy]);
 }
 
 // 시험용 — 메모리 비우기
