@@ -59,6 +59,7 @@
     "verify:fmt-cache": "node scripts/verify-fmt-cache.mjs",
     "verify:split": "node scripts/verify-split.mjs",
     "verify:ui-theme": "node scripts/verify-ui-theme.mjs",
+    "verify:fund-gap": "node scripts/verify-fund-gap.mjs",
     "gate": "node scripts/gate.mjs",
     "ship": "node scripts/ship.mjs"
   },

@@ -2101,6 +2101,61 @@ export const evalSeriesDates = (p: any, histDates: string[], effectiveDateKey: s
 //   - 주말·공휴일·종가 미로드일·추정 수량 → 직전 정확값을 이월(carry-forward) — carry-back 근사로 튀지 않게
 //   - 첫 정확값 이전 or 오늘(effectiveDateKey) → map 미설정 → 호출부가 저장값/라이브값으로 폴백
 // 반환: Map<date, number> (정확값 또는 이월값이 있는 날짜만). 호출부는 `map.get(date) ?? 저장값`으로 사용.
+//
+// ⚠️ 펀드 기준가 공백 구제(fundGapEval — 2026-11-26 사용자 신고, 회귀 주의):
+//    그날 **정확값이 빠진 종목이 펀드뿐**이면 그 펀드만 '그날 이전 마지막 기준가'로 계산하고 나머지는
+//    그날 종가 그대로 쓴다. 펀드 NAV 조회처(미래에셋)가 막히면 펀드 하나(실측 비중 8%) 때문에
+//    allExact가 매일 거짓이 되어 **계좌 전체가 한 달간 직전 값으로 이월**됐다 — 나머지 18종목(92%)의
+//    실제 종가가 차트에 전혀 안 나오고 마지막 날 라이브 값에서 −9%p 절벽이 났다(퇴직연금 820,
+//    10/28~11/25 평평). 주식·ETF·금은 구제하지 않는다(종가 미로드 = 부팅 중간 상태일 수 있다 —
+//    그날은 종전처럼 이월). 펀드도 그날 이전 기준가가 한 번도 없으면 구제하지 않는다.
+const fundNavKeysOf = (cache: Map<string, string[]>, stockHistoryMap: Record<string, Record<string, number>>, code: string): string[] => {
+  let keys = cache.get(code);
+  if (!keys) {
+    const src = stockHistoryMap?.[code] || {};
+    keys = Object.keys(src).filter(d => isValidIsoDate(d) && Number(src[d]) > 0).sort();
+    cache.set(code, keys);
+  }
+  return keys;
+};
+export const lastNavOnOrBefore = (
+  stockHistoryMap: Record<string, Record<string, number>>,
+  code: string,
+  date: string,
+  cache: Map<string, string[]> = new Map(),
+): number | null => {
+  const keys = fundNavKeysOf(cache, stockHistoryMap, code);
+  let lo = 0, hi = keys.length - 1, at = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (keys[mid] <= date) { at = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return at < 0 ? null : Number(stockHistoryMap[code][keys[at]]);
+};
+// calcPortfolioEvalDetail 결과 r(allExact=false)를 받아, 정확값이 빠진 항목이 **기준가 이력이 있는 펀드뿐**이면
+// 그 펀드만 마지막 기준가로 바꾼 합계를 돌려준다. 하나라도 다른 종류가 빠졌으면 null(호출부는 종전대로 이월).
+export const fundGapEval = (
+  r: { total: number; fxRate: number; items: any[]; hasAnyPrice: boolean },
+  date: string,
+  stockHistoryMap: Record<string, Record<string, number>>,
+  cache: Map<string, string[]> = new Map(),
+): number | null => {
+  if (!r || !r.hasAnyPrice) return null;
+  let total = r.total;
+  let rescued = false;
+  for (const it of r.items || []) {
+    if (it.source === 'deposit' || it.source === 'savings' || it.source === 'manual' || it.source === 'cash') continue;
+    if (it.source === 'history' && it.code && stockHistoryMap?.[it.code]?.[date] != null) continue; // 그날 정확값
+    if (it.type !== 'fund' || !it.code) return null;
+    const qty = cleanNum(it.quantity);
+    if (!(qty > 0)) return null;
+    const nav = lastNavOnOrBefore(stockHistoryMap, it.code, date, cache);
+    if (!(nav != null && nav > 0)) return null;
+    total += qty * nav * (r.fxRate || 1) - cleanNum(it.eval);
+    rescued = true;
+  }
+  return rescued && total > 0 ? total : null;
+};
 export const buildCloseEvalSeries = (
   p: any,
   dates: string[],
@@ -2123,6 +2178,7 @@ export const buildCloseEvalSeries = (
   const sorted = [...new Set(dates.filter(Boolean))].sort();
   let lastClose: number | null = null;
   let lastDeposit: number | null = null;
+  const navKeyCache = new Map<string, string[]>(); // fundGapEval용 — 펀드 코드별 기준가 날짜(호출 1회 동안 재사용)
   for (const date of sorted) {
     if (date === effectiveDateKey) continue; // 오늘=라이브 → 호출부 처리(미설정)
     let closeVal: number | null = null;
@@ -2130,7 +2186,9 @@ export const buildCloseEvalSeries = (
     const resolved = resolveHoldings(p, date);
     if (!resolved.estimated) {
       const r = calcPortfolioEvalDetail(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap || {}, fxRate, mpo);
+      const fundGap = (r.hasAnyPrice && !r.allExact && accountType !== 'gold') ? fundGapEval(r, date, stockHistoryMap, navKeyCache) : null;
       if (r.hasAnyPrice && r.allExact) { closeVal = r.total; depVal = depositEvalOf(r.items); }
+      else if (fundGap != null) { closeVal = fundGap; depVal = depositEvalOf(r.items); }
       // ⚠️ '평가할 포지션이 하나도 없음'과 '가격을 못 구함'을 구분한다(이월 금지 — 회귀 주의).
       //    종목을 전부 다른 계좌로 이관/매도해 비운 계좌는 그날부터 평가액이 **진짜 0**인데,
       //    hasAnyPrice=false(가격 종목 0건)를 '데이터 공백'으로 보고 직전 값을 이월하면 이미
