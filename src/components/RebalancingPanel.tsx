@@ -7,7 +7,7 @@ import { rowHighlightOf, nextRowHighlight } from '../watchlistGroups';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, isManualCashRow, manualCashEval, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources, blendWithDarkBg } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { ladderWinId } from '../cardWindow';
-import { rebalCapitalBase, rebalRowOutcome, parseDraftNumber, REBAL_PREVIEW_DELAY_MS, tradeSideLabel, minRatioForOneShare } from '../rebalPreview';
+import { rebalCapitalBase, rebalRowOutcome, parseDraftNumber, REBAL_PREVIEW_DELAY_MS, tradeSideLabel, minRatioForOneShare, rebalCashSummary } from '../rebalPreview';
 import RebalPreviewBubble from './RebalPreviewBubble';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import CardExpandButton from './CardExpandButton';
@@ -611,17 +611,11 @@ export default function RebalancingPanel({
   const headerBaseCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
   const headerExtraCost = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
   const headerInvestable = isLevelMode ? headerAmount : (headerUseDeposit + headerAmount);
-  const headerTotalBuy = rebalanceData.reduce((s, d) => {
-    const q = d.action + (rebalExtraQty[d.id] || 0);
-    return s + (q > 0 ? q * cleanNum(d.currentPrice) : 0);
-  }, 0);
-  const headerTotalSell = rebalanceData.reduce((s, d) => {
-    const q = d.action + (rebalExtraQty[d.id] || 0);
-    return s + (q < 0 ? -q * cleanNum(d.currentPrice) : 0);
-  }, 0);
-  const headerDepositForBuy = isLevelMode ? headerDepositAmount : headerUseDeposit;
-  const rebalTotalAvailable = headerDepositForBuy + headerAmount + headerTotalSell;
-  const rebalBalance = rebalTotalAvailable - headerTotalBuy;
+  // 매수·매도·잔액 = rebalPreview.rebalCashSummary 하나(휴대폰 화면 리밸런싱 표가 같은 함수를 부른다 — 여기서 식을 다시 굴리지 말 것).
+  const {
+    totalBuy: headerTotalBuy, totalSell: headerTotalSell, depositForBuy: headerDepositForBuy,
+    totalAvailable: rebalTotalAvailable, balance: rebalBalance,
+  } = rebalCashSummary({ rows: rebalanceData, extraQty: rebalExtraQty, depositAmount: headerDepositAmount, settings });
   const rebalRemaining = Math.max(0, rebalBalance);
 
   // 입력 중 미리보기 말풍선의 내용 — 칸에 친 값이 Enter로 적용됐을 때 그 행에 나올 값.

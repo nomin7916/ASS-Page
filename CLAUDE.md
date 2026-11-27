@@ -18,7 +18,7 @@ src/
 ├── appsScript.ts        # 승인 스크립트(Apps Script) 호출 단일 관문 — 본문에 로그인 토큰을 싣는다(⚠️ 직접 fetch 금지)
 ├── watchlistQuote.ts    # 관심종목 코드→시장 판정(detectMarket)·시세/이력/최근 분배금 조회(api.ts 재사용)
 ├── watchlistChart.ts    # 관심종목 기간 구간·등락율·비교 차트 행·분배금 파서·보유 매입가(buildHoldings)·보유종목 줄(holdingWatchStocks)·찾기(holdingCatalog·초성 searchHoldingCatalog)·이동평균(movingAverage·withMaRows) (⚠️ import 0 — verify:watchlist 직접 import)
-├── rebalPreview.ts      # 리밸런싱 수량·예상평가금·예상비중 산식 단일 소스(표 usePortfolioData + 입력 중 말풍선 RebalPreviewBubble) · 말풍선 = 수량(매수·매도)·매수금액/매도금액(부호 없음)·예상평가금·예상비중 + 적립식 0주면 1주 최소 비중(minRatioForOneShare) (⚠️ import 0 — verify:rebal-preview)
+├── rebalPreview.ts      # 리밸런싱 수량·예상평가금·예상비중 산식 단일 소스(표 usePortfolioData + 입력 중 말풍선 RebalPreviewBubble) · 말풍선 = 수량(매수·매도)·매수금액/매도금액(부호 없음)·예상평가금·예상비중 + 적립식 0주면 1주 최소 비중(minRatioForOneShare) · 표 아래 매수·매도·잔액 `rebalCashSummary`(PC 표·휴대폰 리밸런싱 공용) (⚠️ import 0 — verify:rebal-preview)
 ├── liveTodayRow.ts      # 비활성 시장 계좌의 '오늘' 라이브 줄을 새 시세로 맞춤(useHistoryBackfill 효과#1 — ⚠️ "같은 날 1건만(불변)"으로 되돌리지 말 것: 부팅 때 저장된 옛 시세로 굳었다 · 원금은 안 건드림) (⚠️ import 0 — verify:live-today)
 ├── backdatedTrade.ts    # 자산검증(추이 표 날짜 클릭)에서 지난 날짜 수량 변경 = 그날의 매매: 투자금액 식(매수 + 늘어난 수량×단가 · 매도 × 남은÷원래)·그 뒤 기록과 계좌 표에 같은 차이·예수금은 고를 때만·표에서 먼저 고쳤으면 '옮기기' (⚠️ import 0 · 마지막 기록과 계좌 표에 같은 차이를 더할 것 — 갈리면 App 구성 변경 효과가 오늘 날짜로 되돌림 기록을 만든다 — verify:backdated-trade)
 ├── tradePhoto.ts        # 추이 머리줄 📷 「주문내역 사진으로 매매 넣기」: AI 답 줄(`매매 | 날짜 | 코드 | 종목명 | 구분 | 체결수량 | 체결단가`)·연도 없는 날짜·같은 날 체결 합치기(가중평균)·날짜순(매도 먼저) backdatedTrade로 넣기·두 번 막기(그날 기록 trades·그날 표 수정)·표가 이미 맞으면 옮기기·되돌리기 (⚠️ utils·backdatedTrade·holdingsPhoto만 .ts import — verify:trade-photo)
@@ -189,6 +189,8 @@ src/
   계좌 = 활성 계좌(`switchToPortfolioWithSnapshot`) · 카메라 = `setHoldPhotoPid`(금현물 제외) · 금액 보이기 = PIN 창 · 로그아웃 = `handleLogout` 하나 · 뒤로 가기 = 계좌 → 대시보드.
 - 숨긴 것(사용자 확정): 위쪽 단추 줄 전체·차트·추이 표·입출금·리밸런싱·분배금 표. 필요하면 요청받아 하나씩 더한다. ⋯ 메뉴 = 새로고침·PC 화면으로 보기·로그아웃뿐.
   배경 = 이 기기 `localStorage` 한 칸(기본 시스템 연동) · PC 화면 보기 = `sessionStorage`(탭을 닫으면 다시 휴대폰 화면) — Drive·STATE 금지. 검증: `verify:mobile-view`.
+- 계좌 이름 옆 「리밸런싱」(금현물 없음) = 보기 전용 표: 종목명·코드 | 현재·예상 수량 | 매수·매도(action + 추가 수량) | 예상 투자금(= `expEval`, PC 예상평가금) + 매수·매도·잔액.
+  ⚠️ 값은 PC와 같은 `rebalanceData`·`rebalExtraQty`·`rebalCashSummary`(RebalancingPanel도 이 함수) — 휴대폰에서 수량·잔액 식을 따로 굴리지 말 것. 목표 비중·추가 수량 편집은 PC에서만.
 
 ## 사진으로 보유 맞추기 (`src/holdingsPhoto.ts`·`api/holdings-photo.ts`·`api/_holdingsPhoto.ts`, ⚠️ 회귀 주의 — 2026-11-26)
 

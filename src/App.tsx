@@ -5987,6 +5987,9 @@ export default function App() {
             isLoading={isLoading}
             onPcView={() => mobile.setPcView(true)}
             onLogout={handleLogout}
+            rebalanceData={rebalanceData}
+            rebalExtraQty={rebalExtraQty}
+            rebalSettings={settings}
           />
         </ErrorBoundary>
       )}

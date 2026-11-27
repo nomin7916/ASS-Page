@@ -37,6 +37,35 @@ export function rebalRowOutcome({ mode, price, qty, curEval, overallExp, allocBa
   return { action, totalAction, cost: action * price, flow: totalAction * price, expEval, expRatio };
 }
 
+// utils.cleanNum 과 같은 규칙(import 0 이라 사본) — 빈 값 0 · 숫자는 그대로 · 글자는 숫자·점·빼기만 남겨 읽는다.
+const toNum = (val) => {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return val;
+  const parsed = parseFloat(String(val).replace(/[^0-9.-]+/g, ''));
+  return isNaN(parsed) || !isFinite(parsed) ? 0 : parsed;
+};
+
+// 자금 요약 — 표 아래 「매수·매도·잔액」. PC 리밸런싱 표와 휴대폰 화면이 **같은 함수**를 부른다(2026-11-27).
+// rows = usePortfolioData.rebalanceData · extraQty = 이 계좌의 추가 수량 · 금액은 계좌 통화(해외 = 달러).
+// 매매 수량 = action + 추가 · 잔액 = (예수금 + 적립금 + 매도) − 매수. 리밸런싱·목표금액은 예수금 전액, 적립식은 쓸 예수금만.
+export function rebalCashSummary({ rows = [], extraQty = {}, depositAmount = 0, settings = {} }) {
+  const mode = settings?.mode;
+  const isLevelMode = mode === 'rebalance' || mode === 'targetAmount';
+  const amount = toNum(settings?.amount);
+  const useDeposit = settings?.useDepositAmount != null
+    ? Math.min(Math.max(0, toNum(settings.useDepositAmount)), depositAmount)
+    : depositAmount;
+  let totalBuy = 0, totalSell = 0;
+  (rows || []).forEach((d) => {
+    const q = d.action + ((extraQty || {})[d.id] || 0);
+    if (q > 0) totalBuy += q * toNum(d.currentPrice);
+    else if (q < 0) totalSell += -q * toNum(d.currentPrice);
+  });
+  const depositForBuy = isLevelMode ? depositAmount : useDeposit;
+  const totalAvailable = depositForBuy + amount + totalSell;
+  return { totalBuy, totalSell, depositForBuy, amount, useDeposit, totalAvailable, balance: totalAvailable - totalBuy, isLevelMode };
+}
+
 // 입력 초안 → 숫자. 숫자가 하나도 없으면 null('비움' — 호출부가 커밋 규약대로 폴백을 정한다).
 export function parseDraftNumber(raw) {
   const s = String(raw ?? '').trim();

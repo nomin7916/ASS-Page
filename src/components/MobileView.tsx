@@ -8,12 +8,17 @@ import {
   MOBILE_THEMES, MOBILE_THEME_OPTIONS, MOBILE_HTML_CLASS, MOBILE_Z, MASK,
   badgeOf, fmtWon, fmtSigned, fmtPct, fmtUsd, fmtQty, toneOf,
   mobileAccountList, mobileHoldingRows, holdingAccountNames, mobileMergedHoldings, todayOf, shortDate,
+  mobileRebalRows, rebalModeLabel,
 } from '../mobileView';
+import { rebalCashSummary } from '../rebalPreview';
+import { cleanNum } from '../utils';
 
 const FONT = "-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif";
 // 종목명 칸은 미래에셋처럼 약 38% — 나머지 세 칸은 숫자 길이에 맞춰(평가금액 9자리까지 한 줄)
 const GRID = 'clamp(116px, 37vw, 156px) minmax(0, 1.05fr) minmax(0, 1.1fr) minmax(0, 0.85fr)';
 const NUM_FS = 'clamp(12px, 3.4vw, 14px)';
+// 리밸런싱 표 — 종목명·코드 | 현재·예상 수량 | 매수·매도 수량 | 예상 투자금
+const REBAL_GRID = 'clamp(108px, 32vw, 132px) minmax(0, 0.95fr) minmax(0, 0.8fr) minmax(0, 1.25fr)';
 const RESET = { border: 0, padding: 0, margin: 0, background: 'transparent', font: 'inherit', color: 'inherit', cursor: 'pointer', WebkitTapHighlightColor: 'transparent', textAlign: 'inherit' };
 const ICON_BTN = { ...RESET, flex: 'none', width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' };
 const ELLIPSIS = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
@@ -40,12 +45,14 @@ export default function MobileView({
   showDashboard, activePortfolioId, activeTitle, activeTotals, activeAccountType,
   hideAmounts, onToggleHide, onGoHome, onOpenAccount, onPhotoSync,
   onRefresh, isLoading, onPcView, onLogout,
+  rebalanceData, rebalExtraQty, rebalSettings,
 }) {
   const C = MOBILE_THEMES[theme] || MOBILE_THEMES.black;
   const [sheet, setSheet] = useState('');
   const [tab, setTab] = useState('accounts');
   const [more, setMore] = useState(false);
   const [openRow, setOpenRow] = useState('');
+  const [rebal, setRebal] = useState(false);
   const scrollRef = useRef(null);
   const metaOrigRef = useRef(null);
 
@@ -100,7 +107,7 @@ export default function MobileView({
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     setOpenRow('');
-  }, [showDashboard, activePortfolioId]);
+  }, [showDashboard, activePortfolioId, rebal]);
 
   const toneColor = (n) => { const t = toneOf(n); return t === 'up' ? C.up : t === 'down' ? C.down : C.text; };
   const W = (n) => (hideAmounts ? MASK : fmtWon(n));
@@ -123,6 +130,21 @@ export default function MobileView({
   const activeRate = activeSummary ? activeSummary.returnRate : 0;
   const activeBadge = badgeOf(activeAccountType);
   const showCamera = showDashboard ? photoAccounts.length > 0 : activeAccountType !== 'gold';
+
+  // 리밸런싱 표 — PC 리밸런싱 표와 같은 값(rebalanceData·추가 수량·rebalCashSummary). 금현물은 PC처럼 없음.
+  const canRebal = !showDashboard && activeAccountType !== 'gold';
+  const rebalOn = rebal && canRebal;
+  const rebalUsd = activeAccountType === 'overseas';
+  const rebalRows = useMemo(() => (rebalOn ? mobileRebalRows(rebalanceData, rebalExtraQty, activeAccountType) : []), [rebalOn, rebalanceData, rebalExtraQty, activeAccountType]);
+  const rebalSum = useMemo(() => {
+    if (!rebalOn) return null;
+    const dep = (activeTotals?.calcPortfolio || []).find(p => p && p.type === 'deposit');
+    return rebalCashSummary({ rows: rebalanceData || [], extraQty: rebalExtraQty || {}, depositAmount: cleanNum(dep?.depositAmount || 0), settings: rebalSettings || {} });
+  }, [rebalOn, rebalanceData, rebalExtraQty, rebalSettings, activeTotals]);
+  const rebalTotal = rebalRows.reduce((s, r) => s + r.expEval, 0);
+  const AMT = (n) => (hideAmounts ? MASK : rebalUsd ? fmtUsd(n) : `${fmtWon(n)}원`);
+  const AMTN = (n) => (hideAmounts ? MASK : rebalUsd ? fmtUsd(n) : fmtWon(n));
+  const moveColor = (n) => (n > 0 ? C.up : n < 0 ? C.down : C.sub);
 
   const goHome = () => { setSheet(''); onGoHome(true); };
   const openAccount = (id) => { setSheet(''); onOpenAccount(id); };
@@ -181,6 +203,11 @@ export default function MobileView({
                 <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.4px', ...ELLIPSIS }}>{activeTitle || '계좌'}</span>
                 <ChevronDown size={20} style={{ flex: 'none' }} aria-hidden="true" />
               </button>
+              {canRebal && (
+                <button type="button" aria-pressed={rebalOn} onClick={() => { setSheet(''); setRebal(v => !v); }} style={{ ...RESET, flex: 'none', height: 44, display: 'flex', alignItems: 'center', padding: '0 2px' }}>
+                  <span style={{ height: 30, display: 'flex', alignItems: 'center', padding: '0 11px', borderRadius: 999, border: `1px solid ${rebalOn ? C.text : C.line2}`, background: rebalOn ? C.text : 'transparent', color: rebalOn ? C.bg : C.text, fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap' }}>리밸런싱</span>
+                </button>
+              )}
             </>
           )}
         </div>
@@ -272,6 +299,76 @@ export default function MobileView({
 
             <div style={{ padding: '26px 20px 34px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
               {isLoading && <span style={{ fontSize: 12.5, color: C.sub }}>시세를 받는 중…</span>}
+              <button type="button" onClick={onPcView} style={{ ...RESET, height: 44, padding: '0 12px', color: C.sub, fontSize: 13.5, textDecoration: 'underline', textUnderlineOffset: 3 }}>PC 화면으로 보기</button>
+            </div>
+          </div>
+        ) : rebalOn ? (
+          <div>
+            <div style={{ padding: '18px 20px 16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <span style={{ flex: 'none', padding: '3px 8px', borderRadius: 6, background: activeBadge.bg, color: '#ffffff', fontSize: 12, fontWeight: 700 }}>{activeBadge.label}</span>
+                <span style={{ fontSize: 13.5, color: C.sub, ...ELLIPSIS }}>리밸런싱 · {rebalModeLabel(rebalSettings?.mode)}</span>
+              </div>
+              <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', background: C.card, borderRadius: 12, padding: '12px 0' }}>
+                {[
+                  ['매수 금액', rebalSum?.totalBuy || 0, C.up],
+                  ['매도 금액', rebalSum?.totalSell || 0, C.down],
+                  ['잔액', rebalSum?.balance || 0, (rebalSum?.balance || 0) < 0 ? C.up : C.text],
+                ].map(([label, v, color], i) => (
+                  <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 0, borderLeft: i ? `1px solid ${C.line}` : 'none', padding: '0 4px' }}>
+                    <span style={{ fontSize: 12.5, color: C.sub }}>{label}</span>
+                    <span style={{ fontSize: NUM_FS, fontWeight: 600, color, ...ELLIPSIS, maxWidth: '100%' }}>{AMT(v)}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12.5, color: C.sub }}>
+                {rebalUsd ? '해외 계좌는 달러 · ' : ''}잔액 = 예수금 + 적립금 + 매도 − 매수 (PC 표와 같은 값)
+              </div>
+            </div>
+
+            <div>
+              <div style={{ position: 'sticky', top: 0, zIndex: 2, display: 'grid', gridTemplateColumns: REBAL_GRID, background: C.head, borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`, color: C.sub, fontSize: 13, textAlign: 'center' }}>
+                {[['종목명', '종목코드'], ['현재 수량', '예상 수량'], ['매수·매도', '수량'], ['예상 투자금', '']].map(([a, b], i) => (
+                  <div key={a} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3, padding: '8px 4px', borderRight: i === 0 ? `1px solid ${C.line}` : 'none' }}><span>{a}</span>{b && <span>{b}</span>}</div>
+                ))}
+              </div>
+
+              {rebalRows.map(r => (
+                <div key={r.id} style={{ display: 'grid', gridTemplateColumns: REBAL_GRID, borderBottom: `1px solid ${C.line}` }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4, padding: '12px 8px 12px 16px', borderRight: `1px solid ${C.line}`, minWidth: 0 }}>
+                    <span style={{ fontSize: 15, fontWeight: 600, ...ELLIPSIS }}>{r.name}</span>
+                    <span style={{ fontSize: 13, color: C.sub, ...ELLIPSIS }}>{r.code || '-'}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'flex-end', gap: 4, padding: '12px 8px 12px 0', fontSize: NUM_FS, minWidth: 0 }}>
+                    <span style={{ color: C.sub, ...ELLIPSIS }}>{r.fixed ? '-' : `${Q(r.qty)}${r.unit}`}</span>
+                    <span style={{ fontWeight: 700, ...ELLIPSIS }}>{r.fixed ? '-' : `${Q(r.expQty)}${r.unit}`}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'flex-end', gap: 4, padding: '12px 8px 12px 0', fontSize: NUM_FS, color: moveColor(r.move), minWidth: 0 }}>
+                    <span style={{ fontWeight: 700 }}>{r.fixed ? '-' : r.move > 0 ? '매수' : r.move < 0 ? '매도' : '유지'}</span>
+                    <span style={ELLIPSIS}>{r.move ? `${r.move > 0 ? '+' : '-'}${Q(Math.abs(r.move))}${r.unit}` : '-'}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '12px 12px 12px 0', fontSize: NUM_FS, minWidth: 0 }}>
+                    <span style={ELLIPSIS}>{AMTN(r.expEval)}</span>
+                  </div>
+                </div>
+              ))}
+
+              {rebalRows.length === 0 && (
+                <div style={{ padding: '28px 20px', textAlign: 'center', fontSize: 14, color: C.sub }}>리밸런싱할 종목이 없습니다</div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: REBAL_GRID, borderBottom: `1px solid ${C.line}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', padding: '12px 8px 12px 16px', borderRight: `1px solid ${C.line}`, fontSize: 15, fontWeight: 600 }}>합계</div>
+                <div />
+                <div />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '12px 12px 12px 0', fontSize: NUM_FS, fontWeight: 700 }}>
+                  <span style={ELLIPSIS}>{AMTN(rebalTotal)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding: '22px 20px 34px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, textAlign: 'center' }}>
+              <span style={{ fontSize: 12.5, color: C.sub }}>목표 비중·추가 수량 같은 자세한 설정은 PC 화면에서 합니다</span>
               <button type="button" onClick={onPcView} style={{ ...RESET, height: 44, padding: '0 12px', color: C.sub, fontSize: 13.5, textDecoration: 'underline', textUnderlineOffset: 3 }}>PC 화면으로 보기</button>
             </div>
           </div>

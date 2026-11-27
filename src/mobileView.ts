@@ -111,7 +111,8 @@ export function fmtPct(n: unknown): string {
 }
 
 export function fmtUsd(n: unknown): string {
-  return '$' + FMT_USD.format(num(n));
+  const v = num(n);
+  return (v < 0 ? '-$' : '$') + FMT_USD.format(Math.abs(v));
 }
 
 export function fmtQty(n: unknown): string {
@@ -188,6 +189,34 @@ export function mobileHoldingRows(calcPortfolio: any[], accountType: string) {
     });
   });
   return { rows, depositEval, holdInvest, holdEval, today, hasChange };
+}
+
+export type MobileRebalRow = {
+  id: string; code: string; name: string; fixed: boolean;
+  qty: number; expQty: number; move: number; unit: string; expEval: number; usd: boolean;
+};
+
+// 리밸런싱 표(계좌 이름 옆 「리밸런싱」) — usePortfolioData.rebalanceData 그대로 + 이 계좌의 추가 수량(rebalExtraQty).
+// 매매 수량 = action + 추가 · 예상 수량 = 수량 + 매매 · 예상 투자금 = expEval(PC 「예상평가금」, 계좌 통화).
+// 예적금·수동 현금 행은 매매 대상이 아니라 PC처럼 수량 칸이 '-'(fixed).
+export function mobileRebalRows(rebalanceData: any[], extraQty: Record<string, number>, accountType: string): MobileRebalRow[] {
+  const usd = accountType === 'overseas';
+  const unit = accountType === 'crypto' ? '개' : '주';
+  return (rebalanceData || []).filter(Boolean).map((d: any) => {
+    const fixed = !!(d.isSavings || d.isManualCash);
+    const qty = num(d.quantity);
+    const move = fixed ? 0 : (Number(d.action) || 0) + (Number((extraQty || {})[d.id]) || 0);
+    return {
+      id: String(d.id ?? d.code ?? d.name), code: String(d.code || ''), name: String(d.name || d.code || (d.isSavings ? '예적금' : '현금')),
+      fixed, qty, expQty: qty + move, move, unit: d.type === 'fund' ? '좌' : unit, expEval: num(d.expEval), usd,
+    };
+  });
+}
+
+export function rebalModeLabel(mode: unknown): string {
+  if (mode === 'rebalance') return '목표 비중대로 맞출 때';
+  if (mode === 'targetAmount') return '목표 금액대로 맞출 때';
+  return '적립식 — 이번 투자금 나누기';
 }
 
 // 보유종목 탭의 '어느 계좌에 있나' 한 줄 — useIntegratedData.intHoldingsDonutData 의 묶음 이름 규칙을 그대로 따른다.
