@@ -99,6 +99,10 @@ if (M) {
   ok('#H6 오늘 손익 = 평가 × 등락률 ÷ (100 + 등락률)', Math.abs(d.rows[0].today - 17986700 * 0.84 / 100.84) < 1e-6 && d.hasChange);
   ok('#H7 등락률이 없으면 오늘 손익 줄을 숨긴다', M.mobileHoldingRows([calc[2]], 'isa').hasChange === false);
   ok('#H8 단위: 금현물 g · 해외는 달러 표시', M.mobileHoldingRows([calc[0]], 'gold').rows[0].unit === 'g' && M.mobileHoldingRows([calc[0]], 'overseas').rows[0].usd === true && d.rows[0].usd === false);
+  const noPp = { id: 9, type: 'stock', name: 'TIGER 머니마켓액티브', code: '488770', quantity: '64', purchasePrice: '', currentPrice: 102000, investAmount: 6650880, evalAmount: 6528000, profit: -122880, returnRate: -1.85, evalRatio: 7.5 };
+  const stalePp = { ...noPp, purchasePrice: 28460, investAmount: 10409848, quantity: 300 };
+  ok('#H9 평균단가 = PC 구매단가(국내 = 투자금액 ÷ 수량 반올림 · purchasePrice 무시)', M.mobileHoldingRows([noPp], 'isa').rows[0].avg === 103920 && M.mobileHoldingRows([stalePp], 'isa').rows[0].avg === Math.round(10409848 / 300));
+  ok('#H10 해외 평균단가 = 저장된 달러 단가', M.mobileHoldingRows([{ ...noPp, purchasePrice: 182.4, quantity: 20, investAmount: 5052480 }], 'overseas').rows[0].avg === 182.4);
 }
 
 console.log('\n── 파트⑤ 보유종목 탭 ──');

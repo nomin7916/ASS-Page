@@ -178,10 +178,13 @@ export function mobileHoldingRows(calcPortfolio: any[], accountType: string) {
     today += dayPl;
     holdInvest += invest;
     holdEval += evalAmount;
+    // 평균단가 = PC 종목 표 「구매단가」와 같은 값: 해외는 저장된 달러 단가, 그 밖은 투자금액 ÷ 수량(반올림).
+    //   ⚠️ purchasePrice를 그대로 쓰지 말 것 — 국내 행은 비어 있거나 옛 값이라 '-'·다른 숫자가 보였다(사용자 사진 2026-11-27).
+    const avg = usd ? num(it.purchasePrice) : (qty > 0 ? Math.round(invest / qty) : 0);
     rows.push({
       id: String(it.id ?? it.code ?? it.name), code: String(it.code || ''), name: String(it.name || it.code || (kind === 'cash' ? '현금' : '이름 없음')), kind,
       qty, unit: kind === 'fund' ? '좌' : unit, weight: num(it.evalRatio), profit: num(it.profit), rate: num(it.returnRate),
-      evalAmount, invest, price: num(it.currentPrice), avg: num(it.purchasePrice), usd, changeRate: chg, today: dayPl,
+      evalAmount, invest, price: num(it.currentPrice), avg, usd, changeRate: chg, today: dayPl,
     });
   });
   return { rows, depositEval, holdInvest, holdEval, today, hasChange };
