@@ -46,6 +46,7 @@ src/
 ├── introVideo.ts        # 인트로 영상(public/intro) 목록 INTRO_VIDEOS(⚠️ 최신이 맨 앞 — 새 영상은 맨 앞 한 줄 = 버튼 하나)·처음 영상 pickIntroVideo(INTRO_PICK_MODE 'latest'·나중에 'random')·진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro · 영상 음량은 −22.3 LUFS로 맞춰 INTRO_VOLUME 하나)
 ├── apiAuth.ts           # /api/… fetch 관문(로그인 토큰 탑재·401 재발급 1회·별도 창 토큰 전달) (⚠️ import 0 — verify:api-auth)
 ├── sessionKeepAlive.ts  # 로그인 유지: 비활동 로그아웃(4시간)·조작 목록·토큰 미리 받기(40분) 판정·별도 창 활동/토큰 중계 (⚠️ import 0 — verify:session)
+├── mobileView.ts        # 휴대폰 화면(폭 768px 미만) 순수 로직: 기준 폭·배경 4종(시스템 기본·블랙·밝은 베이지·남색, 이 기기 저장소)·PC 화면 보기(세션)·계좌 배지·숫자 모양·계좌 목록/잔고 표/보유종목 줄(PC 계산값을 받아 모양만) (⚠️ import 0 — verify:mobile-view)
 ├── uiTheme.ts           # 새 디자인(인디고 나이트) 시범: 관리자만 켬(UserInfoBar '새 디자인' 버튼)·이 기기 저장소 한 칸·?ui=classic 탈출 · 켜면 html.ui-indigo → index.css가 색만 바꿔 칠함(클래스는 그대로) (⚠️ import 0 — verify:ui-theme)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
@@ -76,6 +77,7 @@ src/
     ├── MarketIndicators.tsx      # 시장 지표 바
     ├── Header.tsx                # 상단 헤더
     ├── AccountTabBar.tsx         # 계좌 탭 바
+    ├── MobileView.tsx            # 휴대폰 화면 덮개(z=250) — 대시보드(총자산·오늘의 수익·계좌/보유종목) ↔ 계좌 잔고(미래에셋식 두 줄 표) · 위 오른쪽 카메라(사진으로 보유 맞추기)·◐ 배경·⋯ 메뉴 (hooks/useMobileView)
     ├── UserInfoBar.tsx           # 로그인 정보 바
     ├── PinChangeModal.tsx        # PIN 변경 모달
     ├── ScaleSettingModal.tsx     # 지표 배율 설정 모달
@@ -178,6 +180,15 @@ src/
   미승인은 **403**(401이면 앱이 재발급을 반복한다). 이메일별 메모리 + Redis(이메일 해시 키): 승인 **1시간**(사용자 확정 — 취소 반영
   최대 시간, 토큰 캐시도 이 시각을 넘지 않는다) · 미승인 5분. 스크립트 무응답일 때만 24시간 안 승인 기록으로 통과, 그 외 503.
   ⚠️ `SCRIPT_URL`·`ADMIN_EMAIL`·`CLIENT_ID`는 src/config.ts 사본이다(verify:api-auth가 대조). 검증: `verify:api-auth`.
+
+## 휴대폰 화면 (`src/mobileView.ts`·`components/MobileView.tsx`·`hooks/useMobileView.ts`, ⚠️ 회귀 주의 — 2026-11-27)
+
+- 화면 폭 768px 미만이면 PC 본문 **위에 덮는다**(z=`MOBILE_Z` 250 — PIN 창 500·사진 맞추기 1000·확인 창·로딩보다 아래). ⚠️ PC 본문(IntegratedDashboard·PortfolioTable 등)을
+  조건으로 빼지 말 것 — 저장·시세·기록 효과가 그 아래에서 PC와 똑같이 돌아야 한다(verify:mobile-view #W2). 덮개가 뜨면 `html.mobile-view`(index.css)가 문서 스크롤을 잠근다.
+- **모양만 다르다**: 숫자는 portfolioSummaries·intTotals·intMonthlyHistory[0]·intHoldingsDonutData·totals.calcPortfolio 그대로(새로 계산 금지). 대시보드 = `showIntegratedDashboard`,
+  계좌 = 활성 계좌(`switchToPortfolioWithSnapshot`) · 카메라 = `setHoldPhotoPid`(금현물 제외) · 금액 보이기 = PIN 창 · 로그아웃 = `handleLogout` 하나 · 뒤로 가기 = 계좌 → 대시보드.
+- 숨긴 것(사용자 확정): 위쪽 단추 줄 전체·차트·추이 표·입출금·리밸런싱·분배금 표. 필요하면 요청받아 하나씩 더한다. ⋯ 메뉴 = 새로고침·PC 화면으로 보기·로그아웃뿐.
+  배경 = 이 기기 `localStorage` 한 칸(기본 시스템 연동) · PC 화면 보기 = `sessionStorage`(탭을 닫으면 다시 휴대폰 화면) — Drive·STATE 금지. 검증: `verify:mobile-view`.
 
 ## 사진으로 보유 맞추기 (`src/holdingsPhoto.ts`·`api/holdings-photo.ts`·`api/_holdingsPhoto.ts`, ⚠️ 회귀 주의 — 2026-11-26)
 

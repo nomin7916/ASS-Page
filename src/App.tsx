@@ -42,6 +42,9 @@ import UnlockPinModal from './components/UnlockPinModal';
 import PasteModal from './components/PasteModal';
 import HoldingsPhotoSync from './components/HoldingsPhotoSync';
 import TradePhotoSync from './components/TradePhotoSync';
+import MobileView from './components/MobileView';
+import { useMobileView } from './hooks/useMobileView';
+import { resolveMobileTheme } from './mobileView';
 import { usePhotoCodeFill } from './hooks/usePhotoCodeFill';
 import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
 import PortfolioStatsPanel from './components/PortfolioStatsPanel';
@@ -626,6 +629,8 @@ export default function App() {
   // 📷 사진으로 보유 맞추기 — 연 순간의 계좌 id(열린 동안 다른 계좌로 바꿔도 그 계좌에만 쓴다). null = 닫힘
   const [holdPhotoPid, setHoldPhotoPid] = useState(null);
   const [tradePhotoPid, setTradePhotoPid] = useState(null);
+  // 휴대폰 화면(화면 폭 768px 미만) — PC 본문은 그대로 두고 그 위에 덮는다(규칙 src/mobileView.ts·components/MobileView.tsx).
+  const mobile = useMobileView();
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   // 종목 계좌 간 이관 — 대상 항목 id(모달 열림 여부 겸용)
   const [transferItemId, setTransferItemId] = useState(null);
@@ -5252,6 +5257,30 @@ export default function App() {
     saveAllToDrive({ ...saveStateRef.current, seenAdminNotifIds: newSeen, portfolioUpdatedAt: nowTs });
   };
 
+  const handleLogout = () => {
+    // ⚠️ 카드 별도 창을 먼저 정리한다(ADMIN_VIEW_EMAIL 가드보다 앞) — 그러지 않으면
+    //    로그아웃 후에도 창에 이전 사용자의 계좌 데이터가 그대로 남는다.
+    try { teardownCardWinsRef.current?.(); } catch {}
+    // 새 탭 관리자 접속 중에는 로그아웃=탭 닫기(reload 시 ?adminView로 재진입 루프 방지)
+    if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }
+    sessionStorage.removeItem(SESSION_KEY);
+    window.location.reload();
+  };
+  // 휴대폰 화면의 단추들 — PC 계좌 탭 막대(AccountTabBar)의 금액 숨김·새로고침과 같은 동작.
+  const toggleHideAmountsMobile = () => {
+    if (hideAmounts) {
+      setUnlockPinDigits(['', '', '', '']);
+      setUnlockPinError('');
+      setShowUnlockPinModal(true);
+    } else {
+      setHideAmounts(true);
+    }
+  };
+  const refreshMobile = () => {
+    if (!showIntegratedDashboard && activePortfolioAccountType === 'gold') fetchMarketIndicators({ fresh: true });
+    else refreshPrices();
+  };
+
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
@@ -5332,15 +5361,7 @@ export default function App() {
               saveAllToDrive(state);
             }
           }}
-          onLogout={() => {
-            // ⚠️ 카드 별도 창을 먼저 정리한다(ADMIN_VIEW_EMAIL 가드보다 앞) — 그러지 않으면
-            //    로그아웃 후에도 창에 이전 사용자의 계좌 데이터가 그대로 남는다.
-            try { teardownCardWinsRef.current?.(); } catch {}
-            // 새 탭 관리자 접속 중에는 로그아웃=탭 닫기(reload 시 ?adminView로 재진입 루프 방지)
-            if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }
-            sessionStorage.removeItem(SESSION_KEY);
-            window.location.reload();
-          }}
+          onLogout={handleLogout}
           canAccessDividendTax={canAccessDividendTax}
           onOpenDividendTax={() => setShowDividendTaxPage(true)}
           onAppClose={handleAppClose}
@@ -5939,6 +5960,43 @@ export default function App() {
       </div>
 
 
+      {/* 휴대폰 화면 — PC 본문 위에 덮는다(z=MOBILE_Z). 같은 App 상태·핸들러만 쓴다(통합 대시보드 ↔ 활성 계좌).
+          ErrorBoundary label = 섹션 격리: 휴대폰 화면 오류가 앱 전체 오류 화면이 되지 않게(그때는 아래 PC 화면이 보인다). */}
+      {mobile.active && (
+        <ErrorBoundary label="휴대폰 화면">
+          <MobileView
+            theme={resolveMobileTheme(mobile.themePref, mobile.sysDark)}
+            themePref={mobile.themePref}
+            onThemePref={mobile.setThemePref}
+            portfolios={portfolios}
+            portfolioSummaries={portfolioSummaries}
+            intTotals={intTotals}
+            intMonthlyHistory={intMonthlyHistory}
+            intHoldingsDonutData={intHoldingsDonutData}
+            showDashboard={showIntegratedDashboard}
+            activePortfolioId={activePortfolioId}
+            activeTitle={title}
+            activeTotals={totals}
+            activeAccountType={activePortfolioAccountType}
+            hideAmounts={hideAmounts}
+            onToggleHide={toggleHideAmountsMobile}
+            onGoHome={goIntegratedDashboard}
+            onOpenAccount={switchToPortfolioWithSnapshot}
+            onPhotoSync={(pid) => setHoldPhotoPid(pid)}
+            onRefresh={refreshMobile}
+            isLoading={isLoading}
+            onPcView={() => mobile.setPcView(true)}
+            onLogout={handleLogout}
+          />
+        </ErrorBoundary>
+      )}
+      {mobile.narrow && mobile.pcView && (
+        <button
+          type="button"
+          onClick={() => mobile.setPcView(false)}
+          className="fixed bottom-4 right-4 z-[240] px-4 py-2.5 rounded-full bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold shadow-2xl"
+        >휴대폰 화면</button>
+      )}
       <HoldingsPhotoSync
         open={!!holdPhotoPid}
         onClose={() => setHoldPhotoPid(null)}

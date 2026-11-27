@@ -117,3 +117,8 @@ html.ui-indigo [class~="hover:text-gray-400"]:hover { color: #A39DC7; }
 
 html.ui-indigo [class~="rounded-lg"] { border-radius: 14px; }
 html.ui-indigo [class~="rounded-xl"] { border-radius: 20px; }
+
+/* ── 휴대폰 화면(src/mobileView.ts · components/MobileView.tsx) — 덮개가 떠 있는 동안만 ──
+   아래 PC 화면이 따라 스크롤되지 않게 잠그고, 위아래로 당겼을 때 보이는 바탕을 고른 배경색으로 맞춘다. */
+html.mobile-view,
+html.mobile-view body { overflow: hidden; overscroll-behavior: none; background-color: var(--mv-bg, #0b1120); }

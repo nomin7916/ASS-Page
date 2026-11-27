@@ -193,10 +193,13 @@ ok('#G7b 창이 활동 신호를 보낸다',
   ok('#G8 ⚠️ 강제 로그아웃이 카드 창을 정리한다 — ADMIN_VIEW_EMAIL 가드보다 **앞**',
     /teardownCardWinsRef\.current\?\.\(\)/.test(forceBody)
     && forceBody.indexOf('teardownCardWinsRef') < forceBody.indexOf('ADMIN_VIEW_EMAIL'));
-  const logoutIdx = s.indexOf('onLogout={() => {');
+  // 수동 로그아웃 = handleLogout 하나(PC 위 막대·휴대폰 화면 메뉴가 함께 쓴다, 2026-11-27).
+  const logoutIdx = s.indexOf('const handleLogout = () => {');
   const logoutBody = logoutIdx >= 0 ? s.slice(logoutIdx, logoutIdx + 600) : '';
   ok('#G8b 수동 로그아웃도 정리한다 — 같은 순서',
-    /teardownCardWinsRef\.current\?\.\(\)/.test(logoutBody)
+    /onLogout=\{handleLogout\}/.test(s)
+    && !/onLogout=\{\(\) => \{/.test(s)
+    && /teardownCardWinsRef\.current\?\.\(\)/.test(logoutBody)
     && logoutBody.indexOf('teardownCardWinsRef') < logoutBody.indexOf('ADMIN_VIEW_EMAIL'));
 }
 ok('#G8c 창은 teardown에서 **화면 내용을 지운다** (읽기 전용만으로는 데이터가 남는다)',

@@ -370,8 +370,9 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
   ].filter(Boolean).join(' · ') : '';
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 px-3" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}>
-      <div className="relative w-full max-w-[640px] max-h-[92vh] flex flex-col overflow-hidden rounded-2xl border border-sky-700/50 bg-[#0f1623] shadow-2xl">
+    <div className="fixed inset-0 z-[1000] flex items-end sm:items-center justify-center bg-black/70 px-0 sm:px-3" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}>
+      {/* 휴대폰(640px 미만)은 아래에서 올라오는 판(휴대폰 화면의 카메라 단추가 연다) — PC는 종전 그대로 가운데 창 */}
+      <div className="relative w-full max-w-[640px] max-h-[92vh] flex flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-sky-700/50 bg-[#0f1623] shadow-2xl">
         {showGuide ? (
           <AiApiGuide inline onClose={() => setShowGuide(false)} />
         ) : (<>
