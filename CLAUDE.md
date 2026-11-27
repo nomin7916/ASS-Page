@@ -36,7 +36,7 @@ src/
 ├── krEtfTaxHelpers.ts   # 과표 계산 — 배당락월 셀 = 배당락 전날 장 마감 기준(`exCutOf` — 평균 과표·보유 수량, 배당락일 매매 제외·그 달 앵커는 포함 · 배당락일 모르면 말일) · 매매 과표 = 그 날짜 줄의 과표기준가격(전일 장 마감 기준으로 그날 공고 — 사용자 확정 2026-11-26) (⚠️ verify:kretf-tax #170b·#G25c)
 ├── taxPhotoJob.ts       # 과표 계산기 「📷 사진 맡기기」(관리자 전용) 화면 도구: 상태·오류 글·다시 부르기 판단·예약 작업 지침 글(ROUTINE_PROMPT = docs/ai-task/ROUTINE-PROMPT.md) (⚠️ import 0 — verify:ai-tax)
 ├── taxCalcPaste.ts      # 평균 과표 계산기 '사진으로 넣기'(모든 사용자, 2026-11-24 둘째 요청 — 사진만 올리면 끝): ⚠️ 사진 = 프로그램 읽기(OCR, `tradeOcr.ocrTaxRead`) 1순위 — 이 종목 것을 하나도 못 읽거나 'AI로 검수'일 때만 AI · 사진 고르자마자 기기에서 JPEG로 줄여(photoBudget·photoFitSize — 합계 3MB) `api/tax-photo.ts`(Edge, 구글 Gemini · 키 = Vercel `GEMINI_API_KEY`(2~9) · 부탁 문장은 서버 `api/_taxPhoto.ts`가 만든다 · 응답 NDJSON을 바로 흘림) → 끝까지 받은 답({d:1})만 parseTaxCalcPaste → plan(그 순간의 이벤트) → 바로 넣기 + '되돌리기' · 날짜·구분별 합친 행(가중평균 단가)·같은 날 같은 수량은 빈칸만 채움·`과표 N` · '다른 방법'(접힘) = AI 앱으로 공유(navigator.share 는 첫 await 보다 먼저) · AI 답 붙여넣기 — ⚠️ 사진은 저장하지 않는다(서버·Drive·기록 0) · 화면은 AI를 직접 부르지 않는다(fetch는 /api/tax-photo 하나) · accept 값은 PASTE_PHOTO_ACCEPT(슬래시·별표를 붙여 쓰면 검사 도구가 주석으로 읽는다) (⚠️ import 0 — verify:tax-paste · #G가 서버 처리부를 가짜 Gemini로 끝까지)
-├── holdingsPhoto.ts     # 계좌 표 「사진으로 보유 맞추기」(2026-11-26) 순수 로직: AI 답 줄 해석(`보유 | 코드 | 이름 | 수량 | 매입금액 | 평균단가`·잘림)·종목 맞추기(코드→이름→잘린 앞부분)·계획(바꿈/같음/0으로/그대로/새로 추가)·적용·되돌리기·메모 글·새 종목 코드 찾기(검색 답 읽기 codeCandsFrom·후보 고르기·공식 이름 확인 findCodeByName·채우기) (⚠️ import 0 — verify:holdings-photo)
+├── holdingsPhoto.ts     # 계좌 표 「사진으로 보유 맞추기」(2026-11-26) 순수 로직: AI 답 줄 해석(`보유 | 코드 | 이름 | 수량 | 매입금액 | 평균단가` · 펀드 줄 `보유 | - | 이름 | - | 매입금액 | - | 평가금액`·잘림)·종목 맞추기(코드→이름→확인한 코드 resolved→잘린 앞부분 · 펀드 줄은 펀드 행만)·계획(바꿈/같음/0으로/그대로/새로 추가/골라 주세요 pick)·적용·되돌리기·메모 글·새 종목 코드 찾기(검색 답 읽기 codeCandsFrom·후보 고르기·공식 이름 확인 findCodeByName·채우기)·고르기(pickTargets·applyHoldingPick·mergeHoldUndo)·비슷한 이름 추천 순위(nameScore·rankCodeSuggestions) (⚠️ import 0 — verify:holdings-photo)
 ├── aiSearch.ts          # AI 검색 채팅창 순수 로직: 답 읽기(NDJSON)·마크다운 조각·듣기 문장 조각(speechChunks)·대화 묶음 저장 모양·한도(normalizeSearchStore)·보유 종목(이름·코드만) (⚠️ import 0 · 뒤보기 정규식 금지 — verify:ai-search)
 ├── aiProviders.ts       # AI 검색 창의 여러 AI: 회사 표(AI_PROVIDERS 10곳 — 서버 `api/_aiChat.ts` CHAT_PROVIDERS와 같은 id)·키 모양·고른 AI(aiPrefsOf)·「내 구독으로 묻기」 넘길 곳(AI_HANDS)·넘길 글(handPrompt)·주소(handUrl)·붙여넣기 다듬기 (⚠️ import 0 — verify:ai-chat)
 ├── pcAsk.ts             # 「내 PC가 구독 AI에 묻기」 화면 도구: PC 연결 문구(pcTaskPrompt — 열쇠·bash 기다리기·curl 답 넣기)·기다리는 자리(pcPending)·확인 간격·글 (⚠️ import 0 — verify:pc-ask가 문구 속 bash를 실제로 돌린다)
@@ -82,6 +82,7 @@ src/
     ├── DriveBackupModal.tsx      # Drive 백업 관리 모달
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
+    ├── CodeSuggestList.tsx       # 이름이 비슷한 종목코드 추천 목록(api.suggestKrStockCodes + 다른 계좌) — 사진 맞추기 「골라 주세요」·표의 노란 코드 칸 돋보기가 함께 씀
     ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 맨 위 「프로그램으로 읽기」(AI 없이 · `planHoldingsSync(…, {keepUnseen})` = 안 보인 종목 0으로 안 함 · 자체 검사 어긋난 종목 그대로) · 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기 · 프로그램이 잔고 표를 못 찾으면 AI 자동(관리자·내 키일 때 — OCR 1순위 · AI 2순위)
     ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — **맨 위 = 프로그램 읽기**(주문내역·잔고 사진 함께 → 잔고 수량 기준으로 아직 표에 없는 매매만 `anchorToHoldings` → 같은 넣기 · 확인 필요 줄은 넣지 않고 붙여넣기 칸으로) · 「AI로 읽기·검수」(접힘, 사용자 확정: AI는 최종 검수만) 안에 — 같은 키 규칙(관리자도 내 키 칸 — 사이트 키가 없어도 됨)·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기 · 「구독 중인 AI로 읽기」(API 키 없이: 부탁 글 `tradeAskPrompt` 복사 → Gemini·Claude 앱에 사진 → 답 줄 붙여넣기 → 같은 applyText) · 「내 PC의 Claude로 읽기」(**관리자만** — PC 우편함 `/api/pc-ask` target claude + imgs → PC의 Claude가 읽어 답 → 같은 applyText) · ⚠️ 다른 사용자 = 「내 AI로 읽기」가 맨 위·펼침(무료 AI `PHOTO_AI_IDS` 7곳 · 휴대폰 공유) + 선택으로 내 무료 Gemini 키(사용자 확정 2026-11-26) · 프로그램이 표를 못 찾으면 AI 자동(쓸 수 있을 때) · 해외 계좌는 AI에 달러(cur usd)
     ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json) · 다른 AI(내 키 → /api/ai-chat)·「내 구독으로 묻기」(AI 사이트 열기 + 답 붙여넣기)
@@ -195,6 +196,12 @@ src/
   내 키 = 사용자 Index_Data 폴더 `ai_settings.json`(DRIVE_FILES.AI_SETTINGS, `saveDriveFile`만 · STATE·버전 백업·브라우저 저장소 금지 · 관리자 접속 중 읽기/쓰기 안 함)
   → 요청 헤더 `X-Gemini-Key`로만(서버는 저장·기록 안 함). 과표 '사진으로 넣기'(/api/tax-photo)는 그대로 사이트 키.
 - 메모 달력 머리줄 「AI 연동」 = 사용법(그림 5장 `public/ai-guide/`). 검증: `verify:holdings-photo`(가짜 Gemini로 서버 처리부 끝까지 포함).
+- **카드형 화면·펀드·고르기(사용자 요청 2026-11-27 — 퇴직계좌 미래에셋 「연금계좌현황」)**: 프로그램 읽기가 카드형(이름 줄 아래 「매입금액」·「보유수량/매입단가 N주/M원」·「평가금액」)을
+  `tradeOcr.parseOcrCards`로 읽는다(`isCardLayout` = 왼쪽 이름표 + 「원」 붙은 오른쪽 값 — 표 머리줄·키움 요약은 아님) · 펀드 카드(수량 없음) = 표의 **펀드 행** 매입금액·평가금액(`fund`, 검수 = 손익 줄 plcheck).
+  국내 계좌는 넣기 전에 이 계좌에서 바로 못 찾은 이름(+잘린 이름으로 이은 것)의 코드를 확인한다(`namesToResolve` → `knownCodeFor` → `findCodeByName`) → 확인한 코드가 이 계좌에 있으면 그 행(표 이름이 달라도) ·
+  ⚠️ 잘린 이름으로 이은 행의 코드가 확인한 코드와 다르면 끊는다(「KODEX 200TR」↔「KODEX 200」) · 확인한 새 종목 = 그 코드로 새 행 + `onCodeSet`(현재가) · **확인 못 하면 넣지 않고 「골라 주세요」**
+  (이 계좌의 다른 이름 행 · 추천 코드 · 직접 입력 · 코드 없이 · 넣지 않음 → `applyHoldingPick`, 되돌리기는 `mergeHoldUndo`로 하나). 고르기가 남으면 안 보인 주식 행은 0으로 하지 않는다 · 펀드만 찍은 사진은 주식 행을 건드리지 않는다.
+  표의 노란 코드 칸 돋보기 = 같은 추천 목록(`CodeSuggestList`). 검증: `verify:trade-ocr` #R(실제 OCR 출력 FX5)·`verify:holdings-photo` #F·#M·#P·#S17~19.
 
 ## AI 검색 채팅창 (`src/aiSearch.ts`·`api/ai-search.ts`·`api/_aiSearch.ts`·`AiSearchChat.tsx`, ⚠️ 회귀 주의 — 2026-11-26)
 

@@ -76,7 +76,7 @@ if (H) {
   eq('#H2 겹친 종목은 한 번 · 잘림이 사라짐', [p2.rows.length, p2.rows.some(r => r.cut), p2.skipped.length], [7, false, 0]);
   const plan2 = planHoldingsSync(p2, ITEMS());
   eq('#H2 계획 — 사진에 없는 KODEX 200 = 0으로 · ACE 같음', kinds(plan2), { a1: 'update', a2: 'same', a3: 'update', a4: 'same', a5: 'update', a6: 'same', a7: 'zero' });
-  eq('#H2 개수', holdCounts(plan2), { update: 3, same: 3, zero: 1, keep: 0, add: 1, cut: 0, bad: 0 });
+  eq('#H2 개수', holdCounts(plan2), { update: 3, same: 3, zero: 1, keep: 0, add: 1, cut: 0, bad: 0, pick: 0 });
   let n = 0;
   const r2 = applyHoldingsPlan(ITEMS(), plan2, { newId: () => `N${++n}`, today: TODAY });
   const by2 = Object.fromEntries(r2.next.map(it => [it.id, it]));
@@ -151,7 +151,8 @@ if (H && P) {
   const sp = P.buildHoldPrompt({ account: 'DC', cands: [{ code: '0091P0', name: 'TIGER 머니마켓액티브' }, { code: '', name: '이름만' }] });
   const ex = sp.split('\n').slice(sp.split('\n').indexOf('예)') + 1).join('\n');
   const pe = H.parseHoldingsText(ex);
-  eq('#G1 예시 세 줄 = 해석기 형식(마지막은 잘림)', [pe.rows.length, pe.rows.map(r => r.cut), pe.skipped.length, pe.rows[0].invest], [3, [false, false, true], 0, 935273]);
+  eq('#G1 예시 네 줄 = 해석기 형식(셋째는 펀드 줄 · 마지막은 잘림)', [pe.rows.length, pe.rows.map(r => r.cut), pe.rows.map(r => !!r.fund), pe.skipped.length, pe.rows[0].invest, pe.rows[2].invest, pe.rows[2].eval], [4, [false, false, false, true], [false, false, true, false], 0, 935273, 6000000, 5400000]);
+  ok('#G1b 부탁 문장 — 카드형 화면(보유수량/매입단가) · 펀드 줄(보유수량 -, 7번째 칸 평가금액)', sp.includes("'보유수량/매입단가'의 앞 숫자(주)가 보유수량") && sp.includes("'보유 | - | 상품명 | - | 매입금액 | - | 평가금액'"));
   ok('#G1 부탁 문장 — 목록 코드·이름 · 보유수량≠주문가능 · 매입금액≠평가금액 · 잘림 · 겹침 · 없음',
     sp.includes('0091P0 TIGER 머니마켓액티브') && sp.includes('- 이름만') && sp.includes("'주문가능' 수량이 아닙니다") && sp.includes("'평가금액'이 아닙니다")
     && sp.includes("'보유 | 코드 | 종목명 | 잘림'") && sp.includes('한 번만') && sp.includes("'없음'"));
@@ -274,6 +275,127 @@ if (H) {
   ], ['wait', 'miss', '', '', '']);
   const typedNote = codeTypedNote(TODAY);
   ok('#C17 직접 넣은 코드의 메모 — 표시는 남되(코드가 있어 다시 찾지 않음) 「직접 넣었습니다」', typedNote.includes(PHOTO_ADD_MARK) && typedNote.includes('직접 넣었') && photoCodeTodo([{ id: 'p', portfolio: [{ id: 'r', type: 'stock', code: '069500', name: 'KODEX 200', syncNote: typedNote }] }]).length === 0);
+}
+
+// #F·#M·#P 사용자 요청(2026-11-27): 퇴직계좌 「연금계좌현황」 사진 → 표에 이미 있는 종목을 이름으로 찾아 수량·매입금액 · 펀드(디폴트옵션)는 매입·평가금액
+//   · 못 찾으면 사용자가 고른다(이 계좌의 다른 이름 종목 · 이름이 비슷한 종목코드 추천 · 직접 입력)
+if (H) {
+  const { parseHoldingsText, planHoldingsSync, applyHoldingsPlan, undoHoldingsPlan, holdCounts, matchHoldingHow, namesToResolve, photoKey, planUsedIds, pickTargets,
+    applyHoldingPick, mergeHoldUndo, nameScore, rankCodeSuggestions, mergeCodeSuggestions, acctCodeCands, suggestQueries, photoCodeTodo, codeCandsFrom } = H;
+  // 사용자 사진(미래에셋 연금계좌현황 카드 3장)을 프로그램이 읽은 줄 그대로(scripts/verify-trade-ocr.mjs FX5 → ocrHoldLine)
+  const CARDS = [
+    '보유 | 0047A0 | RISE 삼성전자SK하이닉스채권혼합50 | 1342 | 17090157 | 12734',
+    '보유 | - | ACEK휴머노이드로봇산업TOP2+ | 172 | 1486555 | 8642',
+    '보유 | - | RISE 현대차고정피지컬AI | 잘림',
+    '보유 | - | KODEX 200TR | 227 | 8588873 | 37836',
+    '보유 | - | TIGER 미국S&P500 | 419 | 10074759 | 24044',
+    '보유 | - | KODEX 신재생에너지액티브 | 잘림',
+    '보유 | - | 미래에셋증권 디폴트옵션 적극투자형 BF1 | - | 6067250 | - | 5346116',
+  ].join('\n');
+  const RET = () => [
+    { id: 'r1', type: 'stock', code: '0047A0', name: 'RISE 삼성전자SK하이닉스채권혼합50', quantity: 1000, investAmount: 12000000 },
+    { id: 'r2', type: 'stock', code: '0005A0', name: 'ACE K휴머노이드로봇', quantity: 150, investAmount: 1300000 },
+    { id: 'r3', type: 'stock', code: '278530', name: '코덱스200TR', quantity: 200, investAmount: 7000000 },
+    { id: 'r4', type: 'stock', code: '0153K0', name: 'RISE 현대차고정피지컬AI', quantity: 50, investAmount: 600000 },
+    { id: 'r5', type: 'stock', code: '', name: '미국S&P500 타이거', quantity: 400, investAmount: 9000000 },
+    { id: 'r6', type: 'stock', code: '069500', name: 'KODEX 200', quantity: 10, investAmount: 300000 },
+    { id: 'f1', type: 'fund', code: '', name: '디폴트옵션 적극투자형 BF1', investAmount: 5000000, evalAmount: 4800000 },
+    { id: 'd1', type: 'deposit', name: '예수금', depositAmount: 10000 },
+  ];
+  const pc = parseHoldingsText(CARDS);
+  eq('#F1 펀드 줄 = 보유수량 - · 7번째 칸 평가금액 → fund · 잘림 줄은 그대로 잘림', [pc.rows.length, pc.rows.map(r => !!r.fund), pc.rows[6].invest, pc.rows[6].eval, pc.rows.filter(r => r.cut).length, pc.skipped.length],
+    [7, [false, false, false, false, false, false, true], 6067250, 5346116, 2, 0]);
+  eq('#F1b 평가금액이 없는 「-」 줄은 펀드가 아니라 잘림(예전 그대로)', parseHoldingsText('보유 | - | 어떤 펀드 | - | 6,067,250 | -').rows.map(r => [r.cut, !!r.fund]), [[true, false]]);
+
+  // 이름으로 확인한 코드(화면이 미리 찾는다) — KODEX 200TR = 278530 · TIGER 미국S&P500은 못 찾음
+  const RES = { [photoKey('KODEX 200TR')]: { code: '278530', name: 'KODEX 200TR', price: 27800, changeRate: 0.1, from: 'search' } };
+  const pre = planHoldingsSync(pc, RET(), { keepUnseen: true, pick: true });
+  const preK = Object.fromEntries(pre.rows.filter(r => r.itemId).map(r => [r.itemId, `${r.kind}:${r.match || ''}`]));
+  eq('#M1 확인 전 — 코드·이름·잘린 이름으로 잇기 · 「KODEX 200TR」은 앞부분이 같은 「KODEX 200」에 잠정으로(loose) · 펀드는 펀드 행에(증권사 이름이 앞에 붙어도)',
+    [preK.r1, preK.r2, preK.r4, preK.r6, preK.f1], ['update:code', 'update:loose', 'cut:name', 'update:loose', 'update:loose']);
+  eq('#M2 확인할 이름 — 잘린·짧은 이름으로 이은 것 + 못 찾은 것(펀드·정확히 맞은 것 빼고)', namesToResolve(pre), ['ACEK휴머노이드로봇산업TOP2+', 'KODEX 200TR', 'TIGER 미국S&P500']);
+  const plan = planHoldingsSync(pc, RET(), { keepUnseen: true, pick: true, resolved: RES });
+  const K = Object.fromEntries(plan.rows.filter(r => r.itemId).map(r => [r.itemId, `${r.kind}:${r.match || ''}`]));
+  eq('#M3 확인 뒤 — 「KODEX 200TR」(278530)은 이름이 다른 표의 「코덱스200TR」(278530)에 · 「KODEX 200」(069500)은 잇지 않음(그대로)',
+    [K.r3, K.r6, K.r1, K.r2, K.f1], ['update:resolved', 'keep:', 'update:code', 'update:loose', 'update:loose']);
+  const pk = plan.rows.filter(r => r.kind === 'pick');
+  eq('#P1 못 찾은 종목 = 골라 주세요(넣지 않고 기다림) · 잘린 새 종목 = 넣지 않음 · 개수', [pk.map(r => [r.photo, r.after.qty, r.after.invest]), plan.rows.filter(r => r.kind === 'bad').map(r => r.name), holdCounts(plan).pick, plan.outcome],
+    [[['TIGER 미국S&P500', 419, 10074759]], ['KODEX 신재생에너지액티브'], 1, 'apply']);
+  let n = 0;
+  const ap = applyHoldingsPlan(RET(), plan, { newId: () => `N${++n}`, today: TODAY });
+  const by = Object.fromEntries(ap.next.map(it => [it.id, it]));
+  eq('#P2 적용 — 수량·매입금액 · 펀드는 매입·평가금액(수량 칸 없음) · 고르기 종목은 아직 안 넣음 · 이름이 다른 행도 이름은 그대로',
+    [[by.r1.quantity, by.r1.investAmount], [by.r2.quantity, by.r2.investAmount], [by.r3.quantity, by.r3.investAmount, by.r3.name], [by.f1.investAmount, by.f1.evalAmount, 'quantity' in by.f1], by.r5.quantity, by.r6.quantity, ap.next.length],
+    [[1342, 17090157], [172, 1486555], [227, 8588873, '코덱스200TR'], [6067250, 5346116, false], 400, 10, RET().length]);
+  const usedIds = planUsedIds(plan);
+  const tg = pickTargets(pk[0], ap.next, usedIds);
+  eq('#P3 이 계좌에서 고를 행 — 같은 종류(주식)·아직 안 이은 행(잘려 보인 r4도 사진에 있음) · 이름이 비슷한 순(「미국S&P500 타이거」가 맨 위)', [tg[0].id, tg.map(t => t.id).sort(), tg.some(t => t.id === 'f1' || t.id === 'r1' || t.id === 'r4')], ['r5', ['r5', 'r6'], false]);
+  // 고르기 — 이 계좌 행에 · 추천 코드로 새 행 · 이 계좌에 그 코드가 있으면 그 행에 · 직접 입력 · 코드 없이 · 잘못된 코드
+  const toItem = applyHoldingPick(ap.next, pk[0], { to: 'item', itemId: 'r5' }, { newId: () => 'X', today: TODAY });
+  const r5 = toItem.next.find(it => it.id === 'r5');
+  eq('#P4 이 계좌 행에 넣기 — 수량·매입금액 · 시세 부를 코드 없음 · 되돌리기 정보', [r5.quantity, r5.investAmount, toItem.id, toItem.code, Object.keys(toItem.undo.restore), toItem.next.length], [419, 10074759, 'r5', '', ['r5'], ap.next.length]);
+  const toCode = applyHoldingPick(ap.next, pk[0], { to: 'code', code: '360750', name: 'TIGER 미국S&P500', how: 'pick' }, { newId: () => 'X1', today: TODAY });
+  const x1 = toCode.next[0];
+  eq('#P5 추천 코드로 새 행 — 맨 위 · 코드·이름·수량·매입금액 · 메모 「추천에서 골랐습니다」 · 시세 부를 코드', [x1.id, x1.code, x1.name, x1.quantity, x1.investAmount, /추천에서 골랐습니다/.test(x1.syncNote), toCode.id, toCode.code, photoCodeTodo([{ id: 'p', portfolio: toCode.next }]).length],
+    ['X1', '360750', 'TIGER 미국S&P500', 419, 10074759, true, 'X1', '360750', 0]);
+  const toDup = applyHoldingPick(ap.next, pk[0], { to: 'code', code: '069500', how: 'typed' }, { newId: () => 'X2', today: TODAY });
+  eq('#P6 고른 코드가 이 계좌에 이미 있으면 새 행 대신 그 행에', [toDup.id, toDup.next.length, toDup.next.find(it => it.id === 'r6').quantity], ['r6', ap.next.length, 419]);
+  const toTyped = applyHoldingPick(ap.next, pk[0], { to: 'code', code: '0091p0', how: 'typed' }, { newId: () => 'X3', today: TODAY });
+  const toNew = applyHoldingPick(ap.next, pk[0], { to: 'new' }, { newId: () => 'X4', today: TODAY });
+  const bad = applyHoldingPick(ap.next, pk[0], { to: 'code', code: '12345' }, { newId: () => 'X5', today: TODAY });
+  eq('#P7 직접 입력(대문자로) · 코드 없이 추가(다시 이름으로 찾을 대상) · 잘못된 코드는 아무것도 안 함', [toTyped.next[0].code, /직접 넣었습니다/.test(toTyped.next[0].syncNote), toNew.next[0].code, photoCodeTodo([{ id: 'p', portfolio: toNew.next }]).length, bad.id, bad.next === ap.next],
+    ['0091P0', true, '', 1, '', true]);
+  const all = mergeHoldUndo(ap.undo, toCode.undo);
+  const back = undoHoldingsPlan(toCode.next, all);
+  eq('#P8 되돌리기 합치기 — 맞추기 + 고르기를 한 번에 처음으로(새 행 빼고 · 펀드 평가금액도)', back.map(it => [it.id, it.quantity, it.investAmount, it.evalAmount]), RET().map(it => [it.id, it.quantity, it.investAmount, it.evalAmount]));
+  // 펀드 고르기 — 펀드 행이 없으면 새 펀드 행
+  const fundOnly = parseHoldingsText('보유 | - | 미래에셋증권 디폴트옵션 적극투자형 BF1 | - | 6067250 | - | 5346116');
+  const fp = planHoldingsSync(fundOnly, RET().filter(it => it.type !== 'fund'), { pick: true });
+  eq('#P9 펀드만 찍은 사진 — 주식 행은 건드리지 않음(0으로·그대로 줄도 없음) · 펀드 행이 없으면 골라 주세요', [fp.rows.map(r => r.kind), fp.outcome], [['pick'], 'same']);
+  const fNew = applyHoldingPick([], fp.rows[0], { to: 'new' }, { newId: () => 'F9', today: TODAY }).next[0];
+  eq('#P9b 새 펀드 행 — 펀드 추가 행 모양 + 매입·평가금액', [fNew.type, fNew.category, fNew.code, fNew.investAmount, fNew.evalAmount], ['fund', 'FUND', '', 6067250, 5346116]);
+  const fp2 = planHoldingsSync(fundOnly, RET());
+  eq('#P9c 고르기 모드가 아니어도 펀드만 찍은 사진은 주식 행을 0으로 하지 않는다', [fp2.rows.map(r => `${r.itemId}:${r.kind}`), fp2.outcome], [['f1:update'], 'apply']);
+  // AI(잘림 없음) 사진에서 고르기가 남으면, 안 보인 주식 행을 0으로 하지 않는다(그 종목일 수 있다)
+  const ai = parseHoldingsText('보유 | 0047A0 | RISE 삼성전자SK하이닉스채권혼합50 | 1342 | 17090157 | 12734\n보유 | - | 처음 보는 종목 | 10 | 100,000 | 10,000');
+  const aiPlan = planHoldingsSync(ai, RET(), { pick: true });
+  eq('#P10 고르기가 남으면 안 보인 종목은 0 대신 그대로', [aiPlan.rows.filter(r => r.kind === 'zero').length, aiPlan.rows.filter(r => r.kind === 'keep').length > 0, String((aiPlan.rows.find(r => r.kind === 'keep') || {}).note || '').includes('골라 주세요')], [0, true, true]);
+  const aiPlan2 = planHoldingsSync(ai, RET());
+  eq('#P10b 예전 방식(고르기 아님) — 새 종목은 코드 빈 새 행 · 안 보인 종목은 0으로(그대로)', [holdCounts(aiPlan2).add, holdCounts(aiPlan2).zero > 0], [1, true]);
+  // 다른 계좌 사진 + 고르기 모드 — 아무것도 넣지 않고 새 종목(코드 확인된 것 포함)은 골라 주세요로
+  const other = parseHoldingsText('보유 | - | 삼성전자 | 10 | 700,000 | 70,000\n보유 | - | 카카오 | 5 | 250,000 | 50,000');
+  const op = planHoldingsSync(other, RET(), { pick: true, resolved: { [photoKey('삼성전자')]: { code: '005930', name: '삼성전자', price: 70000, changeRate: 0, from: 'search' } } });
+  eq('#P11 다른 계좌 사진 — mismatch · 모두 골라 주세요(코드 확인된 것은 첫 추천) · 적용 없음', [op.outcome, op.rows.filter(r => r.kind === 'pick').map(r => [r.photo, r.found ? r.found.code : '']), applyHoldingsPlan(RET(), op, { newId: () => 'Z', today: TODAY }).next.length],
+    ['mismatch', [['삼성전자', '005930'], ['카카오', '']], RET().length]);
+  // 확인된 새 종목 — 그 코드로 바로 새 행(공식 이름·현재가·메모)
+  const np = planHoldingsSync(parseHoldingsText('보유 | - | KODEX 200TR | 227 | 8588873 | 37836'), [], { pick: true, resolved: RES });
+  const nr = applyHoldingsPlan([], np, { newId: () => 'A1', today: TODAY }).next[0];
+  eq('#P12 이름으로 확인한 새 종목 = 그 코드로 새 행(현재가 함께 · 다시 찾을 대상 아님)', [np.rows[0].kind, nr.code, nr.name, nr.currentPrice, /이름으로 찾아 넣었습니다/.test(nr.syncNote), photoCodeTodo([{ id: 'p', portfolio: [nr] }]).length], ['add', '278530', 'KODEX 200TR', 27800, true, 0]);
+  // 잠정(loose) 잇기의 보호 — 확인한 코드가 그 행 코드와 다르면 끊고, 같으면 잇는다
+  const row = (name, fund = false) => ({ code: '', name, qty: 1, invest: 1, avg: 0, cut: false, unread: '', line: '', ...(fund ? { fund: true, eval: 1 } : {}) });
+  const items8 = [{ id: 's1', type: 'stock', code: '005935', name: '삼성전자우' }, { id: 's2', type: 'stock', code: '', name: 'TIGER 미국배당' }];
+  eq('#M4 「삼성전자」 → 「삼성전자우」 잠정 잇기는 확인 코드(005930)가 다르면 끊음 · 확인이 없으면 예전처럼 · 코드 없는 행은 막지 않음', [
+    matchHoldingHow(row('삼성전자'), items8, new Set())?.it.id, matchHoldingHow(row('삼성전자'), items8, new Set(), { [photoKey('삼성전자')]: { code: '005930', name: '삼성전자', price: 1, changeRate: 0 } }),
+    matchHoldingHow(row('TIGER 미국배당다우존스'), items8, new Set(), { [photoKey('TIGER 미국배당다우존스')]: { code: '458730', name: 'TIGER 미국배당다우존스', price: 1, changeRate: 0 } })?.it.id,
+  ], ['s1', null, 's2']);
+  eq('#M5 펀드 줄은 펀드 행에만 · 주식 줄은 주식 행에만', [matchHoldingHow(row('KODEX 200', true), [{ id: 'k', type: 'stock', code: '069500', name: 'KODEX 200' }], new Set()), matchHoldingHow(row('어떤 펀드'), [{ id: 'f', type: 'fund', code: '', name: '어떤 펀드' }], new Set())], [null, null]);
+  // 추천 순위
+  const SUG = [{ code: '360750', name: 'TIGER 미국S&P500' }, { code: '448290', name: 'TIGER 미국S&P500(H)' }, { code: '379800', name: 'KODEX 미국S&P500' }, { code: '069500', name: 'KODEX 200' }, { code: '005930', name: '삼성전자' }];
+  const rk = rankCodeSuggestions('TIGER 미국S&P500', SUG, 'search');
+  eq('#P13 추천 — 같은 이름 맨 위(이름 같음) · 비슷한 순 · 동떨어진 이름은 뺌', [rk.map(s => s.code), rk[0].exact, rk.some(s => s.code === '005930' || s.code === '069500')], [['360750', '448290', '379800'], true, false]);
+  eq('#P14 닮음 — 같음 1 · 띄어쓰기·&·… 무시 · 앞부분 · 동떨어짐 0에 가까움', [nameScore('TIGER 미국S&P500', 'TIGER미국S&P500'), nameScore('KODEX 200TR', 'KODEX 200') > 0.7, nameScore('삼성전자', 'TIGER 미국S&P500') < 0.2, nameScore('', 'A')], [1, true, true, 0]);
+  const mg = mergeCodeSuggestions([[{ code: '379800', name: 'KODEX 미국S&P500', score: 0.6, exact: false, from: 'acct' }], rk]);
+  eq('#P15 출처 합치기 — 코드 겹침 없음 · 닮음 순 · 같은 점수면 다른 계좌 것', [mg.map(s => s.code), mg.find(s => s.code === '379800').from], [['360750', '448290', '379800'], 'acct']);
+  eq('#P16 다른 계좌 코드 후보 — 국내 계좌의 코드 있는 주식 행만(해외·삭제·현금 빼고 · 겹침 없음)', acctCodeCands([
+    { id: 'a', accountType: 'dc-irp', portfolio: [{ type: 'stock', code: '360750', name: 'TIGER 미국S&P500' }, { type: 'stock', code: '', name: '코드 없음' }, { type: 'fund', code: 'K55301', name: '펀드' }] },
+    { id: 'b', accountType: 'overseas', portfolio: [{ type: 'stock', code: '360750', name: 'X' }, { type: 'stock', code: 'QQQM', name: 'Q' }] },
+    { id: 'c', deletedAt: 1, portfolio: [{ type: 'stock', code: '005930', name: '삼성전자' }] },
+    { id: 'd', portfolio: [{ type: 'stock', code: '360750', name: '다른 이름' }, { type: 'stock', code: '069500', name: 'KODEX 200', isManualCash: true }] },
+  ]), [{ code: '360750', name: 'TIGER 미국S&P500' }]);
+  eq('#P17 추천 검색어 — 사진 이름 · 가장 긴 한글 덩어리 · 영문 머리+한글 앞', [suggestQueries('ACEK휴머노이드로봇산업TOP2+'), suggestQueries('TIGER 미국S&P500'), suggestQueries('')],
+    [['ACEK휴머노이드로봇산업TOP2+', '휴머노이드로봇산업', 'ACEK 휴머노이'], ['TIGER 미국S&P500', 'TIGER 미국'], []]);
+  const big = { result: { etfItemList: Array.from({ length: 120 }, (_, i) => ({ itemcode: String(100000 + i), itemname: `ETF ${i}` })) } };
+  eq('#P18 ETF 전체 목록은 다 읽는다(추천 순위용 max) · 기본은 40개', [codeCandsFrom(big, undefined, 3000).length, codeCandsFrom(big).length], [120, 40]);
 }
 
 // #E 서버 처리부를 끝까지 — 로그인 확인·관리자 판별은 바꿔 끼우고 가짜 Gemini로
@@ -422,7 +544,26 @@ ok('#S14 코드 찾기 훅 — ① 다른 계좌의 같은 이름(knownCodeFor) 
 ok('#S16 표 — 찾지 못한 코드 칸은 노란 칸 + 「코드 입력」 · 직접 넣으면 메모를 「직접 넣었습니다」로', /const codeState = photoCodeState\(item\);/.test(pt)
   && /codeState === 'miss' \? 'bg-amber-500\/20 ring-1 ring-inset ring-amber-400' : ''/.test(pt) && /placeholder=\{codeState === 'miss' \? '코드 입력'/.test(pt)
   && /photoCodeState\(\{ \.\.\.item, code: '' \}\)\) onUpdate\(item\.id, 'syncNote', codeTypedNote\(getTodayKST\(\)\)\)/.test(pt)
-  && /import \{ photoCodeState, codeTypedNote \} from '\.\.\/holdingsPhoto';/.test(pt));
+  && /import \{ photoCodeState, codeTypedNote(, codeFoundNote)? \} from '\.\.\/holdingsPhoto';/.test(pt));
+const app2 = app;
+ok('#S17 사진 창 — 국내는 넣기 전에 이름으로 코드 확인(다른 계좌의 같은 이름 → 검색·공식 이름) → 고르기 모드로 계획 · 코드로 넣은 새 행은 현재가 부르기',
+  /const names = namesToResolve\(planHoldingsSync\(parsed, itemsRef\.current, \{ keepUnseen: !!ocr, pick: true \}\)\);/.test(hp)
+  && /const known = knownCodeFor\(names\[i\], portfoliosRef\.current\);/.test(hp) && /await findCodeByName\(names\[i\], \{ search: searchKrStockCodes, info: fetchStockInfo \}\)/.test(hp)
+  && /if \(!live\(\)\) return;\s*if \(f\) resolved\[photoKey\(names\[i\]\)\] = f;/.test(hp)
+  && /planHoldingsSync\(parsed, itemsRef\.current, usd \? \{ keepUnseen: !!ocr, usd \} : \{ keepUnseen: !!ocr, resolved, pick: true \}\)/.test(hp)
+  && /plan\.rows\.filter\(r => r\.kind === 'add'\)\.forEach\(\(r, i\) => \{ if \(r\.code\) onCodeSet\(ids\[i\], r\.code\); \}\)/.test(hp)
+  && /import \{ searchKrStockCodes, fetchStockInfo \} from '\.\.\/api';/.test(hp));
+ok('#S18 고르기 — 고른 것만 applyItems(최신 prev)로 · 되돌리기는 맞추기와 합침 · 추천 목록(CodeSuggestList) · 이 계좌 행(pickTargets)',
+  /applyItems\(prev => applyHoldingPick\(prev, p\.row, choice, \{ newId: \(\) => nid, today \}\)\.next\);/.test(hp) && /undo: mergeHoldUndo\(r\.undo, res\.undo\)/.test(hp)
+  && /if \(res\.code && onCodeSet\) onCodeSet\(res\.id, res\.code\);/.test(hp) && /<CodeSuggestList name=\{title\}/.test(hp) && /targets=\{pickTargets\(p\.row, items, usedNow\)\}/.test(hp)
+  && /import CodeSuggestList from '\.\/CodeSuggestList';/.test(hp)
+  && /portfolios=\{portfolios\}\s*onCodeSet=\{\(id, code\) => \{ const pid = holdPhotoPid; if \(pid\) \{ inheritSharedCategoryFor\(pid, id\); handleSingleStockRefreshFor\(pid, id, code\); \} \}\}/.test(app2));
+const sugList = stripComments(read('src/components/CodeSuggestList.tsx'));
+ok('#S19 표의 노란 코드 칸 — 추천(돋보기) → 고르면 코드 넣기·조회(onBlur)·구분 물려받기·메모 「추천에서 골랐습니다」 · 추천은 api.suggestKrStockCodes(/api/proxy)만',
+  /\{codeState === 'miss' && \(\s*<button type="button" onClick=\{e => \{ const r = e\.currentTarget\.getBoundingClientRect\(\); setCodePop\(/.test(pt)
+  && /onUpdate\(id, 'code', s\.code\);\s*onBlur\(id, s\.code\);\s*if \(onCodeChanged\) onCodeChanged\(id\);\s*onUpdate\(id, 'syncNote', codeFoundNote\(getTodayKST\(\), s\.code, s\.name, 'pick'\)\);/.test(pt)
+  && /<CodeSuggestList name=\{codePop\.name\} onPick=\{s => pickSuggestedCode\(codePop\.id, s\)\} \/>/.test(pt) && /import CodeSuggestList from '\.\/CodeSuggestList';/.test(pt)
+  && /suggestKrStockCodes\(name\)/.test(sugList) && !/fetch\(/.test(sugList) && /export const suggestKrStockCodes = async/.test(search) && /proxyJson\(`https:\/\/ac\.stock\.naver\.com/.test(search));
 ok('#S15 이름 검색은 /api/proxy(로그인 확인)만 — 바깥 공용 프록시로 보내지 않음', search.length > 200 && (search.match(/fetch\(/g) || []).length === 0
   && /fetch\(`\/api\/proxy\?url=\$\{encodeURIComponent\(url\)\}`/.test(apiSrc) && !/allorigins|codetabs/.test(search));
 

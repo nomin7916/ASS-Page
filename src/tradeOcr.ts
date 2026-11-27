@@ -9,7 +9,7 @@ import { normTradeDate } from './tradePhoto.ts';
 import { normName } from './holdingsPhoto.ts';
 
 export interface OcrLineIn { text: string; conf: number; x0: number; y0: number; x1: number; y1: number }
-export type OcrFlag = 'lowconf' | 'noheader' | 'orderprice' | 'farclose' | 'noprice' | 'nodate' | 'noname' | 'selfcheck' | 'cut' | 'dateorder';
+export type OcrFlag = 'lowconf' | 'noheader' | 'orderprice' | 'farclose' | 'noprice' | 'nodate' | 'noname' | 'selfcheck' | 'plcheck' | 'cut' | 'dateorder';
 export interface OcrTrade { rawDate: string; date: string; code: string; name: string; side: 'buy' | 'sell'; qty: number; price: number; conf: number; flags: OcrFlag[]; src: string; guess?: boolean }
 export interface OcrParsed { trades: OcrTrade[]; header: boolean; title: string }
 
@@ -24,6 +24,7 @@ export const OCR_FLAG_TEXT: Record<OcrFlag, string> = {
   nodate: '날짜를 못 읽음',
   noname: '종목을 못 찾음',
   selfcheck: '보유수량×평균단가가 매입금액과 맞지 않음',
+  plcheck: '평가금액−매입금액이 손익 줄과 맞지 않음',
   cut: '사진 아래가 잘려 숫자가 없음',
   dateorder: '날짜가 앞뒤 줄과 이어지지 않음',
 };
@@ -302,7 +303,8 @@ export function splitOcrTrades(trades: OcrTrade[]): { okText: string; checkText:
 
 // ── 잔고(보유) 화면 — MY자산·잔고처럼 종목마다 두 줄(종목명/주문가능·보유수량 · 평가손익/수익률 · 평가금액/매입금액 · 현재가/평균단가)이거나 한 줄 ──
 // 머리줄 낱말의 가로 자리로 칸을 잡고, 같은 가로 자리에 머리줄이 위아래 둘이면(평가금액 위 · 매입금액 아래) 종목 칸 안의 숫자도 위아래 차례로 나눈다.
-export interface OcrHold { code: string; name: string; qty: number; invest: number; avg: number; conf: number; flags: OcrFlag[]; cut?: boolean; ticker?: string; usd?: boolean }
+// fund = 펀드·디폴트옵션 카드(보유수량 없이 매입금액·평가금액만) · eval = 평가금액(카드형 화면)
+export interface OcrHold { code: string; name: string; qty: number; invest: number; avg: number; conf: number; flags: OcrFlag[]; cut?: boolean; ticker?: string; usd?: boolean; eval?: number; fund?: boolean }
 type HCol = 'name' | 'qty' | 'avail' | 'invest' | 'avg' | 'eval' | 'pl' | 'rate' | 'cur';
 const HHEAD: [RegExp, HCol][] = [
   [/^종목(명)?$/, 'name'],
@@ -337,7 +339,119 @@ export function isChromeName(parts: string[]): boolean {
   const ws = parts.join(' ').split(/\s+/).filter(Boolean);
   return ws.some(w => TICKER_BAR_RE.test(w)) || ws.filter(w => CHROME_RE.test(w)).length >= 2;
 }
+// ── 카드형 잔고(사용자 사진 2026-11-27 미래에셋 「연금계좌현황」: 종목 이름 줄(오른쪽 끝 「>」) 아래 왼쪽 이름표·오른쪽 값 —
+//    「매입금액 17,090,157원」 · 「보유수량/매입단가 1,342주/12,734원」 · 「평가금액 14,983,430원」 · 손익 줄 「2,106,727원(-12.33%)」 · 매수/매도 단추) ──
+// 펀드·디폴트옵션 카드는 보유수량 줄 없이 매입금액·평가금액만 있다(fund) → 표의 펀드 행 매입금액·평가금액.
+// 검수: 주식 = 보유수량×매입단가 ≈ 매입금액(selfcheck) · 펀드 = |평가금액−매입금액| = 손익 줄 금액(plcheck).
+// ⚠️ 값에 「원」이 붙은 왼쪽 이름표 줄이 있어야 카드형이다 — 키움 잔고 위 요약(「매입금액 189,890,144」, 원 없음)·표 머리줄은 카드형이 아니다.
+type CLab = 'invest' | 'qtyavg' | 'qty' | 'avg' | 'eval';
+const CLAB: [RegExp, CLab][] = [
+  [/^(매입|매수)금액$|^(투자|매입)원금$/, 'invest'],
+  [/^보유(수량|잔고)[\/|]?(매입|평균)(단가|가)$/, 'qtyavg'],
+  [/^보유(수량|잔고)$|^잔고수량$/, 'qty'],
+  [/^(매입|평균)(단가|가)$/, 'avg'],
+  [/^평가금액$/, 'eval'],
+];
+const clabOf = (t: string): CLab | null => {
+  const s = String(t || '').replace(/[\s:·]/g, '');
+  for (const [re, c] of CLAB) if (re.test(s)) return c;
+  return null;
+};
+const NUMW = '([\\d,]+(?:\\.\\d+)?)';
+const WON_RE = new RegExp(`^[+-]?${NUMW}원$`);
+const PL_RE = new RegExp(`^[▲▼△▽+-]?${NUMW}원\\(([+-]?\\d+(?:\\.\\d+)?)%\\)$`);
+const CARD_BTN_RE = /^(매수|매도|교체매매|정정|취소|주문|상세|더보기)$/;
+const CHEVRON_RE = /^[>〉›»]$/;
+interface CRow { ls: OcrLineIn[]; y0: number; y1: number; yc: number; h: number }
+function cardRows(lines: OcrLineIn[]): CRow[] {
+  return ocrRows(lines || []).map(ls => {
+    const y0 = Math.min(...ls.map(l => l.y0)), y1 = Math.max(...ls.map(l => l.y1));
+    return { ls, y0, y1, yc: (y0 + y1) / 2, h: Math.min(...ls.map(l => l.y1 - l.y0)) };
+  });
+}
+// 이름표 줄 — 맨 왼쪽 글이 이름표이고, 나머지(오른쪽)가 값
+const rowLabel = (r: CRow): { c: CLab; v: string; conf: number; x1: number } | null => {
+  const [first, ...rest] = r.ls;
+  const c = first && first.x0 < 0.35 ? clabOf(first.text) : null;
+  if (!c) return null;
+  const vs = rest.filter(l => l.x0 >= first.x1 - 0.01);
+  return { c, v: vs.map(l => l.text).join('').replace(/\s+/g, ''), conf: Math.min(1, ...vs.map(l => l.conf)), x1: Math.max(0, ...vs.map(l => l.x1)) };
+};
+export function isCardLayout(lines: OcrLineIn[]): boolean {
+  return cardRows(lines).some(r => { const lb = rowLabel(r); return !!lb && lb.c === 'invest' && WON_RE.test(lb.v) && lb.x1 > 0.7; });
+}
+export function parseOcrCards(lines: OcrLineIn[], cands: { code: string; name: string }[]): { holds: OcrHold[]; header: boolean } {
+  const rows = cardRows(lines);
+  const labs = rows.map(rowLabel);
+  const isNameRow = (i: number): string => {
+    const r = rows[i];
+    if (labs[i]) return '';
+    const words = r.ls.filter(l => !CHEVRON_RE.test(l.text.trim()));
+    const first = words[0];
+    if (!first || first.x0 > 0.3 || words.length !== 1) return '';
+    const t = first.text.replace(/\s*[>〉›»]\s*$/, '').trim();
+    if (!isWordy(t) || /^[<‹〈]/.test(t) || CARD_BTN_RE.test(t.replace(/\s+/g, '')) || normName(t).length < 2 || isChromeName([t])) return '';
+    if (/\d원/.test(t.replace(/\s+/g, ''))) return '';
+    const chevron = r.ls.some(l => CHEVRON_RE.test(l.text.trim()) && l.x0 > 0.75);
+    const next = labs[i + 1];
+    const nextOk = !!next && next.c === 'invest' && rows[i + 1].y0 - r.y1 < 2.5 * r.h;
+    return chevron || nextOk ? t : '';
+  };
+  const names: { i: number; t: string; conf: number }[] = [];
+  rows.forEach((r, i) => { const t = isNameRow(i); if (t) names.push({ i, t, conf: Math.min(...r.ls.filter(l => !CHEVRON_RE.test(l.text.trim())).map(l => l.conf)) }); });
+  const holds: OcrHold[] = [];
+  names.forEach((nm, k) => {
+    const end = k + 1 < names.length ? names[k + 1].i : rows.length;
+    const got: Partial<Record<CLab, { v: string; conf: number; i: number }>> = {};
+    let pl: { amt: number; conf: number } | null = null;
+    for (let i = nm.i + 1; i < end; i++) {
+      const lb = labs[i];
+      if (lb) { if (!got[lb.c] && lb.v) got[lb.c] = { v: lb.v, conf: lb.conf, i }; continue; }
+      const one = rows[i].ls.map(l => l.text).join('').replace(/\s+/g, '');
+      const m = one.match(PL_RE);
+      if (m && !pl) pl = { amt: num(m[1]), conf: Math.min(...rows[i].ls.map(l => l.conf)) };
+    }
+    const won = (x?: { v: string }) => { const m = x && x.v.match(WON_RE); return m ? num(m[1]) : 0; };
+    const invest = won(got.invest), evalAmt = won(got.eval);
+    let qty = 0, avg = 0;
+    const qa = got.qtyavg && got.qtyavg.v.match(new RegExp(`^${NUMW}주[/|lI]?${NUMW}원?$`));
+    if (qa) { qty = num(qa[1]); avg = num(qa[2]); }
+    else {
+      const q = got.qty && got.qty.v.match(new RegExp(`^${NUMW}주?$`));
+      if (q) qty = num(q[1]);
+      const a = got.avg && got.avg.v.match(WON_RE);
+      if (a) avg = num(a[1]);
+    }
+    const m = matchCand(nm.t, cands);
+    const base = { code: m ? m.code : '', name: m ? m.name : nm.t };
+    const confOf = (...xs: ({ conf: number } | null | undefined)[]) => Math.min(nm.conf, ...xs.filter(Boolean).map(x => (x as { conf: number }).conf));
+    const plBad = !!pl && invest > 0 && evalAmt > 0 && Math.abs(Math.abs(evalAmt - invest) - pl.amt) > Math.max(2, invest * 0.0005);
+    if (qty > 0 && (invest > 0 || avg > 0)) {
+      const flags: OcrFlag[] = [];
+      const inv = invest > 0 ? invest : Math.round(qty * avg);
+      if (invest > 0 && avg > 0 && Math.abs(qty * avg / invest - 1) > OCR_SELF_TOL) flags.push('selfcheck');
+      const conf = confOf(got.invest, got.qtyavg || got.qty, got.avg);
+      if (conf < OCR_LOWCONF) flags.push('lowconf');
+      if (!m) flags.push('noname');
+      holds.push({ ...base, qty, invest: inv, avg, conf, flags, eval: evalAmt || undefined });
+      return;
+    }
+    // 펀드 카드 — 매입금액 줄 바로 다음 줄이 평가금액(사이에 보유수량 줄이 없음)
+    if (invest > 0 && evalAmt > 0 && !got.qtyavg && !got.qty && got.eval && got.invest && got.eval.i === got.invest.i + 1) {
+      const flags: OcrFlag[] = [];
+      if (plBad) flags.push('plcheck');
+      const conf = confOf(got.invest, got.eval);
+      if (conf < OCR_LOWCONF) flags.push('lowconf');
+      holds.push({ code: '', name: nm.t, qty: 0, invest, avg: 0, conf, flags, eval: evalAmt, fund: true });
+      return;
+    }
+    holds.push({ ...base, qty: 0, invest: 0, avg: 0, conf: nm.conf, flags: ['cut'], cut: true });
+  });
+  return { holds, header: names.length > 0 };
+}
+
 export function classifyOcr(lines: OcrLineIn[]): 'orders' | 'holdings' | 'unknown' {
+  if (isCardLayout(lines || [])) return 'holdings';
   const ts = ptoks(lines || []);
   const hs = new Set(ts.map(k => hheadOf(k.t)).filter(Boolean));
   const os = new Set(ts.map(k => headOf(k.t)).filter(Boolean));
@@ -349,6 +463,7 @@ export function classifyOcr(lines: OcrLineIn[]): 'orders' | 'holdings' | 'unknow
 }
 
 export function parseOcrHoldings(lines: OcrLineIn[], cands: { code: string; name: string }[]): { holds: OcrHold[]; header: boolean } {
+  if (isCardLayout(lines || [])) return parseOcrCards(lines, cands);
   const ts = ptoks(lines || []);
   const heads = ts.filter(k => !k.lnum).map(k => ({ k, c: hheadOf(k.t) })).filter(x => x.c) as { k: PTok; c: HCol }[];
   // 기준 머리줄 = 보유수량·매입금액 낱말 중 둘레(±0.07)에 머리줄 낱말이 가장 많은 것 — 화면 위 탭 「일반 잔고」의 '잔고' 같은 외톨이 낱말은 머리줄이 아니다
@@ -428,10 +543,13 @@ export function parseOcrHoldings(lines: OcrLineIn[], cands: { code: string; name
 }
 // 사진으로 보유 맞추기(src/holdingsPhoto.ts parseHoldingsText)가 읽는 줄
 // 확인이 필요한 줄(글자 확신 낮음·자체 검사 어긋남·잘림)은 '잘림'으로 — 그 종목은 바꾸지 않는다.
-export const ocrHoldBad = (h: OcrHold) => !!h.cut || h.flags.includes('lowconf') || h.flags.includes('selfcheck');
+export const ocrHoldBad = (h: OcrHold) => !!h.cut || h.flags.includes('lowconf') || h.flags.includes('selfcheck') || h.flags.includes('plcheck');
+// 펀드 카드 = 보유수량 '-' + 7번째 칸 평가금액(holdingsPhoto.parseHoldingsText가 펀드 줄로 읽는다)
 export const ocrHoldLine = (h: OcrHold) => ocrHoldBad(h)
   ? `보유 | ${h.code || h.ticker || '-'} | ${h.name} | 잘림`
-  : `보유 | ${h.code || h.ticker || '-'} | ${h.name} | ${h.qty} | ${h.invest > 0 ? h.invest : '-'} | ${h.avg > 0 ? h.avg : '-'}`;
+  : h.fund
+    ? `보유 | ${h.code || '-'} | ${h.name} | - | ${h.invest} | - | ${h.eval || '-'}`
+    : `보유 | ${h.code || h.ticker || '-'} | ${h.name} | ${h.qty} | ${h.invest > 0 ? h.invest : '-'} | ${h.avg > 0 ? h.avg : '-'}`;
 
 // ── 평균 과표 계산기(한 종목) 「주문내역 사진 올리기」 1순위(2026-11-26 사용자 확정: 사진은 OCR 먼저, AI는 그다음) ──
 // 주문내역 사진 → 이 종목 체결만 계산기 붙여넣기 줄(`2026-11-24 매도 50주 7490원` — taxCalcPaste.parseTaxCalcPaste가 읽는 꼴).

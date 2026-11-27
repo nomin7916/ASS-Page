@@ -5950,6 +5950,8 @@ export default function App() {
         keyApi={geminiKeyApi}
         onOpenCalendarGuide
         usd={(portfolios.find(p => p.id === holdPhotoPid)?.accountType) === 'overseas'}
+        portfolios={portfolios}
+        onCodeSet={(id, code) => { const pid = holdPhotoPid; if (pid) { inheritSharedCategoryFor(pid, id); handleSingleStockRefreshFor(pid, id, code); } }}
       />
       <TradePhotoSync
         open={!!tradePhotoPid}

@@ -1,4 +1,4 @@
-import { codeCandsFrom, jsonFromBytes, type CodeCand } from './holdingsPhoto';
+import { codeCandsFrom, jsonFromBytes, rankCodeSuggestions, mergeCodeSuggestions, suggestQueries, type CodeCand, type CodeSugg } from './holdingsPhoto';
 import { fundFeedCode, fundFeedRows, fundFeedWant, feedSlice, feedLatest } from './fundFeed';
 
 // ── 해외주식 히스토리: 서버사이드 Edge Function 경유 (Naver worldstock → Yahoo Finance) ──
@@ -190,17 +190,38 @@ export const searchKrStockCodes = async (query: string): Promise<{ reached: bool
     const cands = codeCandsFrom(json, q);
     if (cands.length) return { reached, cands };
   }
-  if (!_etfList) {
-    _etfList = proxyJson('https://finance.naver.com/api/sise/etfItemList.nhn?etfType=0&targetColumn=market_sum&sortOrder=desc');
-    _etfList.then(j => { if (j == null) _etfList = null; });
-  }
-  const etf = await _etfList;
+  const etf = await etfListJson();
   if (etf != null) {
     reached = true;
     const cands = codeCandsFrom(etf, q);
     if (cands.length) return { reached, cands };
   }
   return { reached, cands: [] };
+};
+const etfListJson = (): Promise<unknown> => {
+  if (!_etfList) {
+    _etfList = proxyJson('https://finance.naver.com/api/sise/etfItemList.nhn?etfType=0&targetColumn=market_sum&sortOrder=desc');
+    _etfList.then(j => { if (j == null) _etfList = null; });
+  }
+  return _etfList;
+};
+// 이름이 비슷한 종목 추천(사진 맞추기 「골라 주세요」·표의 노란 코드 칸, 사용자 요청 2026-11-27) — 자동완성(검색어 몇 개) + ETF 전체 목록에서
+// 이름이 비슷한 순(같은 이름이 맨 위). 고르는 것은 사용자다 — 여기서는 순서만 매긴다.
+export const suggestKrStockCodes = async (photo: string): Promise<{ reached: boolean; list: CodeSugg[] }> => {
+  const qs = suggestQueries(photo);
+  if (!qs.length) return { reached: true, list: [] };
+  let reached = false;
+  const lists: CodeSugg[][] = [];
+  for (const q of qs) {
+    const json = await proxyJson(`https://ac.stock.naver.com/ac?q=${encodeURIComponent(q)}&target=stock,index,marketindicator`);
+    if (json == null) continue;
+    reached = true;
+    lists.push(rankCodeSuggestions(photo, codeCandsFrom(json), 'search', 8, 0.3));
+    if (lists.some(l => l.some(x => x.exact))) break;
+  }
+  const etf = await etfListJson();
+  if (etf != null) { reached = true; lists.push(rankCodeSuggestions(photo, codeCandsFrom(etf, undefined, 3000), 'search', 8, 0.3)); }
+  return { reached, list: mergeCodeSuggestions(lists, 8) };
 };
 
 // 해외(미국) 주식/ETF 현재가 조회: 서버사이드 라우트 1순위 → 클라이언트 사이드 fallback

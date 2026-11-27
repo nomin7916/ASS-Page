@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { Trash2, RefreshCw, Plus, Calendar, FileSpreadsheet, Camera } from 'lucide-react';
+import { Trash2, RefreshCw, Plus, Calendar, FileSpreadsheet, Camera, Search } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { rowHighlightOf, nextRowHighlight } from '../watchlistGroups';
 import {
@@ -17,7 +17,8 @@ import { getTodayKST } from '../hooks/useMarketCalendar';
 import CustomDatePicker from './CustomDatePicker';
 import CategoryViewSwitch from './CategoryViewSwitch';
 import { normalizeUserCategory, userCategoryNames, userCategoryColor, normalizeCategoryView, effectiveUserCategory, USER_CATEGORY_MAX } from '../userCategory';
-import { photoCodeState, codeTypedNote } from '../holdingsPhoto';
+import { photoCodeState, codeTypedNote, codeFoundNote } from '../holdingsPhoto';
+import CodeSuggestList from './CodeSuggestList';
 
 const formatUSD = (n) => {
   const v = cleanNum(n);
@@ -391,6 +392,15 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const [excelFlash, setExcelFlash] = useState('idle');
   // 📝 사진 맞추기 메모 보기 { id, text, x, y } | null
   const [notePop, setNotePop] = useState(null);
+  // 노란 코드 칸(사진으로 넣었는데 코드를 못 찾은 종목)의 「비슷한 이름 추천」 — 고르면 코드를 넣고 현재가를 부른다(사용자 요청 2026-11-27)
+  const [codePop, setCodePop] = useState(null);
+  const pickSuggestedCode = (id, s) => {
+    onUpdate(id, 'code', s.code);
+    onBlur(id, s.code);
+    if (onCodeChanged) onCodeChanged(id);
+    onUpdate(id, 'syncNote', codeFoundNote(getTodayKST(), s.code, s.name, 'pick'));
+    setCodePop(null);
+  };
   const excelTimerRef = useRef(null);
   const tableWrapRef = useRef(null);
   const [hlListOpen, setHlListOpen] = useState(false);
@@ -767,6 +777,16 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
         </div>
       </div>
     )}
+    {codePop && (
+      <div className="fixed inset-0 z-[1000]" onClick={() => setCodePop(null)}>
+        <div className="fixed w-[340px] max-w-[calc(100vw-16px)] rounded-lg border border-amber-500/40 bg-[#1e293b] shadow-2xl px-3 py-2 text-[12px] text-gray-200 space-y-1.5" style={{ left: codePop.x, top: codePop.y }} onClick={e => e.stopPropagation()}>
+          <div className="text-amber-300 font-bold truncate">종목코드 추천 — {codePop.name}</div>
+          <p className="text-[11px] text-gray-400">이름이 비슷한 순입니다. 누르면 그 코드를 넣고 현재가를 불러옵니다(맞지 않으면 코드 칸에 직접 넣으세요).</p>
+          <CodeSuggestList name={codePop.name} onPick={s => pickSuggestedCode(codePop.id, s)} />
+          <div className="flex justify-end"><button onClick={() => setCodePop(null)} className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-100 text-[11.5px]">닫기</button></div>
+        </div>
+      </div>
+    )}
     <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full">
       {hiddenColumns.length > 0 && (
         <div className="flex items-end gap-1 px-3 pt-2 pb-0 flex-wrap bg-[#080e1c]">
@@ -970,8 +990,12 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   )}
                   {/* 코드 */}
                   {!H('code') && (
-                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS} ${codeState === 'miss' ? 'bg-amber-500/20 ring-1 ring-inset ring-amber-400' : ''}`} title={codeState === 'miss' ? '종목코드를 찾지 못했습니다 — 6자리 종목코드를 넣으면 현재가를 불러옵니다' : codeState === 'wait' ? '종목코드를 찾는 중입니다' : undefined}>
+                    <td className={`p-0 relative border-r border-gray-600 ${CELL_FOCUS} ${codeState === 'miss' ? 'bg-amber-500/20 ring-1 ring-inset ring-amber-400' : ''}`} title={codeState === 'miss' ? '종목코드를 찾지 못했습니다 — 6자리 종목코드를 넣으면 현재가를 불러옵니다' : codeState === 'wait' ? '종목코드를 찾는 중입니다' : undefined}>
                       <input type="text" data-col="code" className={`${inp} text-center ${codeState === 'miss' ? 'text-amber-200 placeholder:text-amber-300' : 'text-gray-400 placeholder:text-gray-500'} text-xs font-mono caret-blue-400`} value={item.code} placeholder={codeState === 'miss' ? '코드 입력' : codeState === 'wait' ? '찾는 중…' : undefined} onFocus={e => { codeFocusRef.current = { id: item.id, code: item.code }; e.target.select(); }} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => { const was = codeFocusRef.current; codeFocusRef.current = null; onBlur(item.id, e.target.value); if (onCodeChanged && was?.id === item.id && String(was.code ?? '').trim().toUpperCase() !== e.target.value.trim().toUpperCase()) onCodeChanged(item.id); if (was?.id === item.id && !String(was.code ?? '').trim() && e.target.value.trim() && photoCodeState({ ...item, code: '' })) onUpdate(item.id, 'syncNote', codeTypedNote(getTodayKST())); }} onKeyDown={e => handleTableKeyDown(e, 'code')} />
+                      {codeState === 'miss' && (
+                        <button type="button" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setCodePop(p => (p && p.id === item.id) ? null : { id: item.id, name: item.name, x: Math.max(8, Math.min(r.left - 160, window.innerWidth - 348)), y: Math.min(r.bottom + 6, window.innerHeight - 280) }); }}
+                          title="이름이 비슷한 종목의 종목코드 추천 보기" aria-label="종목코드 추천" className="absolute right-0.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-amber-300 hover:text-amber-100 hover:bg-amber-500/20"><Search size={12} /></button>
+                      )}
                     </td>
                   )}
                   {/* 등락률 */}
