@@ -1614,8 +1614,8 @@ ok('#G4 AppsScript checkApproval/listUsers가 FEATURE_KEYS 순서(row[4 + i])로
 ok('#G4b AppsScript setUserFeature가 FEATURE_KEYS 인덱스로 열을 고른다(E=5열부터)',
   /const col = FEATURE_KEYS\.indexOf\(feature\);/.test(AS) && /getRange\(found\.index \+ 1, 5 \+ col\)/.test(AS));
 // 2026-10: N열(금리 모니터링) 추가로 범위가 E1:N1·E2:N100으로 넓어졌다 — M열(가계부)을 포함하는 한 통과.
-ok('#G4c AppsScript 라벨 범위가 M열을 포함 (E1:M1 이상)', /E1:[MN]1/.test(AS) && !/getRange\('E1:L1'\)/.test(AS));
-ok('#G4d AppsScript 검증 범위가 M열을 포함 (E2:M100 이상)', /E2:[MN]100/.test(AS));
+ok('#G4c AppsScript 라벨 범위가 M열을 포함 (E1:M1 이상)', /E1:[M-Z]1/.test(AS) && !/getRange\('E1:L1'\)/.test(AS));
+ok('#G4d AppsScript 검증 범위가 M열을 포함 (E2:M100 이상)', /E2:[M-Z]100/.test(AS));
 ok('#G4e AppsScript 승인(approveRequest)이 기능 열 전부를 OFF로 쓴다',
   /concat\(FEATURE_KEYS\.map\(function \(\) \{ return 'OFF'; \}\)\)/.test(sliceBlock(AS, 'function approveRequest', '\n}')));
 

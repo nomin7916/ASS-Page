@@ -295,7 +295,7 @@ export default function App() {
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
-  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false, backtestEnabled: false, ledgerEnabled: false, rateEnabled: false });
+  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false, backtestEnabled: false, ledgerEnabled: false, rateEnabled: false, aiSearchEnabled: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
@@ -680,6 +680,11 @@ export default function App() {
   const ledgerAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.ledgerEnabled;
   // 금리 모니터링 접근 권한(N열 rateEnabled, 2026-10) — ledgerAccess와 같은 근거·같은 자리(브릿지 effect에서 참조).
   const rateAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.rateEnabled;
+  // AI 검색 접근 권한(O열 aiSearchEnabled, 사용자 요청 2026-11-28 "관리자만 · 다른 사용자는 관리자 페이지에서 허용/미허용 · 미허용이면 단추 숨김").
+  // rateAccess와 같은 근거·같은 자리. ⚠️ 기본 false = fail-closed — 단추·인앱 창·별도 창 다리(ais:) 셋 다 이 값 하나로 막는다.
+  const aiSearchAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.aiSearchEnabled;
+  const aiSearchAccessRef = useRef(false);
+  aiSearchAccessRef.current = aiSearchAccess;
   const rateIsAdmin = (authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
   // 새 디자인(인디고 나이트) 시범 — 관리자 계정만. 규칙·저장·되돌리기(?ui=classic)는 src/uiTheme.ts 한 곳.
   const [uiThemePref, setUiThemePref] = useState(() => {
@@ -3658,9 +3663,12 @@ export default function App() {
       const reply = (msg) => { try { e.source?.postMessage(msg, window.location.origin); } catch {} };
       if (d.type === 'ais:ping') {
         // 이 탭이 새로고침된 뒤에도 살아 있는 창의 핑에서 다시 입양한다.
+        const email = authEmailRef.current;
+        // 권한이 없으면 입양하지 않고 거절만 알린다(창은 '사용 권한 없음'을 띄운다 · 대화·키 부탁도 아래에서 막힌다).
+        // ⚠️ 로그인 계정을 알기 전(이 탭 새로고침 직후 부팅 중)엔 거절하지 않는다 — 떠 있는 창의 대화가 부팅마다 내려간다.
+        if (email && !aiSearchAccessRef.current) { reply({ type: 'ais:pong', email, denied: true }); return; }
         if (aiWinRef.current !== e.source) aiWinRef.current = e.source;
         setAiWinLive(true);
-        const email = authEmailRef.current;
         reply({
           type: 'ais:pong', email,
           isAdmin: !!email && email === ADMIN_EMAIL.toLowerCase(),
@@ -3670,6 +3678,7 @@ export default function App() {
         return;
       }
       if (d.type !== 'ais:call' || !aiWinRef.current || e.source !== aiWinRef.current) return;   // 부탁은 입양된 창만
+      if (authEmailRef.current && !aiSearchAccessRef.current) { reply({ type: 'ais:result', reqId: d.reqId, value: { ok: false, canSave: false, error: 'AI 검색 사용 권한이 없습니다' } }); return; }
       const fn = Object.prototype.hasOwnProperty.call(OPS, d.op) ? OPS[d.op] : null;
       if (!fn) { reply({ type: 'ais:result', reqId: d.reqId, value: { ok: false, canSave: false, error: '알 수 없는 요청' } }); return; }
       Promise.resolve().then(() => fn(d.arg)).then(
@@ -3689,6 +3698,7 @@ export default function App() {
   // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다. ⚠️ 클릭 직후 **동기** window.open(팝업 차단 피하기).
   // 화면 오른쪽에 세로로 긴 창 — 앱을 가리지 않고 나란히 쓴다. 휴대폰(좁은 화면)·팝업 차단이면 예전처럼 앱 안 창.
   const openAiSearchWindow = () => {
+    if (!aiSearchAccess) return;
     const existing = aiWinRef.current;
     if (existing && !existing.closed) { try { existing.focus(); } catch {} setShowAiSearch(false); return; }
     if ((window.innerWidth || 0) < 640) { setShowAiSearch(v => !v); return; }
@@ -5376,7 +5386,7 @@ export default function App() {
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
           showAiSearch={showAiSearch || aiWinLive}
-          onToggleAiSearch={openAiSearchWindow}
+          onToggleAiSearch={aiSearchAccess ? openAiSearchWindow : undefined}
           youtubeUrl={youtubeAccess ? youtubeUrl : ''}
           youtubeEnabled={youtubeAccess}
           notebookLinks={gatedNotebookLinks}
@@ -6051,7 +6061,7 @@ export default function App() {
       </ErrorBoundary>
       {/* AI 검색 채팅창 — 계산기와 같은 섹션 격리(렌더 예외가 앱 전체 오류 화면이 되지 않게). key = 로그인 계정(계정이 바뀌면 대화를 새로 불러온다). */}
       <ErrorBoundary label="AI 검색">
-        {!aiWinLive && <KeepAfterOpen open={showAiSearch}>
+        {aiSearchAccess && !aiWinLive && <KeepAfterOpen open={showAiSearch}>
         <Suspense fallback={<WindowLoading />}>
         <AiSearchChat
           key={(authUser?.email || '').toLowerCase()}

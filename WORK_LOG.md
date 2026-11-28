@@ -1,10 +1,18 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-11-27  
+> 마지막 작업일: 2026-11-28  
 > 브랜치: main  
 > 작업 PC: 클라우드 세션(node_modules 없음 — build 실행 불가, TypeScript 문법 파싱만 확인)
 
 ---
+
+## 2026-11-28 — AI 검색 = 관리자만 · 다른 사용자는 관리자 페이지에서 허용/미허용(미허용이면 단추 숨김)
+
+- 사용자 요청: 검색 기능은 관리자만 쓰고, 다른 사용자는 관리자 페이지에서 허용·미허용 — 미허용이면 단추가 보이지 않게.
+- 구현: 승인 시트 O열 `aiSearchEnabled`(금리 N열과 같은 길) — Apps Script `FEATURE_KEYS`·머리글 E1:O1 · LoginGate `pickFeatures` · 관리자 페이지 「AI검색 ON/OFF」 칸 ·
+  App `aiSearchAccess`(관리자 또는 O열 ON)로 상단 말풍선 단추·앱 안 창·별도 창(`ais:` 다리 거절 → 창은 「사용 권한 없음」) 함께 막음.
+- ⚠️ 관리자가 계정 관리 스크립트를 새 버전으로 배포해야 켜기가 된다(그 전엔 다른 사용자 전부 미허용 = 단추 숨김 · 켜기는 「Apps Script 새 버전 배포를 확인하세요」).
+- 검증: verify:ai-search #S6b~d · verify:access #U1b·#U1c·#M6·#M9b·#M9c · verify:migrate #1d(11종) · verify:pc-ask #W1·#W2 정규식 갱신.
 
 ## 2026-11-27 — 휴대폰 화면: 계좌 이름 옆 「리밸런싱」 표 · 평균단가 = PC 구매단가
 

@@ -37,7 +37,8 @@ function makeRuntime() {
       getLastRow: () => s.rows.length,
       getRange: (r, c) => {
         if (typeof r === 'string') {
-          if (r === 'E1:N1') return { getValues: () => [s.rows[0].slice(4, 14)] };
+          // 실제 시트처럼 데이터가 없는 칸은 ''로 채운다(O1 머리글이 없는 기존 시트 = 지금 운영 시트)
+          if (r === 'E1:O1') return { getValues: () => [Array.from({ length: 11 }, (_, i) => s.rows[0][4 + i] ?? '')] };
           throw new Error('A1 표기 미지원: ' + r);
         }
         return {
@@ -182,6 +183,9 @@ console.log('\n── 파트② 권한 경계(원본 스크립트 실행) ──
   // 승인 사용자
   const uc = post({ action: 'check', token: T.user });
   ok('#U1 승인 사용자 check → approved + 기능 + 본인 리셋 비번', uc.status === 'approved' && uc.feature1 === true && uc.rateEnabled === false && uc.resetPassword === '4321');
+  eq('#U1b O열이 없는 기존 줄 → aiSearchEnabled 꺼짐(미허용 = 단추 숨김)', [Object.prototype.hasOwnProperty.call(uc, 'aiSearchEnabled'), uc.aiSearchEnabled], [true, false]);
+  const fl = post({ action: 'getFeatureLabels', token: T.user }).labels;
+  eq('#U1c 기능 이름 11개 · O1 머리글이 비면 \'AI검색\'', [fl?.length, fl?.[9], fl?.[10]], [11, '금리', 'AI검색']);
   const uo = post({ action: 'check', token: T.user, email: 'other@gmail.com' });
   ok('#U2 승인 사용자가 남의 이메일로 check → 자기 줄만', uo.name === '사용자');
   ok('#U3 승인 사용자 getSettings 통과', post({ action: 'getSettings', token: T.user }).youtubeUrl === 'https://youtu.be/x');
@@ -205,10 +209,12 @@ console.log('\n── 파트② 권한 경계(원본 스크립트 실행) ──
   eq('#M4 관리자 접속(남의 check) → 대상 줄', post({ action: 'check', token: T.admin, email: 'other@gmail.com' }).name, '다른이');
   eq('#M5 승인 → 성공', post({ action: 'approveRequest', token: T.admin, email: 'stranger@gmail.com' }).success, true);
   const added = sheets.approved_users.rows.find(r => r[1] === 'stranger@gmail.com');
-  eq('#M6 승인 줄 = 14칸 · 기능 10개 전부 OFF', [added?.length, added?.slice(4).every(v => v === 'OFF')], [14, true]);
+  eq('#M6 승인 줄 = 15칸 · 기능 11개 전부 OFF(O열 AI 검색 포함)', [added?.length, added?.slice(4).every(v => v === 'OFF')], [15, true]);
   eq('#M7 승인 뒤 요청 줄 삭제', reqRows(sheets).length, 0);
   eq('#M8 승인 뒤 check → approved', post({ action: 'check', token: T.stranger }).status, 'approved');
   eq('#M9 기능 켜기', [post({ action: 'setUserFeature', token: T.admin, email: 'stranger@gmail.com', feature: 'rateEnabled', value: true }).success, post({ action: 'check', token: T.stranger }).rateEnabled], [true, true]);
+  eq('#M9b AI 검색 켜기 → O열(15번째 칸)에 ON · check에 aiSearchEnabled', [post({ action: 'setUserFeature', token: T.admin, email: 'stranger@gmail.com', feature: 'aiSearchEnabled', value: true }).success, sheets.approved_users.rows.find(r => r[1] === 'stranger@gmail.com')?.[14], post({ action: 'check', token: T.stranger }).aiSearchEnabled], [true, 'ON', true]);
+  eq('#M9c AI 검색 끄기 → OFF', [post({ action: 'setUserFeature', token: T.admin, email: 'stranger@gmail.com', feature: 'aiSearchEnabled', value: false }).success, post({ action: 'check', token: T.stranger }).aiSearchEnabled], [true, false]);
   eq('#M10 없는 기능 키 거부', post({ action: 'setUserFeature', token: T.admin, email: 'stranger@gmail.com', feature: 'admin', value: true }).success, false);
   eq('#M11 설정 키 허용 목록 유지', post({ action: 'setSettings', token: T.admin, key: 'evil', value: 'x' }).success, false);
   eq('#M12 관리자 자신은 승인 취소 불가', post({ action: 'removeUser', token: T.admin, email: ADMIN }).success, false);

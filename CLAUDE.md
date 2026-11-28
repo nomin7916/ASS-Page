@@ -223,6 +223,7 @@ src/
 - 대화 = 내 Drive `ai_search_chats.json`(DRIVE_FILES.AI_SEARCH, `saveDriveFile`만 · STATE·버전 백업·브라우저 저장소 금지 · 관리자 접속 중 읽기/쓰기 안 함).
   ⚠️ 읽기 실패면 저장하지 않는다(빈 목록으로 덮어 지난 대화를 지운다). 검색 제안 html은 저장하지 않는다(그때만 격리 iframe — scripts·same-origin 금지).
 - 보유 종목은 켰을 때만 이름·코드만. 듣기 = 브라우저 말하기(`useSpeech`, 문장 조각 · 창을 닫으면 멈춤). 검증: `verify:ai-search`(가짜 Gemini로 서버 처리부 끝까지).
+- **권한(사용자 확정 2026-11-28)**: 관리자만 늘 · 다른 사용자는 관리자 페이지 「AI검색」 칸(승인 시트 **O열 `aiSearchEnabled`**)으로 허용/미허용 → App `aiSearchAccess` 하나가 단추(미허용 = prop 안 넘김 = 숨김)·인앱 창·별도 창 다리(`ais:pong` denied·`ais:call` 거절)를 함께 막는다(fail-closed). ⚠️ 새 플래그는 LoginGate `pickFeatures`·Apps Script `FEATURE_KEYS`·AdminPage `featureDefs`·`MIGRATION_FEATURE_KEYS` 넷을 같이. 스크립트 새 버전 배포 전엔 다른 사용자 전부 미허용(켜기는 실패 글). 검증: `verify:ai-search #S6b~d`·`verify:access #U1b·#M9b`.
 - 죽은 키(틀린 키 · **선불 크레딧 소진 402** · 결제 막힘)는 `api/_taxPhoto.ts` `gKeyDead` 하나로 가려 다른 모델로 되풀이하지 않고 다음 키로(ai-search·holdings-photo·tax-photo 셋 다).
   키·모델 돌리기는 세 경로 공용 `gFirstOk` 하나(429 = `gQuota`로 하루·1분·한도 0 가림 · 1분 한도이고 25초 안이면 한 번만 기다렸다 다시).
   실패 = `gFailOf` → `credit`(모든 키 죽음 중 크레딧 소진이 있거나, 한 키라도 충전금 0원)·`badkey`·`quota0`·`rate1m`·`rate`·`gemini` + 키별 까닭 한 줄(`gKeyLabels` 내 키·사이트 키 N).

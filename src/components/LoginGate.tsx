@@ -24,6 +24,8 @@ export interface UserFeatures {
   ledgerEnabled: boolean;
   /** 금리 모니터링 — approved_users 시트 N열(index 13) */
   rateEnabled: boolean;
+  /** AI 검색(상단 말풍선 단추) — approved_users 시트 O열(index 14) · 관리자는 이 값과 무관하게 늘 표시 */
+  aiSearchEnabled: boolean;
 }
 
 // ⚠️ 필드 나열 지점을 1곳으로 축소한 구조적 방어.
@@ -37,7 +39,7 @@ export const EMPTY_FEATURES: UserFeatures = {
   feature1: false, feature2: false, feature3: false,
   youtubeEnabled: false, notebookEnabled: false, reportEnabled: false,
   flowEnabled: false, backtestEnabled: false, ledgerEnabled: false,
-  rateEnabled: false,
+  rateEnabled: false, aiSearchEnabled: false,
 };
 
 export const pickFeatures = (r: any): UserFeatures => ({
@@ -52,6 +54,7 @@ export const pickFeatures = (r: any): UserFeatures => ({
   backtestEnabled: !!r?.backtestEnabled,
   ledgerEnabled: !!r?.ledgerEnabled,
   rateEnabled: !!r?.rateEnabled,
+  aiSearchEnabled: !!r?.aiSearchEnabled,
 });
 
 interface AdminViewUserCtx {

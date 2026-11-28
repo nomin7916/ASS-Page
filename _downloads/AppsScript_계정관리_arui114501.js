@@ -1,6 +1,7 @@
 // ============================================================
 //  Google Apps Script — 계정 관리 (arui114501@gmail.com 전용)
-//  최종 갱신: 2026-11-05 (보안 강화 — 모든 요청에서 구글 로그인 확인 · 승인 요청은 '대기'로만 · 관리자 전용 동작 잠금)
+//  최종 갱신: 2026-11-28 (O열 aiSearchEnabled — AI 검색 허용 · 관리자 페이지에서 켜고 끔)
+//  이전 갱신: 2026-11-05 (보안 강화 — 모든 요청에서 구글 로그인 확인 · 승인 요청은 '대기'로만 · 관리자 전용 동작 잠금)
 //
 //  [보안 모델 — 2026-11-05]  ⚠️ 이 절의 규칙을 하나라도 빼면 누구나 스스로 승인할 수 있게 된다.
 //  - 사이트 코드는 누구나 받을 수 있다 → 이 스크립트 주소도 공개돼 있다고 본다. 문을 지키는 곳은 이 스크립트다.
@@ -28,7 +29,8 @@
 //    L(11): backtestEnabled — 백테스트 표시
 //    M(12): ledgerEnabled   — 가계부 표시
 //    N(13): rateEnabled     — 금리 모니터링 표시
-//  ※ E~N 값은 'ON' / 'OFF' 또는 체크박스(TRUE/FALSE) 모두 인식. 비어 있으면 OFF.
+//    O(14): aiSearchEnabled — AI 검색(상단 말풍선 단추) 표시 — 관리자는 늘 표시
+//  ※ E~O 값은 'ON' / 'OFF' 또는 체크박스(TRUE/FALSE) 모두 인식. 비어 있으면 OFF.
 //
 //  [access_requests 시트]  A=email  B=name  C=requestedAt  D=status(PENDING|REJECTED)  E=decidedAt
 //    REJECTED 줄이 남아 있는 동안 그 계정은 다시 요청할 수 없다(관리자 페이지에서 '기록 지우기'로 풀린다).
@@ -59,7 +61,7 @@ const CLIENT_ID      = '972766008827-am47e7998m6o299d15gkul2p2r5btkff.apps.googl
 const MAX_PENDING     = 30;    // 대기 요청 상한 — 넘으면 새 요청을 받지 않는다(시트 도배 방지)
 const MAIL_DAILY_CAP  = 20;    // 관리자 알림 메일 하루 상한(무료 계정 하루 100통 한도 보호)
 const AUDIT_MAX_ROWS  = 1000;  // 보안 기록 보관 줄 수
-const FEATURE_KEYS    = ['feature1', 'feature2', 'feature3', 'youtubeEnabled', 'notebookEnabled', 'reportEnabled', 'flowEnabled', 'backtestEnabled', 'ledgerEnabled', 'rateEnabled'];
+const FEATURE_KEYS    = ['feature1', 'feature2', 'feature3', 'youtubeEnabled', 'notebookEnabled', 'reportEnabled', 'flowEnabled', 'backtestEnabled', 'ledgerEnabled', 'rateEnabled', 'aiSearchEnabled'];
 const SETTINGS_KEYS   = { youtubeUrl: true, notebookLinks: true, reportLinks: true, youtubeUrlHistory: true, feature1Label: true, dividendLinks: true };
 
 function doGet(e) {
@@ -242,11 +244,11 @@ function getSettings() {
 }
 
 function getFeatureLabels() {
-  const fallbacks = ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트', '가계부', '금리'];
+  const fallbacks = ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트', '가계부', '금리', 'AI검색'];
   try {
     const sheet = getUsersSheet();
     if (!sheet) return { labels: fallbacks };
-    const headers = sheet.getRange('E1:N1').getValues()[0];
+    const headers = sheet.getRange('E1:O1').getValues()[0];
     return { labels: headers.map(function (h, i) { return extractLabel(h, fallbacks[i]); }) };
   } catch (err) {
     return { labels: fallbacks, error: err.toString() };
@@ -348,7 +350,7 @@ function approveRequest(email) {
     if (!findUserRow(email)) {
       const today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
       const name = (req && req.name) || email.split('@')[0];
-      // A~N (14열): reset, email, name, registeredAt, 기능 10개 — 새 사용자는 기능이 전부 꺼진 채 시작한다
+      // A~O (15열): reset, email, name, registeredAt, 기능 11개 — 새 사용자는 기능이 전부 꺼진 채 시작한다
       getUsersSheet().appendRow(['', email, name, today].concat(FEATURE_KEYS.map(function () { return 'OFF'; })));
     }
     deleteRequestRows(email);
@@ -645,11 +647,11 @@ function setupSheet() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
-    // 신규 시트만 전체 헤더 작성. 기존 시트의 커스텀 헤더(E~N)는 절대 덮어쓰지 않음.
+    // 신규 시트만 전체 헤더 작성. 기존 시트의 커스텀 헤더(E~O)는 절대 덮어쓰지 않음.
     sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(['RESET', 'email', 'name', 'registeredAt', '기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트', '가계부', '금리']);
+    sheet.appendRow(['RESET', 'email', 'name', 'registeredAt', '기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트', '가계부', '금리', 'AI검색']);
   } else {
-    // 기존 시트: 비어 있는 J1~N1에만 헤더 추가 (E~N 커스텀 라벨 보존 — 비파괴 규약)
+    // 기존 시트: 비어 있는 J1~O1에만 헤더 추가 (E~O 커스텀 라벨 보존 — 비파괴 규약)
     var j1 = sheet.getRange('J1');
     if (!String(j1.getValue() || '').trim()) j1.setValue('시장리포트');
     var k1 = sheet.getRange('K1');
@@ -660,9 +662,11 @@ function setupSheet() {
     if (!String(m1.getValue() || '').trim()) m1.setValue('가계부');
     var n1 = sheet.getRange('N1');
     if (!String(n1.getValue() || '').trim()) n1.setValue('금리');
+    var o1 = sheet.getRange('O1');
+    if (!String(o1.getValue() || '').trim()) o1.setValue('AI검색');
   }
-  // E2:N100 ON/OFF 데이터 검증 + 빈 셀 OFF 채우기
-  var range = sheet.getRange('E2:N100');
+  // E2:O100 ON/OFF 데이터 검증 + 빈 셀 OFF 채우기
+  var range = sheet.getRange('E2:O100');
   var rule = SpreadsheetApp.newDataValidation()
     .requireValueInList(['ON', 'OFF'], true)
     .setAllowInvalid(false)
@@ -675,7 +679,7 @@ function setupSheet() {
     }
   }
   range.setValues(values);
-  Logger.log('Sheet setup complete (A~N, E2:N100 validation)');
+  Logger.log('Sheet setup complete (A~O, E2:O100 validation)');
 }
 
 // ──────────────────────────────────────────────────────────

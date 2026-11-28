@@ -12,6 +12,7 @@ import ErrorBoundary from './ErrorBoundary';
  *    /api/… 호출의 로그인 토큰은 main.tsx installApiAuth('window')가 opener에게 받는다.
  * ⚠️ 수신은 opener에서 온 `ais:pong`·`ais:result` 둘뿐(그 밖은 버린다).
  * ⚠️ 보유 종목은 앱 탭이 이름·코드만(searchHoldings) 보낸다 — 창은 그 목록을 AiSearchChat의 getPortfolios 모양으로만 감싼다.
+ * ⚠️ 앱 탭이 `denied`(AI 검색 미허용 — 관리자 페이지 O열 aiSearchEnabled)로 답하면 채팅을 내리고 안내만 띄운다(2026-11-28).
  */
 
 const PING_MS = 3000;
@@ -21,6 +22,7 @@ const CALL_TIMEOUT_MS = 60000;
 export default function AiSearchWindow() {
   const [info, setInfo] = useState(null);   // { email, isAdmin, viewingAs } — 앱 탭이 알려 준 로그인 계정
   const [linked, setLinked] = useState(true);
+  const [denied, setDenied] = useState(false);
   const holdsRef = useRef([]);
   const lastRef = useRef(0);
   const pend = useRef(new Map());
@@ -43,6 +45,8 @@ export default function AiSearchWindow() {
       if (d.type === 'ais:pong') {
         lastRef.current = Date.now();
         setLinked(true);
+        setDenied(!!d.denied);
+        if (d.denied) { setInfo(null); return; }
         if (Array.isArray(d.holdings)) holdsRef.current = d.holdings;
         const email = String(d.email || '').toLowerCase();
         if (email) {
@@ -96,7 +100,9 @@ export default function AiSearchWindow() {
     <ErrorBoundary label="AI 검색">
       <div className="h-screen flex flex-col bg-[#0f1623] text-gray-200">
         {banner && <div className="shrink-0 px-3 py-1.5 text-[12px] text-amber-200 bg-amber-900/30 border-b border-amber-700/40">{banner}</div>}
-        {info ? (
+        {denied ? (
+          <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-gray-400">AI 검색 사용 권한이 없습니다 — 관리자에게 허용을 요청해 주세요.</div>
+        ) : info ? (
           <AiSearchChat
             key={info.email}
             open

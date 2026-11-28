@@ -311,7 +311,7 @@ const lib = stripComments(read('src/aiSearch.ts'));
 ok('#S1 App — 늘 떠 있는 창: lazyScreen(inApp) + 쓰는 자리 전부 <KeepAfterOpen open={showAiSearch}><Suspense fallback={<WindowLoading />}> 안 · 정적 import 없음',
   /const AiSearchChat = lazyScreen\(\(\) => import\('\.\/components\/AiSearchChat'\), \{ inApp: true \}\);/.test(app) && !/^import\s+AiSearchChat\s+from/m.test(app)
   && (app.match(/<AiSearchChat\b/g) || []).length === 1
-  && /<ErrorBoundary label="AI 검색">\s*\{!aiWinLive && <KeepAfterOpen open=\{showAiSearch\}>\s*<Suspense fallback=\{<WindowLoading \/>\}>\s*<AiSearchChat\b/.test(app));
+  && /<ErrorBoundary label="AI 검색">\s*\{aiSearchAccess && !aiWinLive && <KeepAfterOpen open=\{showAiSearch\}>\s*<Suspense fallback=\{<WindowLoading \/>\}>\s*<AiSearchChat\b/.test(app));
 ok('#S2 App — 창에 키·대화 저장·관리자 접속 여부·계좌를 넘긴다(계좌는 ref를 읽는 함수 — 다시 그리기를 부르지 않게)',
   /<AiSearchChat[\s\S]*?keyApi=\{geminiKeyApi\}[\s\S]*?storeApi=\{aiSearchStoreApi\}[\s\S]*?viewingAs=\{!!ADMIN_VIEW_EMAIL \|\| !!adminViewingAs\}[\s\S]*?getPortfolios=\{getSearchPortfolios\}/.test(app)
   && /const getSearchPortfolios = useCallback\(\(\) => portfoliosRef\.current, \[\]\);/.test(app));
@@ -326,7 +326,26 @@ ok('#S4 읽기 실패 = 저장 금지(빈 목록으로 덮어 지난 대화를 �
 ok('#S5 미리 받기 목록에 창이 있다(맨 끝 — 앞 순서는 verify:split #W4)', /admin && AdminPortal,\s*AiSearchChat,\s*\]\.filter\(Boolean\)/.test(app));
 // 2026-11-26 사용자 요청 "팝업 말고 별도 브라우저로" — 단추는 별도 창(openAiSearchWindow)을 열고, 막히거나 좁은 화면만 앱 안 창(verify:pc-ask #W1~3).
 ok('#S6 상단 막대 — AI 검색 버튼(인라인 아이콘) · App이 연다(별도 창 · 막히면 앱 안 창)', /\{onToggleAiSearch && \(\s*<button\s*onClick=\{onToggleAiSearch\}/.test(bar) && /const AiSearchIcon = /.test(bar)
-  && /onToggleAiSearch=\{openAiSearchWindow\}/.test(app) && /const \[showAiSearch, setShowAiSearch\] = useState\(false\);/.test(app));
+  && /onToggleAiSearch=\{aiSearchAccess \? openAiSearchWindow : undefined\}/.test(app) && /const \[showAiSearch, setShowAiSearch\] = useState\(false\);/.test(app));
+// 2026-11-28 사용자 요청 "검색 기능은 관리자만 · 다른 사용자는 관리자 페이지에서 허용/미허용 · 미허용이면 단추가 안 보이게" — 승인 시트 O열 aiSearchEnabled.
+{
+  const gate = stripComments(read('src/components/LoginGate.tsx'));
+  const adminPg = stripComments(read('src/components/AdminPage.tsx'));
+  const win = stripComments(read('src/components/AiSearchWindow.tsx'));
+  const gs = read('_downloads/AppsScript_계정관리_arui114501.js');
+  ok('#S6b 권한 = 관리자 또는 aiSearchEnabled 하나(fail-closed) — 단추(prop 미전달 = 숨김)·인앱 창·별도 창 열기 셋 다 이 값',
+    /const aiSearchAccess = \(\(authUser\?\.email \|\| ''\)\.toLowerCase\(\) === ADMIN_EMAIL\.toLowerCase\(\)\) \|\| !!userFeatures\.aiSearchEnabled;/.test(app)
+    && /aiSearchAccessRef\.current = aiSearchAccess;/.test(app) && /const openAiSearchWindow = \(\) => \{\s*if \(!aiSearchAccess\) return;/.test(app)
+    && /ledgerEnabled: false, rateEnabled: false, aiSearchEnabled: false \}\);/.test(app));
+  ok('#S6c 별도 창 다리 — 계정을 안 뒤 미허용이면 입양하지 않고 denied · 부탁(ais:call)도 거절 · 창은 채팅을 내리고 안내만',
+    /if \(email && !aiSearchAccessRef\.current\) \{ reply\(\{ type: 'ais:pong', email, denied: true \}\); return; \}\s*if \(aiWinRef\.current !== e\.source\) aiWinRef\.current = e\.source;/.test(app)
+    && /if \(authEmailRef\.current && !aiSearchAccessRef\.current\) \{ reply\(\{ type: 'ais:result', reqId: d\.reqId, value: \{ ok: false,/.test(app)
+    && /setDenied\(!!d\.denied\);\s*if \(d\.denied\) \{ setInfo\(null\); return; \}/.test(win) && /\{denied \? \(/.test(win));
+  ok('#S6d 플래그 배선 — 로그인 3경로 공용 pickFeatures·EMPTY_FEATURES · 관리자 페이지 켜고 끄기 칸 · 스크립트 O열(FEATURE_KEYS 맨 끝 · 머리글 E1:O1)',
+    /aiSearchEnabled: !!r\?\.aiSearchEnabled,/.test(gate) && /rateEnabled: false, aiSearchEnabled: false,\s*\};/.test(gate)
+    && /\{ feat: 'aiSearchEnabled',label: featureLabels\[10\], val: !!u\.aiSearchEnabled,/.test(adminPg) && /'가계부', '금리', 'AI검색'\]\);/.test(adminPg)
+    && /const FEATURE_KEYS\s*= \[[^\]]*'rateEnabled', 'aiSearchEnabled'\];/.test(gs) && /getRange\('E1:O1'\)/.test(gs));
+}
 ok('#S7 화면은 같은 출처의 /api/ai-search(Gemini 검색)·/api/ai-chat(다른 AI — verify:ai-chat)·/api/pc-ask(내 PC 우편함 — verify:pc-ask)만 부른다(AI 회사를 직접 부르지 않음) · 내 Gemini 키는 X-Gemini-Key 헤더로만',
   (chat.match(/fetch\(/g) || []).length === 3 && /fetch\('\/api\/pc-ask',/.test(chat) && /fetch\(pickP \? '\/api\/ai-chat' : '\/api\/ai-search',/.test(chat) && /fetch\('\/api\/ai-chat',/.test(chat) && !/generativelanguage|https?:\/\/api\./.test(chat)
   && /else if \(keyRef\.current && !viewingAs\) headers\['X-Gemini-Key'\] = keyRef\.current;/.test(chat) && /let body = \{ messages: sendMsgs, holdings \};/.test(chat) && /body: JSON\.stringify\(body\)/.test(chat));

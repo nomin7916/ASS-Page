@@ -414,10 +414,10 @@ const appSrc = stripComments(read('src/App.tsx'));
 const winSrc = stripComments(read('src/components/AiSearchWindow.tsx'));
 const mainSrc = stripComments(read('src/main.tsx'));
 ok('#W1 AI 검색 단추 = 별도 창(/?aiSearchWindow=1 · 이름 ass-ai-search · noopener 없음) · 막히거나 좁은 화면이면 앱 안 창',
-  /onToggleAiSearch=\{openAiSearchWindow\}/.test(appSrc) && /window\.open\('\/\?aiSearchWindow=1', 'ass-ai-search', `popup=yes,/.test(appSrc) && !/aiSearchWindow=1[^\n]*noopener/.test(appSrc)
+  /onToggleAiSearch=\{aiSearchAccess \? openAiSearchWindow : undefined\}/.test(appSrc) && /window\.open\('\/\?aiSearchWindow=1', 'ass-ai-search', `popup=yes,/.test(appSrc) && !/aiSearchWindow=1[^\n]*noopener/.test(appSrc)
   && /if \(!w\) \{ setShowAiSearch\(true\); return; \}/.test(appSrc) && /if \(\(window\.innerWidth \|\| 0\) < 640\) \{ setShowAiSearch\(v => !v\); return; \}/.test(appSrc));
 ok('#W2 창이 떠 있는 동안 앱 안 채팅을 내린다(같은 대화 파일을 둘이 덮지 않게) · 부탁은 입양된 창만 · 할 일은 여섯 가지뿐',
-  /\{!aiWinLive && <KeepAfterOpen open=\{showAiSearch\}>/.test(appSrc) && /if \(d\.type !== 'ais:call' \|\| !aiWinRef\.current \|\| e\.source !== aiWinRef\.current\) return;/.test(appSrc)
+  /\{aiSearchAccess && !aiWinLive && <KeepAfterOpen open=\{showAiSearch\}>/.test(appSrc) && /if \(d\.type !== 'ais:call' \|\| !aiWinRef\.current \|\| e\.source !== aiWinRef\.current\) return;/.test(appSrc)
   && /storeLoad: \(\) => aiSearchStoreApi\.load\(\), storeSave: \(a\) => aiSearchStoreApi\.save\(a\),\s*keyLoad: \(\) => geminiKeyApi\.load\(\), keySave: \(a\) => geminiKeyApi\.save\(a\),\s*aiLoad: \(\) => aiKeysApi\.load\(\), aiSave: \(a\) => aiKeysApi\.save\(a\),\s*\};/.test(appSrc)
   && /Object\.prototype\.hasOwnProperty\.call\(OPS, d\.op\)/.test(appSrc) && /import \{ searchHoldings \} from '\.\/aiSearch';/.test(appSrc));
 ok('#W3 창 = App 없이 같은 AiSearchChat(variant page) · opener·같은 출처 메시지만 · 브라우저 저장소 안 씀 · main에서 창 부팅',
