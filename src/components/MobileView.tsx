@@ -1,11 +1,12 @@
 // @ts-nocheck
-// 휴대폰 화면(화면 폭 768px 미만) — 미래에셋 MY자산 구조를 참고한 시안(사용자 확정 2026-11-27).
+// 휴대폰 화면(화면 폭과 상관없이 기본 — 2026-11-28 · 넓은 화면은 가운데 한 줄) — 미래에셋 MY자산 구조를 참고한 시안(사용자 확정 2026-11-27).
 // ⚠️ PC 화면(App 본문)은 그대로 마운트된 채 이 덮개(z=MOBILE_Z) 아래에 있다 — 저장·시세·기록 효과가 PC와 똑같이 돈다.
 //    여기서는 같은 App 상태(통합 대시보드 ↔ 활성 계좌)와 같은 핸들러만 부른다. 숫자 계산 금지(src/mobileView.ts 머리말).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronDown, ChevronUp, ChevronRight, Camera, MoreHorizontal, Eye, EyeOff, Info, Check, RefreshCw, Monitor, LogOut } from 'lucide-react';
+import { PASTE_PHOTO_ACCEPT } from '../taxCalcPaste';
 import {
-  MOBILE_THEMES, MOBILE_THEME_OPTIONS, MOBILE_HTML_CLASS, MOBILE_Z, MASK,
+  MOBILE_THEMES, MOBILE_THEME_OPTIONS, MOBILE_HTML_CLASS, MOBILE_Z, MOBILE_COL_MAX, MASK,
   badgeOf, fmtWon, fmtSigned, fmtPct, fmtUsd, fmtQty, toneOf,
   mobileAccountList, mobileHoldingRows, holdingAccountNames, mobileMergedHoldings, todayOf, shortDate,
   mobileRebalRows, rebalModeLabel,
@@ -43,7 +44,7 @@ export default function MobileView({
   theme, themePref, onThemePref,
   portfolios, portfolioSummaries, intTotals, intMonthlyHistory, intHoldingsDonutData,
   showDashboard, activePortfolioId, activeTitle, activeTotals, activeAccountType,
-  hideAmounts, onToggleHide, onGoHome, onOpenAccount, onPhotoSync,
+  hideAmounts, onToggleHide, onGoHome, onOpenAccount, onPhotoSync, onPhotoFiles,
   onRefresh, isLoading, onPcView, onLogout,
   rebalanceData, rebalExtraQty, rebalSettings,
 }) {
@@ -148,12 +149,27 @@ export default function MobileView({
 
   const goHome = () => { setSheet(''); onGoHome(true); };
   const openAccount = (id) => { setSheet(''); onOpenAccount(id); };
+  // 카메라 = 누른 그 순간 휴대폰 사진 고르기(최근 캡처가 맨 앞)를 바로 열고, 뒤에서 사진 맞추기 창도 연다 —
+  // 고르면 창이 곧바로 프로그램 읽기(OCR)를 시작한다. 고르기를 취소하면 창의 큰 카메라 칸이 남는다.
+  // ⚠️ 사진 고르기는 누름(클릭) 안에서만 열린다 — 창이 뜬 뒤에 여는 식으로 바꾸면 휴대폰이 막는다.
+  const fileRef = useRef(null);
+  const photoPidRef = useRef('');
+  const startPhoto = (pid) => {
+    photoPidRef.current = pid;
+    if (onPhotoFiles && fileRef.current) { try { fileRef.current.click(); } catch { /* 고르기를 못 여는 창 — 창의 큰 칸으로 */ } }
+    onPhotoSync(pid);
+  };
+  const onFilesPicked = (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length && photoPidRef.current && onPhotoFiles) onPhotoFiles(photoPidRef.current, files);
+  };
   const openPhoto = () => {
     if (showDashboard) { setSheet('photoAcct'); return; }
     setSheet('');
-    onPhotoSync(activePortfolioId);
+    startPhoto(activePortfolioId);
   };
-  const pickPhotoAccount = (id) => { setSheet(''); onOpenAccount(id); onPhotoSync(id); };
+  const pickPhotoAccount = (id) => { setSheet(''); onOpenAccount(id); startPhoto(id); };
 
   const segStyle = (on) => ({ ...RESET, height: 46, borderRadius: 12, background: on ? C.segOn : 'transparent', color: on ? C.text : C.sub, fontSize: 16, fontWeight: on ? 700 : 500, textAlign: 'center' });
   const sheetRowBtn = { ...RESET, width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '0 24px', minHeight: 56, fontSize: 16, textAlign: 'left' };
@@ -190,8 +206,10 @@ export default function MobileView({
   return (
     <div
       className="mobile-view-root"
-      style={{ position: 'fixed', inset: 0, zIndex: MOBILE_Z, display: 'flex', flexDirection: 'column', background: C.bg, color: C.text, fontFamily: FONT, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.2px', WebkitFontSmoothing: 'antialiased', colorScheme: C.scheme, fontSize: 14 }}
+      style={{ position: 'fixed', inset: 0, zIndex: MOBILE_Z, display: 'flex', justifyContent: 'center', background: C.bg, color: C.text, fontFamily: FONT, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.2px', WebkitFontSmoothing: 'antialiased', colorScheme: C.scheme, fontSize: 14 }}
     >
+      <input ref={fileRef} type="file" accept={PASTE_PHOTO_ACCEPT} multiple onChange={onFilesPicked} tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
+      <div style={{ position: 'relative', width: '100%', maxWidth: MOBILE_COL_MAX, minWidth: 0, display: 'flex', flexDirection: 'column', boxShadow: `0 0 0 1px ${C.line}` }}>
       <div style={{ height: 56, flex: 'none', display: 'flex', alignItems: 'center', padding: '0 4px', borderBottom: `1px solid ${showDashboard ? 'transparent' : C.line}`, background: C.bg }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
           {showDashboard ? (
@@ -458,11 +476,12 @@ export default function MobileView({
           </div>
         )}
       </div>
+      </div>
 
       {sheet && sheetTitles[sheet] && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 20 }}>
           <button type="button" aria-label="닫기" onClick={() => setSheet('')} style={{ ...RESET, position: 'absolute', inset: 0, width: '100%', height: '100%', background: C.overlay }} />
-          <div role="dialog" aria-modal="true" aria-label={sheetTitles[sheet]} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', background: C.sheet, color: C.text, borderRadius: '22px 22px 0 0', padding: '8px 0 calc(26px + env(safe-area-inset-bottom, 0px))', boxShadow: '0 -8px 30px rgba(0,0,0,0.25)' }}>
+          <div role="dialog" aria-modal="true" aria-label={sheetTitles[sheet]} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, margin: '0 auto', maxWidth: MOBILE_COL_MAX, maxHeight: '86%', overflowY: 'auto', background: C.sheet, color: C.text, borderRadius: '22px 22px 0 0', padding: '8px 0 calc(26px + env(safe-area-inset-bottom, 0px))', boxShadow: '0 -8px 30px rgba(0,0,0,0.25)' }}>
             <div aria-hidden="true" style={{ width: 40, height: 4, borderRadius: 2, background: C.line2, margin: '2px auto 14px' }} />
 
             {sheet === 'theme' && (
@@ -500,7 +519,6 @@ export default function MobileView({
             {(sheet === 'acct' || sheet === 'photoAcct') && (
               <div>
                 <h2 style={{ margin: 0, padding: '0 24px 4px', fontSize: 19, fontWeight: 700 }}>{sheet === 'acct' ? '계좌 고르기' : '어느 계좌의 잔고 사진인가요?'}</h2>
-                {sheet === 'photoAcct' && <p style={{ margin: 0, padding: '0 24px 10px', fontSize: 13.5, color: C.sub }}>고른 계좌의 수량·매입금액을 사진에 맞춥니다.</p>}
                 {(sheet === 'acct' ? openable : photoAccounts).map(a => {
                   const sel = sheet === 'acct' && a.id === activePortfolioId;
                   return (

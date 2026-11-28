@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 휴대폰 화면(화면 폭 768px 미만) 검증 — 사용자 확정 2026-11-27(미래에셋 MY자산 구조 참고 시안).
+// 휴대폰 화면 검증 — 사용자 확정 2026-11-27(미래에셋 MY자산 구조 참고 시안) · 2026-11-28 화면 폭과 상관없이 기본(PC 화면은 고를 때만).
 //   src/mobileView.ts 를 직접 import한다(미러 금지). 런타임이 .ts를 못 읽으면 단위 검사만 건너뛴다.
 //   ⚠️ 휴대폰 화면은 '모양만' 다르다 — PC 본문을 그대로 마운트한 채 위에 덮고, 같은 App 상태·핸들러만 쓴다.
 import { readFileSync } from 'node:fs';
@@ -39,8 +39,8 @@ if (M) {
   ok('#P1 PC 화면 보기 기본 꺼짐', M.readPcView(ss) === false);
   M.writePcView(ss, true);
   ok('#P2 PC 화면 보기 켬/끔', M.readPcView(ss) === true && (M.writePcView(ss, false), M.readPcView(ss) === false));
-  ok('#P3 좁은 화면 + PC 보기 아님 = 휴대폰 화면', M.isMobileViewOn(true, false) && !M.isMobileViewOn(true, true) && !M.isMobileViewOn(false, false));
-  ok('#P4 기준 폭 768px 미만', M.MOBILE_QUERY === '(max-width: 767px)');
+  ok('#P3 화면 폭과 상관없이 휴대폰 화면이 기본 — PC 화면은 고른 탭만(사용자 확정 2026-11-28)', M.isMobileViewOn(false) === true && M.isMobileViewOn(true) === false);
+  ok('#P4 넓은 화면은 가운데 한 줄(최대 폭) · 좁은 화면 기준 768px 미만(돌아가기 단추 모양만)', M.MOBILE_COL_MAX >= 360 && M.MOBILE_COL_MAX <= 720 && M.MOBILE_QUERY === '(max-width: 767px)');
   ok('#P5 덮개 z는 PIN 창(500)·사진 맞추기(1000)보다 아래, PC 고정 메뉴(100)보다 위', M.MOBILE_Z > 100 && M.MOBILE_Z < 300);
 }
 
@@ -170,7 +170,8 @@ ok('#W3 같은 핸들러: 대시보드 = goIntegratedDashboard · 계좌 = switc
 ok('#W4 숫자는 PC 계산값 그대로(portfolioSummaries·intTotals·intMonthlyHistory·totals)', /portfolioSummaries=\{portfolioSummaries\}/.test(app.slice(app.indexOf('<MobileView'))) && /activeTotals=\{totals\}/.test(app) && /intMonthlyHistory=\{intMonthlyHistory\}/.test(app.slice(app.indexOf('<MobileView'))));
 ok('#W5 금액 보이기는 PIN 창(UnlockPinModal) — 숨기기만 바로', /const toggleHideAmountsMobile = \(\) => \{\s*if \(hideAmounts\) \{[\s\S]{0,200}setShowUnlockPinModal\(true\)[\s\S]{0,80}setHideAmounts\(true\)/.test(app));
 ok('#W6 로그아웃은 PC와 같은 함수 하나(handleLogout)', /onLogout=\{handleLogout\}[\s\S]*onLogout=\{handleLogout\}/.test(app) && /const handleLogout = \(\) => \{[\s\S]{0,400}teardownCardWinsRef/.test(app));
-ok('#W7 PC 화면으로 보기 → 「휴대폰 화면」 단추로 돌아온다', /mobile\.narrow && mobile\.pcView/.test(app) && /mobile\.setPcView\(false\)/.test(app));
+ok('#W7 PC 화면으로 보기 → 「휴대폰 화면」 단추로 돌아온다(넓은 화면도) · 켜짐은 폭이 아니라 PC 보기 하나', /\{mobile\.pcView && \(/.test(app) && !/mobile\.narrow && mobile\.pcView/.test(app) && /mobile\.setPcView\(false\)/.test(app)
+  && /active: isMobileViewOn\(pcView\)/.test(hook) && !/isMobileViewOn\(narrow/.test(hook));
 ok('#W8 카메라 = lucide Camera 하나(글은 title·aria-label)', /import \{[^}]*\bCamera\b[^}]*\} from 'lucide-react'/.test(mv) && /aria-label="잔고 사진으로 맞추기" title="잔고 사진으로 맞추기"[^>]*><Camera size=\{23\} \/><\/button>/.test(mv) && !/ImagePlus/.test(mv));
 ok('#W9 금현물 계좌는 카메라 없음(PC도 사진 맞추기 없음)', /activeAccountType !== 'gold'/.test(mv) && /a\.type !== 'gold'/.test(mv));
 ok('#W10 배경을 고르면 창이 닫힌다', /onThemePref\(o\.key\); setSheet\(''\);/.test(mv));
@@ -188,6 +189,28 @@ ok('#W16 리밸런싱 매수·매도·잔액은 rebalCashSummary 하나(PC 표�
 ok('#W17 App이 활성 계좌의 rebalanceData·추가 수량·설정을 넘긴다', /rebalanceData=\{rebalanceData\}\s*rebalExtraQty=\{rebalExtraQty\}\s*rebalSettings=\{settings\}/.test(app.slice(app.indexOf('<MobileView'))));
 ok('#W18 리밸런싱 단추는 계좌 화면에서만 · 금현물 없음(PC처럼)', /const canRebal = !showDashboard && activeAccountType !== 'gold';/.test(mv) && /\{canRebal && \(/.test(mv) && /aria-pressed=\{rebalOn\}/.test(mv));
 ok('#W19 리밸런싱 표 칸 = 종목명·코드 | 현재·예상 수량 | 매수·매도 수량 | 예상 투자금', /\['종목명', '종목코드'\], \['현재 수량', '예상 수량'\], \['매수·매도', '수량'\], \['예상 투자금', ''\]/.test(mv) && /mobileRebalRows\(rebalanceData, rebalExtraQty, activeAccountType\)/.test(mv));
+
+// 카메라 = 누른 그 순간 사진 고르기(휴대폰은 최근 캡처가 맨 앞) + 뒤에서 창 열기 → 고르면 창이 바로 프로그램 읽기(사용자 요청 2026-11-28)
+const startFn = (mv.match(/const startPhoto = \(pid\) => \{[\s\S]*?\n  \};/) || [''])[0];
+ok('#W20 카메라 — 누름 안에서 사진 고르기를 연다(fileRef.click) · 창도 연다 · 고른 사진은 onPhotoFiles로 그 계좌에',
+  startFn.indexOf('fileRef.current.click()') > 0 && startFn.indexOf('fileRef.current.click()') < startFn.indexOf('onPhotoSync(pid)')
+  && /<input ref=\{fileRef\} type="file" accept=\{PASTE_PHOTO_ACCEPT\} multiple onChange=\{onFilesPicked\}/.test(mv) && /import \{ PASTE_PHOTO_ACCEPT \} from '\.\.\/taxCalcPaste';/.test(mv)
+  && /onPhotoFiles\(photoPidRef\.current, files\)/.test(mv) && /startPhoto\(activePortfolioId\)/.test(mv) && /pickPhotoAccount = \(id\) => \{ setSheet\(''\); onOpenAccount\(id\); startPhoto\(id\); \}/.test(mv)
+  && /onPhotoFiles=\{\(pid, files\) => \{ setHoldPhotoPid\(pid\); setHoldPhotoFiles\(files\); \}\}/.test(app)
+  && /initialFiles=\{holdPhotoFiles\}/.test(app) && /onInitialFilesTaken=\{\(\) => setHoldPhotoFiles\(null\)\}/.test(app));
+ok('#W21 사진 맞추기 창 — 고른 사진은 키 확인 뒤 한 번만 읽는다(프로그램이 못 읽으면 AI로 넘길지 정하려고)',
+  /if \(!open \|\| !keyState\.loaded \|\| !initialFiles \|\| !initialFiles\.length\) return;\s*const list = initialFiles;\s*if \(onInitialFilesTaken\) onInitialFilesTaken\(\);\s*if \(ocrFilesRef\.current\) ocrFilesRef\.current\(list\);/.test(hps)
+  && /ocrFilesRef\.current = ocrFiles;/.test(hps));
+ok('#W22 사진 맞추기 창 — 설명·AI로 읽기는 ⓘ를 눌렀을 때만(기본 접힘) · 큰 카메라 칸 하나가 프로그램 읽기',
+  /const \[more, setMore\] = useState\(false\);/.test(hps) && /\{more && \(<>/.test(hps) && /setMore\(v => !v\)/.test(hps)
+  && /<Camera size=\{46\}/.test(hps) && /<input type="file" accept=\{PASTE_PHOTO_ACCEPT\} multiple disabled=\{reading\} onChange=\{readByOcr\} className="sr-only" \/>\s*<\/label>/.test(hps)
+  && hps.indexOf('<Camera size={46}') < hps.indexOf('{more && (<>') && hps.indexOf('증권사 앱의') > hps.indexOf('{more && (<>'));
+ok('#W23 PC — 끌어 놓기(창 전체 한 곳에서만 읽음)·붙여넣기(그림 파일만 · 키 칸 글자는 그대로)',
+  (hps.match(/onDrop=\{dropFiles\}/g) || []).length === 1 && /onDragOver=\{\(e\) => e\.preventDefault\(\)\} onDrop=\{dropFiles\}/.test(hps)
+  && /document\.addEventListener\('paste', onPaste\)/.test(hps) && /document\.removeEventListener\('paste', onPaste\)/.test(hps)
+  && /filter\(f => \/\^image\\\/\/\.test\(\(f && f\.type\) \|\| ''\)\)/.test(hps) && /if \(!files\.length \|\| !ocrFilesRef\.current\) return;\s*e\.preventDefault\(\);/.test(hps)
+  && /if \(busy \|\| run\.phase === 'ocr'\) return;/.test(hps));
+ok('#W24 넓은 화면 = 가운데 한 줄(MOBILE_COL_MAX) — 아래 판(sheet)도 같은 폭', /maxWidth: MOBILE_COL_MAX, minWidth: 0, display: 'flex', flexDirection: 'column'/.test(mv) && /margin: '0 auto', maxWidth: MOBILE_COL_MAX/.test(mv));
 
 console.log(`\n${fail ? '❌' : '✅'} verify:mobile-view — ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

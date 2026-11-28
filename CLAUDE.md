@@ -46,7 +46,7 @@ src/
 ├── introVideo.ts        # 인트로 영상(public/intro) 목록 INTRO_VIDEOS(⚠️ 최신이 맨 앞 — 새 영상은 맨 앞 한 줄 = 버튼 하나)·처음 영상 pickIntroVideo(INTRO_PICK_MODE 'latest'·나중에 'random')·진행 막대 비율·상태 글씨·Enter/Esc 판정 (⚠️ import 0 — verify:intro · 영상 음량은 −22.3 LUFS로 맞춰 INTRO_VOLUME 하나)
 ├── apiAuth.ts           # /api/… fetch 관문(로그인 토큰 탑재·401 재발급 1회·별도 창 토큰 전달) (⚠️ import 0 — verify:api-auth)
 ├── sessionKeepAlive.ts  # 로그인 유지: 비활동 로그아웃(4시간)·조작 목록·토큰 미리 받기(40분) 판정·별도 창 활동/토큰 중계 (⚠️ import 0 — verify:session)
-├── mobileView.ts        # 휴대폰 화면(폭 768px 미만) 순수 로직: 기준 폭·배경 4종(시스템 기본·블랙·밝은 베이지·남색, 이 기기 저장소)·PC 화면 보기(세션)·계좌 배지·숫자 모양·계좌 목록/잔고 표/보유종목 줄(PC 계산값을 받아 모양만) (⚠️ import 0 — verify:mobile-view)
+├── mobileView.ts        # 휴대폰 화면(폭과 상관없이 기본 · PC는 고를 때만) 순수 로직: 가운데 한 줄 폭·배경 4종(시스템 기본·블랙·밝은 베이지·남색, 이 기기 저장소)·PC 화면 보기(세션)·계좌 배지·숫자 모양·계좌 목록/잔고 표/보유종목 줄(PC 계산값을 받아 모양만) (⚠️ import 0 — verify:mobile-view)
 ├── uiTheme.ts           # 새 디자인(인디고 나이트) 시범: 관리자만 켬(UserInfoBar '새 디자인' 버튼)·이 기기 저장소 한 칸·?ui=classic 탈출 · 켜면 html.ui-indigo → index.css가 색만 바꿔 칠함(클래스는 그대로) (⚠️ import 0 — verify:ui-theme)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
@@ -77,7 +77,7 @@ src/
     ├── MarketIndicators.tsx      # 시장 지표 바
     ├── Header.tsx                # 상단 헤더
     ├── AccountTabBar.tsx         # 계좌 탭 바
-    ├── MobileView.tsx            # 휴대폰 화면 덮개(z=250) — 대시보드(총자산·오늘의 수익·계좌/보유종목) ↔ 계좌 잔고(미래에셋식 두 줄 표) · 위 오른쪽 카메라(사진으로 보유 맞추기)·◐ 배경·⋯ 메뉴 (hooks/useMobileView)
+    ├── MobileView.tsx            # 휴대폰 화면 덮개(z=250) — 대시보드(총자산·오늘의 수익·계좌/보유종목) ↔ 계좌 잔고(미래에셋식 두 줄 표) · 위 오른쪽 카메라(누르면 바로 사진 고르기 + 사진 맞추기 창 → 고르면 곧바로 읽기)·◐ 배경·⋯ 메뉴 (hooks/useMobileView)
     ├── UserInfoBar.tsx           # 로그인 정보 바
     ├── PinChangeModal.tsx        # PIN 변경 모달
     ├── ScaleSettingModal.tsx     # 지표 배율 설정 모달
@@ -85,7 +85,7 @@ src/
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
     ├── CodeSuggestList.tsx       # 이름이 비슷한 종목코드 추천 목록(api.suggestKrStockCodes + 다른 계좌) — 사진 맞추기 「골라 주세요」·표의 노란 코드 칸 돋보기가 함께 씀
-    ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 맨 위 「프로그램으로 읽기」(AI 없이 · `planHoldingsSync(…, {keepUnseen})` = 안 보인 종목 0으로 안 함 · 자체 검사 어긋난 종목 그대로) · 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기 · 프로그램이 잔고 표를 못 찾으면 AI 자동(관리자·내 키일 때 — OCR 1순위 · AI 2순위)
+    ├── HoldingsPhotoSync.tsx     # 「사진으로 보유 맞추기」 창(z=1000) — 큰 카메라 칸 하나 = 「프로그램으로 읽기」(누름·끌어 놓기·붙여넣기 · 설명·AI 칸은 ⓘ를 눌렀을 때만 — 사용자 요청 2026-11-28)(AI 없이 · `planHoldingsSync(…, {keepUnseen})` = 안 보인 종목 0으로 안 함 · 자체 검사 어긋난 종목 그대로) · 내 Gemini 키 칸·사진 고르기→/api/holdings-photo→바로 맞춤+되돌리기 · 프로그램이 잔고 표를 못 찾으면 AI 자동(관리자·내 키일 때 — OCR 1순위 · AI 2순위)
     ├── TradePhotoSync.tsx        # 「주문내역 사진으로 매매 넣기」 창(z=1000, App 탭만) — **맨 위 = 프로그램 읽기**(주문내역·잔고 사진 함께 → 잔고 수량 기준으로 아직 표에 없는 매매만 `anchorToHoldings` → 같은 넣기 · 확인 필요 줄은 넣지 않고 붙여넣기 칸으로) · 「AI로 읽기·검수」(접힘, 사용자 확정: AI는 최종 검수만) 안에 — 같은 키 규칙(관리자도 내 키 칸 — 사이트 키가 없어도 됨)·/api/holdings-photo(kind 'trades')→끝까지 받은 답만→바로 넣기+되돌리기 · 「구독 중인 AI로 읽기」(API 키 없이: 부탁 글 `tradeAskPrompt` 복사 → Gemini·Claude 앱에 사진 → 답 줄 붙여넣기 → 같은 applyText) · 「내 PC의 Claude로 읽기」(**관리자만** — PC 우편함 `/api/pc-ask` target claude + imgs → PC의 Claude가 읽어 답 → 같은 applyText) · ⚠️ 다른 사용자 = 「내 AI로 읽기」가 맨 위·펼침(무료 AI `PHOTO_AI_IDS` 7곳 · 휴대폰 공유) + 선택으로 내 무료 Gemini 키(사용자 확정 2026-11-26) · 프로그램이 표를 못 찾으면 AI 자동(쓸 수 있을 때) · 해외 계좌는 AI에 달러(cur usd)
     ├── AiSearchChat.tsx          # AI 검색 채팅창(상단 말풍선 아이콘, z=996, 늘 떠 있는 창) — /api/ai-search(Gemini+구글 검색)·출처·듣기·자료 목록(Drive ai_search_chats.json) · 다른 AI(내 키 → /api/ai-chat)·「내 구독으로 묻기」(AI 사이트 열기 + 답 붙여넣기)
     ├── AiSearchWindow.tsx        # AI 검색 별도 창(/?aiSearchWindow=1, 2026-11-26 — 상단 말풍선 단추가 화면 오른쪽에 세로 창으로 엶 · 좁은 화면·팝업 차단이면 앱 안 창) — App 미마운트·같은 AiSearchChat(variant page) · 대화·키는 `ais:call`로 앱 탭에 부탁(앱 탭이 Drive에) · ⚠️ 창이 떠 있는 동안 앱 안 채팅을 내린다(`aiWinLive` — 같은 대화 파일을 둘이 덮지 않게, verify:pc-ask #W1~3)
@@ -183,12 +183,12 @@ src/
 
 ## 휴대폰 화면 (`src/mobileView.ts`·`components/MobileView.tsx`·`hooks/useMobileView.ts`, ⚠️ 회귀 주의 — 2026-11-27)
 
-- 화면 폭 768px 미만이면 PC 본문 **위에 덮는다**(z=`MOBILE_Z` 250 — PIN 창 500·사진 맞추기 1000·확인 창·로딩보다 아래). ⚠️ PC 본문(IntegratedDashboard·PortfolioTable 등)을
+- **화면 폭과 상관없이 기본으로** PC 본문 **위에 덮는다**(사용자 확정 2026-11-28 — PC 화면은 ⋯ 「PC 화면으로 보기」를 고른 탭만 · 넓은 화면은 가운데 한 줄 `MOBILE_COL_MAX`)(z=`MOBILE_Z` 250 — PIN 창 500·사진 맞추기 1000·확인 창·로딩보다 아래). ⚠️ PC 본문(IntegratedDashboard·PortfolioTable 등)을
   조건으로 빼지 말 것 — 저장·시세·기록 효과가 그 아래에서 PC와 똑같이 돌아야 한다(verify:mobile-view #W2). 덮개가 뜨면 `html.mobile-view`(index.css)가 문서 스크롤을 잠근다.
 - **모양만 다르다**: 숫자는 portfolioSummaries·intTotals·intMonthlyHistory[0]·intHoldingsDonutData·totals.calcPortfolio 그대로(새로 계산 금지). 대시보드 = `showIntegratedDashboard`,
   계좌 = 활성 계좌(`switchToPortfolioWithSnapshot`) · 카메라 = `setHoldPhotoPid`(금현물 제외) · 금액 보이기 = PIN 창 · 로그아웃 = `handleLogout` 하나 · 뒤로 가기 = 계좌 → 대시보드.
 - 숨긴 것(사용자 확정): 위쪽 단추 줄 전체·차트·추이 표·입출금·리밸런싱·분배금 표. 필요하면 요청받아 하나씩 더한다. ⋯ 메뉴 = 새로고침·PC 화면으로 보기·로그아웃뿐.
-  배경 = 이 기기 `localStorage` 한 칸(기본 시스템 연동) · PC 화면 보기 = `sessionStorage`(탭을 닫으면 다시 휴대폰 화면) — Drive·STATE 금지. 검증: `verify:mobile-view`.
+  배경 = 이 기기 `localStorage` 한 칸(기본 시스템 연동) · PC 화면 보기 = `sessionStorage`(탭을 닫으면 다시 휴대폰 화면 · 돌아오기 = 「휴대폰 화면」 단추, 넓은 화면도) — Drive·STATE 금지. 검증: `verify:mobile-view`.
 - 계좌 이름 옆 「리밸런싱」(금현물 없음) = 보기 전용 표: 종목명·코드 | 현재·예상 수량 | 매수·매도(action + 추가 수량) | 예상 투자금(= `expEval`, PC 예상평가금) + 매수·매도·잔액.
   ⚠️ 값은 PC와 같은 `rebalanceData`·`rebalExtraQty`·`rebalCashSummary`(RebalancingPanel도 이 함수) — 휴대폰에서 수량·잔액 식을 따로 굴리지 말 것. 목표 비중·추가 수량 편집은 PC에서만.
 

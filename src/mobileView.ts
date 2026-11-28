@@ -1,4 +1,4 @@
-// 휴대폰 화면(화면 폭 768px 미만) — 순수 로직·색·숫자 모양 (사용자 확정 2026-11-27, 미래에셋 MY자산 구조 참고 시안).
+// 휴대폰 화면(화면 폭과 상관없이 기본 — 2026-11-28) — 순수 로직·색·숫자 모양 (사용자 확정 2026-11-27, 미래에셋 MY자산 구조 참고 시안).
 // ⚠️ import 0 — verify:mobile-view 가 직접 import한다.
 // ⚠️ 휴대폰 화면은 '모양만' 다르다: 숫자는 PC와 같은 계산값(useIntegratedData·usePortfolioData)을 받아 그리기만 한다 —
 //    여기서 평가액·원금·수익을 새로 계산하지 말 것(같은 날 PC와 휴대폰 숫자가 갈린다).
@@ -62,9 +62,13 @@ export function writePcView(storage: any, on: boolean): void {
   } catch { /* 이번 화면에서만 유지 */ }
 }
 
-export function isMobileViewOn(narrow: boolean, pcView: boolean): boolean {
-  return !!narrow && !pcView;
+// 화면 폭과 상관없이 휴대폰 화면이 기본 — 'PC 화면으로 보기'를 고른 탭만 PC 화면(사용자 확정 2026-11-28).
+export function isMobileViewOn(pcView: boolean): boolean {
+  return !pcView;
 }
+
+// 넓은 화면(PC 브라우저)에서는 휴대폰 화면을 가운데 한 줄로 — 계좌 줄의 이름과 금액이 화면 양 끝으로 벌어지지 않게.
+export const MOBILE_COL_MAX = 560;
 
 // 계좌 종류 배지 — 색은 PC 계좌 탭(ACCOUNT_TYPE_CONFIG)과 같은 색 계열에서 흰 글자 대비 4.5:1 이상인 진한 쪽.
 export const ACCOUNT_BADGES: Record<string, { badge: string; label: string; bg: string }> = {

@@ -5,7 +5,7 @@
 // 키: 관리자는 사이트 키(내 키가 있으면 먼저) · 다른 사용자는 내 Gemini 키(내 Drive ai_settings.json — App의 keyApi가 읽고 쓴다).
 // ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 applyItems(앱 탭이 최신 prev 위에서 적용)로만.
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, ScanText } from 'lucide-react';
+import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, ScanText, Info } from 'lucide-react';
 import { generateId, formatNumber } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
@@ -96,8 +96,13 @@ function PickCard({ p, targets, extra, onChoose, disabled }) {
 
 // usd = 해외 계좌(2026-11-26 — 키움 해외잔고 「외화」 화면 사진 → 보유수량·투자금액(USD, investAmountUsd + 매입단가 미러)). 원화 화면은 넣지 않는다(달러 원가를 알 수 없다).
 // portfolios = 모든 계좌(다른 계좌의 같은·비슷한 이름에서 종목코드 찾기) · onCodeSet(id, code) = 코드로 넣은 새 행의 현재가 부르기(앱 탭)
-export default function HoldingsPhotoSync({ open, onClose, accountName = '', items = [], applyItems, isAdmin = false, viewingAs = false, keyApi = null, onOpenCalendarGuide = null, usd = false, portfolios = [], onCodeSet = null }) {
+// 화면(사용자 요청 2026-11-28 「글을 읽지 않고 감각적으로」): 큰 카메라 칸 하나(누르면 사진 고르기 · PC는 끌어 놓기·붙여넣기도) →
+// 프로그램 읽기(OCR). 설명·주의·AI로 읽기(내 키)는 머리줄 ⓘ를 눌렀을 때만(more). initialFiles = 휴대폰 화면 카메라로 이미 고른 사진(열리자마자 읽기).
+export default function HoldingsPhotoSync({ open, onClose, accountName = '', items = [], applyItems, isAdmin = false, viewingAs = false, keyApi = null, onOpenCalendarGuide = null, usd = false, portfolios = [], onCodeSet = null, initialFiles = null, onInitialFilesTaken = null }) {
   const [run, setRun] = useState({ phase: 'idle' });
+  const [more, setMore] = useState(false);
+  const [drag, setDrag] = useState(false);
+  const ocrFilesRef = useRef(null);
   const [keyState, setKeyState] = useState({ loaded: false, key: '', canSave: false, error: '' });
   const [keyInput, setKeyInput] = useState('');
   const [keyEdit, setKeyEdit] = useState(false);
@@ -123,6 +128,27 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
 
   useEffect(() => () => { runId.current += 1; if (abortRef.current) { try { abortRef.current.abort(); } catch { /* 끝남 */ } } }, []);
 
+  // 창이 열린 동안 붙여넣은(Ctrl+V·⌘V) 캡처도 바로 읽는다 — 그림이 없는 붙여넣기(키 칸의 글자)는 건드리지 않는다.
+  useEffect(() => {
+    if (!open) return;
+    const onPaste = (e) => {
+      const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter(f => /^image\//.test((f && f.type) || ''));
+      if (!files.length || !ocrFilesRef.current) return;
+      e.preventDefault();
+      ocrFilesRef.current(files);
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [open]);
+
+  // 휴대폰 화면 카메라로 고른 사진 — 키 확인이 끝난 뒤(프로그램이 못 읽을 때 AI로 넘길지 정하려고) 한 번만 읽는다.
+  useEffect(() => {
+    if (!open || !keyState.loaded || !initialFiles || !initialFiles.length) return;
+    const list = initialFiles;
+    if (onInitialFilesTaken) onInitialFilesTaken();
+    if (ocrFilesRef.current) ocrFilesRef.current(list);
+  }, [open, keyState.loaded, initialFiles]);
+
   if (!open) return null;
 
   const close = () => {
@@ -131,6 +157,8 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
     setRun({ phase: 'idle' });
     setPickNote('');
     setShowGuide(false);
+    setMore(false);
+    setDrag(false);
     onClose && onClose();
   };
 
@@ -286,9 +314,13 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
 
   // 프로그램 읽기(AI 없이 · 무료 · 사진은 이 기기에서만) — src/screenOcr.ts(학습 사이트의 PP-OCRv5) → src/tradeOcr.ts 잔고 해석.
   // 자체 검사(보유수량×평균단가 ≈ 매입금액)·글자 확신이 어긋난 종목과 잘린 종목은 '그대로', 안 보인 종목도 0으로 하지 않는다.
-  const readByOcr = async (e) => {
+  const readByOcr = (e) => {
     const list = Array.from(e.target.files || []);
     e.target.value = '';
+    ocrFiles(list);
+  };
+  const ocrFiles = async (list) => {
+    if (busy || run.phase === 'ocr') return;
     const { add, notImage, over } = mergePastePhotos([], list);
     setPickNote([
       notImage > 0 ? `사진이 아닌 파일 ${notImage}개는 뺐습니다` : '',
@@ -348,6 +380,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
     const uniq = holds.filter(h => { const k = h.code || h.name; if (seen.has(k)) return false; seen.add(k); return true; });
     applyHoldText(uniq.map(ocrHoldLine).join('\n'), n, '프로그램 글자 인식(AI 없이)', { bad: uniq.filter(ocrHoldBad), unknown, krwShots, cashPlan });
   };
+  ocrFilesRef.current = ocrFiles;
 
   const undoApply = () => {
     const u = run.undo, cp = run.cashPlan && !run.cashPlan.same ? run.cashPlan : null;
@@ -368,9 +401,17 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
     c.update ? `바꿈 ${c.update}` : '', c.zero ? `0으로 ${c.zero}` : '', c.add ? `새로 추가 ${c.add}` : '', c.pick ? `골라 주세요 ${c.pick}` : '',
     c.same ? `같음 ${c.same}` : '', c.keep ? `안 보여 그대로 ${c.keep}` : '', c.cut ? `못 읽어 그대로 ${c.cut}` : '', c.bad ? `넣지 않음 ${c.bad}` : '',
   ].filter(Boolean).join(' · ') : '';
+  // 큰 카메라 칸 안의 짧은 진행 글(설명 없이)
+  const reading = busy || run.phase === 'ocr';
+  const pct = (f) => `${Math.round((f || 0) * 100)}%`;
+  const boxText = run.phase === 'ocr' ? (run.stage === 'load' ? `준비 중… ${pct(run.f)}` : `읽는 중… ${run.n > 1 ? `${run.i}/${run.n} · ` : ''}${pct(run.f)}`)
+    : run.phase === 'resolve' ? `종목 확인 중… ${run.i}/${run.m}`
+      : run.phase === 'shrink' || run.phase === 'read' ? 'AI가 읽는 중…' : '';
+  const dropFiles = (e) => { e.preventDefault(); setDrag(false); if (!reading) ocrFiles(Array.from((e.dataTransfer && e.dataTransfer.files) || [])); };
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-end sm:items-center justify-center bg-black/70 px-0 sm:px-3" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}>
+    <div className="fixed inset-0 z-[1000] flex items-end sm:items-center justify-center bg-black/70 px-0 sm:px-3" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}
+      onDragOver={(e) => e.preventDefault()} onDrop={dropFiles}>
       {/* 휴대폰(640px 미만)은 아래에서 올라오는 판(휴대폰 화면의 카메라 단추가 연다) — PC는 종전 그대로 가운데 창 */}
       <div className="relative w-full max-w-[640px] max-h-[92vh] flex flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-sky-700/50 bg-[#0f1623] shadow-2xl">
         {showGuide ? (
@@ -381,25 +422,35 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
             <Camera size={16} className="text-sky-300 shrink-0" />
             <span className="text-gray-100 font-semibold text-sm truncate">사진으로 보유 맞추기{accountName ? ` — ${accountName}` : ''}</span>
           </div>
-          <button onClick={close} title="닫기" className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition"><X size={16} /></button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={() => setMore(v => !v)} aria-expanded={more} title={more ? '설명 접기' : '설명 · 다른 방법(AI로 읽기)'} aria-label={more ? '설명 접기' : '설명 보기'}
+              className={`p-1.5 rounded-full transition ${more ? 'bg-sky-900/60 text-sky-200' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}><Info size={18} /></button>
+            <button onClick={close} title="닫기" aria-label="닫기" className="p-1.5 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition"><X size={18} /></button>
+          </div>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 text-[12.5px] text-gray-300 leading-relaxed">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-3 text-[12.5px] text-gray-300 leading-relaxed">
+          <label
+            className={`flex flex-col items-center justify-center gap-2 w-full min-h-[190px] sm:min-h-[210px] rounded-2xl border-2 border-dashed transition select-none ${reading ? 'border-sky-500/60 bg-sky-950/40 cursor-wait' : drag ? 'border-sky-300 bg-sky-900/50 cursor-copy' : 'border-sky-600/60 bg-sky-950/20 hover:border-sky-400 hover:bg-sky-950/40 active:bg-sky-900/40 cursor-pointer'}`}
+            title="잔고 캡처를 고르거나 끌어 놓기 · 붙여넣기(Ctrl+V) — 이 기기에서 글자를 읽어 바로 맞춥니다(AI 없이)" aria-label="잔고 사진 고르기(프로그램)"
+            onDragOver={(e) => { e.preventDefault(); if (!drag && !reading) setDrag(true); }} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDrag(false); }}>
+            <Camera size={46} strokeWidth={1.6} className={`text-sky-300 ${reading ? 'animate-pulse' : ''}`} />
+            {reading && <span className="text-[12.5px] text-sky-200 tabular-nums">{boxText}</span>}
+            <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={reading} onChange={readByOcr} className="sr-only" />
+          </label>
+          {pickNote && <p className="text-[11.5px] text-amber-300/90">{pickNote}</p>}
+
+          {more && (<>
           <div className="space-y-1">
-            <p>증권사 앱의 <b className="text-gray-100">잔고(보유종목) 화면</b>을 캡처해 올리면, 이 계좌 종목의 <b className="text-blue-200">보유수량·투자금액(매입금액)</b>을 사진대로 맞춥니다.</p>
+            <p>증권사 앱의 <b className="text-gray-100">잔고(보유종목) 화면</b>을 캡처해 위 칸을 눌러 고르면(PC는 끌어 놓기·붙여넣기도), 이 계좌 종목의 <b className="text-blue-200">보유수량·투자금액(매입금액)</b>을 사진대로 맞춥니다. 고르는 창에는 방금 찍은 캡처가 맨 앞에 있습니다.</p>
             {usd && <p className="text-amber-200/90">해외 계좌 — 키움 해외잔고에서 「원화」 버튼을 눌러 <b>「외화」</b>로 바꾼 화면(매입금액이 달러)을 찍어 주세요. 원화 화면은 넣지 않습니다(원화 매입금액은 환율에 따라 바뀌어서). 종목은 한글 이름 아래 티커(예: GPIQ)로 맞춥니다.</p>}
-            <p className="text-gray-400">목록이 길면 내려 가며 찍은 사진을 <b className="text-gray-200">한 번에 모두</b> 고르세요. 사진에 없는 종목은 판 것으로 보고 0으로 하고, 종목명 칸에 📝 메모(마우스를 올리면 보임)를 남깁니다.</p>
+            <p className="text-gray-400">목록이 길면 내려 가며 찍은 사진을 <b className="text-gray-200">한 번에 모두</b> 고르세요.</p>
           </div>
 
           <div className="rounded-lg border border-sky-600/60 bg-sky-950/30 px-3 py-2.5 space-y-1.5">
             <div className="flex items-center gap-1.5 text-gray-100 font-semibold"><ScanText size={15} className="text-sky-300" />프로그램으로 읽기 <span className="font-normal text-gray-400">— AI 없이 · 무료 · 키 필요 없음</span></div>
-            <p className="text-[11.5px] text-gray-400">사진은 이 기기 밖으로 나가지 않습니다(처음 한 번 글자 인식 엔진 약 17MB를 받습니다). 자체 검사(보유수량×평균단가 ≈ 매입금액)가 어긋난 종목은 바꾸지 않고, 사진에 안 보인 종목도 0으로 하지 않습니다.</p>
-            <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-bold text-[13px] transition ${busy || run.phase === 'ocr' ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'}`}
-              title="잔고 사진 고르기 — 고르면 이 기기에서 글자를 읽어 바로 맞춥니다(AI 없이)" aria-label="잔고 사진 고르기(프로그램)">
-              <Camera size={18} />{run.phase === 'ocr' ? '읽는 중…' : ''}
-              <input type="file" accept={PASTE_PHOTO_ACCEPT} multiple disabled={busy || run.phase === 'ocr'} onChange={readByOcr} className="sr-only" />
-            </label>
+            <p className="text-[11.5px] text-gray-400">위 칸이 이 방법입니다. 사진은 이 기기 밖으로 나가지 않습니다(처음 한 번 글자 인식 엔진 약 17MB를 받습니다). 자체 검사(보유수량×평균단가 ≈ 매입금액)가 어긋난 종목은 바꾸지 않고, 사진에 안 보인 종목도 0으로 하지 않습니다.</p>
           </div>
-          <p className="text-[11.5px] text-gray-500">AI로 읽기 — 프로그램이 못 읽을 때(판 종목을 0으로 맞출 때도):</p>
+          <p className="text-[11.5px] text-gray-500">AI로 읽기 — 프로그램이 못 읽을 때(사진에 없는 종목은 판 것으로 보고 0으로 하고, 종목명 칸에 📝 메모를 남깁니다):</p>
 
           <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 px-3 py-2 space-y-1.5">
             <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -444,22 +495,14 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
             </label>
             <span className="text-[11px] text-gray-500">한 번에 {PASTE_PHOTO_MAX}장까지 · 사진은 저장하지 않습니다</span>
           </div>
-          {pickNote && <p className="text-[11.5px] text-amber-300/90">{pickNote}</p>}
+          </>)}
 
-          {run.phase === 'ocr' && (
-            <p className="text-sky-200 animate-pulse">{run.stage === 'load'
-              ? `글자 인식 엔진을 받는 중… ${Math.round((run.f || 0) * 100)}% (처음 한 번만)`
-              : `사진 ${run.i}/${run.n}장 글자를 읽는 중… ${Math.round((run.f || 0) * 100)}%`}</p>
-          )}
-          {(run.phase === 'shrink' || run.phase === 'read') && run.fromOcr && <p className="text-[11.5px] text-gray-400">프로그램이 잔고 표를 찾지 못해 AI로 읽습니다.</p>}
-          {run.phase === 'shrink' && <p className="text-sky-200">사진 {run.n}장을 줄이는 중…</p>}
-          {run.phase === 'resolve' && <p className="text-sky-200 animate-pulse">이 계좌에서 이름으로 바로 찾지 못한 종목 {run.m}개의 종목코드를 확인하는 중… ({run.i}/{run.m})</p>}
-          {run.phase === 'read' && <p className="text-sky-200 animate-pulse">AI가 사진 {run.n}장을 읽는 중…{run.got > 0 ? ` (${run.got}자 받음)` : ''}</p>}
           {run.phase === 'error' && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 space-y-1">
               <p className="text-red-200">{run.code === 'ocr' ? run.msg : holdErrorText(run.code)}</p>
               {run.msg && run.code !== 'ocr' && <p className="text-[11px] text-red-300/70 break-all">{run.msg}</p>}
               {(run.code === 'needkey' || run.code === 'badkey' || run.code === 'credit' || run.code === 'quota0') && <button onClick={() => setShowGuide(true)} className="text-[11.5px] text-amber-200 underline">키 받는 법 보기</button>}
+              {run.code === 'ocr' && !more && <button onClick={() => setMore(true)} className="text-[11.5px] text-sky-300 underline">다른 방법(AI로 읽기)</button>}
             </div>
           )}
 
@@ -511,7 +554,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
                   </table>
                 </div>
               )}
-              {rows.some(r => r.note && (r.kind === 'add' || r.kind === 'bad' || r.kind === 'keep' || r.kind === 'cut')) && (
+              {more && rows.some(r => r.note && (r.kind === 'add' || r.kind === 'bad' || r.kind === 'keep' || r.kind === 'cut')) && (
                 <ul className="text-[11.5px] text-gray-400 list-disc pl-4 space-y-0.5">
                   {c.add > 0 && <li>새로 추가한 종목은 <b className="text-gray-200">다른 계좌의 같은 이름 종목 → 이름 검색(공식 이름 확인) 순으로 찾은 종목코드로 넣고 현재가를 불러옵니다</b>(몇 초) — 코드 칸이 노란색인 종목은 6자리 코드를 넣어 주세요.</li>}
                   {c.keep > 0 && (run.ocr
@@ -534,13 +577,13 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
               )}
               {run.ocr && run.ocr.krwShots > 0 && <p className="text-[11.5px] text-amber-300/90">원화 화면 {run.ocr.krwShots}종목은 넣지 않았습니다 — 해외 계좌는 「외화」로 바꿔 찍은 화면의 달러 매입금액으로 맞춥니다.</p>}
               {run.ocr && run.ocr.unknown > 0 && <p className="text-[11.5px] text-amber-300/90">잔고 표를 찾지 못한 사진 {run.ocr.unknown}장은 건너뛰었습니다.</p>}
-              {run.model && <p className="text-[10.5px] text-gray-600">읽은 AI: {run.model}</p>}
+              {more && run.model && <p className="text-[10.5px] text-gray-600">읽은 AI: {run.model}</p>}
             </div>
           )}
           {run.phase === 'done' && picks.length > 0 && (
             <div className="rounded-lg border border-amber-500/50 bg-amber-950/20 px-3 py-2 space-y-2">
               <p className="text-amber-200 font-semibold">{picksWait > 0 ? `이 계좌에서 찾지 못한 종목 ${picksWait}개 — 넣을 곳을 골라 주세요` : '고르기를 마쳤습니다'}</p>
-              {picksWait > 0 && <p className="text-[11.5px] text-gray-400">표에 다른 이름으로 있는 종목이면 「이 계좌 {picks.some(p => p.row.fund) && !picks.some(p => !p.row.fund) ? '펀드' : '종목'}에 넣기」에서 고르고, 새로 산 종목이면 추천 종목코드를 누르거나 코드를 직접 넣으세요. 고르기 전에는 넣지 않습니다.</p>}
+              {more && picksWait > 0 && <p className="text-[11.5px] text-gray-400">표에 다른 이름으로 있는 종목이면 「이 계좌 {picks.some(p => p.row.fund) && !picks.some(p => !p.row.fund) ? '펀드' : '종목'}에 넣기」에서 고르고, 새로 산 종목이면 추천 종목코드를 누르거나 코드를 직접 넣으세요. 고르기 전에는 넣지 않습니다.</p>}
               {picks.map(p => (
                 <PickCard key={p.key} p={p} disabled={!applyItems} targets={pickTargets(p.row, items, usedNow)} extra={p.row.fund ? [] : extraOf(p.row)}
                   onChoose={(choice, label) => choosePick(p.key, choice, label)} />

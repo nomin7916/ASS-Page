@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { MOBILE_QUERY, readMobileTheme, writeMobileTheme, normalizeThemePref, readPcView, writePcView, isMobileViewOn } from '../mobileView';
 
-// 휴대폰 화면 켜짐 판단(화면 폭) + 배경 고르기 + 'PC 화면으로 보기'. 규칙은 src/mobileView.ts.
+// 휴대폰 화면 켜짐 판단('PC 화면으로 보기'를 고르지 않았으면 늘) + 배경 고르기. narrow = 화면 폭(돌아가기 단추 모양만). 규칙은 src/mobileView.ts.
 const safeLocal = () => { try { return window.localStorage; } catch { return null; } };
 const safeSession = () => { try { return window.sessionStorage; } catch { return null; } };
 const media = (q) => { try { return window.matchMedia ? window.matchMedia(q) : null; } catch { return null; } };
@@ -30,5 +30,5 @@ export function useMobileView() {
   const setPcView = (on) => { writePcView(safeSession(), !!on); setPcViewState(!!on); };
   const setThemePref = (v) => { writeMobileTheme(safeLocal(), v); setThemePrefState(normalizeThemePref(v)); };
 
-  return { narrow, sysDark, pcView, setPcView, themePref, setThemePref, active: isMobileViewOn(narrow, pcView) };
+  return { narrow, sysDark, pcView, setPcView, themePref, setThemePref, active: isMobileViewOn(pcView) };
 }

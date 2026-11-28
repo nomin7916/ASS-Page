@@ -628,8 +628,10 @@ export default function App() {
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
   // 📷 사진으로 보유 맞추기 — 연 순간의 계좌 id(열린 동안 다른 계좌로 바꿔도 그 계좌에만 쓴다). null = 닫힘
   const [holdPhotoPid, setHoldPhotoPid] = useState(null);
+  // 휴대폰 화면 위 카메라로 고른 사진 — 창이 열리자마자 프로그램 읽기를 시작하고 비운다(사진은 메모리에만)
+  const [holdPhotoFiles, setHoldPhotoFiles] = useState(null);
   const [tradePhotoPid, setTradePhotoPid] = useState(null);
-  // 휴대폰 화면(화면 폭 768px 미만) — PC 본문은 그대로 두고 그 위에 덮는다(규칙 src/mobileView.ts·components/MobileView.tsx).
+  // 휴대폰 화면(화면 폭과 상관없이 기본 · 'PC 화면으로 보기'를 고른 탭만 PC) — PC 본문은 그대로 두고 그 위에 덮는다(규칙 src/mobileView.ts·components/MobileView.tsx).
   const mobile = useMobileView();
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   // 종목 계좌 간 이관 — 대상 항목 id(모달 열림 여부 겸용)
@@ -5993,6 +5995,7 @@ export default function App() {
             onGoHome={goIntegratedDashboard}
             onOpenAccount={switchToPortfolioWithSnapshot}
             onPhotoSync={(pid) => setHoldPhotoPid(pid)}
+            onPhotoFiles={(pid, files) => { setHoldPhotoPid(pid); setHoldPhotoFiles(files); }}
             onRefresh={refreshMobile}
             isLoading={isLoading}
             onPcView={() => mobile.setPcView(true)}
@@ -6003,7 +6006,7 @@ export default function App() {
           />
         </ErrorBoundary>
       )}
-      {mobile.narrow && mobile.pcView && (
+      {mobile.pcView && (
         <button
           type="button"
           onClick={() => mobile.setPcView(false)}
@@ -6012,7 +6015,9 @@ export default function App() {
       )}
       <HoldingsPhotoSync
         open={!!holdPhotoPid}
-        onClose={() => setHoldPhotoPid(null)}
+        onClose={() => { setHoldPhotoPid(null); setHoldPhotoFiles(null); }}
+        initialFiles={holdPhotoFiles}
+        onInitialFilesTaken={() => setHoldPhotoFiles(null)}
         accountName={(portfolios.find(p => p.id === holdPhotoPid)?.name) || ''}
         items={(portfolios.find(p => p.id === holdPhotoPid)?.portfolio) || []}
         applyItems={(fn) => { const pid = holdPhotoPid; if (pid) setPortfolios(prev => prev.map(p => (p.id !== pid ? p : { ...p, portfolio: fn(p.portfolio ?? []) }))); }}
