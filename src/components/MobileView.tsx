@@ -44,7 +44,7 @@ export default function MobileView({
   theme, themePref, onThemePref,
   portfolios, portfolioSummaries, intTotals, intMonthlyHistory, intHoldingsDonutData,
   showDashboard, activePortfolioId, activeTitle, activeTotals, activeAccountType,
-  hideAmounts, onToggleHide, onGoHome, onOpenAccount, onPhotoSync, onPhotoFiles,
+  hideAmounts, onToggleHide, onGoHome, onOpenAccount, onPhotoSync, onPhotoFiles, sharedFiles, onSharedTaken,
   onRefresh, isLoading, onPcView, onLogout,
   rebalanceData, rebalExtraQty, rebalSettings,
 }) {
@@ -119,6 +119,25 @@ export default function MobileView({
   const accounts = useMemo(() => mobileAccountList(portfolios, portfolioSummaries, totalEval), [portfolios, portfolioSummaries, totalEval]);
   const openable = accounts.filter(a => a.canOpen);
   const photoAccounts = openable.filter(a => a.type !== 'gold');
+
+  // 안드로이드 「공유」로 받은 캡처(src/shareTarget.ts) — 넘겨받아(App은 비움) 계좌가 하나면 바로, 여럿이면 계좌를 묻는다(작은 미리보기와 함께).
+  // 고르면 사진 맞추기 창이 곧바로 프로그램 읽기. 계좌를 고르지 않고 닫으면 버린다(사진은 메모리에만).
+  const [shared, setShared] = useState(null);
+  useEffect(() => {
+    if (!sharedFiles || !sharedFiles.length) return;
+    const files = sharedFiles;
+    if (onSharedTaken) onSharedTaken();
+    if (!photoAccounts.length || !onPhotoFiles) return;
+    if (photoAccounts.length === 1) { const id = photoAccounts[0].id; onOpenAccount(id); onPhotoFiles(id, files); return; }
+    setShared(files);
+    setSheet('shareAcct');
+  }, [sharedFiles]);
+  useEffect(() => { if (sheet !== 'shareAcct' && shared) setShared(null); }, [sheet]);
+  const sharedThumbs = useMemo(() => {
+    if (!shared) return [];
+    try { return shared.slice(0, 4).map(f => URL.createObjectURL(f)); } catch { return []; }
+  }, [shared]);
+  useEffect(() => () => { sharedThumbs.forEach(u => { try { URL.revokeObjectURL(u); } catch { /* 이미 풀림 */ } }); }, [sharedThumbs]);
   const today = todayOf(intMonthlyHistory && intMonthlyHistory[0]);
   const merged = useMemo(() => (tab === 'holdings' && showDashboard
     ? mobileMergedHoldings(intHoldingsDonutData, holdingAccountNames(portfolios, activePortfolioId, activeTitle))
@@ -170,10 +189,17 @@ export default function MobileView({
     startPhoto(activePortfolioId);
   };
   const pickPhotoAccount = (id) => { setSheet(''); onOpenAccount(id); startPhoto(id); };
+  const pickShareAccount = (id) => {
+    const files = shared;
+    setShared(null);
+    setSheet('');
+    onOpenAccount(id);
+    if (files && files.length && onPhotoFiles) onPhotoFiles(id, files);
+  };
 
   const segStyle = (on) => ({ ...RESET, height: 46, borderRadius: 12, background: on ? C.segOn : 'transparent', color: on ? C.text : C.sub, fontSize: 16, fontWeight: on ? 700 : 500, textAlign: 'center' });
   const sheetRowBtn = { ...RESET, width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '0 24px', minHeight: 56, fontSize: 16, textAlign: 'left' };
-  const sheetTitles = { theme: '화면 배경', menu: '메뉴', acct: '계좌 고르기', photoAcct: '잔고 사진 계좌 고르기' };
+  const sheetTitles = { theme: '화면 배경', menu: '메뉴', acct: '계좌 고르기', photoAcct: '잔고 사진 계좌 고르기', shareAcct: '받은 캡처 계좌 고르기' };
 
   const accountRowInner = (a) => (
     <>
@@ -516,13 +542,20 @@ export default function MobileView({
               </div>
             )}
 
-            {(sheet === 'acct' || sheet === 'photoAcct') && (
+            {(sheet === 'acct' || sheet === 'photoAcct' || sheet === 'shareAcct') && (
               <div>
                 <h2 style={{ margin: 0, padding: '0 24px 4px', fontSize: 19, fontWeight: 700 }}>{sheet === 'acct' ? '계좌 고르기' : '어느 계좌의 잔고 사진인가요?'}</h2>
+                {sheet === 'shareAcct' && sharedThumbs.length > 0 && (
+                  <div style={{ display: 'flex', gap: 8, padding: '6px 24px 12px', overflowX: 'auto' }}>
+                    {sharedThumbs.map((u, i) => (
+                      <img key={u} src={u} alt={`받은 캡처 ${i + 1}`} style={{ width: 64, height: 112, flex: 'none', objectFit: 'cover', objectPosition: 'top', borderRadius: 10, border: `1px solid ${C.line2}` }} />
+                    ))}
+                  </div>
+                )}
                 {(sheet === 'acct' ? openable : photoAccounts).map(a => {
                   const sel = sheet === 'acct' && a.id === activePortfolioId;
                   return (
-                    <button key={a.id} type="button" aria-pressed={sheet === 'acct' ? sel : undefined} onClick={() => (sheet === 'acct' ? openAccount(a.id) : pickPhotoAccount(a.id))} style={{ ...RESET, width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '8px 24px', minHeight: 56, background: sel ? C.selRow : 'transparent', textAlign: 'left' }}>
+                    <button key={a.id} type="button" aria-pressed={sheet === 'acct' ? sel : undefined} onClick={() => (sheet === 'acct' ? openAccount(a.id) : sheet === 'shareAcct' ? pickShareAccount(a.id) : pickPhotoAccount(a.id))} style={{ ...RESET, width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '8px 24px', minHeight: 56, background: sel ? C.selRow : 'transparent', textAlign: 'left' }}>
                       <Badge type={a.type} size={34} fontSize={10} />
                       <span style={{ flex: 1, minWidth: 0, fontSize: 16, fontWeight: sel ? 700 : 500, ...ELLIPSIS }}>{a.name}</span>
                       {sheet === 'acct'

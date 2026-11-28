@@ -212,5 +212,107 @@ ok('#W23 PC — 끌어 놓기(창 전체 한 곳에서만 읽음)·붙여넣기(
   && /if \(busy \|\| run\.phase === 'ocr'\) return;/.test(hps));
 ok('#W24 넓은 화면 = 가운데 한 줄(MOBILE_COL_MAX) — 아래 판(sheet)도 같은 폭', /maxWidth: MOBILE_COL_MAX, minWidth: 0, display: 'flex', flexDirection: 'column'/.test(mv) && /margin: '0 auto', maxWidth: MOBILE_COL_MAX/.test(mv));
 
+// ── 파트⑦ 안드로이드 「공유」로 캡처 받기(사용자 요청 2026-11-28) — src/shareTarget.ts + public/sw.js + manifest ──
+console.log('\n── 파트⑦ 공유로 캡처 받기(안드로이드) ──');
+let ST = null;
+try { ST = await import(pathToFileURL(join(ROOT, 'src/shareTarget.ts')).href); }
+catch (e) {
+  const unsupported = e && (e.code === 'ERR_UNKNOWN_FILE_EXTENSION' || /Unknown file extension/.test(String(e.message)));
+  if (unsupported) console.log('  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 공유 단위 검사를 건너뜁니다.');
+  else { fail++; console.log(`  ✗ src/shareTarget.ts 를 불러오지 못했습니다 — ${e && (e.code || e.message)}`); }
+}
+const swSrc = read('public/sw.js');
+const manifest = JSON.parse(read('public/manifest.webmanifest'));
+const pngSize = (rel) => { const b = readFileSync(join(ROOT, rel)); return b.slice(1, 4).toString() === 'PNG' ? [b.readUInt32BE(16), b.readUInt32BE(20)] : null; };
+const fakeCaches = () => {
+  const stores = new Map();
+  const mk = () => { const m = new Map(); return {
+    m,
+    put: async (req, res) => { m.set(typeof req === 'string' ? req : req.url, res); },
+    keys: async () => [...m.keys()].map(u => new Request(u)),
+    match: async (req) => { const r = m.get(typeof req === 'string' ? req : req.url); return r ? r.clone() : undefined; },
+  }; };
+  return { stores, open: async (n) => { if (!stores.has(n)) stores.set(n, mk()); return stores.get(n); }, has: async (n) => stores.has(n), delete: async (n) => stores.delete(n) };
+};
+if (ST) {
+  ok('#SH1 안드로이드에서만 등록 대상', ST.isAndroidUA('Mozilla/5.0 (Linux; Android 14; SM-S928N) Chrome/131') && !ST.isAndroidUA('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)') && !ST.isAndroidUA('Mozilla/5.0 (Macintosh)'));
+  const now = Date.UTC(2026, 10, 28, 6, 0, 0);
+  ok('#SH2 받은 지 30분 안만 쓴다(시계 1분 앞섬 허용)', ST.shareFresh(now - 60000, now) && ST.shareFresh(now + 30000, now) && !ST.shareFresh(now - 31 * 60000, now) && !ST.shareFresh(now + 5 * 60000, now) && !ST.shareFresh('', now) && !ST.shareFresh(null, now));
+  ok('#SH3 저장 칸 차례 읽기', ST.shareIndexOf('https://a.test/__share/3') === 3 && ST.shareIndexOf('https://a.test/__share/x') === -1 && ST.shareIndexOf('https://a.test/other') === -1);
+  ok('#SH4 주소에서 shared만 뺀다(다른 값은 그대로)', ST.withoutShareParam('https://a.test/?shared=2') === '/' && ST.withoutShareParam('https://a.test/?a=1&shared=2#h') === '/?a=1#h' && ST.withoutShareParam('https://a.test/?a=1') === null);
+  const regs = [];
+  const navA = { userAgent: 'Linux; Android 14', serviceWorker: { register: (u, o) => { regs.push([u, o && o.scope]); return Promise.resolve(); } } };
+  let loadFn = null;
+  const r1 = ST.registerShareWorker(navA, { readyState: 'loading' }, { addEventListener: (t, f) => { if (t === 'load') loadFn = f; } });
+  const before = regs.length; if (loadFn) loadFn();
+  const r2 = ST.registerShareWorker({ userAgent: 'iPhone', serviceWorker: { register: () => { regs.push(['ios']); return Promise.resolve(); } } }, { readyState: 'complete' }, null);
+  ok('#SH5 서비스 워커는 안드로이드만 · 화면이 다 뜬 뒤(load) 등록 · /sw.js 범위 /', r1 === true && before === 0 && regs.length === 1 && regs[0][0] === '/sw.js' && regs[0][1] === '/' && r2 === false);
+
+  // sw.js 를 그대로 돌린다 — 가짜 브라우저 저장소에 공유 2장(+ 글 파일 1개) → /?shared=2 → 앱이 2장을 꺼내고 저장소를 지운다
+  const vm = await import('node:vm');
+  const handlers = {};
+  const cs = fakeCaches();
+  const ctx = { caches: cs, URL, Response, Request, URLPattern: globalThis.URLPattern, console, encodeURIComponent };
+  ctx.self = { addEventListener: (t, f) => { handlers[t] = f; }, location: new URL('https://app.test/sw.js'), skipWaiting: () => {}, clients: { claim: async () => {} } };
+  vm.createContext(ctx);
+  vm.runInContext(swSrc, ctx);
+  let routes = null; const waits = [];
+  handlers.install({ addRoutes: async (r) => { routes = r; }, waitUntil: (p) => waits.push(p) });
+  await Promise.all(waits);
+  if (globalThis.URLPattern) {
+    ok('#SH6 크롬 길 규칙 — 공유 주소만 서비스 워커, 나머지는 곧장 네트워크(화면·시세가 느려지지 않게)', Array.isArray(routes) && routes.length === 2
+      && routes[0].source === 'fetch-event' && routes[0].condition.urlPattern.test('https://app.test/share-target') && !routes[0].condition.urlPattern.test('https://app.test/')
+      && routes[1].source === 'network' && routes[1].condition.urlPattern.test('https://app.test/assets/x.js') && routes[1].condition.urlPattern.test('https://query1.finance.yahoo.com/v8/a?b=1'));
+  } else console.log('  ⓘ 이 런타임에 URLPattern이 없어 #SH6(길 규칙)을 건너뜁니다.');
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+  const fd = new FormData();
+  fd.append('photos', new File([png], 'Screenshot_20261128.png', { type: 'image/png' }));
+  fd.append('photos', new File([new Uint8Array([255, 216, 255, 1])], '캡처 2.jpg', { type: 'image/jpeg' }));
+  fd.append('photos', new File(['hello'], 'note.txt', { type: 'text/plain' }));
+  let responded = null;
+  handlers.fetch({ request: new Request('https://app.test/share-target', { method: 'POST', body: fd }), respondWith: (p) => { responded = p; } });
+  const res = responded ? await responded : null;
+  let other = 0;
+  handlers.fetch({ request: new Request('https://app.test/'), respondWith: () => { other++; } });
+  handlers.fetch({ request: new Request('https://app.test/api/x', { method: 'POST', body: 'a' }), respondWith: () => { other++; } });
+  ok('#SH7 공유(POST /share-target) → 사진 2장만 저장 → 303 /?shared=2 · 다른 요청(GET·다른 POST)은 손대지 않음',
+    !!res && res.status === 303 && res.headers.get('location') === 'https://app.test/?shared=2' && other === 0 && (await cs.has(ST.SHARE_CACHE)));
+  const got = await ST.takeSharedPhotos(cs);
+  ok('#SH8 앱이 꺼낸 사진 = 같은 이름·종류·내용 · 꺼내면 저장소를 지운다', got.length === 2 && got[0].name === 'Screenshot_20261128.png' && got[0].type === 'image/png'
+    && got[1].name === '캡처 2.jpg' && got[1].type === 'image/jpeg' && (await got[0].arrayBuffer()).byteLength === png.length && !(await cs.has(ST.SHARE_CACHE)));
+  ok('#SH9 받은 것이 없으면 빈 목록(저장소를 만들지 않는다)', (await ST.takeSharedPhotos(cs)).length === 0 && !cs.stores.has(ST.SHARE_CACHE));
+  const old = await cs.open(ST.SHARE_CACHE);
+  await old.put('https://app.test/__share/0', new Response(new Blob([png], { type: 'image/png' }), { headers: { 'Content-Type': 'image/png', 'X-Share-At': String(Date.now() - 31 * 60000) } }));
+  ok('#SH10 30분 넘은 캡처는 버린다(다른 계정이 나중에 로그인해도 남의 사진을 묻지 않게)', (await ST.takeSharedPhotos(cs)).length === 0 && !(await cs.has(ST.SHARE_CACHE)));
+  responded = null;
+  const fd2 = new FormData(); fd2.append('photos', new File(['x'], 'a.txt', { type: 'text/plain' }));
+  handlers.fetch({ request: new Request('https://app.test/share-target', { method: 'POST', body: fd2 }), respondWith: (p) => { responded = p; } });
+  const res2 = await responded;
+  ok('#SH11 사진이 없는 공유 → /?shared=0 · 저장 안 함', res2.status === 303 && res2.headers.get('location') === 'https://app.test/?shared=0' && !(await cs.has(ST.SHARE_CACHE)));
+  ok('#SH12 이름·주소가 세 곳(shareTarget.ts·sw.js·manifest)에서 같다', manifest.share_target.action === ST.SHARE_PATH && manifest.share_target.params.files[0].name === ST.SHARE_FIELD
+    && swSrc.includes(`const SHARE_PATH = '${ST.SHARE_PATH}';`) && swSrc.includes(`const SHARE_CACHE = '${ST.SHARE_CACHE}';`) && swSrc.includes(`const SHARE_FIELD = '${ST.SHARE_FIELD}';`) && swSrc.includes(`const SHARE_MAX = ${ST.SHARE_MAX};`)
+    && swSrc.includes("`/?shared=${n}`") && ST.SHARE_PARAM === 'shared');
+}
+ok('#SH13 manifest — 설치할 수 있는 앱(이름·standalone·시작 주소·아이콘 192/512 PNG·maskable) + 공유 받기(POST·multipart·사진)',
+  manifest.name && manifest.short_name && manifest.display === 'standalone' && manifest.start_url === '/' && manifest.scope === '/'
+  && manifest.icons.every(i => { const d = pngSize(join('public', i.src)); return d && `${d[0]}x${d[1]}` === i.sizes && i.type === 'image/png'; })
+  && manifest.icons.some(i => i.sizes === '192x192') && manifest.icons.some(i => i.sizes === '512x512' && i.purpose === 'maskable')
+  && manifest.share_target.method === 'POST' && manifest.share_target.enctype === 'multipart/form-data' && manifest.share_target.params.files[0].accept.includes('image/*'));
+ok('#SH14 서비스 워커는 캐시하지 않는다(사진 칸 말고는 caches를 쓰지 않음) · 화면이 아니라 공유 주소만 응답', !/caches\.match|cache\.match|addAll\(/.test(swSrc) && (swSrc.match(/respondWith\(/g) || []).length === 1
+  && /if \(req\.method !== 'POST'\) return;/.test(swSrc) && /url\.pathname !== SHARE_PATH\) return;/.test(swSrc));
+const idx = read('index.html'); const mainSrc = read('src/main.tsx');
+ok('#SH15 index.html이 manifest를 잇고 · 앱 탭에서만 서비스 워커 등록(별도 창은 안 함)', /<link rel="manifest" href="\/manifest\.webmanifest" \/>/.test(idx)
+  && /import \{ registerShareWorker \} from '\.\/shareTarget'/.test(mainSrc) && /if \(!SEPARATE_WINDOW_BOOT\) registerShareWorker\(\)/.test(mainSrc));
+ok('#SH16 App — 부팅 정착 뒤 · 관리자 접속 아닐 때 한 번 꺼내 휴대폰 화면에 넘긴다(PC 보기였으면 휴대폰 화면으로)',
+  /import \{ takeSharedPhotos, withoutShareParam \} from '\.\/shareTarget';/.test(app)
+  && /if \(histPhase !== 'settled' \|\| sharedTakenRef\.current \|\| ADMIN_VIEW_EMAIL \|\| adminViewingAsRef\.current\) return;/.test(app)
+  && /takeSharedPhotos\(\)\.then\(\(files\) => \{\s*if \(!files\.length\) return;\s*if \(mobile\.pcView\) mobile\.setPcView\(false\);\s*setSharedPhotos\(files\);/.test(app)
+  && /sharedFiles=\{sharedPhotos\}\s*onSharedTaken=\{\(\) => setSharedPhotos\(null\)\}/.test(app));
+ok('#SH17 휴대폰 화면 — 계좌가 하나면 바로 · 여럿이면 미리보기와 함께 묻고 → 고르면 그 계좌로 바로 읽기 · 닫으면 버림',
+  /if \(photoAccounts\.length === 1\) \{ const id = photoAccounts\[0\]\.id; onOpenAccount\(id\); onPhotoFiles\(id, files\); return; \}/.test(mv)
+  && /setShared\(files\);\s*setSheet\('shareAcct'\);/.test(mv) && /if \(sheet !== 'shareAcct' && shared\) setShared\(null\);/.test(mv)
+  && /sheet === 'shareAcct' \? pickShareAccount\(a\.id\)/.test(mv) && /if \(files && files\.length && onPhotoFiles\) onPhotoFiles\(id, files\);/.test(mv)
+  && /URL\.revokeObjectURL\(u\)/.test(mv));
+
 console.log(`\n${fail ? '❌' : '✅'} verify:mobile-view — ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);

@@ -45,6 +45,7 @@ import TradePhotoSync from './components/TradePhotoSync';
 import MobileView from './components/MobileView';
 import { useMobileView } from './hooks/useMobileView';
 import { resolveMobileTheme } from './mobileView';
+import { takeSharedPhotos, withoutShareParam } from './shareTarget';
 import { usePhotoCodeFill } from './hooks/usePhotoCodeFill';
 import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
 import PortfolioStatsPanel from './components/PortfolioStatsPanel';
@@ -630,6 +631,9 @@ export default function App() {
   const [holdPhotoPid, setHoldPhotoPid] = useState(null);
   // 휴대폰 화면 위 카메라로 고른 사진 — 창이 열리자마자 프로그램 읽기를 시작하고 비운다(사진은 메모리에만)
   const [holdPhotoFiles, setHoldPhotoFiles] = useState(null);
+  // 안드로이드 「공유」로 받은 캡처(src/shareTarget.ts) — 휴대폰 화면이 계좌를 묻고 넘겨받으면 비운다
+  const [sharedPhotos, setSharedPhotos] = useState(null);
+  const sharedTakenRef = useRef(false);
   const [tradePhotoPid, setTradePhotoPid] = useState(null);
   // 휴대폰 화면(화면 폭과 상관없이 기본 · 'PC 화면으로 보기'를 고른 탭만 PC) — PC 본문은 그대로 두고 그 위에 덮는다(규칙 src/mobileView.ts·components/MobileView.tsx).
   const mobile = useMobileView();
@@ -2190,6 +2194,19 @@ export default function App() {
     onFilled: (pid, id, code) => { inheritSharedCategoryFor(pid, id); handleSingleStockRefreshFor(pid, id, code); },
     notify,
   });
+
+  // 안드로이드 「공유」로 받은 캡처 — 부팅 정착 뒤(계좌 데이터가 다 온 뒤) 한 번 꺼낸다(꺼내면서 지움). 관리자 접속 중엔 건드리지 않는다.
+  useEffect(() => {
+    if (histPhase !== 'settled' || sharedTakenRef.current || ADMIN_VIEW_EMAIL || adminViewingAsRef.current) return;
+    sharedTakenRef.current = true;
+    const clean = withoutShareParam(window.location.href);
+    if (clean != null) { try { window.history.replaceState(window.history.state, '', clean); } catch { /* 주소만 그대로 */ } }
+    takeSharedPhotos().then((files) => {
+      if (!files.length) return;
+      if (mobile.pcView) mobile.setPcView(false);
+      setSharedPhotos(files);
+    });
+  }, [histPhase]);
 
   // 백필(효과#2)·자동확정은 useStockData **뒤**에 둔다 — 부팅 상태 머신 histPhase(정착 신호)를 게이트로 받기 위해서다.
   // STOCK-first는 Drive 캐시(전 세션 장중 stamp 포함)를 KIS 실제종가 도착 **전에** 보이게 하므로, 백필은 settled에서만,
@@ -5996,6 +6013,8 @@ export default function App() {
             onOpenAccount={switchToPortfolioWithSnapshot}
             onPhotoSync={(pid) => setHoldPhotoPid(pid)}
             onPhotoFiles={(pid, files) => { setHoldPhotoPid(pid); setHoldPhotoFiles(files); }}
+            sharedFiles={sharedPhotos}
+            onSharedTaken={() => setSharedPhotos(null)}
             onRefresh={refreshMobile}
             isLoading={isLoading}
             onPcView={() => mobile.setPcView(true)}

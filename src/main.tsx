@@ -5,6 +5,7 @@ import ErrorBoundary from './components/ErrorBoundary.tsx'
 import { installApiAuth } from './apiAuth'
 import { installActivityRelay } from './sessionKeepAlive'
 import { lazyScreen } from './lazyScreen'
+import { registerShareWorker } from './shareTarget'
 
 // 앱 본체와 별도 창 8종은 각자 조각으로 받는다(성능 개선 1-3) — 창은 앱 본체 코드를 받지 않는다.
 // ⚠️ 정적 import로 되돌리지 말 것: 모든 창이 앱 전체(약 2.6MB)를 다시 받는다. 앱 탭은 vite.config.ts의
@@ -58,6 +59,8 @@ const SEPARATE_WINDOW_BOOT = CALENDAR_WINDOW_BOOT || FLOW_WINDOW_BOOT || BACKTES
 installApiAuth(SEPARATE_WINDOW_BOOT ? 'window' : 'app')
 // 별도 창에서 하는 조작도 앱 탭의 비활동 자동 로그아웃을 미룬다(sessionKeepAlive.ts) — 없으면 창에서만 일하는 동안 앱 탭이 로그아웃된다.
 if (SEPARATE_WINDOW_BOOT) installActivityRelay(window)
+// 안드로이드 「공유」로 캡처 받기(public/sw.js — 공유 주소만 다루고 캐시 없음) — 앱 탭에서만 등록(src/shareTarget.ts).
+if (!SEPARATE_WINDOW_BOOT) registerShareWorker()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

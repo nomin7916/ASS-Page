@@ -47,6 +47,7 @@ src/
 ├── apiAuth.ts           # /api/… fetch 관문(로그인 토큰 탑재·401 재발급 1회·별도 창 토큰 전달) (⚠️ import 0 — verify:api-auth)
 ├── sessionKeepAlive.ts  # 로그인 유지: 비활동 로그아웃(4시간)·조작 목록·토큰 미리 받기(40분) 판정·별도 창 활동/토큰 중계 (⚠️ import 0 — verify:session)
 ├── mobileView.ts        # 휴대폰 화면(폭과 상관없이 기본 · PC는 고를 때만) 순수 로직: 가운데 한 줄 폭·배경 4종(시스템 기본·블랙·밝은 베이지·남색, 이 기기 저장소)·PC 화면 보기(세션)·계좌 배지·숫자 모양·계좌 목록/잔고 표/보유종목 줄(PC 계산값을 받아 모양만) (⚠️ import 0 — verify:mobile-view)
+├── shareTarget.ts       # 안드로이드 「공유」로 캡처 받기: 홈 화면 앱(public/manifest.webmanifest share_target) → public/sw.js(POST /share-target만 · 캐시 없음)가 사진을 이 기기 Cache Storage에 잠깐 → 앱이 부팅 정착 뒤 takeSharedPhotos(꺼내며 지움 · 30분 넘으면 버림) → 휴대폰 화면이 계좌를 묻고 바로 읽기 · 서비스 워커는 안드로이드만 등록 (⚠️ import 0 — verify:mobile-view #SH가 sw.js를 그대로 돌린다)
 ├── uiTheme.ts           # 새 디자인(인디고 나이트) 시범: 관리자만 켬(UserInfoBar '새 디자인' 버튼)·이 기기 저장소 한 칸·?ui=classic 탈출 · 켜면 html.ui-indigo → index.css가 색만 바꿔 칠함(클래스는 그대로) (⚠️ import 0 — verify:ui-theme)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL
 ├── constants.ts         # INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, 차트 키 상수
@@ -191,6 +192,8 @@ src/
   배경 = 이 기기 `localStorage` 한 칸(기본 시스템 연동) · PC 화면 보기 = `sessionStorage`(탭을 닫으면 다시 휴대폰 화면 · 돌아오기 = 「휴대폰 화면」 단추, 넓은 화면도) — Drive·STATE 금지. 검증: `verify:mobile-view`.
 - 계좌 이름 옆 「리밸런싱」(금현물 없음) = 보기 전용 표: 종목명·코드 | 현재·예상 수량 | 매수·매도(action + 추가 수량) | 예상 투자금(= `expEval`, PC 예상평가금) + 매수·매도·잔액.
   ⚠️ 값은 PC와 같은 `rebalanceData`·`rebalExtraQty`·`rebalCashSummary`(RebalancingPanel도 이 함수) — 휴대폰에서 수량·잔액 식을 따로 굴리지 말 것. 목표 비중·추가 수량 편집은 PC에서만.
+- **공유로 캡처 받기(안드로이드, 2026-11-28)**: `src/shareTarget.ts` 머리말 흐름. ⚠️ `public/sw.js`에 캐시·오프라인을 넣지 말 것(앱 화면·시세가 낡는다) — 공유 주소 POST만 응답하고
+  크롬 길 규칙(`addRoutes`)으로 나머지는 곧장 네트워크. ⚠️ 사진은 서버로 보내지 않는다. 이름·주소(`/share-target`·`photos`·`ass-share-v1`)는 shareTarget.ts·sw.js·manifest 세 곳 같이. 아이폰은 웹 공유 받기 미지원.
 
 ## 사진으로 보유 맞추기 (`src/holdingsPhoto.ts`·`api/holdings-photo.ts`·`api/_holdingsPhoto.ts`, ⚠️ 회귀 주의 — 2026-11-26)
 
