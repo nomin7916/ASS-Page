@@ -193,7 +193,7 @@ ok('#W19 리밸런싱 표 칸 = 종목명·코드 | 현재·예상 수량 | 매�
 // 카메라 = 누른 그 순간 사진 고르기(휴대폰은 최근 캡처가 맨 앞) + 뒤에서 창 열기 → 고르면 창이 바로 프로그램 읽기(사용자 요청 2026-11-28)
 const startFn = (mv.match(/const startPhoto = \(pid\) => \{[\s\S]*?\n  \};/) || [''])[0];
 ok('#W20 카메라 — 누름 안에서 사진 고르기를 연다(fileRef.click) · 창도 연다 · 고른 사진은 onPhotoFiles로 그 계좌에',
-  startFn.indexOf('fileRef.current.click()') > 0 && startFn.indexOf('fileRef.current.click()') < startFn.indexOf('onPhotoSync(pid)')
+  startFn.indexOf('fileRef.current.click()') > 0 && startFn.indexOf('fileRef.current.click()') < startFn.lastIndexOf('onPhotoSync(pid)')
   && /<input ref=\{fileRef\} type="file" accept=\{PASTE_PHOTO_ACCEPT\} multiple onChange=\{onFilesPicked\}/.test(mv) && /import \{ PASTE_PHOTO_ACCEPT \} from '\.\.\/taxCalcPaste';/.test(mv)
   && /onPhotoFiles\(photoPidRef\.current, files\)/.test(mv) && /startPhoto\(activePortfolioId\)/.test(mv) && /pickPhotoAccount = \(id\) => \{ setSheet\(''\); onOpenAccount\(id\); startPhoto\(id\); \}/.test(mv)
   && /onPhotoFiles=\{\(pid, files\) => \{ setHoldPhotoPid\(pid\); setHoldPhotoFiles\(files\); \}\}/.test(app)
@@ -216,6 +216,50 @@ ok('#W24 넓은 화면 = 가운데 한 줄(MOBILE_COL_MAX) — 아래 판(sheet)
 ok('#W25 화면 배경 = 제목과 이름 넷뿐(부연 줄·「기본」 표 없음) · 휴대폰 화면에 안내 문장 없음',
   (M ? M.MOBILE_THEME_OPTIONS.every(o => !('sub' in o)) && M.MOBILE_THEME_OPTIONS.map(o => o.label).join() === '시스템 연동,블랙,밝은 베이지,남색' : true)
   && !/고르면 바로 바뀌고|o\.sub\b|>기본</.test(mv) && !/종목을 누르면 코드와|자세한 설정은 PC 화면에서|달러 종목은 지금 환율로|고른 계좌의 수량·매입금액/.test(mv));
+
+// ── 증권사 앱 열기(사용자 요청 2026-11-28 「증권사 앱을 지정하고 열고 캡처하면 바로 넣기」 — 사이트 안에서) ──
+let BA = null;
+try { BA = await import(pathToFileURL(join(ROOT, 'src/brokerApps.ts')).href); }
+catch (e) {
+  const unsupported = e && (e.code === 'ERR_UNKNOWN_FILE_EXTENSION' || /Unknown file extension/.test(String(e.message)));
+  if (!unsupported) { fail++; console.log(`  ✗ src/brokerApps.ts 를 불러오지 못했습니다 — ${e && (e.code || e.message)}`); }
+}
+if (BA) {
+  ok('#BA1 앱 넷 = M-STOCK·영웅문S#·한국투자·토스증권 · App Store 번호(2026-11-28 apps.apple.com 확인값)',
+    BA.BROKER_APPS.map(a => a.name).join() === 'M-STOCK,영웅문S#,한국투자,토스증권'
+    && BA.BROKER_APPS.map(a => a.iosId).join() === '1248716281,1570370057,1621986905,839333328');
+  ok('#BA2 기기 가리기 — 아이폰·아이패드(맥 글자+터치)=ios · 안드로이드 · PC는 빈 값(앱을 열지 않음)',
+    BA.platformOf('Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X)') === 'ios' && BA.platformOf('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 5) === 'ios'
+    && BA.platformOf('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 0) === '' && BA.platformOf('Mozilla/5.0 (Linux; Android 14)') === 'android' && BA.platformOf('Windows NT 10.0') === '');
+  const app = (id) => BA.brokerAppById(id);
+  ok('#BA3 아이폰 — 공개 스킴이 없는 앱은 App Store 화면 · 토스만 supertoss:// · PC는 빈 주소',
+    BA.brokerAppUrl(app('mstock'), 'ios') === 'https://apps.apple.com/kr/app/id1248716281' && BA.brokerAppUrl(app('kiwoom'), 'ios') === 'https://apps.apple.com/kr/app/id1570370057'
+    && BA.brokerAppUrl(app('toss'), 'ios') === 'supertoss://' && BA.brokerAppUrl(app('kis'), '') === '' && BA.brokerAppUrl(null, 'ios') === '');
+  const ki = BA.brokerAppUrl(app('kiwoom'), 'android');
+  ok('#BA4 안드로이드 — 패키지로 바로(없으면 Play 스토어) · 패키지 모르는 앱은 Play 스토어 검색',
+    /^intent:\/\/#Intent;action=android\.intent\.action\.MAIN;category=android\.intent\.category\.LAUNCHER;package=com\.kiwoom\.heromts;S\.browser_fallback_url=https%3A%2F%2Fplay\.google\.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcom\.kiwoom\.heromts;end$/.test(ki)
+    && BA.brokerAppUrl(app('mstock'), 'android') === 'https://play.google.com/store/search?q=' + encodeURIComponent('미래에셋증권 M-STOCK') + '&c=apps');
+  const st = mem();
+  BA.writeBrokerApp(st, 'acctA', 'kiwoom'); BA.writeBrokerApp(st, 'acctB', 'toss');
+  ok('#BA5 계좌마다 하나 — 이 기기 저장소 한 칸에 계좌 id → 앱 id', BA.brokerAppOf(st, 'acctA').id === 'kiwoom' && BA.brokerAppOf(st, 'acctB').id === 'toss' && BA.brokerAppOf(st, 'acctC') === null && BA.brokerAppOf(st, '') === null);
+  BA.writeBrokerApp(st, 'acctA', 'nope'); BA.writeBrokerApp(st, 'acctB', null);
+  ok('#BA6 모르는 앱·빈 값 = 그 계좌 칸 지움 · 다 지우면 저장 칸도 지움', BA.brokerAppOf(st, 'acctA') === null && !st.m.has(BA.BROKER_KEY));
+  st.setItem(BA.BROKER_KEY, '{bad json'); const st2 = mem(); st2.setItem(BA.BROKER_KEY, JSON.stringify({ x: 'kiwoom', y: 'evil' }));
+  ok('#BA7 깨진 값·모르는 앱 id는 무시', BA.brokerAppOf(st, 'x') === null && BA.brokerAppOf(st2, 'x').id === 'kiwoom' && BA.brokerAppOf(st2, 'y') === null);
+  const st3 = mem(); for (let i = 0; i < 70; i++) BA.writeBrokerApp(st3, 'a' + i, 'kis');
+  ok('#BA8 계좌가 많아도 최근 60개까지만', Object.keys(JSON.parse(st3.getItem(BA.BROKER_KEY))).length === 60 && BA.brokerAppOf(st3, 'a69').id === 'kis' && BA.brokerAppOf(st3, 'a0') === null);
+  const w = { location: { href: '' } };
+  ok('#BA9 열기 = 그 주소로 이동(누름 안) · PC는 아무것도 안 함', BA.openBrokerApp(app('toss'), 'ios', w) === true && w.location.href === 'supertoss://' && BA.openBrokerApp(app('toss'), '', { location: { href: 'x' } }) === false);
+}
+ok('#BA10 사진 맞추기 창 — 휴대폰·태블릿만 앱 단추(고르면 저장하고 바로 열기 · 바꾸기) · 앱에 다녀오면 카메라 칸이 빛남 · 사진을 고르면 꺼짐',
+  /import \{ BROKER_APPS, platformOf, brokerAppOf, writeBrokerApp, openBrokerApp, localStore \} from '\.\.\/brokerApps';/.test(hps)
+  && /\{platform && accountId && \(app && !pickApp \? \(/.test(hps) && /writeBrokerApp\(localStore\(\), accountId, a\.id\)/.test(hps) && /openBrokerApp\(a, platform\);/.test(hps)
+  && /if \(document\.visibilityState === 'hidden'\) away = true;\s*else if \(away\) \{ away = false; setGlow\(true\); \}/.test(hps)
+  && /glow \? 'border-sky-300 bg-sky-900\/40 ring-4/.test(hps) && /if \(busy \|\| run\.phase === 'ocr'\) return;\s*setGlow\(false\);/.test(hps)
+  && /accountId=\{holdPhotoPid \|\| ''\}/.test(app));
+ok('#BA11 휴대폰 화면 위 카메라 — 이 계좌에 앱을 골라 두었으면 그 앱을 열고 창도 연다(사진 고르기 대신)',
+  /const app = plat \? brokerAppOf\(localStore\(\), pid\) : null;\s*if \(app\) \{ onPhotoSync\(pid\); openBrokerApp\(app, plat\); return; \}/.test(mv)
+  && /import \{ platformOf, brokerAppOf, openBrokerApp, localStore \} from '\.\.\/brokerApps';/.test(mv));
 
 // ── 파트⑦ 안드로이드 「공유」로 캡처 받기(사용자 요청 2026-11-28) — src/shareTarget.ts + public/sw.js + manifest ──
 console.log('\n── 파트⑦ 공유로 캡처 받기(안드로이드) ──');

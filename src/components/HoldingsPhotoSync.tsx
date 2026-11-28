@@ -5,7 +5,7 @@
 // 키: 관리자는 사이트 키(내 키가 있으면 먼저) · 다른 사용자는 내 Gemini 키(내 Drive ai_settings.json — App의 keyApi가 읽고 쓴다).
 // ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 applyItems(앱 탭이 최신 prev 위에서 적용)로만.
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, ScanText, Info } from 'lucide-react';
+import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, ScanText, Info, ArrowUpRight, ChevronDown } from 'lucide-react';
 import { generateId, formatNumber } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
@@ -17,6 +17,7 @@ import { shrinkPhotoToB64 } from '../photoShrink';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
 import { classifyOcr, parseOcrHoldings, ocrHoldLine, ocrHoldBad, OCR_FLAG_TEXT, parseOcrCash } from '../tradeOcr';
 import { loadOcrEngine, ocrFile } from '../screenOcr';
+import { BROKER_APPS, platformOf, brokerAppOf, writeBrokerApp, openBrokerApp, localStore } from '../brokerApps';
 
 const KIND_LABEL = {
   update: { t: '바꿈', c: 'text-sky-300' },
@@ -98,11 +99,16 @@ function PickCard({ p, targets, extra, onChoose, disabled }) {
 // portfolios = 모든 계좌(다른 계좌의 같은·비슷한 이름에서 종목코드 찾기) · onCodeSet(id, code) = 코드로 넣은 새 행의 현재가 부르기(앱 탭)
 // 화면(사용자 요청 2026-11-28 「글을 읽지 않고 감각적으로」): 큰 카메라 칸 하나(누르면 사진 고르기 · PC는 끌어 놓기·붙여넣기도) →
 // 프로그램 읽기(OCR). 설명·주의·AI로 읽기(내 키)는 머리줄 ⓘ를 눌렀을 때만(more). initialFiles = 휴대폰 화면 카메라로 이미 고른 사진(열리자마자 읽기).
-export default function HoldingsPhotoSync({ open, onClose, accountName = '', items = [], applyItems, isAdmin = false, viewingAs = false, keyApi = null, onOpenCalendarGuide = null, usd = false, portfolios = [], onCodeSet = null, initialFiles = null, onInitialFilesTaken = null }) {
+export default function HoldingsPhotoSync({ open, onClose, accountName = '', items = [], applyItems, isAdmin = false, viewingAs = false, keyApi = null, onOpenCalendarGuide = null, usd = false, portfolios = [], onCodeSet = null, initialFiles = null, onInitialFilesTaken = null, accountId = '' }) {
   const [run, setRun] = useState({ phase: 'idle' });
   const [more, setMore] = useState(false);
   const [drag, setDrag] = useState(false);
   const ocrFilesRef = useRef(null);
+  // 증권사 앱(src/brokerApps.ts) — 계좌마다 이 기기에 하나 · 휴대폰·태블릿에서만. 앱에 다녀오면(화면이 가려졌다 다시 보이면) 카메라 칸이 빛난다.
+  const [platform] = useState(() => (typeof navigator !== 'undefined' ? platformOf(navigator.userAgent, navigator.maxTouchPoints) : ''));
+  const [app, setApp] = useState(null);
+  const [pickApp, setPickApp] = useState(false);
+  const [glow, setGlow] = useState(false);
   const [keyState, setKeyState] = useState({ loaded: false, key: '', canSave: false, error: '' });
   const [keyInput, setKeyInput] = useState('');
   const [keyEdit, setKeyEdit] = useState(false);
@@ -127,6 +133,23 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
   }, [open, keyApi]);
 
   useEffect(() => () => { runId.current += 1; if (abortRef.current) { try { abortRef.current.abort(); } catch { /* 끝남 */ } } }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    setApp(brokerAppOf(localStore(), accountId));
+    setPickApp(false);
+  }, [open, accountId]);
+
+  useEffect(() => {
+    if (!open) return;
+    let away = false;
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') away = true;
+      else if (away) { away = false; setGlow(true); }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [open]);
 
   // 창이 열린 동안 붙여넣은(Ctrl+V·⌘V) 캡처도 바로 읽는다 — 그림이 없는 붙여넣기(키 칸의 글자)는 건드리지 않는다.
   useEffect(() => {
@@ -159,6 +182,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
     setShowGuide(false);
     setMore(false);
     setDrag(false);
+    setGlow(false);
     onClose && onClose();
   };
 
@@ -321,6 +345,7 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
   };
   const ocrFiles = async (list) => {
     if (busy || run.phase === 'ocr') return;
+    setGlow(false);
     const { add, notImage, over } = mergePastePhotos([], list);
     setPickNote([
       notImage > 0 ? `사진이 아닌 파일 ${notImage}개는 뺐습니다` : '',
@@ -407,6 +432,11 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
   const boxText = run.phase === 'ocr' ? (run.stage === 'load' ? `준비 중… ${pct(run.f)}` : `읽는 중… ${run.n > 1 ? `${run.i}/${run.n} · ` : ''}${pct(run.f)}`)
     : run.phase === 'resolve' ? `종목 확인 중… ${run.i}/${run.m}`
       : run.phase === 'shrink' || run.phase === 'read' ? 'AI가 읽는 중…' : '';
+  const goApp = (a) => {
+    if (a.id !== (app && app.id)) { writeBrokerApp(localStore(), accountId, a.id); setApp(a); }
+    setPickApp(false);
+    openBrokerApp(a, platform);
+  };
   const dropFiles = (e) => { e.preventDefault(); setDrag(false); if (!reading) ocrFiles(Array.from((e.dataTransfer && e.dataTransfer.files) || [])); };
 
   return (
@@ -429,8 +459,23 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-3 text-[12.5px] text-gray-300 leading-relaxed">
+          {platform && accountId && (app && !pickApp ? (
+            <div className="flex items-stretch gap-2">
+              <button onClick={() => goApp(app)} title={`${app.name} 열기`} aria-label={`${app.name} 열기`}
+                className="flex-1 h-12 flex items-center justify-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-[15px] font-bold transition">{app.name}<ArrowUpRight size={19} /></button>
+              <button onClick={() => setPickApp(true)} title="증권사 앱 바꾸기" aria-label="증권사 앱 바꾸기"
+                className="w-12 h-12 flex items-center justify-center rounded-xl border border-gray-700 text-gray-300 hover:bg-gray-800 transition"><ChevronDown size={19} /></button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {BROKER_APPS.map(a => (
+                <button key={a.id} onClick={() => goApp(a)} title={`${a.name} 열기`} aria-label={`${a.name} 열기`}
+                  className={`h-11 flex items-center justify-center gap-1 rounded-xl border text-[14px] font-semibold transition ${app && app.id === a.id ? 'border-sky-400 bg-sky-900/40 text-white' : 'border-gray-700 bg-gray-900/40 text-gray-200 hover:bg-gray-800'}`}>{a.name}<ArrowUpRight size={15} className="text-gray-400" /></button>
+              ))}
+            </div>
+          ))}
           <label
-            className={`flex flex-col items-center justify-center gap-2 w-full min-h-[190px] sm:min-h-[210px] rounded-2xl border-2 border-dashed transition select-none ${reading ? 'border-sky-500/60 bg-sky-950/40 cursor-wait' : drag ? 'border-sky-300 bg-sky-900/50 cursor-copy' : 'border-sky-600/60 bg-sky-950/20 hover:border-sky-400 hover:bg-sky-950/40 active:bg-sky-900/40 cursor-pointer'}`}
+            className={`flex flex-col items-center justify-center gap-2 w-full min-h-[190px] sm:min-h-[210px] rounded-2xl border-2 border-dashed transition select-none ${reading ? 'border-sky-500/60 bg-sky-950/40 cursor-wait' : drag ? 'border-sky-300 bg-sky-900/50 cursor-copy' : glow ? 'border-sky-300 bg-sky-900/40 ring-4 ring-sky-400/50 animate-pulse cursor-pointer' : 'border-sky-600/60 bg-sky-950/20 hover:border-sky-400 hover:bg-sky-950/40 active:bg-sky-900/40 cursor-pointer'}`}
             title="잔고 캡처를 고르거나 끌어 놓기 · 붙여넣기(Ctrl+V) — 이 기기에서 글자를 읽어 바로 맞춥니다(AI 없이)" aria-label="잔고 사진 고르기(프로그램)"
             onDragOver={(e) => { e.preventDefault(); if (!drag && !reading) setDrag(true); }} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDrag(false); }}>
             <Camera size={46} strokeWidth={1.6} className={`text-sky-300 ${reading ? 'animate-pulse' : ''}`} />

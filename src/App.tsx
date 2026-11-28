@@ -6037,6 +6037,7 @@ export default function App() {
         onClose={() => { setHoldPhotoPid(null); setHoldPhotoFiles(null); }}
         initialFiles={holdPhotoFiles}
         onInitialFilesTaken={() => setHoldPhotoFiles(null)}
+        accountId={holdPhotoPid || ''}
         accountName={(portfolios.find(p => p.id === holdPhotoPid)?.name) || ''}
         items={(portfolios.find(p => p.id === holdPhotoPid)?.portfolio) || []}
         applyItems={(fn) => { const pid = holdPhotoPid; if (pid) setPortfolios(prev => prev.map(p => (p.id !== pid ? p : { ...p, portfolio: fn(p.portfolio ?? []) }))); }}
