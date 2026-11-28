@@ -251,15 +251,43 @@ if (BA) {
   const w = { location: { href: '' } };
   ok('#BA9 열기 = 그 주소로 이동(누름 안) · PC는 아무것도 안 함', BA.openBrokerApp(app('toss'), 'ios', w) === true && w.location.href === 'supertoss://' && BA.openBrokerApp(app('toss'), '', { location: { href: 'x' } }) === false);
 }
-ok('#BA10 사진 맞추기 창 — 휴대폰·태블릿만 앱 단추(고르면 저장하고 바로 열기 · 바꾸기) · 앱에 다녀오면 카메라 칸이 빛남 · 사진을 고르면 꺼짐',
-  /import \{ BROKER_APPS, platformOf, brokerAppOf, writeBrokerApp, openBrokerApp, localStore \} from '\.\.\/brokerApps';/.test(hps)
-  && /\{platform && accountId && \(app && !pickApp \? \(/.test(hps) && /writeBrokerApp\(localStore\(\), accountId, a\.id\)/.test(hps) && /openBrokerApp\(a, platform\);/.test(hps)
+if (BA) {
+  const sh = BA.parseAppLink('토스 - App Store https://apps.apple.com/kr/app/%ED%86%A0%EC%8A%A4/id839333328');
+  const pl = BA.parseAppLink('https://play.google.com/store/apps/details?id=com.kiwoom.heromts&hl=ko');
+  ok('#BA10 앱 링크 읽기 — App Store 공유 글(이름 짐작)·번호만·Play 스토어·앱 주소 · http·javascript·빈 글은 거절',
+    sh && sh.iosId === '839333328' && sh.guessName === '토스' && BA.parseAppLink('839333328').iosId === '839333328' && BA.parseAppLink('id1570370057').iosId === '1570370057'
+    && pl && pl.android === 'com.kiwoom.heromts' && BA.parseAppLink('kakaotalk://').scheme === 'kakaotalk://' && BA.parseAppLink('supertoss://securities').guessName === 'supertoss'
+    && BA.parseAppLink('javascript://alert(1)') === null && BA.parseAppLink('https://example.com/a') === null && BA.parseAppLink('') === null && BA.parseAppLink('안녕') === null);
+  const cs2 = mem();
+  const r1 = BA.addCustomApp(cs2, '', 'https://apps.apple.com/kr/app/%ED%95%9C%ED%88%AC-%ED%95%9C%EA%B5%AD%ED%88%AC%EC%9E%90%EC%A6%9D%EA%B6%8C/id1621986905', 'c_a1');
+  const r2 = BA.addCustomApp(cs2, '카톡', 'kakaotalk://', 'c_a2');
+  const r3 = BA.addCustomApp(cs2, 'x', 'http://evil', 'c_a3');
+  const r4 = BA.addCustomApp(cs2, '', 'https://play.google.com/store/apps/details?id=com.x.y', 'c_a4');
+  ok('#BA11 앱 더하기 — 이름이 비면 링크에서 짐작 · 못 읽는 링크·이름 없음은 거절 · 처음 넷 뒤에 붙는다',
+    r1.app && r1.app.name === '한투' && r2.app && r2.app.scheme === 'kakaotalk://' && r3.error === 'link' && r4.error === 'name'
+    && BA.allBrokerApps(cs2).map(a => a.id).join() === 'mstock,kiwoom,kis,toss,c_a1,c_a2');
+  BA.writeBrokerApp(cs2, 'acct1', 'c_a2');
+  ok('#BA12 더한 앱도 계좌 앱으로 기억 · 주소 = 앱 주소(아이폰·안드로이드 같음) · PC는 열지 않음',
+    BA.brokerAppOf(cs2, 'acct1').id === 'c_a2' && BA.brokerAppUrl(BA.brokerAppOf(cs2, 'acct1'), 'ios') === 'kakaotalk://' && BA.brokerAppUrl(r2.app, 'android') === 'kakaotalk://' && BA.brokerAppUrl(r2.app, '') === '');
+  const andOnly = BA.addCustomApp(cs2, '안드', 'https://play.google.com/store/apps/details?id=com.only.android', 'c_a5').app;
+  ok('#BA13 이 기기에서 열 수 없는 앱은 목록에서 뺀다(아이폰에 Play 링크만 넣은 앱)', !BA.appsForPlatform(BA.allBrokerApps(cs2), 'ios').some(a => a.id === andOnly.id) && BA.appsForPlatform(BA.allBrokerApps(cs2), 'android').some(a => a.id === andOnly.id));
+  BA.removeCustomApp(cs2, 'c_a2'); BA.removeCustomApp(cs2, 'toss');
+  ok('#BA14 더한 앱 지우기 — 그 앱을 고른 계좌 칸도 지움 · 처음 넷은 지우지 않음', BA.brokerAppOf(cs2, 'acct1') === null && BA.allBrokerApps(cs2).some(a => a.id === 'toss') && !BA.allBrokerApps(cs2).some(a => a.id === 'c_a2'));
+  const cs3 = mem(); for (let i = 0; i < 15; i++) BA.addCustomApp(cs3, 'a' + i, 'app' + i + '://', 'c_x' + i);
+  cs3.setItem(BA.BROKER_CUSTOM_KEY, JSON.stringify([...JSON.parse(cs3.getItem(BA.BROKER_CUSTOM_KEY)), { id: 'c_bad', name: 'b', scheme: 'javascript://x' }, { id: 'nope', name: 'n', iosId: '123456' }]));
+  ok('#BA15 더한 앱은 12개까지 · 저장 칸에 끼워 넣은 나쁜 주소·이름 꼴은 버린다', BA.readCustomApps(cs3).length === 12 && !BA.readCustomApps(cs3).some(a => a.id === 'c_bad' || a.id === 'nope'));
+}
+ok('#BA16 사진 맞추기 창(휴대폰·태블릿) — 이 계좌 앱 큰 단추 · 다른 앱·더한 앱 단추 · + 더하기(이름·링크) · 연필 = 더한 앱 지우기 · 누른 앱이 이 계좌 앱 · 다녀오면 카메라 칸이 빛남',
+  /import \{ platformOf, brokerAppOf, writeBrokerApp, openBrokerApp, localStore, allBrokerApps, appsForPlatform, addCustomApp, removeCustomApp, BROKER_NAME_MAX \} from '\.\.\/brokerApps';/.test(hps)
+  && /\{platform && accountId && \(/.test(hps) && /\{app && !editApps && \(/.test(hps) && /apps\.filter\(a => editApps \? a\.custom : !\(app && a\.id === app\.id\)\)/.test(hps)
+  && /writeBrokerApp\(localStore\(\), accountId, a\.id\)/.test(hps) && /openBrokerApp\(a, platform\);/.test(hps)
+  && /addCustomApp\(st, addName, addLink, `c_\$\{generateId\(\)\}`\)/.test(hps) && /removeCustomApp\(st, a\.id\)/.test(hps)
   && /if \(document\.visibilityState === 'hidden'\) away = true;\s*else if \(away\) \{ away = false; setGlow\(true\); \}/.test(hps)
   && /glow \? 'border-sky-300 bg-sky-900\/40 ring-4/.test(hps) && /if \(busy \|\| run\.phase === 'ocr'\) return;\s*setGlow\(false\);/.test(hps)
   && /accountId=\{holdPhotoPid \|\| ''\}/.test(app));
-ok('#BA11 휴대폰 화면 위 카메라 — 이 계좌에 앱을 골라 두었으면 그 앱을 열고 창도 연다(사진 고르기 대신)',
-  /const app = plat \? brokerAppOf\(localStore\(\), pid\) : null;\s*if \(app\) \{ onPhotoSync\(pid\); openBrokerApp\(app, plat\); return; \}/.test(mv)
-  && /import \{ platformOf, brokerAppOf, openBrokerApp, localStore \} from '\.\.\/brokerApps';/.test(mv));
+ok('#BA17 휴대폰 화면 위 카메라 — 휴대폰·태블릿은 창을 연다(앱·카메라 칸을 고름) · PC는 바로 사진 고르기',
+  /const plat = typeof navigator !== 'undefined' \? platformOf\(navigator\.userAgent, navigator\.maxTouchPoints\) : '';\s*if \(plat\) \{ onPhotoSync\(pid\); return; \}/.test(mv)
+  && /import \{ platformOf \} from '\.\.\/brokerApps';/.test(mv));
 
 // ── 파트⑦ 안드로이드 「공유」로 캡처 받기(사용자 요청 2026-11-28) — src/shareTarget.ts + public/sw.js + manifest ──
 console.log('\n── 파트⑦ 공유로 캡처 받기(안드로이드) ──');

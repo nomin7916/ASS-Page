@@ -5,7 +5,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronDown, ChevronUp, ChevronRight, Camera, MoreHorizontal, Eye, EyeOff, Info, Check, RefreshCw, Monitor, LogOut } from 'lucide-react';
 import { PASTE_PHOTO_ACCEPT } from '../taxCalcPaste';
-import { platformOf, brokerAppOf, openBrokerApp, localStore } from '../brokerApps';
+import { platformOf } from '../brokerApps';
 import {
   MOBILE_THEMES, MOBILE_THEME_OPTIONS, MOBILE_HTML_CLASS, MOBILE_Z, MOBILE_COL_MAX, MASK,
   badgeOf, fmtWon, fmtSigned, fmtPct, fmtUsd, fmtQty, toneOf,
@@ -169,17 +169,15 @@ export default function MobileView({
 
   const goHome = () => { setSheet(''); onGoHome(true); };
   const openAccount = (id) => { setSheet(''); onOpenAccount(id); };
-  // 카메라 = 누른 그 순간 휴대폰 사진 고르기(최근 캡처가 맨 앞)를 바로 열고, 뒤에서 사진 맞추기 창도 연다 —
-  // 고르면 창이 곧바로 프로그램 읽기(OCR)를 시작한다. 고르기를 취소하면 창의 큰 카메라 칸이 남는다.
+  // 카메라 — 휴대폰·태블릿 = 사진 맞추기 창(이 계좌 증권사 앱 큰 단추 · 다른 앱 · + 앱 더하기 · 카메라 칸, src/brokerApps.ts · 2026-11-28 사용자 요청 「지정된 앱도 원하는 앱도」)
+  //   PC = 누른 그 순간 사진 고르기를 열고 뒤에서 창도 연다(고르면 창이 곧바로 프로그램 읽기 · 취소하면 창의 큰 카메라 칸).
   // ⚠️ 사진 고르기는 누름(클릭) 안에서만 열린다 — 창이 뜬 뒤에 여는 식으로 바꾸면 휴대폰이 막는다.
   const fileRef = useRef(null);
   const photoPidRef = useRef('');
-  // 이 계좌에 증권사 앱을 골라 두었으면(휴대폰·태블릿) 카메라 = 그 앱 열기 + 뒤에서 사진 맞추기 창(돌아오면 카메라 칸이 빛남) — src/brokerApps.ts
   const startPhoto = (pid) => {
     photoPidRef.current = pid;
     const plat = typeof navigator !== 'undefined' ? platformOf(navigator.userAgent, navigator.maxTouchPoints) : '';
-    const app = plat ? brokerAppOf(localStore(), pid) : null;
-    if (app) { onPhotoSync(pid); openBrokerApp(app, plat); return; }
+    if (plat) { onPhotoSync(pid); return; }
     if (onPhotoFiles && fileRef.current) { try { fileRef.current.click(); } catch { /* 고르기를 못 여는 창 — 창의 큰 칸으로 */ } }
     onPhotoSync(pid);
   };

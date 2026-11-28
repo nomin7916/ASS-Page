@@ -47,7 +47,7 @@ src/
 ├── apiAuth.ts           # /api/… fetch 관문(로그인 토큰 탑재·401 재발급 1회·별도 창 토큰 전달) (⚠️ import 0 — verify:api-auth)
 ├── sessionKeepAlive.ts  # 로그인 유지: 비활동 로그아웃(4시간)·조작 목록·토큰 미리 받기(40분) 판정·별도 창 활동/토큰 중계 (⚠️ import 0 — verify:session)
 ├── mobileView.ts        # 휴대폰 화면(폭과 상관없이 기본 · PC는 고를 때만) 순수 로직: 가운데 한 줄 폭·배경 4종(시스템 기본·블랙·밝은 베이지·남색, 이 기기 저장소)·PC 화면 보기(세션)·계좌 배지·숫자 모양·계좌 목록/잔고 표/보유종목 줄(PC 계산값을 받아 모양만) (⚠️ import 0 — verify:mobile-view)
-├── brokerApps.ts        # 증권사 앱 열기(계좌마다 이 기기 localStorage 한 칸 — M-STOCK·영웅문S#·한국투자·토스증권): 아이폰 = App Store 화면(공개 스킴 없음, 토스만 supertoss://) · 안드로이드 = 패키지 intent · 사진 맞추기 창 앱 단추 + 휴대폰 위 카메라가 그 앱을 연다 → 돌아오면 카메라 칸이 빛남 (⚠️ import 0 · App Store 번호는 확인값 — verify:mobile-view #BA)
+├── brokerApps.ts        # 증권사 앱 열기(이 기기 localStorage 두 칸 — 계좌→앱 · 사용자가 더한 앱 12개까지): 처음 넷(M-STOCK·영웅문S#·한국투자·토스증권) + 「+」로 App Store·Play 링크·앱 주소(xxx://, http·javascript 거절) 더하기 · 아이폰 = App Store 화면(공개 스킴 없음, 토스만 supertoss://) · 안드로이드 = 패키지 intent · 사진 맞추기 창 = 이 계좌 앱 큰 단추(누른 앱이 이 계좌 앱) + 다른 앱 · 휴대폰·태블릿 위 카메라 = 이 창 · 돌아오면 카메라 칸이 빛남 (⚠️ import 0 · App Store 번호는 확인값 — verify:mobile-view #BA)
 ├── shareTarget.ts       # 안드로이드 「공유」로 캡처 받기: 홈 화면 앱(public/manifest.webmanifest share_target) → public/sw.js(POST /share-target만 · 캐시 없음)가 사진을 이 기기 Cache Storage에 잠깐 → 앱이 부팅 정착 뒤 takeSharedPhotos(꺼내며 지움 · 30분 넘으면 버림) → 휴대폰 화면이 계좌를 묻고 바로 읽기 · 서비스 워커는 안드로이드만 등록 (⚠️ import 0 — verify:mobile-view #SH가 sw.js를 그대로 돌린다)
 ├── uiTheme.ts           # 새 디자인(인디고 나이트) 시범: 관리자만 켬(UserInfoBar '새 디자인' 버튼)·이 기기 저장소 한 칸·?ui=classic 탈출 · 켜면 html.ui-indigo → index.css가 색만 바꿔 칠함(클래스는 그대로) (⚠️ import 0 — verify:ui-theme)
 ├── config.ts            # UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL

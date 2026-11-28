@@ -5,7 +5,7 @@
 // 키: 관리자는 사이트 키(내 키가 있으면 먼저) · 다른 사용자는 내 Gemini 키(내 Drive ai_settings.json — App의 keyApi가 읽고 쓴다).
 // ⚠️ 사진은 저장하지 않는다(메모리에서 줄여 보내기만). ⚠️ 쓰기는 applyItems(앱 탭이 최신 prev 위에서 적용)로만.
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, ScanText, Info, ArrowUpRight, ChevronDown } from 'lucide-react';
+import { X, Camera, RotateCcw, Lock, ExternalLink, BookOpen, ScanText, Info, ArrowUpRight, Plus, Pencil } from 'lucide-react';
 import { generateId, formatNumber } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { mergePastePhotos, PASTE_PHOTO_MAX, PASTE_PHOTO_ACCEPT, photoBudget, photoReadInit, photoReadStep } from '../taxCalcPaste';
@@ -17,7 +17,7 @@ import { shrinkPhotoToB64 } from '../photoShrink';
 import AiApiGuide, { AI_KEY_PAGE } from './AiApiGuide';
 import { classifyOcr, parseOcrHoldings, ocrHoldLine, ocrHoldBad, OCR_FLAG_TEXT, parseOcrCash } from '../tradeOcr';
 import { loadOcrEngine, ocrFile } from '../screenOcr';
-import { BROKER_APPS, platformOf, brokerAppOf, writeBrokerApp, openBrokerApp, localStore } from '../brokerApps';
+import { platformOf, brokerAppOf, writeBrokerApp, openBrokerApp, localStore, allBrokerApps, appsForPlatform, addCustomApp, removeCustomApp, BROKER_NAME_MAX } from '../brokerApps';
 
 const KIND_LABEL = {
   update: { t: '바꿈', c: 'text-sky-300' },
@@ -104,10 +104,16 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
   const [more, setMore] = useState(false);
   const [drag, setDrag] = useState(false);
   const ocrFilesRef = useRef(null);
-  // 증권사 앱(src/brokerApps.ts) — 계좌마다 이 기기에 하나 · 휴대폰·태블릿에서만. 앱에 다녀오면(화면이 가려졌다 다시 보이면) 카메라 칸이 빛난다.
+  // 증권사 앱(src/brokerApps.ts) — 휴대폰·태블릿에서만. 이 계좌 앱 = 큰 단추 · 다른 앱·더한 앱 = 작은 단추 · + = 앱 더하기(링크).
+  // 누른 앱이 이 계좌의 앱이 된다. 앱에 다녀오면(화면이 가려졌다 다시 보이면) 카메라 칸이 빛난다.
   const [platform] = useState(() => (typeof navigator !== 'undefined' ? platformOf(navigator.userAgent, navigator.maxTouchPoints) : ''));
   const [app, setApp] = useState(null);
-  const [pickApp, setPickApp] = useState(false);
+  const [apps, setApps] = useState([]);
+  const [editApps, setEditApps] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [addLink, setAddLink] = useState('');
+  const [addErr, setAddErr] = useState('');
   const [glow, setGlow] = useState(false);
   const [keyState, setKeyState] = useState({ loaded: false, key: '', canSave: false, error: '' });
   const [keyInput, setKeyInput] = useState('');
@@ -136,8 +142,11 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
 
   useEffect(() => {
     if (!open) return;
-    setApp(brokerAppOf(localStore(), accountId));
-    setPickApp(false);
+    const st = localStore();
+    setApp(brokerAppOf(st, accountId));
+    setApps(appsForPlatform(allBrokerApps(st), platform));
+    setEditApps(false);
+    setAdding(false);
   }, [open, accountId]);
 
   useEffect(() => {
@@ -434,8 +443,22 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
       : run.phase === 'shrink' || run.phase === 'read' ? 'AI가 읽는 중…' : '';
   const goApp = (a) => {
     if (a.id !== (app && app.id)) { writeBrokerApp(localStore(), accountId, a.id); setApp(a); }
-    setPickApp(false);
     openBrokerApp(a, platform);
+  };
+  const saveAddApp = () => {
+    const st = localStore();
+    const r = addCustomApp(st, addName, addLink, `c_${generateId()}`);
+    if (!r.app) { setAddErr(r.error === 'full' ? '더 넣을 수 없습니다' : r.error === 'name' ? '이름을 넣어 주세요' : '링크를 읽지 못했습니다'); return; }
+    setApps(appsForPlatform(allBrokerApps(st), platform));
+    setAdding(false); setAddName(''); setAddLink(''); setAddErr('');
+  };
+  const dropApp = (a) => {
+    const st = localStore();
+    removeCustomApp(st, a.id);
+    const left = appsForPlatform(allBrokerApps(st), platform);
+    setApps(left);
+    if (app && app.id === a.id) setApp(null);
+    if (!left.some(x => x.custom)) setEditApps(false);
   };
   const dropFiles = (e) => { e.preventDefault(); setDrag(false); if (!reading) ocrFiles(Array.from((e.dataTransfer && e.dataTransfer.files) || [])); };
 
@@ -459,21 +482,44 @@ export default function HoldingsPhotoSync({ open, onClose, accountName = '', ite
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-3 text-[12.5px] text-gray-300 leading-relaxed">
-          {platform && accountId && (app && !pickApp ? (
-            <div className="flex items-stretch gap-2">
-              <button onClick={() => goApp(app)} title={`${app.name} 열기`} aria-label={`${app.name} 열기`}
-                className="flex-1 h-12 flex items-center justify-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-[15px] font-bold transition">{app.name}<ArrowUpRight size={19} /></button>
-              <button onClick={() => setPickApp(true)} title="증권사 앱 바꾸기" aria-label="증권사 앱 바꾸기"
-                className="w-12 h-12 flex items-center justify-center rounded-xl border border-gray-700 text-gray-300 hover:bg-gray-800 transition"><ChevronDown size={19} /></button>
+          {platform && accountId && (
+            <div className="space-y-2">
+              {app && !editApps && (
+                <button onClick={() => goApp(app)} title={`${app.name} 열기`} aria-label={`${app.name} 열기`}
+                  className="w-full h-12 flex items-center justify-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-[15px] font-bold transition">{app.name}<ArrowUpRight size={19} /></button>
+              )}
+              {adding ? (
+                <div className="rounded-xl border border-gray-700 bg-gray-900/40 p-2 space-y-2">
+                  <input value={addName} onChange={e => { setAddName(e.target.value); setAddErr(''); }} placeholder="이름" maxLength={BROKER_NAME_MAX} autoComplete="off"
+                    className="w-full h-10 bg-[#0b1120] border border-gray-600 focus:border-sky-500 rounded-lg px-3 text-[14px] text-gray-100 outline-none" />
+                  <input value={addLink} onChange={e => { setAddLink(e.target.value); setAddErr(''); }} placeholder={platform === 'android' ? 'Play 스토어 링크' : 'App Store 링크'} inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"
+                    className={`w-full h-10 bg-[#0b1120] border rounded-lg px-3 text-[14px] text-gray-100 outline-none ${addErr ? 'border-red-400' : 'border-gray-600 focus:border-sky-500'}`} />
+                  {addErr && <p className="text-[12px] text-red-300">{addErr}</p>}
+                  <div className="flex gap-2">
+                    <button onClick={saveAddApp} disabled={!addLink.trim()} className="flex-1 h-10 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-[14px] font-bold">저장</button>
+                    <button onClick={() => { setAdding(false); setAddErr(''); }} className="flex-1 h-10 rounded-lg border border-gray-600 text-gray-300 text-[14px]">취소</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {apps.filter(a => editApps ? a.custom : !(app && a.id === app.id)).map(a => (
+                    <button key={a.id} onClick={() => (editApps ? dropApp(a) : goApp(a))} title={editApps ? `${a.name} 지우기` : `${a.name} 열기`} aria-label={editApps ? `${a.name} 지우기` : `${a.name} 열기`}
+                      className={`h-10 px-3 flex items-center gap-1 rounded-xl border text-[14px] font-semibold transition ${editApps ? 'border-red-400/60 bg-red-950/30 text-red-200' : 'border-gray-700 bg-gray-900/40 text-gray-200 hover:bg-gray-800'}`}>
+                      {a.name}{editApps ? <X size={15} /> : <ArrowUpRight size={15} className="text-gray-400" />}
+                    </button>
+                  ))}
+                  {!editApps && (
+                    <button onClick={() => { setAdding(true); setAddName(''); setAddLink(''); setAddErr(''); }} title="앱 더하기" aria-label="앱 더하기"
+                      className="h-10 w-10 flex items-center justify-center rounded-xl border border-dashed border-gray-600 text-gray-300 hover:bg-gray-800"><Plus size={18} /></button>
+                  )}
+                  {apps.some(a => a.custom) && (
+                    <button onClick={() => setEditApps(v => !v)} aria-pressed={editApps} title={editApps ? '지우기 끝' : '더한 앱 지우기'} aria-label={editApps ? '지우기 끝' : '더한 앱 지우기'}
+                      className={`h-10 w-10 flex items-center justify-center rounded-xl border ${editApps ? 'border-sky-400 bg-sky-900/40 text-sky-200' : 'border-gray-700 text-gray-400 hover:bg-gray-800'}`}><Pencil size={16} /></button>
+                  )}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              {BROKER_APPS.map(a => (
-                <button key={a.id} onClick={() => goApp(a)} title={`${a.name} 열기`} aria-label={`${a.name} 열기`}
-                  className={`h-11 flex items-center justify-center gap-1 rounded-xl border text-[14px] font-semibold transition ${app && app.id === a.id ? 'border-sky-400 bg-sky-900/40 text-white' : 'border-gray-700 bg-gray-900/40 text-gray-200 hover:bg-gray-800'}`}>{a.name}<ArrowUpRight size={15} className="text-gray-400" /></button>
-              ))}
-            </div>
-          ))}
+          )}
           <label
             className={`flex flex-col items-center justify-center gap-2 w-full min-h-[190px] sm:min-h-[210px] rounded-2xl border-2 border-dashed transition select-none ${reading ? 'border-sky-500/60 bg-sky-950/40 cursor-wait' : drag ? 'border-sky-300 bg-sky-900/50 cursor-copy' : glow ? 'border-sky-300 bg-sky-900/40 ring-4 ring-sky-400/50 animate-pulse cursor-pointer' : 'border-sky-600/60 bg-sky-950/20 hover:border-sky-400 hover:bg-sky-950/40 active:bg-sky-900/40 cursor-pointer'}`}
             title="잔고 캡처를 고르거나 끌어 놓기 · 붙여넣기(Ctrl+V) — 이 기기에서 글자를 읽어 바로 맞춥니다(AI 없이)" aria-label="잔고 사진 고르기(프로그램)"
