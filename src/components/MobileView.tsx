@@ -412,7 +412,6 @@ export default function MobileView({
             </div>
 
             <div style={{ padding: '22px 20px 34px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, textAlign: 'center' }}>
-              <span style={{ fontSize: 12.5, color: C.sub }}>목표 비중·추가 수량 같은 자세한 설정은 PC 화면에서 합니다</span>
               <button type="button" onClick={onPcView} style={{ ...RESET, height: 44, padding: '0 12px', color: C.sub, fontSize: 13.5, textDecoration: 'underline', textUnderlineOffset: 3 }}>PC 화면으로 보기</button>
             </div>
           </div>
@@ -436,7 +435,6 @@ export default function MobileView({
                   </div>
                 ))}
               </div>
-              {activeAccountType === 'overseas' && <div style={{ marginTop: 8, fontSize: 12.5, color: C.sub }}>달러 종목은 지금 환율로 원화 환산 · 현재가·평균단가는 달러</div>}
             </div>
 
             <div>
@@ -497,7 +495,7 @@ export default function MobileView({
             </div>
 
             <div style={{ padding: '22px 20px 34px', textAlign: 'center', fontSize: 12.5, color: C.sub }}>
-              {isLoading ? '시세를 받는 중…' : '종목을 누르면 코드와 전일대비가 보입니다'}
+              {isLoading ? '시세를 받는 중…' : ''}
             </div>
           </div>
         )}
@@ -512,20 +510,13 @@ export default function MobileView({
 
             {sheet === 'theme' && (
               <div>
-                <h2 style={{ margin: 0, padding: '0 24px 4px', fontSize: 19, fontWeight: 700 }}>화면 배경</h2>
-                <p style={{ margin: 0, padding: '0 24px 12px', fontSize: 13.5, color: C.sub }}>고르면 바로 바뀌고 이 창은 닫힙니다.</p>
+                <h2 style={{ margin: 0, padding: '0 24px 10px', fontSize: 19, fontWeight: 700 }}>화면 배경</h2>
                 {MOBILE_THEME_OPTIONS.map(o => {
                   const sel = themePref === o.key;
                   return (
-                    <button key={o.key} type="button" aria-pressed={sel} onClick={() => { onThemePref(o.key); setSheet(''); }} style={{ ...RESET, width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '11px 24px', minHeight: 66, background: sel ? C.selRow : 'transparent', textAlign: 'left' }}>
+                    <button key={o.key} type="button" aria-pressed={sel} onClick={() => { onThemePref(o.key); setSheet(''); }} style={{ ...RESET, width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '9px 24px', minHeight: 58, background: sel ? C.selRow : 'transparent', textAlign: 'left' }}>
                       <span aria-hidden="true" style={{ width: 38, height: 38, flex: 'none', borderRadius: '50%', background: o.swatch, boxShadow: `inset 0 0 0 1px ${C.line2}` }} />
-                      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 16, fontWeight: sel ? 700 : 500 }}>
-                          <span>{o.label}</span>
-                          {o.isDefault && <span style={{ padding: '1px 7px', borderRadius: 999, background: C.pill, color: C.sub, fontSize: 11.5, fontWeight: 600 }}>기본</span>}
-                        </span>
-                        <span style={{ fontSize: 13, color: C.sub }}>{o.sub}</span>
-                      </span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 16, fontWeight: sel ? 700 : 500 }}>{o.label}</span>
                       {sel && <Check size={22} strokeWidth={2.4} style={{ flex: 'none' }} aria-hidden="true" />}
                     </button>
                   );

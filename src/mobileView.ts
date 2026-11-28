@@ -21,11 +21,11 @@ export const MOBILE_THEMES: Record<MobileThemeName, Record<string, string>> = {
   navy: { bg: '#0B1120', card: '#111A2E', chip: '#16213A', segOn: '#0B1120', line: '#1E2A3E', line2: '#33415C', head: '#0F172A', text: '#E5E7EB', sub: '#94A3B8', up: '#F87171', down: '#60A5FA', sheet: '#111A2E', overlay: 'rgba(0,0,0,0.6)', pill: '#1E293B', selRow: '#16213A', hl: '#1B2A4A', scheme: 'dark' },
 };
 
-export const MOBILE_THEME_OPTIONS: { key: MobileThemePref; label: string; sub: string; swatch: string; isDefault?: boolean }[] = [
-  { key: 'system', label: '시스템 연동', sub: '휴대폰이 다크 모드면 블랙, 라이트 모드면 밝은 베이지', swatch: 'linear-gradient(135deg, #0B0B0C 50%, #F5F0E6 50%)', isDefault: true },
-  { key: 'black', label: '블랙', sub: '검정 바탕', swatch: '#0B0B0C' },
-  { key: 'beige', label: '밝은 베이지', sub: '따뜻한 밝은 바탕', swatch: '#F5F0E6' },
-  { key: 'navy', label: '남색', sub: 'PC 화면과 같은 색', swatch: '#0B1120' },
+export const MOBILE_THEME_OPTIONS: { key: MobileThemePref; label: string; swatch: string; isDefault?: boolean }[] = [
+  { key: 'system', label: '시스템 연동', swatch: 'linear-gradient(135deg, #0B0B0C 50%, #F5F0E6 50%)', isDefault: true },
+  { key: 'black', label: '블랙', swatch: '#0B0B0C' },
+  { key: 'beige', label: '밝은 베이지', swatch: '#F5F0E6' },
+  { key: 'navy', label: '남색', swatch: '#0B1120' },
 ];
 
 export function normalizeThemePref(v: unknown): MobileThemePref {

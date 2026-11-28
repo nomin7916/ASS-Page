@@ -474,6 +474,8 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 - 함수 이동 시 functional update 패턴 (`setPortfolio(prev => ...)`)
 - 순수 유틸 → `utils.ts` | React 상태 관련 → 훅
 - 알림: 반드시 `notify(text, type)` — `window.alert/confirm` · 인라인 토스트 div 금지
+- **화면 글은 이름만 — 설명·안내·주의 문구를 넣지 않는다**(사용자 확정 2026-11-28 「상세 설명을 꼭 넣어 달라는 것 이외에는 숨기기」). 단추·항목은 이름만(예: 화면 배경 = 「시스템 연동·블랙·밝은 베이지·남색」, 부연 줄·「기본」 표 없음).
+  사용법·주의가 꼭 있어야 하는 창은 ⓘ를 눌렀을 때만 펼친다(예: 사진으로 보유 맞추기). 남기는 글 = 이름·숫자·진행(읽는 중…)·결과·오류·빈 목록뿐. 사용자가 설명을 넣어 달라고 한 곳만 예외.
 - 사진 단추(사진 넣기·고르기·올리기·맡기기·보내기)는 **카메라 기호(lucide `Camera`) 하나** — 글은 `title`·`aria-label`에만, 읽는 중엔 '읽는 중…'(사용자 확정 2026-11-26). `ImagePlus` 금지. 검증: `verify:trade-ocr` #W15.
 - Tailwind 클래스는 **완성된 글자로만** 쓴다(`bg-${색}-500`·`'w-' + n` 금지) — 꾸밈은 빌드 CSS 하나뿐이다.
   ⚠️ `index.html`에 외부 Tailwind 스크립트(cdn.tailwindcss.com)를 다시 넣지 말 것(첫 화면이 2배 느려진다). 검증: `verify:tw-static`.

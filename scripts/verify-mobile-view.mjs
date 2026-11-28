@@ -212,6 +212,11 @@ ok('#W23 PC — 끌어 놓기(창 전체 한 곳에서만 읽음)·붙여넣기(
   && /if \(busy \|\| run\.phase === 'ocr'\) return;/.test(hps));
 ok('#W24 넓은 화면 = 가운데 한 줄(MOBILE_COL_MAX) — 아래 판(sheet)도 같은 폭', /maxWidth: MOBILE_COL_MAX, minWidth: 0, display: 'flex', flexDirection: 'column'/.test(mv) && /margin: '0 auto', maxWidth: MOBILE_COL_MAX/.test(mv));
 
+// 화면 글은 이름만(사용자 확정 2026-11-28 「상세 설명을 꼭 넣어 달라는 것 이외에는 숨기기」)
+ok('#W25 화면 배경 = 제목과 이름 넷뿐(부연 줄·「기본」 표 없음) · 휴대폰 화면에 안내 문장 없음',
+  (M ? M.MOBILE_THEME_OPTIONS.every(o => !('sub' in o)) && M.MOBILE_THEME_OPTIONS.map(o => o.label).join() === '시스템 연동,블랙,밝은 베이지,남색' : true)
+  && !/고르면 바로 바뀌고|o\.sub\b|>기본</.test(mv) && !/종목을 누르면 코드와|자세한 설정은 PC 화면에서|달러 종목은 지금 환율로|고른 계좌의 수량·매입금액/.test(mv));
+
 // ── 파트⑦ 안드로이드 「공유」로 캡처 받기(사용자 요청 2026-11-28) — src/shareTarget.ts + public/sw.js + manifest ──
 console.log('\n── 파트⑦ 공유로 캡처 받기(안드로이드) ──');
 let ST = null;
